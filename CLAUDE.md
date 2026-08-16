@@ -543,9 +543,15 @@ pages/{feature}/            # Route pages
   `BitBiDeltaSqlIntegrationTest` keeps the day-wide `findBySiteIdAndCreatedAtAfter` call the
   `/sql-changes` ordering assertions are about, and filters it to the batches the method seeded.
   `SqlGenerationIntegrationTest`'s `findAll()).isEmpty()` — an assertion that the whole shared
-  database held no generation at all — is scoped to a real batch on a real account that has no
-  bit-bi activation, so it can still fail (a random UUID could never gain a generation:
-  `source_batch_id` is NOT NULL with an FK to `batches`). The widest single change is one line of
+  database held no generation at all — became a test of the guard that actually exists. Two rounds
+  of review were spent on it and the second correction was the interesting one: since 026
+  `BitBiPlugin.execute` only calls `DeltaSqlSweepWorker.wake()` on BATCH_COMPLETED, so **no**
+  assertion about a generation can pin `PluginEventDispatcher`'s early return — the generation
+  comes from `DeltaSqlQueueService` draining segments, and a site with no segments produces none
+  whatever the dispatcher does. The observable that does carry it is `last_used_at`, stamped by
+  `PluginUsageService` only after a dispatch executed the plugin: the test gives the second account
+  a **deactivated** activation and asserts the stamp stays null, which fails if the `isActive`
+  predicate is removed. The queue's own inactive-activation branch stays untested and is **#175**. The widest single change is one line of
   `application-test.yml`: `plugin.sql-generation.delta-sweep-ms: 3600000`, the slow-sweep treatment
   `delta.egress.sweep-ms` and `delta.batch-parquet.sweep-ms` already had and 026 never gave this
   queue. At the shipped 60s the tick fired in **every cached Spring context for the whole run**,

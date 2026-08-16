@@ -227,9 +227,12 @@ public abstract class AbstractIntegrationTest {
      * generation they produced ({@code findBySourceBatchId}) and wait for it instead of sampling
      * the site. Same reasoning as {@link #clearAppSettings()} (issue #119), but deliberately
      * <em>not</em> the same unqualified {@code DELETE}: {@code app_settings} holds one row, while
-     * this table accumulates across the suite, and a table-wide delete would take exactly the
-     * locks whose collision with {@code @Sql("/test-data.sql")} this ticket is about. The caller
-     * names the sites it asserts on.</p>
+     * this table accumulates across the whole suite. The caller names the sites it asserts on, so
+     * the statement's blast radius is those sites rather than every row in the table. That is a
+     * smaller footprint, <em>not</em> a guarantee — a sibling context still draining the same site
+     * can block this delete exactly as it could block a table-wide one, and no {@code lock_timeout}
+     * is set. What actually shrinks that window is the slowed
+     * {@code plugin.sql-generation.delta-sweep-ms} in {@code application-test.yml}.</p>
      *
      * @param siteIds sites whose generations to delete
      */

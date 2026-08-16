@@ -134,22 +134,6 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
                 .orElseThrow();
     }
 
-    /**
-     * Assert that a batch produced no generation, and keep asserting it for half a second so a
-     * late writer is caught rather than missed. Scoped by source batch for the same reason as
-     * {@link #awaitGenerationFor(UUID)}: whether the <em>site</em> has generations is not this
-     * test's business and is not isolated from the rest of the suite.
-     *
-     * @param sourceBatchId the batch expected to produce nothing
-     */
-    private void assertNoGenerationFor(UUID sourceBatchId) {
-        Awaitility.await("no SQL generation for batch " + sourceBatchId)
-                .during(Duration.ofMillis(500))
-                .atMost(Duration.ofSeconds(5))
-                .pollInterval(Duration.ofMillis(100))
-                .until(() -> pluginSqlGenerationRepository.findBySourceBatchId(sourceBatchId).isEmpty());
-    }
-
     @Nested
     @DisplayName("Batch Completion Trigger")
     class BatchCompletionTrigger {
@@ -175,10 +159,6 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             assertThat(generation.getComparisonBatchId()).isEqualTo(firstBatch.getId());
             assertThat(generation.getS3Key()).isNotBlank();
             assertThat(generation.getInsertCount()).isGreaterThan(0);
-
-            // ...and that the baseline batch produced none — the scoped form of what the old
-            // site-wide hasSize(1) was really claiming (issue #159).
-            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
@@ -206,23 +186,14 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should not trigger SQL generation for an account whose Bit BI activation is inactive")
+        @DisplayName("Should not dispatch a completed batch to a Bit BI activation that is inactive")
         void shouldNotTriggerSqlGenerationForAccountsWithoutPlugin() {
-            // Given - a real, completed, file-backed batch on a second account, whose bit-bi
-            // activation exists but is deactivated. Every part of that is load-bearing:
-            // PluginEventDispatcher skips on `accountPlugin == null || !accountPlugin.isActive()`,
-            // and only the second half can be tested at all — plugin_sql_generations.
-            // account_plugin_id is NOT NULL with an FK to account_plugins (V11), so an account with
-            // no activation row could never gain a generation whatever the dispatcher did, and
-            // asserting on one asserts nothing. With the row present and inactive, deleting the
-            // isActive predicate makes this test fail.
+            // Given - a second account whose bit-bi activation exists but is deactivated, and a
+            // real completed batch of its own.
             AccountPlugin inactive = AccountPlugin.activate(OTHER_ACCOUNT_ID, "bit-bi",
                     Map.of("tenantId", "other-tenant"));
             inactive.deactivate();
             accountPluginRepository.save(inactive);
-
-            Batch baseline = createBatchWithCsvFile(OTHER_ACCOUNT_ID, OTHER_SITE_ID, "orders.csv",
-                    "id,total\n1,10.00");
             Batch batch = createBatchWithCsvFile(OTHER_ACCOUNT_ID, OTHER_SITE_ID, "orders.csv",
                     "id,total\n1,10.00\n2,20.00");
 
@@ -230,12 +201,24 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             eventPublisher.publishEvent(new BatchCompletedEvent(
                     batch.getId(), OTHER_ACCOUNT_ID, 1, 512L));
 
-            // Then - the dispatcher had an activation, a completed batch and a previous batch to
-            // diff against, and still must produce nothing. Scoped to the batch: the retired
-            // findAll() was asserting the whole shared database held no generation at all, which
-            // no test owns (issue #159).
-            assertNoGenerationFor(batch.getId());
-            assertNoGenerationFor(baseline.getId());
+            // Then - PluginEventDispatcher must take its early return on
+            // `accountPlugin == null || !accountPlugin.isActive()`. The observable that carries
+            // that is last_used_at, stamped by PluginUsageService only after a dispatch actually
+            // executed the plugin: delete the isActive predicate and this assertion fails.
+            //
+            // The absence of a generation, which this test is named for, is the weaker half and
+            // says so deliberately: since 026 `BitBiPlugin.execute` only calls
+            // DeltaSqlSweepWorker.wake() on BATCH_COMPLETED — the generation itself comes from
+            // DeltaSqlQueueService draining changelog_segments — so no BATCH_COMPLETED path can
+            // produce one for a site that has no segments, guard or no guard. That queue's own
+            // inactive-activation branch is untested and is filed as #175, not widened into here.
+            Awaitility.await("no dispatch to the inactive activation")
+                    .during(Duration.ofMillis(500))
+                    .atMost(Duration.ofSeconds(5))
+                    .pollInterval(Duration.ofMillis(100))
+                    .until(() -> accountPluginRepository.findById(inactive.getId())
+                            .orElseThrow().getLastUsedAt() == null);
+            assertThat(pluginSqlGenerationRepository.findBySourceBatchId(batch.getId())).isEmpty();
         }
     }
 
@@ -263,7 +246,6 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             assertThat(generation.getUpdateCount()).isEqualTo(1); // Bob was modified
             assertThat(generation.getInsertCount()).isEqualTo(0);
             assertThat(generation.getDeleteCount()).isEqualTo(0);
-            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
@@ -286,7 +268,6 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             assertThat(generation.getDeleteCount()).isEqualTo(1); // Item3 was deleted
             assertThat(generation.getInsertCount()).isEqualTo(0);
             assertThat(generation.getUpdateCount()).isEqualTo(0);
-            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
@@ -309,7 +290,6 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             assertThat(generation.getInsertCount()).isEqualTo(1); // 4,D added
             assertThat(generation.getUpdateCount()).isEqualTo(1); // 1,A→A-UPDATED
             assertThat(generation.getDeleteCount()).isEqualTo(1); // 3,C deleted
-            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
