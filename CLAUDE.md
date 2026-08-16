@@ -453,6 +453,26 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- hold-connection-across-s3: A HikariCP connection is no longer held across S3 (or a 120 s
+  semaphore wait) at the three call sites the pool audit named (issue #164, folding **#176**).
+  `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` drop
+  their wrapping `@Transactional`; the claim query and the mark write are the repository's
+  short transactions, and S3 runs with nothing open. A crash between them leaves the row
+  pending and the sweep retries — the same keys are overwritten. `generateSqlForBatch`
+  acquires the semaphore *before* any transaction and **throws** if one is already open, so
+  the 120 s wait cannot pin a connection and the hold cannot return silently.
+  `SqlGenerationPersistence` is the proxied home of `loadBatchData` /
+  `saveGenerationRecord` / `loadBatchDataForRegeneration` — they were `protected` and
+  self-invoked, so their `@Transactional` was inert. `ParquetExportFileService.listFiles`
+  queries the catalog through `ParquetExportCatalogQuery` (`@Transactional(readOnly=true)`)
+  and only then probes S3; a row is still dropped only on a **known** absence (#157) and
+  dropped candidates still advance the cursor. Both queue workers move from `Hold.LONG` to
+  `Hold.SHORT` in `BackgroundConnectionDemandTest`; the floor beside
+  `maximum-pool-size` is now `4 long ticks + 2 request reserve = 6` against the unchanged
+  10. The #171 audit-listener exception is untouched. No REST, gRPC, proto, DTO, migration,
+  configuration-key, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`
+  ("No S3 inside a queue worker", "The connection pool is smaller than the threads that can
+  ask it for a connection").
 - s3-presence-tristate: A read denial and an absent object are two different answers again, at the
   call site that acts on them (issue #157, filed reviewing #154 and made durable by #149).
   `S3CheckpointStorage.exists` returned `false` for a genuine 404 and for a 403 alike. The
@@ -684,7 +704,8 @@ pages/{feature}/            # Route pages
   classifies `Cost.LONG` (the test now exports that count, so adding one tightens both derivations at
   once), not for six threads — counting the whole pool would repeat exactly the conflation of "holds a
   thread" with "holds a connection" that this audit exists to undo, and it is what first pushed the
-  answer to 12. `4 + 2 (egress) + 2 (delta-sql) + 2 for requests = 10`. **Raising it was rejected as
+  answer to 12. `4 + 2 (egress) + 2 (delta-sql) + 2 for requests = 10` at the time; **#164** later
+  took the two workers out of the floor (`4 + 2 for requests = 6`). **Raising it was rejected as
   the one genuinely dangerous option**: the 100 is an assumption (`DB_URL` comes from a secret, and
   the budget also assumes nothing else shares that server, though dev and stage reach `(3+1) x pool`
   each), no observation of `hikari_connections_pending` exists, and overshooting `max_connections`

@@ -1133,21 +1133,19 @@ grpc-java's default cached pool). `spring.datasource.hikari.maximum-pool-size` i
 Nothing deadlocks, because **background work does not hold one connection while waiting for a
 second** — the shape that turns a shortage into a deadlock rather than a delay. A shortage therefore
 costs a wait of up to `connection-timeout` and a retry on the next tick, which background work
-survives. Two exceptions are known, both timed and both filed rather than asserted away:
+survives. One exception is known, timed and filed rather than asserted away:
 `PluginAuditEventListener` is `REQUIRES_NEW` *and* `AFTER_COMMIT`, so if `pluginExecutor` is
 saturated its `CallerRunsPolicy` runs it inline on a publishing thread that still holds its own
-connection (**#171**); and the delta-SQL worker pins a connection while waiting on a semaphore whose
-permit holders need connections from this same pool to release it (part of **#164**). The pool is sized
-so the consumers that *cannot* absorb a wait are covered outright — the ones that pin a connection
+connection (**#171**). The other exception this section used to name — the delta-SQL worker pinning
+a connection across the generation semaphore — was removed by **#164**. The pool is sized so the
+consumers that *cannot* absorb a wait are covered outright — the ones that pin a connection
 across S3 I/O instead of releasing it between statements:
 
 ```
 4 scheduled ticks classified Cost.LONG   (not the scheduler's 6 threads — a short tick that
                                           waits simply runs again on its next wake)
-+ 2 delta.egress.max-concurrent
-+ 2 plugin.sql-generation.delta-max-concurrent
 + 2 kept for request threads
-= 10
+= 6 <= 10
 ```
 
 The bound from the other side is the cluster's, and it is the one to check before raising anything:
@@ -1169,11 +1167,10 @@ So, in order, to give the pool more room:
    `DEFAULT_MAX_CONNECTIONS` in `BackgroundConnectionDemandTest` — the test fails until both move
    together, which is what stops the pool quietly outgrowing the database. At the default the
    ceiling already allows up to 12.
-2. Or lower a long holder: each `-1` on `DELTA_EGRESS_MAX_CONCURRENT` or
-   `PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT` frees a slot without touching the database.
-3. Better than either, shorten the holds themselves — both of those workers keep a connection open
-   across S3 round trips, and one of them across a semaphore wait as well, which is issue **#164**.
-   Fixing that takes all four out of the floor at once.
+2. Or lower a remaining long holder — after **#164** the two queue workers are short (claim/mark
+   only; S3 and the generation semaphore run with no transaction open), so the floor is the four
+   long scheduled ticks plus the request reserve. Shortening or dropping a `Cost.LONG` tick is
+   what moves it now.
 
 `BackgroundConnectionDemandTest` discovers the inventory three ways — every `@Bean` returning an
 `Executor`, every `max-concurrent` property, and every pool constructed directly in
@@ -1507,6 +1504,25 @@ nothing. A full rebuild queue answers 503 (flag cleared); rebuild flags orphaned
 re-driven on startup, so the "Rebuild queued" chip can no longer stick forever. The queued build
 calls `rebuildFromFrame`: it rematerializes every table from the existing frame even
 when there are no new segments, and it does not move the checkpoint pointer.
+
+### No S3 inside a queue worker (issue #164)
+
+The same invariant as the ingestion commit applies to the two queue workers and to the Parquet
+Export listing (issue **#164**, folding **#176**). A HikariCP connection must not be held across a
+network round trip, and the delta-SQL worker must not hold one across the generation semaphore
+either (up to `plugin.sql-generation.semaphore-timeout-seconds`, 120 s).
+
+`DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` open **no**
+transaction of their own. The pending-row claim (`FOR UPDATE SKIP LOCKED`) and the later
+`egress_at` / `plugin_sql_at` write are the repository's short transactions; the S3 download,
+Parquet render, per-table uploads, semaphore wait and SQL `PutObject` run with nothing open. A
+crash between the two halves leaves the row pending and the sweep retries — the same keys are
+overwritten. `generateSqlForBatch` acquires the semaphore *before* any transaction and throws if
+one is already open, so the hold cannot return silently. `loadBatchData` and
+`saveGenerationRecord` live on `SqlGenerationPersistence` so their `@Transactional` is a real
+proxy boundary (they were `protected` self-invocations). `ParquetExportFileService.listFiles`
+queries the catalog through `ParquetExportCatalogQuery` and only then probes S3; a row is still
+dropped only on a known absence (issue **#157**) and dropped candidates still advance the cursor.
 
 ### No S3 inside the ingestion commit (issue #147)
 
