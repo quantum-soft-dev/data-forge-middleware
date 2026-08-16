@@ -67,6 +67,7 @@ public class DeltaMetrics {
     private final Counter checkpointParquetFailed;
     private final Counter checkpointFrameTooLarge;
     private final Counter checkpointLossyRefold;
+    private final Counter checkpointHistoryGone;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -101,6 +102,7 @@ public class DeltaMetrics {
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
+        this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -188,12 +190,23 @@ public class DeltaMetrics {
      * clears. Many sites tripping in the same tick is that; one site tripping alone is the real
      * thing. The 403 branch also logs a WARN naming the key, which is the tiebreaker.</p>
      *
-     * @param reason {@code frame_too_large} or {@code lossy_refold}
+     * <p>{@code history_gone} is the third and the narrowest: the seed frame is unreadable and the
+     * site has <b>no</b> segments at all, so there is no history to refold, lossily or otherwise —
+     * the frame was the whole of that site's checkpoint history. It is split from
+     * {@code lossy_refold} because the operator's next move differs: a lossy refold is about data
+     * that still exists and may be an IAM incident, while this one is only recoverable by a
+     * re-baseline or a history wipe (issue #149). Such a site is visited by the tick only for its
+     * unmaterialized rows, so unlike the other two this abort does stop by itself, once those rows
+     * have spent {@code delta.checkpoint.max-materialize-attempts} —
+     * {@code delta.checkpoint.tables.given-up} is where it is visible afterwards.</p>
+     *
+     * @param reason {@code frame_too_large}, {@code lossy_refold} or {@code history_gone}
      */
     public void checkpointBuildAborted(String reason) {
         switch (reason) {
             case "frame_too_large" -> checkpointFrameTooLarge.increment();
             case "lossy_refold" -> checkpointLossyRefold.increment();
+            case "history_gone" -> checkpointHistoryGone.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
     }

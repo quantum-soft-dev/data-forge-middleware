@@ -32,16 +32,17 @@ class CheckpointSchedulerTest {
             return shuttingDown;
         }
     };
+    private static final int MAX_MATERIALIZE_ATTEMPTS = 3;
     private final CheckpointScheduler scheduler = new CheckpointScheduler(
             checkpointService, retentionService, segmentRepository, checkpointRepository,
-            shutdownSignal);
+            new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal);
 
     @Test
     void buildsAndPrunesEachSite() {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(a, b));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
 
         scheduler.buildCheckpoints();
 
@@ -56,7 +57,7 @@ class CheckpointSchedulerTest {
         UUID failing = UUID.randomUUID();
         UUID ok = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(failing, ok));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
         when(checkpointService.buildCheckpoint(failing)).thenThrow(new RuntimeException("boom"));
 
         scheduler.buildCheckpoints();
@@ -73,7 +74,7 @@ class CheckpointSchedulerTest {
         // rematerialize that table from the frame.
         UUID pruned = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of());
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of(pruned));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of(pruned));
 
         scheduler.buildCheckpoints();
 
@@ -85,7 +86,7 @@ class CheckpointSchedulerTest {
     void visitsASiteOnlyOnceWhenItHasBothSegmentsAndAnUnmaterializedCheckpoint() {
         UUID both = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(both));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of(both));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of(both));
 
         scheduler.buildCheckpoints();
 
@@ -99,7 +100,7 @@ class CheckpointSchedulerTest {
         UUID withSegments = UUID.randomUUID();
         UUID rematerializeOnly = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(withSegments));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints())
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
                 .thenReturn(List.of(rematerializeOnly));
 
         scheduler.buildCheckpoints();
@@ -117,7 +118,7 @@ class CheckpointSchedulerTest {
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(first, second));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
         when(checkpointService.buildCheckpoint(first)).thenAnswer(invocation -> {
             shuttingDown = true;
             return java.util.Map.of();
@@ -135,7 +136,7 @@ class CheckpointSchedulerTest {
         // A site whose tables are all materialized and whose segments are gone is not visited:
         // neither query names it, and the tick has no other source of sites.
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of());
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
 
         scheduler.buildCheckpoints();
 

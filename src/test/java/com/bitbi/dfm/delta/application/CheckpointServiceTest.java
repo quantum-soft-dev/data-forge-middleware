@@ -51,6 +51,8 @@ import static org.mockito.Mockito.*;
 class CheckpointServiceTest {
 
     private static final UUID SITE = UUID.randomUUID();
+    /** Small enough to exhaust in a test, large enough that one failure is not the ceiling. */
+    private static final int MAX_MATERIALIZE_ATTEMPTS = 3;
 
     @org.junit.jupiter.api.io.TempDir
     Path tempDirectory;
@@ -129,7 +131,8 @@ class CheckpointServiceTest {
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                shutdownSignal, scratchDirectory, maxTempBytes, maxFrameTempBytes);
+                new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
+                scratchDirectory, maxTempBytes, maxFrameTempBytes);
     }
 
     @Test
@@ -742,6 +745,161 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void spendsOneAttemptPerFailedRematerializeAndThenStopsRetrying() {
+        // Issue #149, the rule. A table that came out of a build with no snapshot is retried by
+        // every scheduled build (#128) and names its site on the tick's work list (#137). With
+        // nothing bounding that, a deterministic cause — a schema the client never submits, a value
+        // Parquet cannot render — cost a frame download, a whole-site fold and a per-table attempt
+        // every night for the life of the site.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
+        parkAtPointer(2L, frameOf(record("customers", 1L, 1, "Ann")), owing);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        for (int attempt = 1; attempt <= MAX_MATERIALIZE_ATTEMPTS; attempt++) {
+            service.buildCheckpoint(SITE);
+            assertEquals(attempt, owing.materializeAttempts(),
+                    "each rematerialize that ends without a snapshot spends one attempt");
+        }
+        assertNotNull(owing.getLastMaterializeFailureAt(), "the last failure is dated");
+        assertTrue(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
+
+        clearInvocations(checkpointRepository, checkpointStorage, metrics);
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(MAX_MATERIALIZE_ATTEMPTS, owing.materializeAttempts(), "the count stops there");
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(checkpointRepository, never()).save(any());
+        // And the whole visit is skipped: with no retryable row left there is nothing for the fold
+        // to be folded for, so the frame is not even fetched.
+        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+    }
+
+    @Test
+    void aForcedRebuildRearmsATableThatHadGivenUp() {
+        // Giving up is not a dead end, and the exit is not manual SQL: asking for a rebuild says
+        // the cause has been dealt with — the schema was submitted, the value fixed — so the row
+        // goes back into the nightly population. It re-arms whether or not the attempt succeeds,
+        // because the operator's claim is about the cause, not about this one build.
+        Checkpoint givenUp = Checkpoint.create(SITE, "customers", 2L, 1L);
+        for (int i = 0; i < MAX_MATERIALIZE_ATTEMPTS; i++) {
+            givenUp.recordFailedMaterialization();
+        }
+        parkAtPointer(2L, frameOf(record("customers", 1L, 1, "Ann")), givenUp);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/rearmed-key");
+
+        service.rebuildFromFrame(SITE);
+
+        assertEquals("checkpoints/rearmed-key", givenUp.getS3KeyParquet());
+        assertEquals(0, givenUp.materializeAttempts(), "a snapshot clears the record of reaching it");
+        assertNull(givenUp.getLastMaterializeFailureAt());
+    }
+
+    @Test
+    void aForcedRebuildThatFailsStillLeavesTheRowRetryable() {
+        Checkpoint givenUp = Checkpoint.create(SITE, "customers", 2L, 1L);
+        for (int i = 0; i < MAX_MATERIALIZE_ATTEMPTS; i++) {
+            givenUp.recordFailedMaterialization();
+        }
+        parkAtPointer(2L, frameOf(record("customers", 1L, 1, "Ann")), givenUp);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.rebuildFromFrame(SITE);
+
+        assertEquals(1, givenUp.materializeAttempts(),
+                "the forced attempt is the first of a fresh series, not the one past the ceiling");
+        assertFalse(givenUp.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
+    }
+
+    @Test
+    void anIncrementalBuildStillWritesATableThatHadGivenUp() {
+        // The cap bounds the dedicated retry, not materialization itself. A site with new segments
+        // is visited for those segments and the build writes every table in its fold — the work is
+        // happening regardless, so skipping this one would cost nothing and lose a chance.
+        Checkpoint givenUp = Checkpoint.create(SITE, "customers", 1L, 1L);
+        for (int i = 0; i < MAX_MATERIALIZE_ATTEMPTS; i++) {
+            givenUp.recordFailedMaterialization();
+        }
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "customers"))
+                .thenReturn(Optional.of(givenUp));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        assertEquals(0, givenUp.materializeAttempts());
+    }
+
+    @Test
+    void doesNotSpendAnAttemptWhenAFailedRewriteLeavesTheLastGoodSnapshotInPlace() {
+        // The retry exists for rows with nothing to serve. Charging an attempt to a row whose
+        // last-good object is still downloadable would eventually retire a table nobody is
+        // waiting on — and it is the same-seq case the detach rule already declines to touch.
+        Checkpoint healthy = Checkpoint.create(SITE, "customers", 2L, 1L);
+        healthy.attachParquet("checkpoints/last-good-key");
+        parkAtPointer(2L, frameOf(record("customers", 1L, 1, "Ann")), healthy);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.rebuildFromFrame(SITE);
+
+        assertEquals("checkpoints/last-good-key", healthy.getS3KeyParquet());
+        assertEquals(0, healthy.materializeAttempts());
+    }
+
+    @Test
+    void drainsTheNightlyAlarmOfASiteWhoseFrameAndChangelogAreBothGone() {
+        // Round 2 of the #148 review, folded in here. With no segments at all historyPruned is
+        // unconditionally true, so a missing frame raised "refusing lossy refold" — wrong in kind
+        // (there is no history to refold, lossily or otherwise) and with no exit but manual SQL, a
+        // wipe or a re-baseline. The site is on the tick's work list only because of its
+        // unmaterialized rows, so charging the abort to them is what ends the nightly alarm.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        for (int attempt = 1; attempt <= MAX_MATERIALIZE_ATTEMPTS; attempt++) {
+            assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                    () -> service.buildCheckpoint(SITE));
+            assertEquals(attempt, owing.materializeAttempts());
+        }
+
+        // A distinct reason, because it is a distinct fact: the frame was this site's whole
+        // checkpoint history and pruning had nothing to do with it.
+        verify(metrics, times(MAX_MATERIALIZE_ATTEMPTS)).checkpointBuildAborted("history_gone");
+        verify(metrics, never()).checkpointBuildAborted("lossy_refold");
+        assertTrue(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
+    }
+
+    @Test
+    void stillRefusesALossyRefoldWhileSegmentsSurvive() {
+        // The other side of that split, and it must keep shouting: segments on record mean a
+        // refold would publish a truncated checkpoint over real data, and the site is visited for
+        // those segments every night whatever any attempt counter says.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 10L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        ChangelogSegment survivor = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("lossy_refold");
+        verify(metrics, never()).checkpointBuildAborted("history_gone");
+        assertEquals(0, owing.materializeAttempts(), "a site that is visited anyway cannot drain");
+    }
+
+    @Test
     void keepsACheckpointRowWhoseTableIsStillInTheFoldWithNoSurvivingRows() {
         // The boundary of the reap. A table whose rows were all deleted *in this build's own
         // segments* is still a key in the fold, with an empty row map — it gets an empty snapshot,
@@ -1192,6 +1350,16 @@ class CheckpointServiceTest {
                 .putData("id", idVal)
                 .putData("placed_on", dateVal)
                 .build();
+    }
+
+    /** The gzipped all-INSERT frame a previous build would have left at the pointer. */
+    private static byte[] frameOf(ChangeRecord... records) {
+        try (java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            ChangelogCodec.write(List.of(records), out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /** A DELETE of one row by key — the op that empties a table and, one build later, removes it. */

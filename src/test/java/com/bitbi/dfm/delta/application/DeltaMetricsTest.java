@@ -133,15 +133,20 @@ class DeltaMetricsTest {
         assertEquals(0.0, abortCounter(registry, "frame_too_large").count(),
                 "the series must exist before the first abort, or an alert has nothing to watch");
         assertEquals(0.0, abortCounter(registry, "lossy_refold").count());
+        assertEquals(0.0, abortCounter(registry, "history_gone").count());
 
         metrics.checkpointBuildAborted("frame_too_large");
         metrics.checkpointBuildAborted("frame_too_large");
         metrics.checkpointBuildAborted("lossy_refold");
+        metrics.checkpointBuildAborted("history_gone");
 
         assertEquals(2.0, abortCounter(registry, "frame_too_large").count());
         // The other abort that freezes the pointer permanently. Both must be on the meter, or the
         // alert the guide tells operators to write silently misses half the population.
         assertEquals(1.0, abortCounter(registry, "lossy_refold").count());
+        // And the third (issue #149): a frame that is gone with no segments behind it is not a
+        // lossy refold — there is no history to refold — and the recovery is a different one.
+        assertEquals(1.0, abortCounter(registry, "history_gone").count());
     }
 
     @Test

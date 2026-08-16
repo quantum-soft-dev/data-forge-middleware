@@ -60,6 +60,7 @@ public class CheckpointService {
     private final DeltaParquetProperties parquetProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final CheckpointEpochGuard epochGuard;
+    private final CheckpointRetryProperties retryProperties;
     private final ApplicationShutdownSignal shutdownSignal;
     private final Path tempDirectory;
     /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
@@ -77,6 +78,7 @@ public class CheckpointService {
                              DeltaParquetProperties parquetProperties,
                              ApplicationEventPublisher eventPublisher,
                              CheckpointEpochGuard epochGuard,
+                             CheckpointRetryProperties retryProperties,
                              ApplicationShutdownSignal shutdownSignal,
                              // fully qualified: the delta wire Value is imported above
                              @org.springframework.beans.factory.annotation.Value(
@@ -103,6 +105,7 @@ public class CheckpointService {
         this.parquetProperties = parquetProperties;
         this.eventPublisher = eventPublisher;
         this.epochGuard = epochGuard;
+        this.retryProperties = retryProperties;
         this.shutdownSignal = shutdownSignal;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
@@ -172,39 +175,18 @@ public class CheckpointService {
         boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
         boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
-        // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
-        // recordCheckpoint). If it reads as absent — deleted, or an S3 HEAD denial masquerading
-        // as absence — a refold is lossless only while the full history survives; after retention
-        // pruning it would silently publish a truncated checkpoint and advance the pointer, making
-        // the loss durable. Refuse and let the build fail loudly instead.
-        if (checkpointSeq > 0 && !haveFrame && historyPruned) {
-            // Unless a wipe took them. It deletes the frame and the segments after committing the
-            // new epoch, so a build that read the pointer just before it sees exactly this state —
-            // and raising the loudest alarm in this subsystem for a routine operator action would
-            // be wrong. Re-read the epoch and discard instead. (The re-read can itself lose the
-            // race, in which case the alarm is raised as before; a wipe repeated on that site
-            // clears it, since the pointer is 0 by then.) A re-baseline moves the same epoch and is
-            // just as routine, so it is covered by the same re-read.
-            if (!syncStateService.getSyncState(siteId).epoch().equals(epoch)) {
-                log.warn("Discarding the checkpoint build for site {}: its history was replaced "
-                        + "while the build was reading, taking frame@{} with it", siteId, checkpointSeq);
+        try {
+            // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
+            // recordCheckpoint). If it reads as absent — deleted, or an S3 HEAD denial masquerading
+            // as absence — a refold is lossless only while the full history survives; after
+            // retention pruning it would silently publish a truncated checkpoint and advance the
+            // pointer, making the loss durable. Refuse and let the build fail loudly instead.
+            if (checkpointSeq > 0 && !haveFrame && historyPruned) {
+                return refuseRefold(siteId, segments, checkpointSeq, epoch);
+            }
+            if (segments.isEmpty() && !haveFrame) {
                 return Map.of();
             }
-            // Counted with the frame ceiling (issue #153) and for the same reason: the pointer
-            // stays where it is, retention stops with it, and nothing about waiting repairs
-            // either. Counting only one of the two permanent freezes would make the alert the
-            // operator guide asks for silently miss half of them.
-            metrics.checkpointBuildAborted("lossy_refold");
-            throw new S3CheckpointStorage.CheckpointStorageException(
-                    "Checkpoint frame@" + checkpointSeq + " for site " + siteId
-                            + " is unreadable and earlier segments are pruned — refusing lossy refold",
-                    null);
-        }
-        if (segments.isEmpty() && !haveFrame) {
-            return Map.of();
-        }
-
-        try {
             return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
         } catch (BuildEndedByShutdownException e) {
             // Not a failure of this build either, and above all not a fact about any table it was
@@ -223,6 +205,80 @@ public class CheckpointService {
             // taken — and the objects it uploaded are orphans the next wipe sweeps.
             log.warn("Discarding the checkpoint build for site {}: {}", siteId, e.getMessage());
             return Map.of();
+        }
+    }
+
+    /**
+     * The seed frame is unreadable and the changelog cannot replace it. Two different facts hide
+     * behind that, and they deserve two different answers (issue #149, review of #148).
+     *
+     * <p>With segments still on record, a refold would produce a <em>truncated</em> checkpoint and
+     * make the loss durable by advancing the pointer over it: that is the pre-existing
+     * "refusing lossy refold", it is about data that exists and it must keep shouting, because the
+     * site is visited for its segments every night whatever this method does.</p>
+     *
+     * <p>With <b>no</b> segments at all there is no history to refold, lossily or otherwise — the
+     * frame was the site's entire checkpoint history and it is gone. Nothing the changelog can
+     * offer will bring it back, so the message says so instead of blaming pruning, and every
+     * still-retryable row of the site spends an attempt. That is what ends the nightly alarm: such
+     * a site is on the tick's work list <em>only</em> because of those rows, so once they have
+     * given up it is not visited at all, and {@code delta.checkpoint.tables.given-up} carries the
+     * fact from then on. Recovery is a re-baseline or a history wipe, both of which delete the rows
+     * outright.</p>
+     */
+    private Map<String, Map<String, FoldedRow>> refuseRefold(UUID siteId,
+                                                             List<ChangelogSegment> segments,
+                                                             long checkpointSeq,
+                                                             SiteEpoch epoch) {
+        // Unless a wipe took them. It deletes the frame and the segments after committing the
+        // new epoch, so a build that read the pointer just before it sees exactly this state —
+        // and raising the loudest alarm in this subsystem for a routine operator action would
+        // be wrong. Re-read the epoch and discard instead. (The re-read can itself lose the
+        // race, in which case the alarm is raised as before; a wipe repeated on that site
+        // clears it, since the pointer is 0 by then.) A re-baseline moves the same epoch and is
+        // just as routine, so it is covered by the same re-read.
+        if (!syncStateService.getSyncState(siteId).epoch().equals(epoch)) {
+            log.warn("Discarding the checkpoint build for site {}: its history was replaced "
+                    + "while the build was reading, taking frame@{} with it", siteId, checkpointSeq);
+            return Map.of();
+        }
+        if (segments.isEmpty()) {
+            metrics.checkpointBuildAborted("history_gone");
+            spendAnAttemptOnEveryRetryableTable(siteId, epoch);
+            throw new S3CheckpointStorage.CheckpointStorageException(
+                    "Checkpoint frame@" + checkpointSeq + " for site " + siteId
+                            + " is unreadable and the changelog is empty — there is no history left "
+                            + "to rebuild this site's checkpoints from. A re-baseline or a history "
+                            + "wipe is the only recovery; the nightly retry stops after "
+                            + retryProperties.maxMaterializeAttempts() + " attempts",
+                    null);
+        }
+        // Counted with the frame ceiling (issue #153) and for the same reason: the pointer
+        // stays where it is, retention stops with it, and nothing about waiting repairs
+        // either. Counting only one of the two permanent freezes would make the alert the
+        // operator guide asks for silently miss half of them.
+        metrics.checkpointBuildAborted("lossy_refold");
+        throw new S3CheckpointStorage.CheckpointStorageException(
+                "Checkpoint frame@" + checkpointSeq + " for site " + siteId
+                        + " is unreadable and earlier segments are pruned — refusing lossy refold",
+                null);
+    }
+
+    /**
+     * Charge a site-wide abort to the rows that keep the site on the nightly work list.
+     *
+     * <p>The abort happens before any table is reached, so no per-table catch can record it — yet
+     * it is exactly as final for those rows as an unrenderable value would be, and without this
+     * they would be retried nightly forever for a build that cannot start.</p>
+     */
+    private void spendAnAttemptOnEveryRetryableTable(UUID siteId, SiteEpoch epoch) {
+        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
+            if (checkpoint.hasGivenUpMaterializing(retryProperties.maxMaterializeAttempts())
+                    || checkpoint.getS3KeyParquet() != null) {
+                continue;
+            }
+            checkpoint.recordFailedMaterialization();
+            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
         }
     }
 
@@ -247,7 +303,7 @@ public class CheckpointService {
             // wrong order.
             if (newSegments.isEmpty()
                     && (!haveFrame || (idlePass == SnapshotPass.RETRY_MISSING
-                            && !hasUnmaterializedTables(siteId)))) {
+                            && !hasRetryableUnmaterializedTables(siteId)))) {
                 return Map.of();
             }
 
@@ -431,8 +487,24 @@ public class CheckpointService {
                 if (existing.isPresent() && existing.get().getS3KeyParquet() != null) {
                     return;
                 }
+                // The bound on the retry (issue #149). A row that has spent its attempts is not
+                // going to materialize tonight either: the causes that survive this many nights —
+                // a schema the client never submits, a value Parquet cannot render — are not the
+                // kind that pass with time. Only the *dedicated* retry stops; an incremental build
+                // below still writes this table with the rest of its fold.
+                if (existing.isPresent()
+                        && existing.get().hasGivenUpMaterializing(
+                                retryProperties.maxMaterializeAttempts())) {
+                    return;
+                }
             }
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
+            if (pass == SnapshotPass.FORCE) {
+                // The operator's exit from the cap, and the reason giving up is not a dead end:
+                // asking for a rebuild says the cause has been dealt with, so the row goes back
+                // into the nightly population whether this attempt succeeds or not.
+                checkpoint.rearmMaterialization();
+            }
 
             TableSchema tableSchema = schemas.get(tableName);
             if (tableSchema == null) {
@@ -444,6 +516,7 @@ public class CheckpointService {
                 // there is no cause to preserve here, and an epoch refusal must leave the meter
                 // alone. A discarded build has no tables to report a hole for.
                 if (abandonStaleSnapshot(checkpoint, pass)) {
+                    checkpoint.recordFailedMaterialization();
                     epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
                 }
                 metrics.checkpointTableUnmaterialized("no_schema");
@@ -500,6 +573,11 @@ public class CheckpointService {
                 // as its snapshot — detach it. On a same-seq rematerialize the last-good object
                 // is still at that key; keep the row pointing at it.
                 if (abandonStaleSnapshot(checkpoint, pass)) {
+                    // The row ends this build owing a snapshot, so the attempt is spent (issue
+                    // #149). A failure that leaves a still-valid last-good key is deliberately not
+                    // counted: the retry exists for rows with nothing to serve, and charging one
+                    // to a healthy row would eventually retire a table nobody is waiting on.
+                    checkpoint.recordFailedMaterialization();
                     epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
                 }
             } finally {
@@ -592,9 +670,18 @@ public class CheckpointService {
         }
     }
 
-    private boolean hasUnmaterializedTables(UUID siteId) {
+    /**
+     * Does this site still owe a rematerialize that the nightly pass is allowed to attempt?
+     *
+     * <p>"Unmaterialized" alone is not the question (issue #149): a row that has spent its attempts
+     * is unmaterialized and will stay that way, and answering yes for it is what made an idle visit
+     * pay a frame download and a whole-site fold every night for work the pass would then skip.</p>
+     */
+    private boolean hasRetryableUnmaterializedTables(UUID siteId) {
+        int maxAttempts = retryProperties.maxMaterializeAttempts();
         return checkpointRepository.findBySiteId(siteId).stream()
-                .anyMatch(checkpoint -> checkpoint.getS3KeyParquet() == null);
+                .anyMatch(checkpoint -> checkpoint.getS3KeyParquet() == null
+                        && !checkpoint.hasGivenUpMaterializing(maxAttempts));
     }
 
     /**
