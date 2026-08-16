@@ -7,7 +7,9 @@ import com.bitbi.dfm.delta.application.DeltaEgressWorker;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
+import com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import com.bitbi.dfm.delta.application.PreparedSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.grpc.v2.*;
@@ -19,9 +21,11 @@ import io.grpc.stub.StreamObserver;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.mockito.stubbing.Answer;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -70,12 +74,15 @@ abstract class DeltaIngestionContractTestSupport {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         ChangelogSegment segment = mock(ChangelogSegment.class);
         when(segment.getS3Key()).thenReturn(SEGMENT_KEY);
-        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
-        when(changelogSegmentService.persistProvisional(any(), any(), any(), anyLong(), any())).thenReturn(segment);
+        when(changelogSegmentService.prepare(any(), any(), any(), anyLong(), any()))
+                .thenAnswer(preparedSegment());
+        when(changelogSegmentService.persistPrepared(any())).thenReturn(segment);
+        when(changelogSegmentService.persistPreparedProvisional(any())).thenReturn(segment);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new DeltaSessionCommitTransaction(changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(DeltaEgressWorker.class), rebaselineService));
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()),
@@ -99,6 +106,24 @@ abstract class DeltaIngestionContractTestSupport {
     void stopInProcessServer() {
         channel.shutdownNow();
         server.shutdownNow();
+    }
+
+    /**
+     * Stub answer for {@code ChangelogSegmentService.prepare}: the segment's object is already
+     * uploaded by the time the commit transaction opens (issue #147), so the harness has to hand
+     * back a {@link PreparedSegment} derived from the call's own arguments.
+     */
+    protected static Answer<PreparedSegment> preparedSegment() {
+        return invocation -> {
+            UUID siteId = invocation.getArgument(0);
+            UUID batchId = invocation.getArgument(1);
+            String mode = invocation.getArgument(2);
+            long firstSeq = invocation.getArgument(3);
+            List<ChangeRecord> records = invocation.getArgument(4);
+            long lastSeq = records.isEmpty() ? firstSeq - 1 : records.get(records.size() - 1).getSeq();
+            return new PreparedSegment(UUID.randomUUID(), siteId, batchId, mode, firstSeq, lastSeq,
+                    records.size(), "content-hash", SEGMENT_KEY, Map.of());
+        };
     }
 
     protected static Batch mockBatch(UUID id) {

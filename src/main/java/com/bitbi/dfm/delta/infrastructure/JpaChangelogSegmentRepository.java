@@ -39,7 +39,7 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findProvisionalBySiteId(UUID siteId);
 
     // flushAutomatically is load-bearing, not decoration. This runs mid-transaction in
-    // DeltaSessionCommitService.commit, right after rebaselineService.reset() dirtied SiteSyncState
+    // DeltaSessionCommitTransaction.commit, right after rebaselineService.reset() dirtied SiteSyncState
     // and queued checkpoint deletes. Hibernate auto-flushes before a query only when the query space
     // intersects the pending changes; site_sync_state / checkpoints do not intersect
     // changelog_segments, so without an explicit flush clearAutomatically would detach and silently
