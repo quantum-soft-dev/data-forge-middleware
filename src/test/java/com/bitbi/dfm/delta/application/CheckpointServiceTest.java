@@ -17,6 +17,8 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.TableSchema;
+import com.bitbi.dfm.util.LogCapture;
+import ch.qos.logback.classic.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -113,7 +115,7 @@ class CheckpointServiceTest {
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "FULL_SNAPSHOT", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("customers", 2L, 2, "Bob")));
         when(checkpointRepository.findBySiteIdAndTableName(eq(SITE), any())).thenReturn(Optional.empty());
@@ -131,12 +133,40 @@ class CheckpointServiceTest {
      * {@code maxFrameTempBytes} bounds the all-tables reload frame and aborts the build.
      */
     private CheckpointService newService(String scratchDirectory, long maxTempBytes, long maxFrameTempBytes) {
+        return newService(scratchDirectory, maxTempBytes, maxFrameTempBytes, Long.MAX_VALUE);
+    }
+
+    /** As above, plus the ceiling on the fold's own heap (issue #152). */
+    private CheckpointService newService(String scratchDirectory, long maxTempBytes,
+                                         long maxFrameTempBytes, long maxFoldBytes) {
         return new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
-                scratchDirectory, maxTempBytes, maxFrameTempBytes);
+                scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes);
+    }
+
+    /**
+     * Serve a segment's records to a streaming reader, one at a time — the build never asks for
+     * them as a list any more (issue #152).
+     */
+    private void stubSegmentRecords(String s3Key, List<ChangeRecord> records) {
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<ChangeRecord> consumer = invocation.getArgument(1);
+            records.forEach(consumer);
+            return null;
+        }).when(changelogSegmentService).forEachRecord(eq(s3Key), any());
+    }
+
+    /**
+     * Serve the seed frame as a stream. A fresh stream per call: the build reads the object once,
+     * and a shared, already-consumed stream would hide a second read rather than fail on it.
+     */
+    private void stubFrame(long seq, byte[] frameBytes) {
+        when(checkpointStorage.openFrame(SITE, seq))
+                .thenAnswer(invocation -> new java.io.ByteArrayInputStream(frameBytes));
     }
 
     @Test
@@ -195,7 +225,7 @@ class CheckpointServiceTest {
         // "orders" declares a date column whose folded value cannot be coerced: the Parquet write
         // throws. That must not roll back the whole build (checkpoint pointer frozen, retention
         // skipped, segments accumulating) — that one table goes unmaterialized, the rest proceeds.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 orderRecord(2L, "not-a-date")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -274,7 +304,7 @@ class CheckpointServiceTest {
         // The corollary: the remaining tables are not tried either. Every one of them would fail
         // the same way, and each failure is another chance to write a verdict about the data from
         // a fact about the process.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -324,7 +354,7 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
@@ -336,23 +366,23 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(metrics).recordCheckpointPhase(eq("fold"), anyLong());
         // The parquet phase times a void, file-backed write since #112 — the meter name and its
         // "parquet" tag are unchanged, only the timed shape is.
         verify(metrics).timeCheckpointPhase(eq("parquet"), any(Runnable.class));
         verify(metrics, atLeastOnce()).timeCheckpointPhase(eq("upload"), any(Runnable.class));
-        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
+        verify(metrics, never()).recordCheckpointPhase(eq("download_frame"), anyLong());
     }
 
     @Test
     void recordsDownloadFramePhaseWhenASeedFrameExists() {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
-        when(checkpointStorage.downloadFrame(SITE, 2L)).thenReturn(ChangelogCodec.serialize(List.of()));
+        stubFrame(2L, ChangelogCodec.serialize(List.of()));
         ChangelogSegment newer = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 3L, 4L, 2L, "hash", "s3/tail", "DELTA", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(newer));
-        when(changelogSegmentService.readRecords("s3/tail")).thenReturn(List.of(
+        stubSegmentRecords("s3/tail", List.of(
                 record("customers", 3L, 3, "Cara"),
                 record("customers", 4L, 4, "Dan")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
@@ -360,9 +390,283 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(metrics).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
-        verify(checkpointStorage).downloadFrame(SITE, 2L);
-        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(metrics).recordCheckpointPhase(eq("download_frame"), anyLong());
+        verify(checkpointStorage).openFrame(SITE, 2L);
+        verify(metrics).recordCheckpointPhase(eq("fold"), anyLong());
+    }
+
+    @Test
+    void seedsTheFoldByStreamingTheFrameRatherThanReadingItIntoHeap() throws Exception {
+        // Issue #152: the frame used to arrive as one byte[] that ChangelogCodec.parse then expanded
+        // into a List of every record in the site — a second and a third full copy of the site
+        // before the fold even started. The storage port no longer offers the byte[] form at all,
+        // which is the half of this a mock cannot show.
+        assertThrows(NoSuchMethodException.class,
+                () -> S3CheckpointStorage.class.getMethod("downloadFrame", UUID.class, long.class),
+                "downloadFrame must be gone, not merely unused: it is the byte[] this ticket removes");
+
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(1, state.get("customers").size(), "the streamed frame must seed the fold");
+        verify(checkpointStorage).openFrame(SITE, 2L);
+    }
+
+    @Test
+    void foldsEachSegmentAsItStreamsInsteadOfCollectingThemFirst() {
+        // The other list this ticket removes: every new segment's records used to be added to one
+        // ArrayList before a single fold call, so a re-baseline (whose whole snapshot sits above the
+        // pointer) held the entire site as records *and* as the fold it was about to become.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(2, state.get("customers").size(), "both streamed records must be folded");
+        verify(changelogSegmentService).forEachRecord(eq("s3/segment"), any());
+    }
+
+    @Test
+    void abortsTheBuildWhenTheFoldOutgrowsItsHeapBudget() {
+        // The refusal this ticket exists for (issue #152): on a pod with a 2-3Gi limit the fold is
+        // what runs out first, and an OOMKill takes the whole process with it — in-flight ingest
+        // included — where an abort costs one site's build and says why.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+
+        CheckpointService.FoldTooLargeException thrown = assertThrows(
+                CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        assertTrue(thrown.getMessage().contains("delta.checkpoint.max-fold-bytes"),
+                "the message must name the key an operator would raise: " + thrown.getMessage());
+        // Counted with the other aborts that do not repair themselves (issue #153): the fold is
+        // deterministic for the same history, so every following tick ends the same way, with the
+        // pointer — and retention with it — frozen where it was.
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointRepository, never()).save(any());
+    }
+
+    @Test
+    void buildsNormallyWhileTheFoldFitsItsHeapBudget() {
+        // The other side of the guard: a budget that the site fits under must not change anything
+        // about the build, or the ceiling would be a second way to lose a checkpoint.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 1024L * 1024L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+        verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    @Test
+    void countsTheFoldOfTheSeedFrameAgainstTheSameBudget() {
+        // A site that is quiet still folds its whole history from the frame, so the budget has to
+        // cover the seed as well — otherwise the one build that reloads everything at once is the
+        // one build the guard does not watch.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+    }
+
+    @Test
+    void stillAttributesTheFrameTransferWhenTheFoldAbortsWhileReadingIt() {
+        // The phases are recorded in a finally so an aborted build can be read at all; recording
+        // download_frame=0 and charging the whole transfer to fold would make that reading wrong
+        // on the one build worth reading.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(
+                record("customers", 1L, 1, "Ann"), record("customers", 2L, 2, "Bob"))));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        ArgumentCaptor<Long> frameNanos = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointPhase(eq("download_frame"), frameNanos.capture());
+        assertTrue(frameNanos.getValue() > 0,
+                "the transfer that did happen must not be charged to the fold: " + frameNanos.getValue());
+    }
+
+    @Test
+    void warnsOnTheFoldsPeakRatherThanTheSizeItHappenedToEndAt() {
+        // The ceiling is enforced on the running total, so the warning has to watch the same number.
+        // A fold that rises and falls back — a night's inserts followed by the deletes that retire
+        // them — would otherwise stay silent at DEBUG until the tick whose peak crosses the budget,
+        // which is exactly the tick this warning exists to precede.
+        List<ChangeRecord> records = List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("customers", 2L, 2, "Bob"),
+                record("customers", 3L, 3, "Cara"),
+                deletion("customers", 4L, 2),
+                deletion("customers", 5L, 3));
+        // A budget the fold's peak fills past 75% and its final size does not.
+        long peak = foldedBytes(records.subList(0, 3));
+        long ending = foldedBytes(List.of(records.get(0)));
+        long budget = peak + ending;
+        assertTrue(peak * 100 >= budget * 75 && ending * 100 < budget * 75,
+                "fixture: peak " + peak + " must be over and the ending " + ending
+                        + " under 75% of " + budget);
+
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, budget);
+        ChangelogSegment segment = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 1L, 5L, 5L, "hash", "s3/segment", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
+        stubSegmentRecords("s3/segment", records);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        List<String> warnings;
+        try (LogCapture log = LogCapture.attachTo(CheckpointService.class)) {
+            Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+            assertEquals(1, state.get("customers").size(), "the deletes did shrink the fold back");
+            warnings = log.messagesContaining(Level.WARN, "delta.checkpoint.max-fold-bytes");
+        }
+
+        assertEquals(1, warnings.size(),
+                "a fold that peaked over the threshold must say so, whatever it shrank back to: "
+                        + warnings);
+    }
+
+    /** What those records fold to, measured the same way the budget measures it. */
+    private static long foldedBytes(List<ChangeRecord> records) {
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = new java.util.LinkedHashMap<>();
+        long bytes = 0;
+        for (ChangeRecord record : records) {
+            bytes += ChangelogFold.apply(state, record);
+        }
+        return bytes;
+    }
+
+    @Test
+    void doesNotRecordAZeroFrameDownloadWhenTheObjectCannotEvenBeOpened() {
+        // A GetObject that fails took time and must be sampled as such. Recording a zero would make
+        // delta.checkpoint.duration{phase=download_frame} read as though frame downloads had got
+        // faster during a read outage — and the outage puts every site of the tick in that bucket.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        when(checkpointStorage.openFrame(SITE, 2L)).thenThrow(
+                new S3CheckpointStorage.CheckpointStorageException("GetObject failed", null));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        ArgumentCaptor<Long> frameNanos = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointPhase(eq("download_frame"), frameNanos.capture());
+        assertTrue(frameNanos.getValue() > 0,
+                "the failed GetObject must be sampled, not recorded as zero: " + frameNanos.getValue());
+    }
+
+    @Test
+    void namesTheFrameWhenItsBodyCannotBeRead() {
+        // Streaming moved the failure from S3CheckpointStorage.download — which named the object —
+        // to ChangelogCodec.forEach, whose UncheckedIOException names neither the site nor the seq,
+        // and CheckpointScheduler logs only the message.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        when(checkpointStorage.openFrame(SITE, 2L)).thenAnswer(invocation -> new java.io.InputStream() {
+            @Override
+            public int read() throws IOException {
+                throw new IOException("connection reset mid-body");
+            }
+        });
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        S3CheckpointStorage.CheckpointStorageException thrown = assertThrows(
+                S3CheckpointStorage.CheckpointStorageException.class, () -> service.buildCheckpoint(SITE));
+
+        assertTrue(thrown.getMessage().contains(SITE.toString()) && thrown.getMessage().contains("seq 2"),
+                "the failure must name the frame it could not read: " + thrown.getMessage());
+    }
+
+    @Test
+    void namesTheSegmentWhenOneCannotBeRead() {
+        // Same regression on the other half of the fold: readRecords used to fail as a
+        // SegmentStorageException carrying the key, the streaming path as "Failed to stream change
+        // records" carrying nothing.
+        doThrow(new UncheckedIOException("Failed to stream change records", new IOException("reset")))
+                .when(changelogSegmentService).forEachRecord(eq("s3/segment"), any());
+
+        S3CheckpointStorage.CheckpointStorageException thrown = assertThrows(
+                S3CheckpointStorage.CheckpointStorageException.class, () -> service.buildCheckpoint(SITE));
+
+        assertTrue(thrown.getMessage().contains("s3/segment") && thrown.getMessage().contains(SITE.toString()),
+                "the failure must name the segment and the site: " + thrown.getMessage());
+    }
+
+    @Test
+    void recordsTheFoldsPeakSizeOnAMeterSoTheBandBelowTheCeilingIsAlertable() {
+        // The 75% WARN precedes a permanent abort, and no alert can be written on a log line — the
+        // same reasoning that put the abort itself on a counter (#153).
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Long> foldBytes = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointFoldBytes(foldBytes.capture());
+        assertTrue(foldBytes.getValue() > 0, "the fold's size must reach the meter: " + foldBytes.getValue());
+    }
+
+    @Test
+    void recordsNoFoldSizeForAnIdleVisitOrAnAbortedBuild() {
+        // An idle visit answers before folding (issue #149), so it has no size to report; an
+        // aborted build has exactly one over-budget sample, which is the counter's business and
+        // would poison the series an operator reads as "how much room is left".
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
+
+        service.buildCheckpoint(SITE);
+        verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
+
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+        verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
+    }
+
+    @Test
+    void resolvesAnUnsetFoldBudgetAgainstTheHeapTheProcessWasGiven() {
+        // The budget has to arrive by itself on a pod nobody tuned — unlike the scratch ceilings,
+        // whose disk the process cannot see, the heap is right there. Half rather than the quarter
+        // capacity planning would ask for: this is the last line before an OOMKill and its refusal
+        // is permanent, so it must not refuse a fold that fits (see resolveMaxFoldBytes).
+        assertEquals(Runtime.getRuntime().maxMemory() / 2, CheckpointService.resolveMaxFoldBytes(0L),
+                "an unset budget must derive from the max heap");
+        assertEquals(123L, CheckpointService.resolveMaxFoldBytes(123L), "an explicit budget wins");
     }
 
     @Test
@@ -489,7 +793,7 @@ class CheckpointServiceTest {
         // deployed scratch budget (#131/#138) is `2 x max(table, frame)`, one file per build path,
         // not `frame + table`. So the frame is written, uploaded and deleted before the first
         // table's file is created.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -538,7 +842,7 @@ class CheckpointServiceTest {
     void keepsOnlyOneTableSnapshotOnDiskAtATime() {
         // Table by table: fold rows -> file -> upload -> drop the file. Holding every table's
         // snapshot at once would put the peak back in proportion to the table count.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -628,13 +932,13 @@ class CheckpointServiceTest {
         assertEquals(2L, recovered.getValue().getSeq(), "rematerialize must not invent a new seq");
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
-        verify(changelogSegmentService, never()).readRecords(any());
+        verify(changelogSegmentService, never()).forEachRecord(any(), any());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
     void rematerializesOnlyTheTableThatStillHasNoArtifact() {
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -714,9 +1018,9 @@ class CheckpointServiceTest {
         assertEquals(Map.of(), service.buildCheckpoint(SITE),
                 "an idle visit with no work folds nothing at all");
 
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
-        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
-        verify(metrics, never()).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
+        verify(metrics, never()).recordCheckpointPhase(eq("download_frame"), anyLong());
+        verify(metrics, never()).recordCheckpointPhase(eq("fold"), anyLong());
     }
 
     @Test
@@ -776,7 +1080,7 @@ class CheckpointServiceTest {
         verify(checkpointRepository, never()).save(any());
         // And the whole visit is skipped: with no retryable row left there is nothing for the fold
         // to be folded for, so the frame is not even fetched.
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
     }
 
     @Test
@@ -904,7 +1208,7 @@ class CheckpointServiceTest {
         verify(metrics, never()).checkpointBuildAborted(any());
         // And nothing durable was decided either way — a refold from zero would be exactly the
         // truncated checkpoint the refusal exists to prevent.
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(checkpointRepository, never()).save(any());
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
@@ -1050,7 +1354,7 @@ class CheckpointServiceTest {
         // segments* is still a key in the fold, with an empty row map — it gets an empty snapshot,
         // exactly as before. Only the next build, seeded from a frame that no longer mentions it,
         // sees it as gone. Reaping it a build early would delete a row the build is still writing.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob"),
                 deletion("orders", 3L, 2)));
@@ -1254,7 +1558,7 @@ class CheckpointServiceTest {
         // The per-table catch exists so one unrenderable table cannot freeze the pointer. An epoch
         // change is the opposite: nothing about this build may be published, so it must escape the
         // catch instead of being counted as a skip and letting the next table try.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -1435,7 +1739,7 @@ class CheckpointServiceTest {
     private void parkAtPointer(long seq, byte[] frameBytes, Checkpoint... rows) {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, seq)).thenReturn(ObjectPresence.PRESENT);
-        when(checkpointStorage.downloadFrame(SITE, seq)).thenReturn(frameBytes);
+        stubFrame(seq, frameBytes);
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(rows));
         for (Checkpoint row : rows) {
             when(checkpointRepository.findBySiteIdAndTableName(SITE, row.getTableName()))

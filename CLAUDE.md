@@ -453,6 +453,79 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-fold-heap-bound: The checkpoint path's first bound is heap, and it is now a refusal
+  rather than an `OOMKilled` (issue #152, raised reviewing #151). #112 and #126 put the per-table
+  snapshot and the reload frame on disk, and #138 set the deployed ceilings below the volume — but
+  the two consumers that scale with a **site's row count** were still in heap on the same path, so
+  on a 2–3Gi pod the disk ceilings were never what a growing site reached first. **Three copies were
+  removable and one was not.** `S3CheckpointStorage.downloadFrame` read the gzipped frame into one
+  `byte[]` and `ChangelogCodec.parse` expanded it into a `List` of every record in the site;
+  `CheckpointService.materialize` then collected every new segment's records into a second list
+  before a single `ChangelogFold.fold(seed, …)` call whose first act is `deepCopy(initial)` — four
+  full-site copies at the peak, of which the `deepCopy` (a whole second fold, live at once) is the
+  one the ticket's own description missed. Now `openFrame` returns an `InputStream`, the mirror of
+  the `uploadFrame` that has streamed from a file since #126, and new
+  `ChangelogFold.apply(state, record)` folds one record **in place** — so the frame, then each
+  segment, is folded as it arrives and every record is dropped immediately; `fold(initial, records)`
+  keeps its copy-then-apply contract for the callers that do have a starting state to preserve
+  (tests, and nothing in production). Peak: ~4 full-site copies → 1. **What remains is the fold
+  itself**, still one entry per surviving row for the length of the build, which is why the second
+  half is a ceiling and not more streaming: `delta.checkpoint.max-fold-bytes`
+  (`DELTA_CHECKPOINT_MAX_FOLD_BYTES`, **0 = auto = half the max heap**) aborts the build
+  with `FoldTooLargeException`, an ERROR naming site and key, and
+  `delta.checkpoint.builds.aborted{reason=fold_too_large}` — a fourth value on #153's meter,
+  deliberately, because it is a **permanent** abort by that meter's contract: a site's history does
+  not shrink on its own, so every following tick ends identically with retention frozen at the
+  pointer. Nothing durable is written, because the fold precedes the frame upload — the build's
+  first side effect since #153. Three decisions a reviewer should weigh: **the unit is estimated
+  retained heap, not serialized bytes** (`ChangelogFold.estimatedRetainedBytes`, a coarse per-row
+  object-graph figure over map entries, column-name strings, values and the row's identity string) —
+  `delta.ingestion.max-session-bytes` counts wire bytes and assumes a 3–5x retained ratio, which
+  does not transfer to a fold that duplicates key columns and re-parses every column name per row,
+  where the ratio runs to ~20x for narrow rows and no single wire-byte ceiling could be both safe
+  and useful; **the budget is derived, not declared beside the deployment** (the opposite of #138's
+  scratch ceilings, and for a stated reason — a process cannot see how large its scratch volume is,
+  but it can always see its own `-Xmx`), so no ConfigMap change and
+  `ParquetScratchCeilingBudgetTest` is untouched; and **half rather than the quarter capacity
+  planning asks for** — the second review round's main finding, and the correction matters: the
+  `2 x` of the scratch budget plus live ingest says a quarter, but this ceiling is not a capacity
+  plan, it is the last line before an OOMKill and its refusal is permanent (retention freezes with
+  the pointer). Since the seed path used to hold two to three full-site copies, a site building
+  successfully **today** can have a fold near half the heap — a quarter would have refused it on
+  the first tick after the deployment that made its build cheaper, which is the one regression this
+  ticket could introduce. A quarter is available explicitly for whoever wants the headroom, and
+  one night at DEBUG on `CheckpointService` sizes the key against real folds before it is lowered. The running total costs one
+  addition per record, not a walk: `apply` returns what each record did to the state's size. A build
+  logs its **peak** estimate at DEBUG, **WARNs at 75%** of the budget and records it on new
+  **`delta.checkpoint.fold.bytes`** (a summary; an aborted build and an idle visit are both absent
+  from it on purpose), so the band below the ceiling can carry an alert instead of living in a log
+  sink — the same reasoning #153 used for the abort counter. The ceiling is **per build, not per
+  process**: two concurrent folds at 45% each still exhaust the heap, which takes a forced rebuild
+  beside the nightly sweep and is the heap twin of #150, filed from this review as **#178**. A site
+  approaching the cliff is visible before the first abort — the peak and not the final size, raised in review: the
+  ceiling is enforced on the running total, so a fold that rises and falls back (a night's inserts
+  followed by the deletes retiring them) would otherwise stay silent until the tick whose peak
+  crosses. Three more review findings, all in the same
+  region: an abort mid-frame recorded `download_frame=0` and charged the transfer to `fold` (the
+  counter is now written by `foldFrame` whichever way it ends); `foldFrame`'s `IOException` catch
+  was unreachable for the failure it named, since `ChangelogCodec.forEach` wraps every read and
+  parse failure into an `UncheckedIOException` mentioning neither site nor key — both are caught now
+  and re-thrown as the `CheckpointStorageException` the removed `download` used to produce; and
+  `ChangelogSegmentService.forEachRecord`'s `finally` **replaced** an in-flight exception when
+  closing a partially consumed S3 stream failed, which is exactly what an aborted fold produces —
+  the abort would have reached `CheckpointService` as an `UncheckedIOException`, missing its counter
+  and its ERROR line, so the close failure is now suppressed onto the primary. `VALUE_BYTES` also
+  went 24 → 40 (a generated protobuf message carries `memoizedSize`, an `unknownFields` reference
+  and the oneof case), and the estimate's one blind spot is documented rather than papered over: a
+  character is charged one byte, true for compact Latin-1 strings, so a site whose string data is
+  Cyrillic or CJK is under-counted by roughly its string payload and wants a lower key. **Off-heap or spillable folding is deliberately not attempted** —
+  the ticket's middle option, and the one that would have made this a rewrite; this is its stated
+  interim, and the guide says so where the "later ticket" has been named since #112. Two meter
+  notes: `phase=download_frame` keeps its meaning through `TimingInputStream` (the transfer now
+  interleaves with the fold instead of finishing before it), and `phase=fold` **additionally covers
+  the seed frame's fold**, which used to fall between the two phases and be timed by neither — the
+  series' values move, its name and tag do not. No REST, gRPC, proto, DTO, migration, S3-key or
+  frontend change. See `docs/delta-client-v2-guide.md` ("The first bound is heap", Metrics).
 - s3-presence-tristate: A read denial and an absent object are two different answers again, at the
   call site that acts on them (issue #157, filed reviewing #154 and made durable by #149).
   `S3CheckpointStorage.exists` returned `false` for a genuine 404 and for a 403 alike. The
