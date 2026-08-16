@@ -9,7 +9,7 @@ import com.bitbi.dfm.site.domain.TableSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +25,13 @@ import java.util.Map;
  * {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}. Tables without a declared
  * schema are skipped (logged) — the segment is still marked egressed so the queue drains.
  * Re-running after a partial failure is idempotent: the same keys are overwritten.</p>
+ *
+ * <p>This class opens <em>no</em> transaction of its own (issue #164). The pending-row claim
+ * and the {@code egress_at} write are the repository's short transactions; the S3 download,
+ * Parquet render and per-table uploads run with nothing open. A crash after a successful
+ * upload leaves the segment pending and the sweep retries — the same keys are overwritten.
+ * Calling {@link #egressSegment} with a transaction already open is refused rather than
+ * silently pinning that connection across the network round trip.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -56,12 +63,14 @@ public class DeltaEgressService {
     }
 
     /**
-     * Claim and materialize the next pending segment (per-site head, {@code SKIP LOCKED}); the
-     * claim and the egress share one transaction, so a crash rolls the segment back to pending.
+     * Claim and materialize the next pending segment (per-site head, {@code SKIP LOCKED}).
+     *
+     * <p>The claim query and the later {@code egress_at} write are each their own short
+     * repository transaction. A crash between them leaves the segment pending; the sweep
+     * retries and overwrites the same keys.</p>
      *
      * @return {@code true} if a segment was processed, {@code false} when the queue is empty
      */
-    @Transactional
     public boolean egressNextPending() {
         List<ChangelogSegment> next = segmentRepository.findNextPendingEgress(1);
         if (next.isEmpty()) {
@@ -75,13 +84,19 @@ public class DeltaEgressService {
      * Write the segment's delta Parquet files and mark it egressed.
      *
      * @param segment the committed changelog segment to materialize
+     * @throws IllegalStateException when called with a transaction already open
      */
-    @Transactional
     public void egressSegment(ChangelogSegment segment) {
         metrics.timeEgress(() -> egressSegmentTimed(segment));
     }
 
     private void egressSegmentTimed(ChangelogSegment segment) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "Refusing to egress a changelog segment inside an active transaction: the "
+                            + "S3 download and per-table uploads would hold that transaction's "
+                            + "connection for the length of a network call (issue #164).");
+        }
         List<ChangeRecord> records = metrics.timeEgressPhase("download",
                 () -> changelogSegmentService.readRecords(segment.getS3Key()));
 
@@ -105,10 +120,10 @@ public class DeltaEgressService {
                                 parquetProperties.rowGroupBytes()));
             } catch (RuntimeException e) {
                 // One poison table (data the declared schema cannot render) must not wedge the
-                // queue: without this the whole segment rolls back and the sweep retries it forever,
-                // blocking every other table — the skip-and-continue contract CheckpointService
-                // documents. Render only: an upload failure is transient and must keep the segment
-                // pending for the sweep, so it stays outside the catch.
+                // queue: without this the whole segment stays pending and the sweep retries it
+                // forever, blocking every other table — the skip-and-continue contract
+                // CheckpointService documents. Render only: an upload failure is transient and
+                // must keep the segment pending for the sweep, so it stays outside the catch.
                 log.error("Delta Parquet render failed for table {} of site {} (seq {}..{}) — skipping "
                                 + "the table's delta file (check the declared schema against the data)",
                         table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
