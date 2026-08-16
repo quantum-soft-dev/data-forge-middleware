@@ -923,10 +923,12 @@ build*, so two concurrent folds of 45% each cross nothing and still exhaust the 
 That takes a forced rebuild running beside the nightly sweep — the only way one JVM holds two builds,
 and the `2 x` this note's disk formula already reserves for. Closing it needs a reservation shared
 across concurrent folds rather than a per-fold ceiling, which is the heap twin of #150 and is
-tracked as **#178**; what is bounded today is the single-build case, which is the nightly one. What is *not* bounded is the
-number of rows a fold may hold before the estimate is wrong — off-heap or spillable folding remains
-the open question here, and this ceiling is the honest interim: it turns an unattributable pod
-death into a named, counted refusal.
+tracked as **#178**; what is bounded today is the single-build case, which is the nightly one.
+
+**And the fold is still a fold.** Nothing here makes a site of any size buildable — off-heap or
+spillable folding, named as a later ticket since #112 and #126, remains the open question. This
+ceiling is the honest interim: it turns an unattributable pod death into a named, counted refusal,
+and gives the number that says which sites are near it.
 
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
