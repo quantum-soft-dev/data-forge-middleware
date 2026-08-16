@@ -47,6 +47,17 @@ public class Checkpoint {
     @Column(name = "s3_key_parquet", length = 1000)
     private String s3KeyParquet;
 
+    /**
+     * Consecutive failed attempts to materialize this table's snapshot (issue #149). Zero while the
+     * row has a snapshot; a rematerialize that fails increments it, any success resets it.
+     */
+    @Column(name = "materialize_attempts", nullable = false)
+    private Integer materializeAttempts = 0;
+
+    /** When the attempt counted above last failed; {@code null} while the row has a snapshot. */
+    @Column(name = "last_materialize_failure_at")
+    private LocalDateTime lastMaterializeFailureAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -75,7 +86,55 @@ public class Checkpoint {
 
     public void attachParquet(String s3KeyParquet) {
         this.s3KeyParquet = s3KeyParquet;
+        // A snapshot is the only thing the retry was ever after, so reaching one clears the record
+        // of getting there. The counter must mean "consecutive failures since the last snapshot" —
+        // a running total would eventually retire a table that materializes fine every other week.
+        this.materializeAttempts = 0;
+        this.lastMaterializeFailureAt = null;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Record one attempt that ended without a snapshot (issue #149).
+     *
+     * <p>Called only where the row comes out of the build with no usable key — the population the
+     * nightly rematerialize retries. A failure that leaves a still-valid last-good snapshot in
+     * place is not counted: nothing is owed for that table.</p>
+     */
+    public void recordFailedMaterialization() {
+        this.materializeAttempts = materializeAttempts() + 1;
+        this.lastMaterializeFailureAt = LocalDateTime.now(ZoneOffset.UTC);
+        this.updatedAt = this.lastMaterializeFailureAt;
+    }
+
+    /**
+     * Put a row that had given up back in the nightly retry population (issue #149).
+     *
+     * <p>The deliberate operator exit from the attempt cap, reached through a forced rebuild. It
+     * clears only the bookkeeping — the snapshot key, seq and row count are the build's business.</p>
+     */
+    public void rearmMaterialization() {
+        this.materializeAttempts = 0;
+        this.lastMaterializeFailureAt = null;
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Whether this row has spent its attempts and is no longer retried by the nightly pass.
+     *
+     * <p>Only a row without a snapshot can give up: one that has a key owes nothing, whatever
+     * happened on the way to it.</p>
+     *
+     * @param maxAttempts the configured ceiling ({@code delta.checkpoint.max-materialize-attempts})
+     * @return {@code true} when the nightly rematerialize must skip this row
+     */
+    public boolean hasGivenUpMaterializing(int maxAttempts) {
+        return s3KeyParquet == null && materializeAttempts() >= maxAttempts;
+    }
+
+    /** Never null in practice; defensive for rows read back before V53's default was applied. */
+    public int materializeAttempts() {
+        return materializeAttempts == null ? 0 : materializeAttempts;
     }
 
     /**

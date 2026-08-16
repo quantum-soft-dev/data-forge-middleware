@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -31,16 +32,22 @@ public class CheckpointScheduler {
     private final ChangelogRetentionService retentionService;
     private final ChangelogSegmentRepository segmentRepository;
     private final CheckpointRepository checkpointRepository;
+    private final CheckpointRetryProperties retryProperties;
+    private final ApplicationShutdownSignal shutdownSignal;
     private final ReentrantLock buildLock = new ReentrantLock();
 
     public CheckpointScheduler(CheckpointService checkpointService,
                                ChangelogRetentionService retentionService,
                                ChangelogSegmentRepository segmentRepository,
-                               CheckpointRepository checkpointRepository) {
+                               CheckpointRepository checkpointRepository,
+                               CheckpointRetryProperties retryProperties,
+                               ApplicationShutdownSignal shutdownSignal) {
         this.checkpointService = checkpointService;
         this.retentionService = retentionService;
         this.segmentRepository = segmentRepository;
         this.checkpointRepository = checkpointRepository;
+        this.retryProperties = retryProperties;
+        this.shutdownSignal = shutdownSignal;
     }
 
     @Scheduled(cron = "${delta.checkpoint.cron:0 0 2 * * *}")
@@ -51,6 +58,14 @@ public class CheckpointScheduler {
         }
         try {
             for (UUID siteId : sitesToVisit()) {
+                // The sweep is the outer half of the same decision CheckpointService makes between
+                // tables (issue #162): once the context is closing, the remaining sites would each
+                // open a transaction and an S3 client that are about to be destroyed. Stop here
+                // rather than fail site by site to the end of the list.
+                if (shutdownSignal.isShuttingDown()) {
+                    log.info("Ending the checkpoint tick: the application is shutting down");
+                    return;
+                }
                 try {
                     checkpointService.buildCheckpoint(siteId);
                     retentionService.prune(siteId);
@@ -77,15 +92,18 @@ public class CheckpointScheduler {
      * <p>Segment sites come first and the set de-duplicates, so a site on both lists is built once,
      * in the position it had when segments were the only source.</p>
      *
-     * <p>The rematerialize-only count is logged because a row that no build can materialize — a
-     * table with no declared schema, or one whose last row was deleted at the source — is retried
-     * by every tick with nothing to bound it (issue #149). This line is how that population is
-     * seen without querying the database.</p>
+     * <p>A row that has spent {@code delta.checkpoint.max-materialize-attempts} attempts without
+     * producing a snapshot is not on this list (issue #149) — that is the whole of the bound, since
+     * such a site has no other reason to be visited. It has not been forgotten:
+     * {@code delta.checkpoint.tables.given-up} gauges the population that dropped out, and a forced
+     * rebuild puts a row back into it. The rematerialize-only count is logged because it is the
+     * cheapest read on how much of a tick is retry rather than ingestion.</p>
      */
     private Set<UUID> sitesToVisit() {
         Set<UUID> siteIds = new LinkedHashSet<>(segmentRepository.findDistinctSiteIds());
         int withSegments = siteIds.size();
-        siteIds.addAll(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints());
+        siteIds.addAll(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(
+                retryProperties.maxMaterializeAttempts()));
         int rematerializeOnly = siteIds.size() - withSegments;
         if (rematerializeOnly > 0) {
             log.info("Checkpoint tick: {} site(s) with changelog segments, {} more visited only to "

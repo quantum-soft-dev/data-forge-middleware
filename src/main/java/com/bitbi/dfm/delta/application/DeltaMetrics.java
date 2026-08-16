@@ -24,8 +24,11 @@ import java.util.function.Supplier;
  *       {@code phase=total} is the cycle, {@code download_frame|fold|parquet|upload} are
  *       the inner steps (042)</li>
  *   <li>{@code delta.checkpoint.builds.aborted} — checkpoint builds abandoned whole, tagged
- *       {@code reason=frame_too_large|lossy_refold}; the pointer does not move, so retention
- *       freezes with it, and neither cause repairs itself</li>
+ *       {@code reason=frame_too_large|lossy_refold|history_gone}; the pointer does not move, so
+ *       retention freezes with it, and no cause repairs itself unaided. <b>Alert on the meter, not
+ *       on one tag</b> — that promise is the reason every permanent abort is registered here</li>
+ *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
+ *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -67,6 +70,7 @@ public class DeltaMetrics {
     private final Counter checkpointParquetFailed;
     private final Counter checkpointFrameTooLarge;
     private final Counter checkpointLossyRefold;
+    private final Counter checkpointHistoryGone;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -101,6 +105,7 @@ public class DeltaMetrics {
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
+        this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -188,12 +193,23 @@ public class DeltaMetrics {
      * clears. Many sites tripping in the same tick is that; one site tripping alone is the real
      * thing. The 403 branch also logs a WARN naming the key, which is the tiebreaker.</p>
      *
-     * @param reason {@code frame_too_large} or {@code lossy_refold}
+     * <p>{@code history_gone} is the third and the narrowest: the seed frame is unreadable and the
+     * site has <b>no</b> segments at all, so there is no history to refold, lossily or otherwise —
+     * the frame was the whole of that site's checkpoint history. It is split from
+     * {@code lossy_refold} because the operator's next move differs: a lossy refold is about data
+     * that still exists and may be an IAM incident, while this one is only recoverable by a
+     * re-baseline or a history wipe (issue #149). Such a site is visited by the tick only for its
+     * unmaterialized rows, so unlike the other two this abort does stop by itself, once those rows
+     * have spent {@code delta.checkpoint.max-materialize-attempts} —
+     * {@code delta.checkpoint.tables.given-up} is where it is visible afterwards.</p>
+     *
+     * @param reason {@code frame_too_large}, {@code lossy_refold} or {@code history_gone}
      */
     public void checkpointBuildAborted(String reason) {
         switch (reason) {
             case "frame_too_large" -> checkpointFrameTooLarge.increment();
             case "lossy_refold" -> checkpointLossyRefold.increment();
+            case "history_gone" -> checkpointHistoryGone.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
     }

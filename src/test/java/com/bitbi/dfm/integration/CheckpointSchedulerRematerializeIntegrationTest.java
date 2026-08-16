@@ -34,8 +34,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * sites named by an unmaterialized checkpoint row — and stops visiting them the moment every table
  * is materialized again.
  */
-@TestPropertySource(properties = "delta.retention.audit-window-segments=0")
+@TestPropertySource(properties = {
+        "delta.retention.audit-window-segments=0",
+        "delta.checkpoint.max-materialize-attempts=" + CheckpointSchedulerRematerializeIntegrationTest.MAX_ATTEMPTS
+})
 class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTest {
+
+    /** Low enough to exhaust in a test without a loop that hides what is being asserted. */
+    static final String MAX_ATTEMPTS = "2";
 
     private static final UUID SITE = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654"); // store-01
     private static final UUID BATCH = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
@@ -57,6 +63,9 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
 
     @Autowired
     private S3CheckpointStorage checkpointStorage;
+
+    @Autowired
+    private com.bitbi.dfm.delta.application.DeltaCheckpointRebuildService rebuildService;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -84,7 +93,7 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
                 "the audit window is 0, so the below-checkpoint segment is pruned");
         assertFalse(segmentRepository.findDistinctSiteIds().contains(SITE),
                 "the segment table no longer names the site — the hole this issue is about");
-        assertTrue(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints().contains(SITE),
+        assertTrue(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(Integer.parseInt(MAX_ATTEMPTS)).contains(SITE),
                 "the unmaterialized checkpoint row must keep the site on the tick's work list");
         long pointer = syncStateRepository.findBySiteId(SITE).orElseThrow().getLastCheckpointSeq();
         assertEquals(2L, pointer);
@@ -105,7 +114,60 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         // …and now nothing names the site any more: a fully materialized site with no leftover
         // segments is not visited by the following ticks.
         assertFalse(segmentRepository.findDistinctSiteIds().contains(SITE));
-        assertFalse(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints().contains(SITE));
+        assertFalse(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(Integer.parseInt(MAX_ATTEMPTS)).contains(SITE));
+    }
+
+    @Test
+    void stopsNamingASiteWhoseTableHasSpentItsMaterializeAttempts() {
+        // Issue #149. The schema never arrives, so every tick records the same verdict: without a
+        // bound the site is visited — frame download, whole-site fold, per-table attempt — every
+        // night for the life of the site, behind the single lock the sweep with real work shares.
+        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", intVal(1)),
+                        data("id", intVal(1), "name", strVal("Ann")))));
+
+        int cap = Integer.parseInt(MAX_ATTEMPTS);
+        for (int tick = 1; tick <= cap; tick++) {
+            scheduler.buildCheckpoints();
+            assertEquals(tick,
+                    checkpointRepository.findBySiteIdAndTableName(SITE, "customers")
+                            .orElseThrow().materializeAttempts(),
+                    "every tick that leaves the table without a snapshot spends one attempt");
+        }
+
+        assertFalse(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(cap).contains(SITE),
+                "a row with no attempts left must stop naming its site");
+        assertTrue(checkpointRepository.findBySiteIdAndTableName(SITE, "customers")
+                        .orElseThrow().hasGivenUpMaterializing(cap),
+                "and must be counted instead, so giving up is visible rather than silent");
+        // The gauge is a whole-database level and the tick visits every seeded site, so this asserts
+        // that the row reached it, not that it is alone there.
+        assertTrue(checkpointRepository.countGivenUpMaterializing(cap) >= 1);
+
+        scheduler.buildCheckpoints();
+
+        assertEquals(cap, checkpointRepository.findBySiteIdAndTableName(SITE, "customers")
+                        .orElseThrow().materializeAttempts(),
+                "a further tick does not reach the table at all");
+
+        // The exit is not manual SQL: the cause is fixed and a forced rebuild re-arms the row.
+        seedCustomersSchema();
+        rebuildService.requestRebuild(SITE);
+        awaitMaterialized();
+
+        Checkpoint recovered = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
+        assertNotNull(recovered.getS3KeyParquet(), "the forced rebuild materializes from the frame");
+        assertEquals(0, recovered.materializeAttempts(), "a snapshot clears the attempt count");
+        assertFalse(recovered.hasGivenUpMaterializing(cap), "and puts the row back in the population");
+    }
+
+    private void awaitMaterialized() {
+        org.awaitility.Awaitility.await()
+                .atMost(java.time.Duration.ofSeconds(20))
+                .pollInterval(java.time.Duration.ofMillis(200))
+                .until(() -> checkpointRepository.findBySiteIdAndTableName(SITE, "customers")
+                        .map(checkpoint -> checkpoint.getS3KeyParquet() != null)
+                        .orElse(false));
     }
 
     private void seedCustomersSchema() {

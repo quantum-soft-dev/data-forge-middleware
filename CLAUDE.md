@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V52**, next is **V53**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V53**, next is **V54**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -450,9 +450,83 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
+- Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-table-verdict: A per-table checkpoint failure is now bounded when it is deterministic
+  and not recorded at all when it is the process ending (issue #149, folding **#162**). Both halves
+  are one decision in `CheckpointService` — *when is a per-table failure the table's verdict?* — and
+  they pull opposite ways, which is why splitting them would have produced two fixes that fight.
+  **The retry is bounded in attempts, not seconds.** V53 adds `checkpoints.materialize_attempts` +
+  `last_materialize_failure_at` and a partial index on the null-key side; a row that ends a build
+  without a snapshot spends one attempt, and at `delta.checkpoint.max-materialize-attempts`
+  (`DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS`, default **5**) it drops out of the nightly
+  rematerialize (#128) and stops naming its site on the tick's work list (#137). Attempts rather
+  than a delay because the retry runs from a once-a-night cron: a backoff could only ever express
+  itself as skipped nights, and a counter needs no clock to survive a restart. What is bounded is
+  the **dedicated** retry — a site with new segments is visited for its segments and the incremental
+  build there writes every table in its fold whatever the counter says, since that work is happening
+  regardless; a failure that leaves a still-valid last-good key spends nothing, because the retry
+  exists for rows with nothing to serve. Giving up is neither silent nor final: new gauge
+  **`delta.checkpoint.tables.given-up`** (`CheckpointGivenUpMetrics`, snapshot-cached like
+  `delta.batch-parquet.queue`) is the standing signal that replaces the nightly alarm — without it
+  the fix for "retried forever" would have been "silent forever", each retired row being a table
+  permanently absent from the Bit BI files listing, Parquet Export `type=checkpoint` and the Delta
+  Sync download — and four things re-arm a row: submitting the schema and letting the next
+  incremental build write it, `POST .../delta/checkpoints/rebuild` (which re-arms deliberately,
+  whether or not that attempt succeeds), a re-baseline, a wipe. **The state with no exit at all was
+  a different one**: a table whose last row was `DELETE`d at the source stays in the fold for the
+  build that sees the deletion (an empty inner map) but `CheckpointFrame` emits no record for it, so
+  the next frame never mentions it and both snapshot passes, which iterate the fold, could never
+  reach it again — while its row survived (only a wipe or a re-baseline deletes checkpoint rows) and
+  named its site nightly for work not even a forced rebuild could do. That row is now **deleted** by
+  the build that notices, through the epoch guard like every other write — **after** that build has
+  written its own tables and **never all of them** (both raised in review): an empty fold would take
+  every row, and `CheckpointFileQueryService` reads "no checkpoint rows" as "not a Delta site yet"
+  and would serve pre-Delta uploaded CSVs as the current baseline. Sparing them re-opened the hole
+  one round later (the per-table settle lives inside the snapshot loop, which an empty fold never
+  enters), so a site whose whole fold is empty is now **settled site-wide** — one attempt per
+  retryable row, a re-arm on a forced rebuild — and drains like every other unfixable state. The object it named joins the
+  superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118, sweeper is #160). The third unfixable state, found in round 2 of #148's review, is a site whose frame is
+  unreadable with **no segments behind it**: `historyPruned` is unconditionally true there, so it
+  raised "refusing lossy refold" every night — wrong in kind, since with no frame and no changelog
+  there is no history to refold, lossily or otherwise. It gets its own message and
+  `delta.checkpoint.builds.aborted{reason=history_gone}`, and a scheduled build spends an attempt
+  on every still-retryable row of the site, which is what drains it (a **forced** rebuild re-arms
+  them instead — raised in review: the documented recovery must not be the fastest way to exhaust
+  the retry it restores): such a site is on the work list *only* because of those rows. The drain is
+  durable where the pre-#149 alarm self-healed, and `S3CheckpointStorage.exists` reads a **403 as
+  absence** by design, so a multi-night IAM read outage retires those rows and leaves the site
+  reachable only by a forced rebuild — accepted (an outage that long has already broken every
+  checkpoint download) and documented, with #157 the fix at source. `reason=lossy_refold` keeps its meaning for a site whose segments survive —
+  real data, an alarm that must keep shouting, and a site visited for those segments anyway, so no
+  counter could ever quiet it. **Part 2 (#162) is the opposite verdict.** Spring publishes
+  `ContextClosedEvent` and *then* destroys the singletons, so a build still running when a pod is
+  replaced calls a closed `S3Client` or `HikariDataSource` and fails in a way indistinguishable from
+  a broken table; the per-table catch recorded that, `abandonStaleSnapshot` detached
+  `s3_key_parquet` on the advancing seq, and the table answered 404 until the next nightly
+  rematerialize — for a build that was not failing, only ending. New
+  `shared/lifecycle/ApplicationShutdownSignal` (a one-way flag set by the event, therefore set
+  *before* anything is closed — a `@PreDestroy` of our own would answer "no" for exactly the window
+  that matters) is checked before the frame upload, between tables and inside the per-table catch:
+  the build ends with last-good keys, pointer and attempt counters untouched, and
+  `CheckpointScheduler` stops walking sites for the same reason. Deliberately **not** on
+  `delta.checkpoint.builds.aborted`: that meter's contract is aborts that never repair themselves,
+  and this one is repaired by the process that replaces it — **except on the forced path**, raised
+  in review: a scheduled tick is found again by the nightly work list, while
+  `POST .../delta/checkpoints/rebuild` has only its durable `rebuild_requested` flag, so
+  `DeltaCheckpointRebuildService` now leaves that flag set (and does not log "completed") when the
+  build ended on the shutdown, and `resumePendingRebuilds()` re-drives it after the restart. It makes #146's "do not interrupt the
+  pool" belt-and-braces rather than the single load-bearing setting. **Fourth**, the "is there
+  anything to rematerialize?" probe moved *before* the frame download and the fold (raised in #148's
+  review, deferred here), so an idle visit costs one query against `checkpoints` instead of a
+  whole-site fold thrown away — and it reads *retryable* rows, since a row that has given up is
+  unmaterialized forever and would otherwise keep the visit expensive after the retry stopped.
+  #137's invariant is untouched and pinned: a site with every table materialized and no leftover
+  segments is not visited at all. No REST, gRPC, proto, DTO, S3-key or frontend change — the
+  given-up state is deliberately not on `DeltaCheckpointResponseDto`, since adding a field there is
+  a Zod/API contract change the gauge and the guide cover without one. See
+  `docs/delta-client-v2-guide.md` ("When is a per-table failure the table's verdict?", Metrics).
 - sql-generation-test-isolation: The two plugin SQL-generation integration classes assert on the
   generation they produced instead of sampling every generation a site has (issue #159, folding
   #163). `plugin_sql_generations` is never named by `test-data.sql` — it is emptied only as a side

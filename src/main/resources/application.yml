@@ -365,6 +365,19 @@ delta:
     # fallback is the property, not DELTA_CHECKPOINT_MAX_TEMP_BYTES, so it also follows a value set
     # through a profile yml, SPRING_APPLICATION_JSON or a CLI argument.
     max-frame-temp-bytes: ${DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES:${delta.checkpoint.max-temp-bytes}}
+    # How many nights the tick keeps retrying a table that came out of a build with no snapshot
+    # (issue #149). Since #128 such a row is retried by every scheduled build, and since #137 it
+    # also puts its site on the tick's work list — so a table nothing can ever materialize (no
+    # declared schema, an unrenderable value) cost a frame download, a whole-site fold and an
+    # attempt every night, forever, behind the scheduler's single lock.
+    # Counted in attempts rather than seconds because the retry runs from a once-a-night cron: a
+    # delay would only ever express itself as skipped nights, and the counter survives a restart
+    # without a clock. What it bounds is the DEDICATED retry only — a site with new segments is
+    # visited for its segments, and the incremental build there writes every table in its fold
+    # whatever this says. Giving up is neither silent nor final: delta.checkpoint.tables.given-up
+    # gauges the population, and a forced rebuild (POST .../delta/checkpoints/rebuild), an
+    # incremental success, a re-baseline or a wipe all put the row back.
+    max-materialize-attempts: ${DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS:5}
   parquet:
     # Row-group budget for every V2 Parquet writer (checkpoint snapshots, per-segment egress and
     # completed-batch artifacts). A writer buffers one row group in heap before flushing, so with

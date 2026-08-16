@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
@@ -33,9 +34,17 @@ class DeltaCheckpointRebuildServiceTest {
     private final DeltaSyncStateService syncStateService = mock(DeltaSyncStateService.class);
     private final CheckpointService checkpointService = mock(CheckpointService.class);
 
+    private volatile boolean shuttingDown;
+    private final ApplicationShutdownSignal shutdownSignal = new ApplicationShutdownSignal() {
+        @Override
+        public boolean isShuttingDown() {
+            return shuttingDown;
+        }
+    };
+
     /** Direct executor: the async hop runs inline so the full lifecycle is observable. */
-    private final DeltaCheckpointRebuildService service =
-            new DeltaCheckpointRebuildService(syncStateService, checkpointService, Runnable::run);
+    private final DeltaCheckpointRebuildService service = new DeltaCheckpointRebuildService(
+            syncStateService, checkpointService, shutdownSignal, Runnable::run);
 
     @Test
     void requestRebuildSetsFlagBuildsCheckpointAndClearsFlag() {
@@ -61,6 +70,24 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
+    void keepsTheFlagWhenTheBuildEndedBecauseTheProcessIsShuttingDown() {
+        // Review of PR #169, round 2. Since issue #162 CheckpointService swallows a shutdown and
+        // returns an empty fold, which here would read as success: the log would say "completed"
+        // and the finally would spend the very flag resumePendingRebuilds exists to re-drive, so an
+        // operator's click during a rollout would vanish. The scheduled tick can rely on the
+        // nightly work list finding the site again; this path has only the flag.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE)).thenAnswer(invocation -> {
+            shuttingDown = true;
+            return Map.of();
+        });
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(syncStateService, never()).clearRebuildRequested(SITE);
+    }
+
+    @Test
     void duplicateRequestShortCircuitsWithoutASecondBuild() {
         // Flag already set: a second click must not queue a second full rebuild whose
         // sibling's finally-clear would flip the UI to "idle" mid-run.
@@ -77,8 +104,8 @@ class DeltaCheckpointRebuildServiceTest {
         // The flag transaction commits before the submit; a full queue must not leave the
         // durable flag orphaned (UI stuck on "Rebuild queued" with no task behind it).
         Executor rejecting = task -> { throw new RejectedExecutionException("queue full"); };
-        DeltaCheckpointRebuildService rejectingService =
-                new DeltaCheckpointRebuildService(syncStateService, checkpointService, rejecting);
+        DeltaCheckpointRebuildService rejectingService = new DeltaCheckpointRebuildService(
+                syncStateService, checkpointService, shutdownSignal, rejecting);
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
 
         assertThrows(RejectedExecutionException.class, () -> rejectingService.requestRebuild(SITE));
