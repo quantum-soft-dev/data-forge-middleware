@@ -79,12 +79,9 @@ public class DeltaRebaselineService {
         // two operations racing on a fresh site collide on the primary key instead. There is also no
         // checkpoint history for a build to resurrect on such a site.
         //
-        // The reset runs first inside DeltaSessionCommitService.commit, so this lock is now held for
-        // the rest of that transaction — including the tail segment's S3 upload. That is a longer
-        // hold than the flush-time lock it replaces, and it is deliberate: the alternative is the
-        // window above. What waits on it (a guarded checkpoint write, clearWipePending, a wipe) is
-        // short and, in the guard's case, about to be refused anyway. Getting S3 out of the
-        // ingestion commit transaction altogether is the real fix and is tracked as issue #147.
+        // The reset runs first inside the ingestion commit transaction, so this lock is held for the
+        // rest of it. Everything that follows is a statement: the tail segment's object is uploaded
+        // before that transaction opens (issue #147), so the hold no longer spans a network call.
         SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(siteId)
                 .orElseGet(() -> SiteSyncState.initial(siteId));
 

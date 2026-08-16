@@ -382,7 +382,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         ServerEvent last = received.get(received.size() - 1);
         assertTrue(last.hasCommitted(), "empty session still commits its batch");
         assertTrue(last.getCommitted().getSegmentS3Key().isEmpty(), "no segment for an empty session");
-        verify(changelogSegmentService, never()).persist(any(), any(), any(), anyLong(), any());
+        verify(changelogSegmentService, never()).prepare(any(), any(), any(), anyLong(), any());
         verify(batchLifecycle).completeBatch(batchId);
     }
 
@@ -531,7 +531,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         verify(batchLifecycle).completeBatch(batchId);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
-        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("DELTA"), eq(121L), records.capture());
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("DELTA"), eq(121L), records.capture());
         assertEquals(3, records.getValue().size(), "segment spans staged + replayed records");
     }
 
@@ -591,7 +591,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
         verify(changelogSegmentService)
-                .persist(eq(SITE), eq(freshBatchId), eq("DELTA"), eq(121L), records.capture());
+                .prepare(eq(SITE), eq(freshBatchId), eq("DELTA"), eq(121L), records.capture());
         assertEquals(3, records.getValue().size(),
                 "segment spans the staged + replayed records — no data lost to the batch swap");
     }
@@ -734,7 +734,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
         verify(changelogSegmentService)
-                .persist(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"), eq(200L), records.capture());
+                .prepare(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"), eq(200L), records.capture());
         assertEquals(2, records.getValue().size(), "staged + replayed snapshot records");
     }
 
@@ -774,7 +774,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         assertTrue(done.await(5, TimeUnit.SECONDS), "twice-resumed snapshot did not complete");
         verify(rebaselineService).reset(SITE, 200L);
         verify(changelogSegmentService)
-                .persist(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"), eq(200L), any());
+                .prepare(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"), eq(200L), any());
     }
 
     @Test
@@ -812,7 +812,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         verify(rebaselineService).reset(SITE, 200L);
         verify(batchLifecycle).completeBatch(freshBatchId);
         verify(changelogSegmentService)
-                .persist(eq(SITE), eq(freshBatchId), eq("FULL_SNAPSHOT"), eq(200L), any());
+                .prepare(eq(SITE), eq(freshBatchId), eq("FULL_SNAPSHOT"), eq(200L), any());
     }
 
     @Test
@@ -883,11 +883,11 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         // Three segments, contiguous and complete, all under the session's batch: [1..100],
         // [101..200], [201..250].
-        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
                 argThat((List<ChangeRecord> r) -> r.size() == 100));
-        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(101L),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(101L),
                 argThat((List<ChangeRecord> r) -> r.size() == 100));
-        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(201L),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(201L),
                 argThat((List<ChangeRecord> r) -> r.size() == 50));
     }
 
@@ -913,7 +913,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         verify(batchLifecycle, times(1)).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(any());
         // The threshold seal wrote the one and only segment; the close flushed no second one.
-        verify(changelogSegmentService, times(1)).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"),
+        verify(changelogSegmentService, times(1)).prepare(eq(SITE), eq(batchId), eq("CONTINUOUS"),
                 eq(1L), argThat((List<ChangeRecord> r) -> r.size() == 100));
     }
 
@@ -972,7 +972,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         verify(batchLifecycle, times(1)).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle, times(1)).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(any());
-        verify(changelogSegmentService, never()).persist(any(), any(), any(), anyLong(), any());
+        verify(changelogSegmentService, never()).prepare(any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -991,7 +991,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         // The unsealed tail is durably sealed and the batch completed (not left IN_PROGRESS).
         verify(batchLifecycle).startBatch(eq(ACCOUNT), eq(SITE), any());
-        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
                 argThat((List<ChangeRecord> r) -> r.size() == 2));
         verify(batchLifecycle).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(batchId);
@@ -1006,8 +1006,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
-        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any()))
-                .thenThrow(new RuntimeException("s3 down"));
+        // doThrow, not when(...): prepare is already stubbed by the harness, so calling it inside
+        // when(...) would run that answer against null arguments.
+        doThrow(new RuntimeException("s3 down"))
+                .when(changelogSegmentService).prepare(any(), any(), any(), anyLong(), any());
 
         List<ServerEvent> received = new CopyOnWriteArrayList<>();
         CountDownLatch done = new CountDownLatch(1);
@@ -1033,8 +1035,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction(
+                        changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService));
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 // cap = 2 records; the snapshot seal must stay below it (#130) — irrelevant to this
@@ -1077,8 +1081,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 .getSerializedSize() * 2L; // room for two records, not three
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction(
+                        changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
@@ -1142,8 +1148,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         long budget = recordSize + 2;     // ...and the second does not fit (valid: seal < budget)
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction(
+                        changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService));
         DeltaIngestionService tight = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes, 500, 100);
@@ -1199,8 +1207,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(b1, b2, b3);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction(
+                        changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService));
         DeltaIngestionService timed = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L, 500, 100); // seal on every record
@@ -1241,8 +1251,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 .getSerializedSize() * 2L; // seal after every two records
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction(
+                        changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService));
         DeltaIngestionService sized = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L,
@@ -1305,12 +1317,17 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         assertTrue(received.stream().noneMatch(ServerEvent::hasError));
 
         // Two silent seals drained the buffer at the 100-record threshold; the tail commits normally.
-        verify(changelogSegmentService).persistProvisional(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
                 eq(1L), argThat((List<ChangeRecord> r) -> r.size() == 100));
-        verify(changelogSegmentService).persistProvisional(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
                 eq(101L), argThat((List<ChangeRecord> r) -> r.size() == 100));
-        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
+        verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
                 eq(201L), argThat((List<ChangeRecord> r) -> r.size() == 50));
+        // 033: the two seals are provisional (invisible to the fold and both work queues) and only
+        // the tail is written as a published segment. prepare() cannot say which — the upload is the
+        // same either way — so the split is asserted on the row half.
+        verify(changelogSegmentService, times(2)).persistPreparedProvisional(any());
+        verify(changelogSegmentService, times(1)).persistPrepared(any());
 
         // One batch, completed once; the baseline is reset from the session's first seq, not the
         // tail segment's, and the whole snapshot is published in the same commit.
@@ -1334,8 +1351,10 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         // A cap well below the dataset, but above the 100-record seal threshold.
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+                changelogSegmentService,
+                new com.bitbi.dfm.delta.application.DeltaSessionCommitTransaction(
+                        changelogSegmentService, syncStateService, batchLifecycle,
+                        mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService));
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()), 150, Long.MAX_VALUE, 3900000L, 300000L,
@@ -1517,7 +1536,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         assertEquals(2, received.stream().filter(ServerEvent::hasCommitted).count(),
                 "continuous still announces the threshold seal and the closing flush");
-        verify(changelogSegmentService, never()).persistProvisional(any(), any(), any(), anyLong(), any());
+        verify(changelogSegmentService, never()).persistPreparedProvisional(any());
         verify(changelogSegmentService, never()).publishProvisional(any());
         verify(rebaselineService, never()).deleteProvisionalByBatch(any());
     }
