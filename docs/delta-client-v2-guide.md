@@ -654,13 +654,16 @@ ceiling is raised or the site is re-baselined. Two things follow, and both are h
   the frame cost one tick, and a build discarded because the site's history was replaced under it
   (#136, #142) is a normal outcome of an operator action.
 
-  **Read `lossy_refold` per site before acting.** `S3CheckpointStorage.exists` treats a `403` as
-  absence on purpose — least-privilege IAM answers HEAD-on-a-missing-key that way, having no
-  `s3:ListBucket` — so a bucket-policy or IAM read outage makes the frame read as absent for *every*
-  site at once and each pruned-history site increments the counter for something a permission fix
-  clears. **Many sites in one tick is a permissions incident; one site alone is the real thing.**
-  The 403 branch logs a WARN naming the key, which is the tiebreaker. Distinguishing the two at
-  source is #157.
+  **`lossy_refold` is a fact about the site's own data again (issue #157).** It used to need a
+  caveat: `S3CheckpointStorage` read a `403` as absence — correct for a missing key, since
+  least-privilege IAM answers HEAD-on-a-missing-key that way, having no `s3:ListBucket`, and
+  indistinguishable from a blanket read denial on keys that exist. A bucket-policy or IAM outage
+  therefore tripped this counter for every pruned-history site in the same tick, for something a
+  permission fix clears. A denied HEAD is now resolved by a ranged read of the first byte, and a
+  denial that cannot be resolved answers `UNKNOWN`: the build **skips that site** untouched and
+  increments `delta.s3.read-denied` instead. So a permissions incident shows up as that meter
+  rising, plainly labelled, and this one keeps its promise — the aborts that do not repair
+  themselves.
 - **A repeat costs nothing durable.** The frame is written first, so an abort leaves no snapshot
   object, no `checkpoints` row and no moved pointer. Before #153 the per-table snapshots were
   uploaded first, at the *new* seq, and their rows saved; the previous seq's objects were then
@@ -765,16 +768,16 @@ answers pull in opposite directions.
   `reason=lossy_refold` keeps its meaning for a site whose segments survive — data that still
   exists, an alarm that must keep shouting, and a site that is visited for those segments anyway.
 
-  **Check for a 403 before reading this as data loss.** `S3CheckpointStorage.exists` treats an S3
-  HEAD denial as absence on purpose (least-privilege IAM has no `s3:ListBucket`), so a bucket-policy
-  or IAM read outage makes every segment-less site look `history_gone`. Unlike the pre-#149
-  behaviour — which repeated the alarm nightly and healed itself the moment the permission came
-  back — the drain is durable: after `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` such nights the
-  rows give up and, having no segments, the site is only reachable again through a forced rebuild.
-  That is an accepted trade (a read outage lasting that many nights has already broken every
-  checkpoint download on the deployment, and the ERROR line plus the `S3 HEAD denied (403)` warning
-  name it), but it is the reason to read this counter **per site**: many sites in one tick is a
-  permissions incident, one site alone is the real thing. Distinguishing the two at source is #157.
+  **`history_gone` means gone, not unreadable (issue #157).** When #149 shipped, an S3 HEAD denial
+  read as absence, so a bucket-policy or IAM read outage made every segment-less site look
+  `history_gone` — and unlike the pre-#149 alarm, which repeated nightly and healed itself the
+  moment the permission came back, the drain is durable: after
+  `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` such nights the rows give up and, having no segments,
+  the site names itself on no work list and is reachable only through a forced rebuild. That
+  trade no longer has to be made. A denied HEAD is resolved by a ranged read of the first byte, and
+  a denial that cannot be resolved answers `UNKNOWN`: the build skips the site, spends no attempt,
+  and counts `delta.s3.read-denied`. This abort is now reached only when S3 itself says the frame is
+  not there.
 - **A build that is only ending records nothing (#162).** Spring publishes `ContextClosedEvent` and
   then destroys the singletons, so a build still running when a pod is replaced makes its next call
   against a closed `S3Client` or `HikariDataSource` — a failure that reads exactly like a broken
@@ -794,6 +797,41 @@ answers pull in opposite directions.
   the frame download and the fold, so a site named by the tick that turns out to have no retryable
   row costs one query against `checkpoints`. #137's invariant is unchanged: a site with every table
   materialized and no leftover segments is not visited at all.
+
+**"S3 will not say" is a third answer, not a missing object (issue #157).** Every refusal above —
+`lossy_refold`, `history_gone`, and the per-table rematerialize they drain — starts from the seed
+frame reading as *absent*, and until this ticket absence was inferred from a status code that means
+two different things. HEAD on a missing key answers `404` only with `s3:ListBucket`; the deployment
+runs least-privilege (`GetObject`/`PutObject`), so S3 answers **403** for a key that is not there.
+That reading is correct and is kept. What was wrong is the other direction: a blanket read denial on
+keys that *do* exist answers 403 as well, so one IAM or bucket-policy change presented as N sites
+having lost their checkpoint history in the same tick — and since #149 it also **spent** those
+sites' finite rematerialize attempts, after which a segment-less site is named by no work list and
+does not come back when the permission does.
+
+`S3CheckpointStorage.presence(key)` now answers `PRESENT` / `ABSENT` / `UNKNOWN`:
+
+- A denied HEAD is resolved with the permission the deployment does have — a ranged `GetObject` of
+  the first byte (`Range: bytes=0-0`). It answers `NoSuchKey` for a key that is genuinely gone and
+  succeeds for a denied-but-present one, so the least-privilege reading survives without the
+  conflation. The extra round trip is paid on the 403 path only: rare on a healthy deployment, and
+  on a least-privilege one the price of every genuinely missing key. A `416` counts as present — a
+  zero-length object has no first byte, and reading "missing" out of "your range was wrong" would be
+  the same mistake again.
+- Only when the probe is denied too is the answer `UNKNOWN`, and that is a real read outage rather
+  than a guess about one. It increments **`delta.s3.read-denied`** and logs a WARN naming the key.
+- The checkpoint build **skips a site whose frame presence is unknown**: nothing is folded,
+  uploaded, saved or counted, no attempt is spent, and the next tick asks again. It is deliberately
+  not on `delta.checkpoint.builds.aborted`, whose contract is aborts that never repair themselves —
+  this one repairs itself the moment the permission is restored.
+- Parquet Export's file listing drops a delta row only on a **known** absence, so a denial no longer
+  hides a download that is there (`GET /api/v1/plugins/parquet-export/files?type=delta`).
+
+**During an incident, read `delta.s3.read-denied`.** Rising there and flat on
+`delta.checkpoint.builds.aborted` is a permissions problem: no site has been written off, the
+pointers are where they were, and the backlog visible in `delta.seq.lag` drains once the policy is
+fixed. The reverse — `builds.aborted` moving while `read-denied` stays at zero — is the site's own
+data, which is what those tag values were always meant to say.
 
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
@@ -1387,7 +1425,7 @@ zeroes `last_checkpoint_seq` inside the FULL_SNAPSHOT `SessionEnd` commit — an
 client to drop its journal and reset its counters. Keyed on `generation` the guard saw nothing and
 the build restored the pre-re-baseline pointer, and unlike the wipe case this was **silent**: `reset`
 deletes the segment objects but not the checkpoint `_frame/seq=N/frame.pb.gz`, so the next build
-found `frameExists(N)` true, seeded the fold from the **discarded** baseline's frame and folded the
+found the frame at N present, seeded the fold from the **discarded** baseline's frame and folded the
 new snapshot on top — rows deleted at the source reappearing in every checkpoint Parquet served to
 Bit BI and Parquet Export, with no pruning alarm and no "refusing lossy refold".
 
@@ -1594,7 +1632,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
 `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone}`,
-`delta.checkpoint.tables.given-up`,
+`delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
@@ -1638,7 +1676,9 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
-| `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
+| `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
+| `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
+| `delta.s3.read-denied` | `delta_s3_read_denied_total` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:

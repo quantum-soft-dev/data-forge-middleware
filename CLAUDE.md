@@ -453,6 +453,49 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- s3-presence-tristate: A read denial and an absent object are two different answers again, at the
+  call site that acts on them (issue #157, filed reviewing #154 and made durable by #149).
+  `S3CheckpointStorage.exists` returned `false` for a genuine 404 and for a 403 alike. The
+  404-as-403 half is correct and stays: with least-privilege IAM (`GetObject`/`PutObject`, no
+  `s3:ListBucket`) S3 answers **403** for a key that does not exist, so treating that as absence is
+  the only workable reading. The other direction was the bug — a blanket read denial on keys that
+  *do* exist answers 403 as well, so one IAM or bucket-policy change made the checkpoint frame read
+  as absent for every site in the same tick, tripping `delta.checkpoint.builds.aborted`, a meter
+  whose documented contract is "aborts that do not repair themselves", for a condition a permission
+  fix clears. **#149 raised the stakes from noisy to irreversible**: it decides `history_gone` by
+  the same `exists` call, and a site classified that way spends one `checkpoints.materialize_attempts`
+  per tick, so after `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` (5) nights its rows give up — and,
+  having no segments, the site is then named by neither work-list query and **does not recover when
+  the permission does**. Before #149 the same state self-healed nightly. New
+  `presence(String)` → `PRESENT|ABSENT|UNKNOWN` combines the ticket's first two options, because
+  neither alone is enough: the tri-state without the probe would answer `UNKNOWN` for **every**
+  missing key on a least-privilege deployment (the normal case) and stall the pipeline, while the
+  probe without the tri-state would still have to collapse a genuine outage into one of two lies.
+  A denied HEAD is resolved with the permission we do have — a ranged `GetObject` of the first byte,
+  which answers `NoSuchKey` for a key that is genuinely gone and succeeds for a denied-but-present
+  one — and only a probe that is denied too yields `UNKNOWN`. One extra round trip on the 403 path
+  alone; `416` reads as **present**, since a zero-length object has no first byte and "your range
+  was wrong" is not "the object is missing". `CheckpointService` **skips** a site whose frame
+  presence is unknown: nothing folded, uploaded, saved or counted, no attempt spent, pointer and
+  per-table keys untouched, retried next tick — deliberately **not** on
+  `delta.checkpoint.builds.aborted`, since this one repairs itself the moment the policy is fixed.
+  New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage` over the injected
+  `MeterRegistry`, the `CheckpointGivenUpMetrics` shape — infrastructure must not depend on
+  `delta.application`, and `DeltaMetrics` documents it without owning it) is the incident signal; it
+  counts the **unresolved** denial only, not every HEAD 403, which on least-privilege IAM would be
+  one per missing key and pure noise — which is also why the ticket's suggested
+  `delta.s3.head-denied` name was not used. `deltaExists` → `deltaPresence` and `frameExists` →
+  `framePresence`; `exists` stays as the yes/no form (`presence == PRESENT`, so an undecidable
+  answer is never a yes) for the integration suite. Parquet Export's file listing drops a delta row
+  only on a **known** absence, so a denial no longer hides a present download. The `lossy_refold`
+  caveat is **removed** rather than reworded in `docs/delta-client-v2-guide.md` and in
+  `DeltaMetrics.checkpointBuildAborted` — the meter is a fact about the site's own data again — and
+  the `history_gone` ERROR line drops its "check for a 403 first" note for the same reason. Proven
+  against LocalStack for the half a mock cannot: the ranged probe reads a real object through a
+  denied HEAD and a missing key really does answer `NoSuchKey`; only the denial is injected
+  (`DelegatingS3Client`), because LocalStack community enforces no IAM or bucket policy. No REST,
+  gRPC, proto, DTO, migration, configuration-key, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("S3 will not say", Metrics), `docs/parquet-export-plugin-guide.md`.
 - checkpoint-table-verdict: A per-table checkpoint failure is now bounded when it is deterministic
   and not recorded at all when it is the process ending (issue #149, folding **#162**). Both halves
   are one decision in `CheckpointService` — *when is a per-table failure the table's verdict?* — and
