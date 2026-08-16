@@ -45,6 +45,13 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
 
     private static final UUID SITE = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654"); // store-01
     private static final UUID BATCH = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    /**
+     * Shared Testcontainers DB: many classes persist store-01 at first_seq=1. A leftover
+     * that lands between this class's DELETE and persist still trips
+     * {@code uk_segment_site_first_seq} (CI on #164, PR run 31954480363). This range is
+     * this class's only.
+     */
+    private static final long FIRST_SEQ = 8_000_001L;
 
     @Autowired
     private CheckpointScheduler scheduler;
@@ -73,16 +80,20 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
     @BeforeEach
     void purgeCheckpointObjects() {
         purgeCheckpointPrefix(SITE);
+        // Both methods persist (store-01, first_seq=1). @Sql is per-class, so a leftover
+        // from the sibling method — or from another class sharing the Testcontainers DB —
+        // trips uk_segment_site_first_seq. Wipe the site's segments per method.
+        jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE);
     }
 
     @Test
     void rematerializesOnTheNextTickAfterEverySegmentWasPruned() {
         // A first tick with no declared schema: the table is recorded without an artifact, the
         // pointer advances, and retention (window 0) then removes the only segment row.
-        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, List.of(
-                rec("customers", Op.INSERT, 1L, key("id", intVal(1)),
+        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", FIRST_SEQ, List.of(
+                rec("customers", Op.INSERT, FIRST_SEQ, key("id", intVal(1)),
                         data("id", intVal(1), "name", strVal("Ann"))),
-                rec("customers", Op.INSERT, 2L, key("id", intVal(2)),
+                rec("customers", Op.INSERT, FIRST_SEQ + 1, key("id", intVal(2)),
                         data("id", intVal(2), "name", strVal("Bob")))));
 
         scheduler.buildCheckpoints();
@@ -96,7 +107,7 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         assertTrue(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(Integer.parseInt(MAX_ATTEMPTS)).contains(SITE),
                 "the unmaterialized checkpoint row must keep the site on the tick's work list");
         long pointer = syncStateRepository.findBySiteId(SITE).orElseThrow().getLastCheckpointSeq();
-        assertEquals(2L, pointer);
+        assertEquals(FIRST_SEQ + 1, pointer);
 
         // The cause is gone: the schema arrives, and the next tick must find the site again.
         seedCustomersSchema();
@@ -106,7 +117,7 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         Checkpoint recovered = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertNotNull(recovered.getS3KeyParquet(), "the tick must rematerialize from the frame");
         assertTrue(checkpointStorage.exists(recovered.getS3KeyParquet()), "the snapshot object must exist");
-        assertEquals(2L, recovered.getSeq());
+        assertEquals(FIRST_SEQ + 1, recovered.getSeq());
         assertEquals(2L, recovered.getRowCount());
         assertEquals(pointer, syncStateRepository.findBySiteId(SITE).orElseThrow().getLastCheckpointSeq(),
                 "a rematerialize must not move the checkpoint pointer");
@@ -122,8 +133,8 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         // Issue #149. The schema never arrives, so every tick records the same verdict: without a
         // bound the site is visited — frame download, whole-site fold, per-table attempt — every
         // night for the life of the site, behind the single lock the sweep with real work shares.
-        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, List.of(
-                rec("customers", Op.INSERT, 1L, key("id", intVal(1)),
+        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", FIRST_SEQ, List.of(
+                rec("customers", Op.INSERT, FIRST_SEQ, key("id", intVal(1)),
                         data("id", intVal(1), "name", strVal("Ann")))));
 
         int cap = Integer.parseInt(MAX_ATTEMPTS);

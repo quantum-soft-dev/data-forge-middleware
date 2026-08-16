@@ -113,10 +113,9 @@ class SqlGenerationServiceTest {
                 csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
 
         service = new SqlGenerationService(
-                batchRepository,
-                siteRepository,
                 accountPluginRepository,
-                sqlGenerationRepository,
+                new SqlGenerationPersistence(batchRepository, siteRepository,
+                        sqlGenerationRepository, changelogSegmentRepository),
                 s3SqlFileStorageService,
                 meterRegistry,
                 pluginAuditService,
@@ -124,7 +123,6 @@ class SqlGenerationServiceTest {
                 cdcStrategy,
                 siteSchemaService,
                 deltaStrategy,
-                changelogSegmentRepository,
                 pluginDeltaBaselineRepository,
                 2,
                 120,
@@ -243,10 +241,9 @@ class SqlGenerationServiceTest {
             DbfSqlGenerationStrategy realDbfStrategy = new DbfSqlGenerationStrategy(
                     csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, realRegistry);
             SqlGenerationService serviceWithRealMetrics = new SqlGenerationService(
-                    batchRepository,
-                    siteRepository,
                     accountPluginRepository,
-                    sqlGenerationRepository,
+                    new SqlGenerationPersistence(batchRepository, siteRepository,
+                            sqlGenerationRepository, changelogSegmentRepository),
                     s3SqlFileStorageService,
                     realRegistry,
                     pluginAuditService,
@@ -254,7 +251,6 @@ class SqlGenerationServiceTest {
                     cdcStrategy,
                     siteSchemaService,
                     deltaStrategy,
-                    changelogSegmentRepository,
                     pluginDeltaBaselineRepository,
                     2,
                     120,
@@ -366,10 +362,9 @@ class SqlGenerationServiceTest {
         @BeforeEach
         void setUpDelta() {
             deltaService = new SqlGenerationService(
-                    batchRepository,
-                    siteRepository,
                     accountPluginRepository,
-                    sqlGenerationRepository,
+                    new SqlGenerationPersistence(batchRepository, siteRepository,
+                            sqlGenerationRepository, changelogSegmentRepository),
                     s3SqlFileStorageService,
                     new SimpleMeterRegistry(),
                     pluginAuditService,
@@ -377,7 +372,6 @@ class SqlGenerationServiceTest {
                     cdcStrategy,
                     siteSchemaService,
                     deltaStrategy,
-                    changelogSegmentRepository,
                     pluginDeltaBaselineRepository,
                     2,
                     120,
@@ -435,6 +429,25 @@ class SqlGenerationServiceTest {
             assertThat(result.get().getComparisonBatchId()).isNull();
             verify(changelogSegmentRepository).existsByBatchId(batchId);
             verify(changelogSegmentRepository).findByBatchId(batchId);
+        }
+
+        @Test
+        @DisplayName("should adopt the existing row when another worker wins the unique claim")
+        void shouldAdoptExistingGenerationOnUniqueViolation() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+            PluginSqlGeneration existing = PluginSqlGeneration.create(
+                    accountPluginId, siteId, batchId, null, "plugins/bit-bi/winner.sql", 10L,
+                    new SqlGenerationStats(1, 0, 0, 1), 1L);
+            when(sqlGenerationRepository.save(any())).thenThrow(
+                    new org.springframework.dao.DataIntegrityViolationException("uk_sql_gen_source_batch"));
+            when(sqlGenerationRepository.findBySourceBatchId(batchId)).thenReturn(Optional.of(existing));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).contains(existing);
+            verify(s3SqlFileStorageService).deleteFile("plugins/bit-bi/x.sql");
         }
 
         @Test

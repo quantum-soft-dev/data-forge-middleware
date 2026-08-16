@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code delta.egress.max-concurrent}; one site's segments always publish in seq order. Extra
  * wakes while the pool is saturated are discarded — a queued drain will see the new segment.
  * A low-frequency sweep re-wakes the pool for segments left pending by a crash or a failed
- * drain (the failed segment's transaction rolls back, so it stays queued).</p>
+ * drain (a failed segment is not marked egressed, so it stays queued).</p>
  *
  * @author Data Forge Team
  * @version 1.0.0

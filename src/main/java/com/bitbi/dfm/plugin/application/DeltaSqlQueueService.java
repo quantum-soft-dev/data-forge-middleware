@@ -11,8 +11,8 @@ import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
 import java.util.List;
@@ -25,9 +25,12 @@ import java.util.Set;
  *
  * <p>Claims the per-site head pending segment ({@code FOR UPDATE SKIP LOCKED}), renders it into
  * plugin SQL via {@link SqlGenerationService} (semaphore, idempotency, audit and persistence all
- * reused), and marks it processed — all in one transaction, so a failure rolls back and the
- * sweep retries. Segments of accounts without an active bit-bi activation are marked processed
- * without generating (they must not accumulate).</p>
+ * reused), and marks it processed. This class opens <em>no</em> transaction of its own
+ * (issue #164): the claim query, the skip/snapshot path and the {@code plugin_sql_at} write
+ * are short repository transactions, and generation — which first waits on the SQL semaphore
+ * and then talks to S3 — runs with nothing open. A failure before the mark leaves the
+ * segment pending and the sweep retries. Segments of accounts without an active bit-bi
+ * activation are marked processed without generating (they must not accumulate).</p>
  *
  * <p>{@code FULL_SNAPSHOT} segments (source-side rebaseline) emit no SQL: the site's per-table
  * baselines are suspended ({@code Long.MAX_VALUE}) until the user reinitializes the plugin, and
@@ -74,7 +77,6 @@ public class DeltaSqlQueueService {
      * @return {@code true} if a segment was processed (keep draining), {@code false} if the
      *         queue is empty
      */
-    @Transactional
     public boolean processNextPending() {
         List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(1);
         if (claimed.isEmpty()) {
@@ -96,7 +98,7 @@ public class DeltaSqlQueueService {
         } else if (DeltaSqlGenerationStrategy.MODE_FULL_SNAPSHOT.equals(segment.getMode())) {
             suspendBaselines(segment, site, activation.get());
         } else {
-            // throws on failure → transaction rolls back → segment stays pending for the sweep
+            // throws on failure → mark is skipped → segment stays pending for the sweep
             sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
         }
 
@@ -142,7 +144,11 @@ public class DeltaSqlQueueService {
                 if (covered.add(tableName)) {
                     PluginDeltaBaseline suspended =
                             PluginDeltaBaseline.create(activation.getId(), site.getId(), tableName, Long.MAX_VALUE);
-                    baselineRepository.save(suspended);
+                    try {
+                        baselineRepository.save(suspended);
+                    } catch (DataIntegrityViolationException e) {
+                        // Another worker already inserted this table's suspension (#164).
+                    }
                     newlySuspended.add(tableName);
                 }
             }

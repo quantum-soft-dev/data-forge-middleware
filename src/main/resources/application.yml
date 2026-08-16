@@ -70,15 +70,14 @@ spring:
       # REQUIRES_NEW runs under a non-transactional build, and CheckpointRecordedEvent is published
       # outside the guard's transaction on purpose.
       #
-      # TWO EXCEPTIONS EXIST, both timed and both worth removing rather than budgeting for.
+      # ONE EXCEPTION EXISTS, timed and worth removing rather than budgeting for.
       # PluginAuditEventListener is REQUIRES_NEW *and* AFTER_COMMIT: normally it runs on
       # pluginExecutor long after the publisher is done, but with that pool saturated (10 threads
       # and all 50 queue slots) CallerRunsPolicy runs it inline on the publishing thread, which is
       # still inside the commit synchronization holding its own connection (release happens in
-      # afterCompletion, not afterCommit) — issue #171. And the delta-SQL worker below pins its
-      # connection while blocking on a semaphore whose other permit holders need connections from
-      # this same pool to release it — part of #164. Introducing a third changes this reasoning,
-      # not just this number.
+      # afterCompletion, not afterCommit) — issue #171. The other exception this derivation used
+      # to name — the delta-SQL worker pinning a connection across the generation semaphore —
+      # was removed by #164. Introducing another changes this reasoning, not just this number.
       #
       # So the size is fixed by two bounds rather than by the peak, and ten satisfies both:
       #
@@ -91,14 +90,12 @@ spring:
       #            whole pool here would be the same conflation of "holds a thread" with "holds a
       #            connection" that this derivation exists to undo.
       #                4 long scheduled ticks
-      #              + 2 delta.egress.max-concurrent  (transaction spans download, render, uploads)
-      #              + 2 plugin.sql-generation.delta-max-concurrent  (transaction spans a wait of
-      #                  up to semaphore-timeout-seconds on the generation semaphore, then S3 I/O)
       #              + 2 reserved for request threads
-      #              = 10 <= 10
-      #            Everything else is short (one INSERT, a claim, a publish) and may queue. Those
-      #            two workers are worth shortening rather than budgeting for — issue #164 — and
-      #            doing so returns four slots without touching anything here.
+      #              = 6 <= 10
+      #            Everything else is short (one INSERT, a claim, a publish) and may queue. The
+      #            two workers this used to budget as long — delta.egress and delta-sql — were
+      #            shortened by #164: they no longer hold a connection across S3 or the generation
+      #            semaphore, so they sit with the short consumers rather than in this floor.
       #
       #   ceiling  (maxReplicas + maxSurge) x pool + operator reserve <= max_connections
       #            The pool is per replica but max_connections is not, and every cron tick fires on

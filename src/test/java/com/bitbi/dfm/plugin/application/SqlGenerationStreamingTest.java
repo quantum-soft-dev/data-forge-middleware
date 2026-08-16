@@ -91,10 +91,10 @@ class SqlGenerationStreamingTest {
         DbfSqlGenerationStrategy dbfStrategy = new DbfSqlGenerationStrategy(
                 csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
         SqlGenerationService service = new SqlGenerationService(
-                batchRepository,
-                siteRepository,
                 accountPluginRepository,
-                sqlGenerationRepository,
+                new SqlGenerationPersistence(batchRepository, siteRepository,
+                        sqlGenerationRepository,
+                        org.mockito.Mockito.mock(com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.class)),
                 s3SqlFileStorageService,
                 meterRegistry,
                 pluginAuditService,
@@ -102,7 +102,6 @@ class SqlGenerationStreamingTest {
                 cdcStrategy,
                 siteSchemaService,
                 org.mockito.Mockito.mock(DeltaSqlGenerationStrategy.class),
-                org.mockito.Mockito.mock(com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.class),
                 org.mockito.Mockito.mock(com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository.class),
                 2,
                 120,

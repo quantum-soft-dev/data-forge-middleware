@@ -1,24 +1,20 @@
 package com.bitbi.dfm.plugin.application;
 
-import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.site.application.SiteSchemaService;
-import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.site.domain.TableSchema;
-import com.bitbi.dfm.upload.domain.UploadedFile;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import jakarta.annotation.PostConstruct;
 
@@ -29,7 +25,6 @@ import java.lang.management.MemoryUsage;
 import java.util.*;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * Service orchestrating SQL file generation from batch data.
@@ -56,14 +51,10 @@ public class SqlGenerationService {
      * Maximum number of files allowed per batch for SQL generation.
      * Prevents memory exhaustion from processing too many files.
      */
-    private static final int MAX_FILES_PER_BATCH = 100;
-
     private static final String PLUGIN_ID = "bit-bi";
 
-    private final BatchRepository batchRepository;
-    private final SiteRepository siteRepository;
     private final AccountPluginRepository accountPluginRepository;
-    private final PluginSqlGenerationRepository sqlGenerationRepository;
+    private final SqlGenerationPersistence persistence;
     private final S3SqlFileStorageService s3SqlFileStorageService;
     private final MeterRegistry meterRegistry;
     private final PluginAuditService pluginAuditService;
@@ -71,7 +62,6 @@ public class SqlGenerationService {
     private final CdcSqlGenerationStrategy cdcStrategy;
     private final SiteSchemaService siteSchemaService;
     private final DeltaSqlGenerationStrategy deltaStrategy;
-    private final com.bitbi.dfm.delta.domain.ChangelogSegmentRepository changelogSegmentRepository;
     private final PluginDeltaBaselineRepository pluginDeltaBaselineRepository;
     private final int maxConcurrent;
     private final int semaphoreTimeoutSeconds;
@@ -80,10 +70,8 @@ public class SqlGenerationService {
     private Semaphore sqlGenerationSemaphore;
 
     public SqlGenerationService(
-            BatchRepository batchRepository,
-            SiteRepository siteRepository,
             AccountPluginRepository accountPluginRepository,
-            PluginSqlGenerationRepository sqlGenerationRepository,
+            SqlGenerationPersistence persistence,
             S3SqlFileStorageService s3SqlFileStorageService,
             MeterRegistry meterRegistry,
             PluginAuditService pluginAuditService,
@@ -91,15 +79,12 @@ public class SqlGenerationService {
             CdcSqlGenerationStrategy cdcStrategy,
             SiteSchemaService siteSchemaService,
             DeltaSqlGenerationStrategy deltaStrategy,
-            com.bitbi.dfm.delta.domain.ChangelogSegmentRepository changelogSegmentRepository,
             PluginDeltaBaselineRepository pluginDeltaBaselineRepository,
             @Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
             @Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
             @Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
-        this.batchRepository = batchRepository;
-        this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
-        this.sqlGenerationRepository = sqlGenerationRepository;
+        this.persistence = persistence;
         this.s3SqlFileStorageService = s3SqlFileStorageService;
         this.meterRegistry = meterRegistry;
         this.pluginAuditService = pluginAuditService;
@@ -107,7 +92,6 @@ public class SqlGenerationService {
         this.cdcStrategy = cdcStrategy;
         this.siteSchemaService = siteSchemaService;
         this.deltaStrategy = deltaStrategy;
-        this.changelogSegmentRepository = changelogSegmentRepository;
         this.pluginDeltaBaselineRepository = pluginDeltaBaselineRepository;
         this.maxConcurrent = maxConcurrent;
         this.semaphoreTimeoutSeconds = semaphoreTimeoutSeconds;
@@ -174,6 +158,7 @@ public class SqlGenerationService {
      * @return Optional containing the generation record, or empty if baseline batch (use CSV) or no changes
      */
     public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
+        refuseIfTransactionActive();
         acquireSemaphore(batchId);
         try {
             return doGenerateSqlForBatch(batchId, accountPluginId, forceFullGeneration);
@@ -185,7 +170,7 @@ public class SqlGenerationService {
     private Optional<PluginSqlGeneration> doGenerateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
-        BatchData batchData = null;
+        SqlGenerationPersistence.BatchData batchData = null;
         long startTimeMs = System.currentTimeMillis();
 
         try {
@@ -196,7 +181,7 @@ public class SqlGenerationService {
             // Segment-backed batches use per-table seq baselines (plugin_delta_baselines, 026)
             // captured at activation/reinit. Historical file-backed batches keep their original
             // batch-level baseline semantics without depending on a retired client API version.
-            boolean segmentBacked = hasChangelogSegments(batchId);
+            boolean segmentBacked = persistence.existsByBatchId(batchId);
 
             // Case 1: This batch is the baseline - skip SQL generation
             if (!segmentBacked && accountPlugin.isBaselineBatch(batchId)) {
@@ -218,7 +203,7 @@ public class SqlGenerationService {
 
             // Case 3: Regular batch - generate SQL delta
             // Phase 1: Load all required data (uses JOIN FETCH to prevent N+1)
-            batchData = loadBatchData(batchId, forceFullGeneration);
+            batchData = persistence.loadBatchData(batchId, forceFullGeneration);
             if (batchData == null) {
                 return Optional.empty();
             }
@@ -266,16 +251,12 @@ public class SqlGenerationService {
             );
             long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
 
-            // Phase 3: Save generation record (separate transaction)
+            // Phase 3: Save generation record (separate transaction). Two workers can now
+            // race here (#164 dropped the queue TX that used to serialize them); the unique
+            // on source_batch_id is the durable claim.
             long durationMs = timer.stop(meterRegistry.timer("sql.generation.duration"));
-            PluginSqlGeneration generation = saveGenerationRecord(
-                    accountPluginId,
-                    batchData,
-                    s3Key,
-                    fileSize,
-                    result.stats(),
-                    durationMs
-            );
+            PluginSqlGeneration generation = persistOrAdoptExisting(
+                    accountPluginId, batchData, s3Key, fileSize, result.stats(), durationMs);
 
             log.info("SQL generation completed: batchId={}, statements={}, duration={}ms",
                     batchId, result.stats().total(), durationMs / 1_000_000);
@@ -372,93 +353,11 @@ public class SqlGenerationService {
     }
 
     /**
-     * Phase 1: Loads all required batch data using JOIN FETCH.
-     * Returns null if generation should be skipped.
-     * Site-type-aware: filters CSV files for DBF, JSONL files for POSTGRES_CDC.
-     *
-     * @param batchId The batch ID to load
-     * @param forceFullGeneration If true, skips previous batch lookup (generates all INSERTs; DBF only)
-     */
-    @Transactional(readOnly = true)
-    protected BatchData loadBatchData(UUID batchId, boolean forceFullGeneration) {
-        // Get batch with files using JOIN FETCH (prevents N+1)
-        Batch batch = batchRepository.findByIdWithFiles(batchId)
-                .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
-
-        // Check if already generated
-        if (sqlGenerationRepository.existsBySourceBatchId(batchId)) {
-            log.warn("SQL already generated for batch: batchId={}", batchId);
-            return null;
-        }
-
-        // Get site for name and type
-        Site site = siteRepository.findById(batch.getSiteId())
-                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
-
-        List<com.bitbi.dfm.delta.domain.ChangelogSegment> segments =
-                changelogSegmentRepository.findByBatchId(batchId);
-        if (!segments.isEmpty()) {
-            return new BatchData(batch, site, List.of(), Optional.empty(), Map.of(), segments);
-        }
-
-        List<UploadedFile> currentFiles = batch.getUploadedFiles();
-        if (currentFiles.isEmpty()) {
-            log.warn("No files in batch, skipping SQL generation: batchId={}", batchId);
-            return null;
-        }
-
-        boolean isCdc = site.getSiteType() == SiteType.POSTGRES_CDC;
-        List<UploadedFile> relevantFiles = filterRelevantFiles(currentFiles, isCdc);
-
-        if (relevantFiles.isEmpty()) {
-            log.warn("No {} files in batch, skipping SQL generation: batchId={}",
-                    isCdc ? "JSONL" : "CSV", batchId);
-            return null;
-        }
-
-        if (relevantFiles.size() > MAX_FILES_PER_BATCH) {
-            log.error("Too many files in batch: count={}, max={}, batchId={}",
-                    relevantFiles.size(), MAX_FILES_PER_BATCH, batchId);
-            throw new IllegalArgumentException(
-                    "Batch contains " + relevantFiles.size() + " files, exceeding limit of " + MAX_FILES_PER_BATCH);
-        }
-
-        // For CDC sites: no previous batch comparison (deltas are self-contained)
-        // For DBF sites: load previous batch for diff comparison
-        Optional<Batch> previousBatchOpt;
-        Map<String, UploadedFile> previousFilesMap = new HashMap<>();
-
-        if (isCdc) {
-            previousBatchOpt = Optional.empty();
-        } else if (forceFullGeneration) {
-            log.info("Force full generation enabled - skipping previous batch comparison (will generate all INSERTs)");
-            previousBatchOpt = Optional.empty();
-        } else {
-            previousBatchOpt = batchRepository
-                    .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
-            if (previousBatchOpt.isPresent()) {
-                for (UploadedFile file : previousBatchOpt.get().getUploadedFiles()) {
-                    previousFilesMap.put(normalizeFileName(file.getOriginalFileName()), file);
-                }
-            }
-        }
-
-        log.debug("Previous batch for comparison: {}",
-                previousBatchOpt.map(b -> b.getId().toString()).orElse("none (first batch, force full, or CDC)"));
-
-        return new BatchData(batch, site, relevantFiles, previousBatchOpt, previousFilesMap, List.of());
-    }
-
-    private boolean hasChangelogSegments(UUID batchId) {
-        return changelogSegmentRepository.existsByBatchId(batchId);
-    }
-
-    /**
      * Phase 2: Generates SQL content by dispatching to the appropriate strategy.
      * Runs outside transaction to avoid connection starvation during S3 I/O.
      * Checks JVM heap pressure before starting to prevent OOM.
      */
-    private SqlGenerationResult generateSqlContent(BatchData data) throws IOException {
+    private SqlGenerationResult generateSqlContent(SqlGenerationPersistence.BatchData data) throws IOException {
         // Pre-flight memory pressure check before starting SQL generation
         if (isMemoryPressureHigh()) {
             log.error("High memory pressure ({}%), aborting SQL generation for batch: {}",
@@ -496,40 +395,6 @@ public class SqlGenerationService {
                 : dbfStrategy;
 
         return strategy.generate(context);
-    }
-
-    /**
-     * Phase 3: Saves the generation record in a separate transaction.
-     */
-    @Transactional
-    protected PluginSqlGeneration saveGenerationRecord(
-            Long accountPluginId,
-            BatchData data,
-            String s3Key,
-            long fileSize,
-            SqlGenerationStats stats,
-            long durationNanos) {
-
-        PluginSqlGeneration generation = PluginSqlGeneration.create(
-                accountPluginId,
-                data.batch().getSiteId(),
-                data.batch().getId(),
-                data.previousBatchOpt().map(Batch::getId).orElse(null),
-                s3Key,
-                fileSize,
-                stats,
-                durationNanos / 1_000_000 // Convert nanos to ms
-        );
-
-        if (!data.segments().isEmpty()) {
-            long firstSeq = data.segments().stream()
-                    .mapToLong(com.bitbi.dfm.delta.domain.ChangelogSegment::getFirstSeq).min().orElseThrow();
-            long lastSeq = data.segments().stream()
-                    .mapToLong(com.bitbi.dfm.delta.domain.ChangelogSegment::getLastSeq).max().orElseThrow();
-            generation.recordSegmentRange(firstSeq, lastSeq);
-        }
-
-        return sqlGenerationRepository.save(generation);
     }
 
     /**
@@ -575,49 +440,6 @@ public class SqlGenerationService {
     }
 
     /**
-     * Internal record to hold batch data loaded in Phase 1.
-     */
-    private record BatchData(
-            Batch batch,
-            Site site,
-            List<UploadedFile> relevantFiles,
-            Optional<Batch> previousBatchOpt,
-            Map<String, UploadedFile> previousFilesMap,
-            List<com.bitbi.dfm.delta.domain.ChangelogSegment> segments
-    ) {}
-
-    /**
-     * Filters uploaded files based on site type.
-     * DBF sites use CSV/CSV.GZ; CDC sites use JSONL/JSONL.GZ.
-     */
-    private List<UploadedFile> filterRelevantFiles(List<UploadedFile> files, boolean isCdc) {
-        if (isCdc) {
-            return files.stream()
-                    .filter(f -> {
-                        String name = f.getOriginalFileName().toLowerCase();
-                        return name.endsWith(".jsonl") || name.endsWith(".jsonl.gz");
-                    })
-                    .collect(Collectors.toList());
-        }
-        return files.stream()
-                .filter(f -> {
-                    String name = f.getOriginalFileName().toLowerCase();
-                    return name.endsWith(".csv") || name.endsWith(".csv.gz");
-                })
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Normalizes file name for comparison (removes .gz extension).
-     */
-    private String normalizeFileName(String fileName) {
-        if (fileName.toLowerCase().endsWith(".gz")) {
-            return fileName.substring(0, fileName.length() - 3);
-        }
-        return fileName;
-    }
-
-    /**
      * Regenerates SQL for a batch, creating a new generation record.
      * Used when admin wants to re-run SQL generation for a specific batch.
      * <p>
@@ -638,6 +460,7 @@ public class SqlGenerationService {
      * @throws SqlGenerationException if generation fails
      */
     public PluginSqlGeneration regenerateForBatch(UUID batchId, Long accountPluginId) {
+        refuseIfTransactionActive();
         acquireSemaphore(batchId);
         try {
             return doRegenerateForBatch(batchId, accountPluginId);
@@ -649,12 +472,12 @@ public class SqlGenerationService {
     private PluginSqlGeneration doRegenerateForBatch(UUID batchId, Long accountPluginId) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
-        BatchData batchData = null;
+        SqlGenerationPersistence.BatchData batchData = null;
         long startTimeMs = System.currentTimeMillis();
 
         try {
             // Load batch data (without checking for existing generation)
-            batchData = loadBatchDataForRegeneration(batchId);
+            batchData = persistence.loadBatchDataForRegeneration(batchId);
             if (batchData == null) {
                 throw new IllegalArgumentException("Cannot regenerate: no processable files in batch " + batchId);
             }
@@ -692,7 +515,7 @@ public class SqlGenerationService {
 
             // Save generation record
             long durationMs = timer.stop(meterRegistry.timer("sql.regeneration.duration"));
-            PluginSqlGeneration generation = saveGenerationRecord(
+            PluginSqlGeneration generation = persistence.saveGenerationRecord(
                     accountPluginId,
                     batchData,
                     s3Key,
@@ -759,52 +582,34 @@ public class SqlGenerationService {
     }
 
     /**
-     * Loads batch data for regeneration (skips existing generation check).
-     * Always filters to CSV files — CDC regeneration is not yet supported.
+     * Persist the generation, or adopt the row another worker already wrote for this batch.
+     * The unique on {@code source_batch_id} is the durable claim now that the queue no longer
+     * holds {@code SKIP LOCKED} across S3 (issue #164).
      */
-    @Transactional(readOnly = true)
-    protected BatchData loadBatchDataForRegeneration(UUID batchId) {
-        Batch batch = batchRepository.findByIdWithFiles(batchId)
-                .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
-
-        Site site = siteRepository.findById(batch.getSiteId())
-                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
-
-        if (hasChangelogSegments(batchId)) {
-            throw new IllegalArgumentException(
-                    "SQL regeneration is not supported for segment-backed batches: siteId=" + site.getId());
+    private PluginSqlGeneration persistOrAdoptExisting(
+            Long accountPluginId,
+            SqlGenerationPersistence.BatchData batchData,
+            String s3Key,
+            long fileSize,
+            SqlGenerationStats stats,
+            long durationNanos) {
+        try {
+            return persistence.saveGenerationRecord(
+                    accountPluginId, batchData, s3Key, fileSize, stats, durationNanos);
+        } catch (DataIntegrityViolationException e) {
+            cleanupOrphanedS3File(s3Key);
+            return persistence.findBySourceBatchId(batchData.batch().getId()).orElseThrow(() -> e);
         }
+    }
 
-        List<UploadedFile> currentFiles = batch.getUploadedFiles();
-        if (currentFiles.isEmpty()) {
-            return null;
+    private static void refuseIfTransactionActive() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "Refusing to generate SQL inside an active transaction: the semaphore wait "
+                            + "and S3 I/O would hold that transaction's connection (issue #164). "
+                            + "Acquire the semaphore first, then open a short transaction only "
+                            + "around the database work.");
         }
-
-        List<UploadedFile> csvFiles = currentFiles.stream()
-                .filter(f -> f.getOriginalFileName().toLowerCase().endsWith(".csv") ||
-                             f.getOriginalFileName().toLowerCase().endsWith(".csv.gz"))
-                .collect(Collectors.toList());
-
-        if (csvFiles.isEmpty()) {
-            return null;
-        }
-
-        if (csvFiles.size() > MAX_FILES_PER_BATCH) {
-            throw new IllegalArgumentException(
-                    "Batch contains " + csvFiles.size() + " CSV files, exceeding limit of " + MAX_FILES_PER_BATCH);
-        }
-
-        Optional<Batch> previousBatchOpt = batchRepository
-                .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
-
-        Map<String, UploadedFile> previousFilesMap = new HashMap<>();
-        if (previousBatchOpt.isPresent()) {
-            for (UploadedFile file : previousBatchOpt.get().getUploadedFiles()) {
-                previousFilesMap.put(normalizeFileName(file.getOriginalFileName()), file);
-            }
-        }
-
-        return new BatchData(batch, site, csvFiles, previousBatchOpt, previousFilesMap, List.of());
     }
 
     /**

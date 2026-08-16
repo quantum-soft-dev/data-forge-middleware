@@ -75,14 +75,16 @@ plugin:
     # when 026 added this queue (issue #159).
     #
     # At the shipped 60s this tick fired in *every* cached Spring context for the whole run, and
-    # its drain claims the head pending segment of any site, not of the class under test. Because
-    # DeltaSqlQueueService.processNextPending() renders inside its transaction (S3 included), a
-    # sweep of a context whose test class finished long ago could hold row locks on
+    # its drain claims the head pending segment of any site, not of the class under test. Before
+    # #164 that drain rendered inside a wrapping transaction (S3 included), so a sweep of a
+    # context whose test class finished long ago could hold row locks on
     # changelog_segments/plugin_sql_generations while the next class's @Sql("/test-data.sql")
     # tried to delete those very rows — the ScriptStatementFailedException seen in
     # BitBiDeltaSqlIntegrationTest's setup — and could write a generation the running method then
-    # counted. Tests that need the queue drained do it explicitly (drainQueue()) or through the
-    # event-time DeltaSqlSweepWorker.wake(), which reinit and BATCH_COMPLETED still call.
+    # counted. The wrapping transaction is gone (#164); the claim itself is still a
+    # SKIP LOCKED write, so a leftover drain can still race @Sql. Tests that need the queue
+    # drained do it explicitly (drainQueue()) or through the event-time
+    # DeltaSqlSweepWorker.wake(), which reinit and BATCH_COMPLETED still call.
     #
     # What this does NOT remove: @Scheduled(fixedDelayString=...) has no initial delay, so each
     # context still runs exactly one drain when it is created. That is a fixed cost of roughly one

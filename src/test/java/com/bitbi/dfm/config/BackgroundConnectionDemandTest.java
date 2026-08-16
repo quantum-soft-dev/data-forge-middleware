@@ -53,8 +53,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       is called from a deliberately non-transactional build, and {@code CheckpointService}
  *       publishes {@code CheckpointRecordedEvent} outside the guard's transaction on purpose (there,
  *       to avoid a self-deadlock on the {@code site_sync_state} row lock).
- *       <p><b>Two exceptions are known and neither is asserted away</b> — both are timed, so they
- *       cost a delay rather than a permanent stall, and both are worth removing:</p>
+ *       <p><b>One exception is known and is not asserted away</b> — it is timed, so it costs a
+ *       delay rather than a permanent stall, and it is worth removing:</p>
  *       <ul>
  *         <li>{@code PluginAuditEventListener} is {@code REQUIRES_NEW} <em>and</em>
  *             {@code AFTER_COMMIT}. Normally it runs on {@code pluginExecutor}, well after the
@@ -63,11 +63,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *             is still inside the commit synchronization with its own connection bound (release
  *             happens in {@code afterCompletion}, not {@code afterCommit}). That thread then wants a
  *             second connection while holding one. Filed as <b>#171</b>.</li>
- *         <li>{@code DeltaSqlQueueService.processNextPending} pins its connection while blocking up
- *             to {@code plugin.sql-generation.semaphore-timeout-seconds} on a semaphore whose other
- *             permit holders need connections from this same pool to release it — a transitive
- *             hold-and-wait rather than a direct one. Part of <b>#164</b>.</li>
  *       </ul>
+ *       <p>The other exception this class used to name — {@code DeltaSqlQueueService.processNextPending}
+ *       pinning a connection across the generation semaphore — was removed by <b>#164</b>.</p>
  *   </li>
  *   <li><b>Waiting is a survivable outcome for background work.</b> The failure is a 30 s
  *       {@code connection-timeout} on a queue worker or a scheduled tick, both of which run again
@@ -171,24 +169,22 @@ class BackgroundConnectionDemandTest {
 
     private static Map<String, Consumer> configuredPools() {
         Map<String, Consumer> pools = new LinkedHashMap<>();
-        // DeltaEgressService.egressNextPending is @Transactional around an S3 download, a Parquet
-        // render and one upload per table, so the connection is pinned for the whole round trip
-        // (issue #164).
+        // DeltaEgressService.egressNextPending opens no transaction of its own (#164): the claim
+        // and the egress_at write are short repository transactions; S3 runs with nothing open.
         pools.put("delta.egress.max-concurrent",
-                new Consumer(0, Hold.LONG, "transaction spans the S3 download and uploads (#164)"));
-        // DeltaSqlQueueService.processNextPending is @Transactional and, inside it, blocks on the
-        // 2-permit SQL-generation semaphore for up to semaphore-timeout-seconds before doing its
-        // own S3 I/O (issue #164).
+                new Consumer(0, Hold.SHORT, "claim/mark only; S3 runs with no transaction (#164)"));
+        // DeltaSqlQueueService.processNextPending acquires the generation semaphore before any
+        // transaction opens, and generation's S3 I/O is likewise outside a transaction (#164).
         pools.put("plugin.sql-generation.delta-max-concurrent",
-                new Consumer(0, Hold.LONG, "transaction spans the semaphore wait and S3 I/O (#164)"));
+                new Consumer(0, Hold.SHORT, "semaphore then S3, both outside a transaction (#164)"));
         // The build itself runs with no transaction open; every database step is its own short
         // REQUIRES_NEW template (settle, claim, publish).
         pools.put("delta.batch-parquet.max-concurrent",
                 new Consumer(0, Hold.SHORT, "claim/publish only; the build holds no connection"));
-        // A semaphore, not a pool: it admits threads that already hold their connection, so it adds
-        // no demand of its own. It is why the delta-sql hold above is long, though.
+        // A semaphore, not a pool: it admits generation work that has not yet opened a transaction
+        // (#164), so it adds no demand of its own.
         pools.put("plugin.sql-generation.max-concurrent",
-                new Consumer(0, Hold.NONE, "semaphore over threads that already hold a connection"));
+                new Consumer(0, Hold.NONE, "semaphore acquired before any transaction (#164)"));
         // Not a thread pool at all — a per-account business rule checked inside a request.
         pools.put("account.max-concurrent-batches",
                 new Consumer(0, Hold.NONE, "business rule, not a pool"));
@@ -233,7 +229,7 @@ class BackgroundConnectionDemandTest {
      * Slots the modelled background peak is required to leave for request threads.
      *
      * <p><b>Nothing enforces this at runtime, and it is not meant to.</b> HikariCP has no notion of
-     * a reserved partition, so the twenty-one {@link Hold#SHORT} background threads may certainly
+     * a reserved partition, so the {@link Hold#SHORT} background threads may certainly
      * occupy these two for a moment — that is acceptable exactly because their holds are
      * milliseconds, which is the same reason they are not in the floor. What the reserve buys is
      * that the consumers which <em>cannot</em> give a slot back quickly are never budgeted to fill
