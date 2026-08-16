@@ -45,7 +45,7 @@ public class BatchEventListener {
      * Events without accountId are logged and skipped.</p>
      *
      * <p>Runs AFTER_COMMIT: {@code BatchLifecycleService.completeBatch} publishes from inside
-     * the caller's transaction (for Delta v2, {@code DeltaSessionCommitService.commit} — the
+     * the caller's transaction (for Delta v2, {@code DeltaSessionCommitTransaction.commit} — the
      * async dispatch must not run before the changelog segment row and COMPLETED status are
      * committed). {@code fallbackExecution} keeps non-transactional publishers working.</p>
      *

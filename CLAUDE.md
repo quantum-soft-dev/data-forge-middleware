@@ -453,6 +453,44 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- ingestion-commit-no-s3: The ingestion commit no longer performs S3 I/O while it holds database
+  locks (issue #147, raised reviewing #142). `DeltaSessionCommitService.commit` was `@Transactional`
+  and called `ChangelogSegmentService.persist`, whose `PutObject` therefore ran inside the
+  transaction — every row lock it had taken, and a HikariCP connection, held for the length of an
+  upload that takes seconds for a large FULL_SNAPSHOT tail. #142 made one consequence concrete:
+  `DeltaRebaselineService.reset` takes the `site_sync_state` row lock **before** it deletes anything
+  (it has to — loading the row last left a window between the checkpoint deletes and the epoch bump),
+  and `reset` is the commit's first statement, so on that path the per-site mutex spanned the upload.
+  Nothing was incorrect (what waits on that lock is short, and a guarded checkpoint write is about to
+  be refused anyway), but it contradicted the invariant this subsystem states everywhere else —
+  `CheckpointEpochGuard`'s "No S3 traffic happens inside the lock", `DeltaSiteWipeService` and
+  `DeltaRebaselineService.deleteOldObjectsAfterCommit` deferring every object delete to
+  `afterCommit`. **Upload first, transaction second** (the ticket's first option):
+  `ChangelogSegmentService.prepare(siteId, batchId, mode, firstSeq, records)` serializes, hashes,
+  mints the segment id, uploads, and returns a new `PreparedSegment`; `persistPrepared` /
+  `persistPreparedProvisional` write the row from it. `DeltaSessionCommitService` keeps its public
+  API and becomes a **non-transactional** orchestrator; the unchanged one-transaction body (reset →
+  row → publish provisional → watermark → complete batch, plus the `afterCommit` egress wake) moved
+  to a new `DeltaSessionCommitTransaction` bean — a separate bean because a `@Transactional` method
+  invoked on `this` is not proxied, so the transaction would have started in the wrong place.
+  `persist`/`persistProvisional` remain as the composed pair for callers with no transaction of their
+  own (test fixtures), and `prepare` **throws** if an actual transaction is active, so the hold cannot
+  return silently. #142's ordering is untouched: `reset` still takes the lock first and still runs
+  before the tail row is written, and its own S3 deletes stay on `afterCommit`. **The rollback
+  trade-off is not new** — the upload was never compensated on rollback when it sat inside the
+  transaction either, and the key carries a freshly minted segment id
+  (`delta/{siteId}/segments/{segmentId}.pb.gz`), so an object left by a failed commit is unreachable
+  without its row; pinned by a test rather than left implicit. What the review added: the *window*
+  is wider than before, because a failure inside `reset` (the row-lock wait behind a concurrent wipe)
+  can now strand a full-size snapshot tail, and nothing sweeps `delta/{siteId}/segments/` — filed as
+  **#158**. A compensating delete in the caller is deliberately not the fix: an exception can also
+  surface *after* the transaction committed (an `AFTER_COMMIT` listener throwing), and the delete
+  would then destroy a live segment. Proven where it matters by an
+  integration test that spies the real `S3ChangelogSegmentStorage` and asserts
+  `isActualTransactionActive()` is false at the `PutObject`, on both the plain and the re-baseline
+  path — the unit tests can only pin call order, since the transaction comes from a Spring proxy. No
+  REST, gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("No S3 inside the ingestion commit").
 - split-scratch-ceilings: The checkpoint scratch ceiling is two keys, and the deployed values sit
   below the volume so the application refuses before kubelet evicts (issue #138). Since #126 one key
   governed two files with opposite failure semantics — an oversized per-table snapshot is skipped
