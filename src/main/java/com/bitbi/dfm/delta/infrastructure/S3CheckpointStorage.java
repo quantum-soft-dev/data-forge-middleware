@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -28,6 +29,7 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -45,6 +47,12 @@ import java.util.UUID;
 public class S3CheckpointStorage {
 
     private static final Logger log = LoggerFactory.getLogger(S3CheckpointStorage.class);
+
+    /** Short enough that readiness is not held hostage to an unreachable S3 at startup. */
+    private static final Duration STARTUP_CHECK_TIMEOUT = Duration.ofSeconds(5);
+
+    /** The prefix every checkpoint object of every site lives under. */
+    private static final String CHECKPOINT_ROOT_PREFIX = "checkpoints/";
 
     private final S3Client s3Client;
     private final String bucketName;
@@ -87,7 +95,12 @@ public class S3CheckpointStorage {
      * operator can act on.</p>
      *
      * <p>It does not fail the context: an S3 that is briefly unreachable at startup must not stop a
-     * pod from serving, and the permission may equally be fixed while the pod runs.</p>
+     * pod from serving, and the permission may equally be fixed while the pod runs. For the same
+     * reason the call carries its own short timeout (raised in review): a ready listener runs
+     * <em>before</em> Boot flips readiness to {@code ACCEPTING_TRAFFIC}, and the SDK's default
+     * 30 s socket timeout across three attempts would keep a pod out of the Service endpoints for a
+     * minute and a half — a stalled rollout, which is the opposite of not stopping a pod from
+     * serving. It would also delay the sibling ready listener that re-drives orphaned rebuilds.</p>
      */
     @EventListener(ApplicationReadyEvent.class)
     public void logListPermission() {
@@ -106,14 +119,27 @@ public class S3CheckpointStorage {
     }
 
     /**
-     * One listing of the bucket, reduced to what it says about the permission.
+     * One listing, reduced to what it says about the permission.
+     *
+     * <p>Listed under {@code checkpoints/} rather than at the bucket root (raised in review): a
+     * {@code s3:ListBucket} grant may carry an {@code s3:prefix} condition, and then the root
+     * answers 403 while the probe this check exists for works perfectly — a false alarm telling an
+     * operator to widen a policy that is already right. The checkpoint prefix is where the answer
+     * matters most, since a misread frame is the failure #149 makes durable.</p>
      *
      * @return {@code GRANTED}, {@code DENIED} (403) or {@code UNDETERMINED} (anything else)
      */
     public ListPermission verifyListPermission() {
         try {
             s3Client.listObjectsV2(ListObjectsV2Request.builder()
-                    .bucket(bucketName).maxKeys(1).build());
+                    .bucket(bucketName).prefix(CHECKPOINT_ROOT_PREFIX).maxKeys(1)
+                    // Bounded on purpose: this runs on the ready thread, before readiness is
+                    // published. The SDK default would be 30 s x 3 attempts.
+                    .overrideConfiguration(AwsRequestOverrideConfiguration.builder()
+                            .apiCallTimeout(STARTUP_CHECK_TIMEOUT)
+                            .apiCallAttemptTimeout(STARTUP_CHECK_TIMEOUT)
+                            .build())
+                    .build());
             return ListPermission.GRANTED;
         } catch (S3Exception e) {
             return e.statusCode() == 403 ? ListPermission.DENIED : ListPermission.UNDETERMINED;
@@ -121,6 +147,7 @@ public class S3CheckpointStorage {
             return ListPermission.UNDETERMINED;
         }
     }
+
 
     /**
      * What S3 was able to tell us about one key (issue #157).
@@ -235,7 +262,7 @@ public class S3CheckpointStorage {
      *         every build plus the {@code _frame/} reload frames (issue #118)
      */
     public static String checkpointPrefix(UUID siteId) {
-        return String.format("checkpoints/%s/", siteId);
+        return CHECKPOINT_ROOT_PREFIX + siteId + "/";
     }
 
     /** @return the keys of all objects under a prefix (single page is sufficient for test/egress sizes). */

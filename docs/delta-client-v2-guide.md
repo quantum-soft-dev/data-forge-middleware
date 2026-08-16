@@ -801,9 +801,9 @@ answers pull in opposite directions.
 **"S3 will not say" is a third answer, not a missing object (issue #157).** Every refusal above —
 `lossy_refold`, `history_gone`, and the per-table rematerialize they drain — starts from the seed
 frame reading as *absent*, and until this ticket absence was inferred from a status code that means
-two different things. HEAD on a missing key answers `404` only with `s3:ListBucket`; the deployment
-runs least-privilege (`GetObject`/`PutObject`), so S3 answers **403** for a key that is not there.
-That reading is correct and is kept. What was wrong is the other direction: a blanket read denial on
+two different things. HEAD on a missing key answers `404` only with `s3:ListBucket`; without that
+permission S3 hides existence behind a **403**, so reading a 403 as absence is the only workable
+choice — and that reading is kept. What was wrong is the other direction: a blanket read denial on
 keys that *do* exist answers 403 as well, so one IAM or bucket-policy change presented as N sites
 having lost their checkpoint history in the same tick — and since #149 it also **spent** those
 sites' finite rematerialize attempts, after which a segment-less site is named by no work list and
@@ -820,15 +820,21 @@ does not come back when the permission does.
   key is there. The extra round trip is paid on the 403 path only.
 - **This application requires `s3:ListBucket` anyway**, which is what makes the probe decidable
   rather than hopeful: site wipe walks `egress/{siteId}/` and `checkpoints/{siteId}/` (#118, #122)
-  and the nightly batch retention lists the batch prefix (#100). A deployment that lacks it cannot
-  run those paths at all — and could not distinguish absence from denial by any means, because
+  and the nightly batch retention lists the batch prefix (#100). The deployed task role grants it
+  (`deploy-script/template-1763397226530.yaml`, `S3BucketAccess`), which also means HEAD *does*
+  answer 404 for a missing key there and the 403 path is the rare one it is described as. A
+  deployment that lacks it cannot run those paths at all — and could not distinguish absence from denial by any means, because
   hiding one behind the other is precisely what the missing permission does. **That premise is
   checked at startup**, not assumed: one `ListObjectsV2` against the bucket on
   `ApplicationReadyEvent` logs `S3 list permission confirmed`, or an **ERROR** naming the grant to
   add. It does not fail the context — a briefly unreachable S3 must not stop a pod from serving,
   and the permission can equally be fixed while it runs. Without that line the failure would be
   quiet: every absent object would answer `UNKNOWN`, the sites owning them would be skipped, and
-  `delta.s3.read-denied` would climb by one per missing key instead of marking an incident.
+  `delta.s3.read-denied` would climb by one per missing key instead of marking an incident. The
+  check lists under `checkpoints/` rather than the bucket root, because a grant carrying an
+  `s3:prefix` condition would 403 at the root while the probe works; it carries a 5 s timeout of its
+  own, since a ready listener runs before Boot publishes readiness and the SDK's default 30 s x 3
+  would hold the pod out of the Service endpoints.
 - Only when the listing is denied too is the answer `UNKNOWN`, and that is a real read outage rather
   than a guess about one. It increments **`delta.s3.read-denied`** and logs a WARN naming the key.
 - The checkpoint build **skips a site whose frame presence is unknown**: nothing is folded,

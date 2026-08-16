@@ -497,7 +497,15 @@ pages/{feature}/            # Route pages
   assumed** (also round 2): one `ListObjectsV2` on `ApplicationReadyEvent` logs it confirmed or
   raises an ERROR naming the grant to add, without failing the context — otherwise a deployment
   lacking it would degrade quietly, every absence answering `UNKNOWN` and the new counter climbing
-  by one per missing key. New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
+  by one per missing key. Round 3 bounded and aimed that check: it lists under **`checkpoints/`**
+  rather than the bucket root (a grant with an `s3:prefix` condition would 403 at the root while the
+  probe works, i.e. a false alarm on every pod start) and carries a **5 s** `apiCallTimeout` of its
+  own, because a ready listener runs *before* Boot publishes `ACCEPTING_TRAFFIC` and the SDK default
+  (30 s x 3) would have kept the pod out of the Service endpoints long enough to stall a rollout.
+  The deployed task role does grant it (`deploy-script/template-1763397226530.yaml`), so on this
+  deployment HEAD answers 404 for a missing key and the 403 path really is the rare one. Follow-up
+  filed from round 3: **#176** — the Parquet Export listing probes S3 inside its read-only
+  transaction, up to two round trips per row on the denial path, the sibling of #164. New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
   over the injected `MeterRegistry`, the `CheckpointGivenUpMetrics` shape — infrastructure must not
   depend on `delta.application`, and `DeltaMetrics` documents it without owning it) counts the
   **unresolved** denial only, which is also why the ticket's suggested `delta.s3.head-denied` name
