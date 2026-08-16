@@ -3,10 +3,15 @@ package com.bitbi.dfm.delta.infrastructure;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -24,6 +29,7 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -42,12 +48,122 @@ public class S3CheckpointStorage {
 
     private static final Logger log = LoggerFactory.getLogger(S3CheckpointStorage.class);
 
+    /** Short enough that readiness is not held hostage to an unreachable S3 at startup. */
+    private static final Duration STARTUP_CHECK_TIMEOUT = Duration.ofSeconds(5);
+
+    /** The prefix every checkpoint object of every site lives under. */
+    private static final String CHECKPOINT_ROOT_PREFIX = "checkpoints/";
+
     private final S3Client s3Client;
     private final String bucketName;
+    private final Counter readDenied;
 
-    public S3CheckpointStorage(S3Client s3Client, @Value("${s3.bucket.name}") String bucketName) {
+    public S3CheckpointStorage(S3Client s3Client, @Value("${s3.bucket.name}") String bucketName,
+                               MeterRegistry registry) {
         this.s3Client = s3Client;
         this.bucketName = bucketName;
+        // Registered here rather than in DeltaMetrics: the denial is an S3-level fact observed in
+        // this class, and infrastructure must not depend on the application layer. Same shape as
+        // CheckpointGivenUpMetrics, which DeltaMetrics documents without owning.
+        this.readDenied = Counter.builder("delta.s3.read-denied")
+                .description("Objects whose presence could not be determined because S3 denied "
+                        + "both the HEAD and the one-key listing probe")
+                .tag("application", "data-forge-middleware")
+                .register(registry);
+    }
+
+    /** What a startup listing of the bucket said about {@code s3:ListBucket}. */
+    public enum ListPermission {
+        /** The bucket can be listed, so {@link #presence} can resolve a denied HEAD. */
+        GRANTED,
+        /** Listing is denied: absence and denial are indistinguishable for this principal. */
+        DENIED,
+        /** S3 could not be reached; nothing may be concluded about the permission. */
+        UNDETERMINED
+    }
+
+    /**
+     * Check at startup that this application may list its bucket (issue #157, raised in review).
+     *
+     * <p>{@link #presence} resolves a denied HEAD by listing, which only works while
+     * {@code s3:ListBucket} is granted. That is not a new requirement — site wipe walks two
+     * prefixes (#118, #122) and the nightly batch retention lists the batch prefix (#100), so a
+     * deployment without it is already broken — but it was an assumption nothing verified, and the
+     * way it fails is quiet: every absent object answers {@code UNKNOWN}, the checkpoint build
+     * skips those sites for as long as it lasts, and {@code delta.s3.read-denied} climbs by one per
+     * missing key instead of marking an incident. One listing at startup turns that into a line an
+     * operator can act on.</p>
+     *
+     * <p>It does not fail the context: an S3 that is briefly unreachable at startup must not stop a
+     * pod from serving, and the permission may equally be fixed while the pod runs. For the same
+     * reason the call carries its own short timeout (raised in review): a ready listener runs
+     * <em>before</em> Boot flips readiness to {@code ACCEPTING_TRAFFIC}, and the SDK's default
+     * 30 s socket timeout across three attempts would keep a pod out of the Service endpoints for a
+     * minute and a half — a stalled rollout, which is the opposite of not stopping a pod from
+     * serving. It would also delay the sibling ready listener that re-drives orphaned rebuilds.</p>
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void logListPermission() {
+        switch (verifyListPermission()) {
+            case GRANTED -> log.info("S3 list permission confirmed for bucket {} — a denied HEAD "
+                    + "can be resolved into present/absent", bucketName);
+            case DENIED -> log.error("s3:ListBucket is DENIED for bucket {}. This application needs "
+                    + "it for site history wipe and batch retention, and without it S3 cannot tell "
+                    + "a missing object from a denied one: every absent object reads as unknown, "
+                    + "checkpoint builds skip those sites, and delta.s3.read-denied counts one per "
+                    + "missing key rather than marking an incident. Grant s3:ListBucket on the "
+                    + "bucket", bucketName);
+            case UNDETERMINED -> log.warn("Could not verify the S3 list permission for bucket {} at "
+                    + "startup; if delta.s3.read-denied climbs steadily, check it by hand", bucketName);
+        }
+    }
+
+    /**
+     * One listing, reduced to what it says about the permission.
+     *
+     * <p>Listed under {@code checkpoints/} rather than at the bucket root (raised in review): a
+     * {@code s3:ListBucket} grant may carry an {@code s3:prefix} condition, and then the root
+     * answers 403 while the probe this check exists for works perfectly — a false alarm telling an
+     * operator to widen a policy that is already right. The checkpoint prefix is where the answer
+     * matters most, since a misread frame is the failure #149 makes durable.</p>
+     *
+     * @return {@code GRANTED}, {@code DENIED} (403) or {@code UNDETERMINED} (anything else)
+     */
+    public ListPermission verifyListPermission() {
+        try {
+            s3Client.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucketName).prefix(CHECKPOINT_ROOT_PREFIX).maxKeys(1)
+                    // Bounded on purpose: this runs on the ready thread, before readiness is
+                    // published. The SDK default would be 30 s x 3 attempts.
+                    .overrideConfiguration(AwsRequestOverrideConfiguration.builder()
+                            .apiCallTimeout(STARTUP_CHECK_TIMEOUT)
+                            .apiCallAttemptTimeout(STARTUP_CHECK_TIMEOUT)
+                            .build())
+                    .build());
+            return ListPermission.GRANTED;
+        } catch (S3Exception e) {
+            return e.statusCode() == 403 ? ListPermission.DENIED : ListPermission.UNDETERMINED;
+        } catch (SdkClientException e) {
+            return ListPermission.UNDETERMINED;
+        }
+    }
+
+
+    /**
+     * What S3 was able to tell us about one key (issue #157).
+     *
+     * <p>{@code UNKNOWN} exists because "absent" and "you may not look" arrive as the same status
+     * code on a least-privilege deployment, and the callers act on absence with very different
+     * severity — up to declaring a site's whole checkpoint history gone. A caller that cannot act
+     * on an undecidable answer must do nothing rather than assume either side.</p>
+     */
+    public enum ObjectPresence {
+        /** The object is there. */
+        PRESENT,
+        /** The object is not there — S3 said so, it was not inferred from a refusal. */
+        ABSENT,
+        /** S3 refused to answer. Nothing may be concluded, in either direction. */
+        UNKNOWN
     }
 
     /**
@@ -127,9 +243,12 @@ public class S3CheckpointStorage {
         return String.format("egress/%s/%s/delta/seq=%019d-%019d.parquet", siteId, tableName, firstSeq, lastSeq);
     }
 
-    /** @return whether the delta Parquet file of one table's segment slice exists (feature 025). */
-    public boolean deltaExists(UUID siteId, String tableName, long firstSeq, long lastSeq) {
-        return exists(deltaKey(siteId, tableName, firstSeq, lastSeq));
+    /**
+     * @return whether the delta Parquet file of one table's segment slice is there, gone, or
+     *         undecidable (feature 025; tri-state since issue #157)
+     */
+    public ObjectPresence deltaPresence(UUID siteId, String tableName, long firstSeq, long lastSeq) {
+        return presence(deltaKey(siteId, tableName, firstSeq, lastSeq));
     }
 
     /** @return the prefix holding every delta Parquet file of a site (feature 025). */
@@ -143,7 +262,7 @@ public class S3CheckpointStorage {
      *         every build plus the {@code _frame/} reload frames (issue #118)
      */
     public static String checkpointPrefix(UUID siteId) {
-        return String.format("checkpoints/%s/", siteId);
+        return CHECKPOINT_ROOT_PREFIX + siteId + "/";
     }
 
     /** @return the keys of all objects under a prefix (single page is sufficient for test/egress sizes). */
@@ -211,9 +330,12 @@ public class S3CheckpointStorage {
         return download(frameKey(siteId, seq));
     }
 
-    /** @return whether a checkpoint frame exists for a site at a given sequence. */
-    public boolean frameExists(UUID siteId, long seq) {
-        return exists(frameKey(siteId, seq));
+    /**
+     * @return whether the checkpoint frame of a site at a given sequence is there, gone, or
+     *         undecidable — the distinction the build acts on (issue #157)
+     */
+    public ObjectPresence framePresence(UUID siteId, long seq) {
+        return presence(frameKey(siteId, seq));
     }
 
     private static String frameKey(UUID siteId, long seq) {
@@ -262,29 +384,100 @@ public class S3CheckpointStorage {
         }
     }
 
-    public boolean exists(String s3Key) {
+    /**
+     * Is this object there, gone, or is S3 refusing to say (issue #157)?
+     *
+     * <p>HEAD on a missing key answers 404 only with {@code s3:ListBucket}; without it AWS hides
+     * existence behind a <b>403</b>, so a 403 must not be read as "unavailable". It must not be
+     * read as "absent" either: a blanket read denial on keys that <em>do</em> exist lands in exactly
+     * the same branch, and before this the two were the same answer — which is how one IAM change
+     * presented as every pruned-history site having lost its checkpoint history at once.</p>
+     *
+     * <p>So the 403 is resolved by <b>listing</b> the key. Not by reading it: AWS applies the same
+     * existence-hiding rule to {@code GetObject} as to {@code HeadObject}, so a ranged read would
+     * answer 403 for a missing key on exactly the deployment that needs resolving, and every
+     * absence would degrade into {@code UNKNOWN}. {@code ListObjectsV2} is a <em>bucket</em> action
+     * with no such rule: granted, it says truthfully whether the key is there. This application
+     * requires {@code s3:ListBucket} regardless — site wipe walks two prefixes (#118, #122) and the
+     * nightly batch retention lists the batch prefix (#100) — so the probe is decidable wherever
+     * this application can run at all, and a 403 that survives it is a genuine read denial.
+     * {@code UNKNOWN} is therefore a real read outage rather than a guess about one, and the extra
+     * round trip is paid on the 403 path alone, which is the rare one.</p>
+     *
+     * @param s3Key the object key
+     * @return {@code PRESENT}, {@code ABSENT}, or {@code UNKNOWN}
+     * @throws CheckpointStorageException if S3 failed in a way that is neither absence nor a denial
+     */
+    public ObjectPresence presence(String s3Key) {
         try {
             s3Client.headObject(HeadObjectRequest.builder().bucket(bucketName).key(s3Key).build());
-            return true;
+            return ObjectPresence.PRESENT;
         } catch (NoSuchKeyException e) {
-            return false;
+            return ObjectPresence.ABSENT;
         } catch (S3Exception e) {
-            // HEAD on a missing key answers 404 only with s3:ListBucket; least-privilege
-            // IAM (Get/PutObject only) answers 403 — both mean "absent", not "unavailable".
-            // A blanket deny on EXISTING keys also lands here, so log the 403 branch: it is
-            // the only trace distinguishing an IAM outage from genuinely missing files.
-            if (e.statusCode() == 404 || e.statusCode() == 403) {
-                if (e.statusCode() == 403) {
-                    log.warn("S3 HEAD denied (403) for {} — treating as absent; if this repeats "
-                            + "for existing keys, check IAM/bucket-policy read permissions", s3Key);
-                }
-                return false;
+            if (e.statusCode() == 404) {
+                return ObjectPresence.ABSENT;
+            }
+            if (e.statusCode() == 403) {
+                return probeAfterDeniedHead(s3Key);
             }
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         } catch (SdkClientException e) {
             // network failures arrive as raw SdkClientException — wrap so callers see one type
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         }
+    }
+
+    /**
+     * List the key as its own prefix: one round trip, one result, and an answer that is not subject
+     * to the existence-hiding rule the HEAD just ran into.
+     *
+     * <p>Deliberately total: every outcome maps to a presence rather than to an exception, because
+     * the question being answered is already "we could not stat it — can we tell anything at all?"
+     * A caller receiving {@code UNKNOWN} skips the work; a caller receiving an exception here would
+     * have to treat it identically, with a stack trace instead of a decision.</p>
+     */
+    private ObjectPresence probeAfterDeniedHead(String s3Key) {
+        try {
+            // Prefix, so the answer must be checked for the exact key: a longer sibling
+            // (…/snapshot.parquet.bak) shares the prefix and is not this object.
+            boolean listed = s3Client.listObjectsV2(ListObjectsV2Request.builder()
+                            .bucket(bucketName).prefix(s3Key).maxKeys(1).build())
+                    .contents().stream().anyMatch(object -> s3Key.equals(object.key()));
+            return listed ? ObjectPresence.PRESENT : ObjectPresence.ABSENT;
+        } catch (S3Exception e) {
+            if (e.statusCode() == 403) {
+                readDenied.increment();
+                log.warn("S3 read denied for {} — HEAD and the one-key listing both answered 403, "
+                        + "so whether the object exists is unknown (delta.s3.read-denied). Work "
+                        + "that depends on this object is being skipped, not written off. Check "
+                        + "IAM/bucket-policy read permissions; note that s3:ListBucket is required "
+                        + "by this application anyway (site wipe, batch retention), and without it "
+                        + "S3 cannot tell absence from denial for anyone", s3Key);
+                return ObjectPresence.UNKNOWN;
+            }
+            return unreadable(s3Key, e);
+        } catch (SdkClientException e) {
+            return unreadable(s3Key, e);
+        }
+    }
+
+    /**
+     * The probe was neither answered nor refused — S3 is unwell. Not counted as a denial:
+     * {@code delta.s3.read-denied} has to mean "denied" for an operator to act on it.
+     */
+    private static ObjectPresence unreadable(String s3Key, Exception cause) {
+        log.warn("Could not determine whether {} exists: HEAD was denied (403) and the one-key "
+                + "listing failed", s3Key, cause);
+        return ObjectPresence.UNKNOWN;
+    }
+
+    /**
+     * Yes/no form of {@link #presence(String)} for callers that have no third answer to give —
+     * an undecidable presence collapses to {@code false}, never to {@code true}.
+     */
+    public boolean exists(String s3Key) {
+        return presence(s3Key) == ObjectPresence.PRESENT;
     }
 
     /**

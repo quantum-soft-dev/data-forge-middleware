@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.infrastructure;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,7 +50,7 @@ class S3CheckpointStorageUploadTest {
     void streamsTheFileToTheCheckpointKey() throws IOException {
         Path snapshot = Files.writeString(tempDir.resolve("snapshot.parquet"), "parquet-bytes");
 
-        String key = new S3CheckpointStorage(s3Client, "test-bucket")
+        String key = new S3CheckpointStorage(s3Client, "test-bucket", new SimpleMeterRegistry())
                 .uploadParquet(SITE, "customers", 7L, snapshot);
 
         assertEquals("checkpoints/" + SITE + "/customers/seq=7/snapshot.parquet", key);
@@ -61,7 +62,7 @@ class S3CheckpointStorageUploadTest {
         when(s3Client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
                 .thenThrow(new UncheckedIOException(new IOException("cannot read the snapshot")));
 
-        assertThrows(CheckpointStorageException.class, () -> new S3CheckpointStorage(s3Client, "test-bucket")
+        assertThrows(CheckpointStorageException.class, () -> new S3CheckpointStorage(s3Client, "test-bucket", new SimpleMeterRegistry())
                 .uploadParquet(SITE, "customers", 7L, snapshot));
     }
 
@@ -69,7 +70,7 @@ class S3CheckpointStorageUploadTest {
     void streamsTheFrameFileToTheFrameKey() throws IOException {
         Path frame = Files.writeString(tempDir.resolve("frame.pb.gz"), "frame-bytes");
 
-        String key = new S3CheckpointStorage(s3Client, "test-bucket")
+        String key = new S3CheckpointStorage(s3Client, "test-bucket", new SimpleMeterRegistry())
                 .uploadFrame(SITE, 7L, frame);
 
         assertEquals("checkpoints/" + SITE + "/_frame/seq=7/frame.pb.gz", key);
@@ -81,7 +82,7 @@ class S3CheckpointStorageUploadTest {
         when(s3Client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
                 .thenThrow(new UncheckedIOException(new IOException("cannot read the frame")));
 
-        assertThrows(CheckpointStorageException.class, () -> new S3CheckpointStorage(s3Client, "test-bucket")
+        assertThrows(CheckpointStorageException.class, () -> new S3CheckpointStorage(s3Client, "test-bucket", new SimpleMeterRegistry())
                 .uploadFrame(SITE, 7L, frame));
     }
 }

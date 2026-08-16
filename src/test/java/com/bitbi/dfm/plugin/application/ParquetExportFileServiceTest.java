@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.FileListing;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.FileType;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.ParquetFileItem;
@@ -116,7 +117,7 @@ class ParquetExportFileServiceTest {
         CatalogRow c = deltaRow("c_table", 1, 2, T1);
         when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(3)))
                 .thenReturn(List.of(a, b, c));
-        when(checkpointStorage.deltaExists(eq(SITE_ID), any(), anyLong(), anyLong())).thenReturn(true);
+        when(checkpointStorage.deltaPresence(eq(SITE_ID), any(), anyLong(), anyLong())).thenReturn(ObjectPresence.PRESENT);
 
         FileListing pageOne = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, null, 2);
 
@@ -144,8 +145,8 @@ class ParquetExportFileServiceTest {
         CatalogRow later = deltaRow("orders", 3, 4, T2);
         when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(3)))
                 .thenReturn(List.of(present, missing, later));
-        when(checkpointStorage.deltaExists(SITE_ID, "orders", 1, 2)).thenReturn(true);
-        when(checkpointStorage.deltaExists(SITE_ID, "poison", 1, 2)).thenReturn(false);
+        when(checkpointStorage.deltaPresence(SITE_ID, "orders", 1, 2)).thenReturn(ObjectPresence.PRESENT);
+        when(checkpointStorage.deltaPresence(SITE_ID, "poison", 1, 2)).thenReturn(ObjectPresence.ABSENT);
 
         FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, null, 2);
 
@@ -158,11 +159,29 @@ class ParquetExportFileServiceTest {
         when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(),
                 eq(missing.producedAt()), eq(missing.s3Key()), eq(3)))
                 .thenReturn(List.of(later));
-        when(checkpointStorage.deltaExists(SITE_ID, "orders", 3, 4)).thenReturn(true);
+        when(checkpointStorage.deltaPresence(SITE_ID, "orders", 3, 4)).thenReturn(ObjectPresence.PRESENT);
 
         FileListing next = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, listing.nextCursor(), 2);
         assertEquals(1, next.files().size());
         assertEquals(3L, next.files().get(0).firstSeq());
+    }
+
+    @Test
+    @DisplayName("Should keep a delta row whose presence S3 refused to answer (issue #157)")
+    void shouldKeepRowsWhosePresenceIsUnknown() {
+        // The probe drops a row so a client is never handed a dead link. A read denial is not
+        // evidence of a dead link: hiding the file would make a transient IAM incident look like
+        // egress having skipped the table, and the client's own download would have told it the
+        // truth anyway.
+        CatalogRow denied = deltaRow("orders", 1, 2, T1);
+        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), anyInt()))
+                .thenReturn(List.of(denied));
+        when(checkpointStorage.deltaPresence(SITE_ID, "orders", 1, 2)).thenReturn(ObjectPresence.UNKNOWN);
+
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, null, 50);
+
+        assertEquals(1, listing.files().size());
+        assertEquals("orders", listing.files().get(0).table());
     }
 
     @Test

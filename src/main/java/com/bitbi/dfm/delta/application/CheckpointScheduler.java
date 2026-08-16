@@ -69,6 +69,14 @@ public class CheckpointScheduler {
                 try {
                     checkpointService.buildCheckpoint(siteId);
                     retentionService.prune(siteId);
+                } catch (CheckpointService.FramePresenceUnknownException e) {
+                    // Not a failure of this site: S3 would not say whether its seed frame is there,
+                    // so the build declined to conclude anything (issue #157). Logged apart from
+                    // the catch below because during a read outage this fires for every site in the
+                    // tick, and calling that "build/retention failed" would send an operator
+                    // looking at the sites rather than at the bucket policy. Retention is skipped
+                    // with it — the pointer did not move, so there is nothing new to prune.
+                    log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
                 } catch (RuntimeException e) {
                     log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
                 }

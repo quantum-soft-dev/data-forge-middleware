@@ -10,6 +10,7 @@ import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
@@ -178,15 +179,37 @@ public class CheckpointService {
         // site_sync_state row lock, so a history wipe (issue #136) or a re-baseline (issue #142)
         // that commits mid-build discards the build instead of having its deletes undone by it.
         SiteEpoch epoch = syncState.epoch();
-        boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
+        ObjectPresence framePresence = checkpointSeq > 0
+                ? checkpointStorage.framePresence(siteId, checkpointSeq)
+                : ObjectPresence.ABSENT;
+        // S3 refused to say whether the seed frame is there (issue #157). Every conclusion below
+        // rests on absence being a fact, and this is not one: a blanket read denial on keys that do
+        // exist answers exactly like a key that is gone. Acting on it would raise this subsystem's
+        // loudest alarm — or, with no segments behind the site, spend one of the finite
+        // rematerialize attempts #149 gave those rows, after which the site names itself on no work
+        // list and does not return when the permission does. End the build instead: nothing is
+        // recorded, nothing is spent, and the next tick answers the same question once the read is
+        // allowed again. Deliberately not on delta.checkpoint.builds.aborted, whose contract is
+        // aborts that never repair themselves; delta.s3.read-denied is the meter for this one, and
+        // it is incremented where the denial is seen.
+        //
+        // Thrown rather than returned as an empty fold, for the same reason #162 made the shutdown
+        // case distinguishable: DeltaCheckpointRebuildService cannot tell an empty fold from a
+        // finished build, so it would log "rebuild completed" and spend the durable
+        // rebuild_requested flag on a build that never ran.
+        if (framePresence == ObjectPresence.UNKNOWN) {
+            throw new FramePresenceUnknownException(siteId, checkpointSeq);
+        }
+        boolean haveFrame = framePresence == ObjectPresence.PRESENT;
         boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
         try {
             // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
-            // recordCheckpoint). If it reads as absent — deleted, or an S3 HEAD denial masquerading
-            // as absence — a refold is lossless only while the full history survives; after
-            // retention pruning it would silently publish a truncated checkpoint and advance the
-            // pointer, making the loss durable. Refuse and let the build fail loudly instead.
+            // recordCheckpoint). If it is genuinely gone — deleted; not merely unreadable, which
+            // the tri-state above has already taken out of this path — a refold is lossless only
+            // while the full history survives; after retention pruning it would silently publish a
+            // truncated checkpoint and advance the pointer, making the loss durable. Refuse and let
+            // the build fail loudly instead.
             if (checkpointSeq > 0 && !haveFrame && historyPruned) {
                 return refuseRefold(siteId, segments, checkpointSeq, epoch, idlePass);
             }
@@ -215,8 +238,12 @@ public class CheckpointService {
     }
 
     /**
-     * The seed frame is unreadable and the changelog cannot replace it. Two different facts hide
+     * The seed frame is <b>gone</b> and the changelog cannot replace it. Two different facts hide
      * behind that, and they deserve two different answers (issue #149, review of #148).
+     *
+     * <p>"Gone" and not "unreadable": since issue #157 a frame S3 refused to talk about answers
+     * {@code UNKNOWN} and never reaches this method, so both branches below are about an object
+     * that S3 itself said is not there.</p>
      *
      * <p>With segments still on record, a refold would produce a <em>truncated</em> checkpoint and
      * make the loss durable by advancing the pointer over it: that is the pre-existing
@@ -252,18 +279,17 @@ public class CheckpointService {
         if (segments.isEmpty()) {
             metrics.checkpointBuildAborted("history_gone");
             settleSiteWide(siteId, epoch, pass);
-            log.error("Checkpoint frame@{} for site {} is unreadable and the changelog is empty — "
-                    + "there is no history left to rebuild this site's checkpoints from. Recovery "
-                    + "is a re-baseline or a history wipe; a forced rebuild re-arms the retry but "
-                    + "cannot conjure a frame. NOTE: an S3 HEAD denial reads as absence by design "
-                    + "(least-privilege IAM, see delta.checkpoint.builds.aborted), so check for a "
-                    + "'S3 HEAD denied (403)' warning before treating this as data loss — the "
-                    + "nightly retry gives up after {} such nights and the site is then only "
-                    + "reachable through a forced rebuild",
+            log.error("Checkpoint frame@{} for site {} is gone and the changelog is empty — there "
+                    + "is no history left to rebuild this site's checkpoints from. Recovery is a "
+                    + "re-baseline or a history wipe; a forced rebuild re-arms the retry but cannot "
+                    + "conjure a frame. The nightly retry gives up after {} such nights, after "
+                    + "which the site is only reachable through a forced rebuild. This is a real "
+                    + "absence: since issue #157 a read denial answers UNKNOWN and skips the site "
+                    + "without spending an attempt",
                     checkpointSeq, siteId, retryProperties.maxMaterializeAttempts());
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
-                            + " is unreadable and the changelog is empty — there is no history left "
+                            + " is gone and the changelog is empty — there is no history left "
                             + "to rebuild this site's checkpoints from",
                     null);
         }
@@ -274,7 +300,7 @@ public class CheckpointService {
         metrics.checkpointBuildAborted("lossy_refold");
         throw new S3CheckpointStorage.CheckpointStorageException(
                 "Checkpoint frame@" + checkpointSeq + " for site " + siteId
-                        + " is unreadable and earlier segments are pruned — refusing lossy refold",
+                        + " is gone and earlier segments are pruned — refusing lossy refold",
                 null);
     }
 
@@ -733,6 +759,24 @@ public class CheckpointService {
     private void stopIfShuttingDown(UUID siteId) {
         if (shutdownSignal.isShuttingDown()) {
             throw new BuildEndedByShutdownException(siteId, null, null);
+        }
+    }
+
+    /**
+     * S3 would not say whether the site's seed frame exists, so this build did nothing (issue #157).
+     *
+     * <p>Public and thrown, unlike its shutdown sibling, because two callers must tell it apart from
+     * a build that finished: {@code CheckpointScheduler} logs it and moves to the next site, while
+     * {@code DeltaCheckpointRebuildService} keeps the operator's {@code rebuild_requested} flag
+     * rather than reporting a rebuild that never ran. Nothing durable changed — no fold, no upload,
+     * no row, no attempt spent — and the next tick asks S3 the same question again.</p>
+     */
+    public static final class FramePresenceUnknownException extends RuntimeException {
+
+        FramePresenceUnknownException(UUID siteId, long checkpointSeq) {
+            super("S3 would not say whether checkpoint frame@" + checkpointSeq + " of site "
+                    + siteId + " exists (read denied); the build was skipped and nothing was "
+                    + "recorded — see delta.s3.read-denied");
         }
     }
 

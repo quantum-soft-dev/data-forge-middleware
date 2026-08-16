@@ -215,7 +215,9 @@ plugins:
 - Catalog: `ParquetExportFileService` + `ParquetExportCatalogDao` — default source is
   `batch_parquet_artifacts` (`READY`/`ABANDONED`); `type=delta` still fans out
   `jsonb_object_keys(stats)`. Keyset pagination `(producedAt, s3Key)` runs in SQL (bounded to
-  `size + 1` rows); the `deltaExists` probe runs only for served delta pages.
+  `size + 1` rows); the `deltaPresence` probe runs only for served delta pages, and drops a row
+  only on a **known** absence — a read S3 refused to answer keeps the entry rather than hiding a
+  file that is there (issue #157).
 - Links: `DownloadLink` / `download_links` (V39), `DownloadLinkService` (atomic consume + 60 s
   presign), `DownloadLinkPurgeScheduler`.
 - Audit: `PluginAuditService` — `FILES_LISTED`, `LINK_CONSUMED`, `LINK_REJECTED`,

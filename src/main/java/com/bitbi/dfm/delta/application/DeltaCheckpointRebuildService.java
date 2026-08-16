@@ -110,28 +110,56 @@ public class DeltaCheckpointRebuildService {
      * <p>The check is deliberately after the call rather than only inside it: a shutdown starting
      * just as a rebuild finished leaves the flag set and costs one redundant rebuild after the
      * restart, which is the harmless direction to be wrong in.</p>
+     *
+     * <p>An S3 read denial on the seed frame (issue #157) is the other build that does nothing, and
+     * it is settled the <b>other</b> way: not logged as completed — {@code CheckpointService} throws
+     * rather than returning an empty fold precisely so this path can tell the two apart — but the
+     * flag is still released. Holding it would strand the request, because nothing re-drives it: a
+     * restart is not implied here as it is by a shutdown, the nightly tick calls
+     * {@code buildCheckpoint} rather than {@code rebuildFromFrame}, and
+     * {@link #requestRebuild} short-circuits while the flag is set, so the operator could not even
+     * ask again once the permission returned — on the very action the {@code history_gone} message
+     * names as the recovery.</p>
      */
     private void runRebuild(UUID siteId) {
-        boolean endedByShutdown = false;
+        boolean keepFlagForARetry = false;
         try {
             checkpointService.rebuildFromFrame(siteId);
-            endedByShutdown = shutdownSignal.isShuttingDown();
-            if (!endedByShutdown) {
+            keepFlagForARetry = shutdownSignal.isShuttingDown();
+            if (!keepFlagForARetry) {
                 log.info("Forced checkpoint rebuild completed: siteId={}", siteId);
+            } else {
+                logShutdown(siteId);
             }
+        } catch (CheckpointService.FramePresenceUnknownException e) {
+            // Neither "completed" nor a retained flag (issue #157, review rounds 1 and 2). Not
+            // completed, because nothing ran — that was the first finding. But not held either:
+            // unlike the shutdown case above, which is followed by a restart *by definition* and so
+            // by resumePendingRebuilds, nothing re-drives this one — the nightly tick runs
+            // buildCheckpoint, never rebuildFromFrame — and requestRebuild short-circuits while the
+            // flag is set, so holding it would leave the operator unable to ask again once the
+            // permission was restored, on the action history_gone names as the recovery. Release it
+            // and say plainly what to do, exactly as a failed attempt does.
+            log.error("Forced checkpoint rebuild for site {} did not run: {}. Nothing was recorded "
+                    + "and the flag is released — request the rebuild again once S3 reads are "
+                    + "allowed (see delta.s3.read-denied)", siteId, e.getMessage());
         } catch (Exception e) {
-            endedByShutdown = shutdownSignal.isShuttingDown();
-            if (!endedByShutdown) {
+            keepFlagForARetry = shutdownSignal.isShuttingDown();
+            if (!keepFlagForARetry) {
                 log.error("Forced checkpoint rebuild failed: siteId={}", siteId, e);
+            } else {
+                logShutdown(siteId);
             }
         } finally {
-            if (endedByShutdown) {
-                log.info("Forced checkpoint rebuild for site {} did not run to completion: the "
-                        + "application is shutting down. Leaving rebuild_requested set so the "
-                        + "next process re-drives it at startup", siteId);
-            } else {
+            if (!keepFlagForARetry) {
                 syncStateService.clearRebuildRequested(siteId);
             }
         }
+    }
+
+    private static void logShutdown(UUID siteId) {
+        log.info("Forced checkpoint rebuild for site {} did not run to completion: the "
+                + "application is shutting down. Leaving rebuild_requested set so the "
+                + "next process re-drives it at startup", siteId);
     }
 }

@@ -88,6 +88,24 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
+    void clearsTheFlagWhenS3WouldNotSayWhetherTheFrameIsThere() {
+        // Issue #157, rounds 1 and 2 of review together. The rebuild did not run, so it must not be
+        // logged as completed (round 1) — but the flag must still be released (round 2). Keeping it
+        // would strand the request: only a restart re-drives it, and requestRebuild short-circuits
+        // while it is set, so the operator could neither wait for it nor ask again once the
+        // permission came back. The shutdown sibling can keep the flag because a restart is
+        // imminent by definition; a bucket-policy incident carries no such promise. So this is
+        // settled like any other failed attempt — released, and loudly enough to re-request.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE))
+                .thenThrow(new CheckpointService.FramePresenceUnknownException(SITE, 7L));
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(syncStateService).clearRebuildRequested(SITE);
+    }
+
+    @Test
     void duplicateRequestShortCircuitsWithoutASecondBuild() {
         // Flag already set: a second click must not queue a second full rebuild whose
         // sibling's finally-clear would flip the UI to "idle" mid-run.

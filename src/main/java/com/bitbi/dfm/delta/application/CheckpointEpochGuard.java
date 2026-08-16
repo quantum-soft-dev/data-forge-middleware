@@ -26,7 +26,7 @@ import java.util.UUID;
  * alone — that field is the wire epoch and moving it would tell the client to drop its journal and
  * reset its seq counter, which a re-baseline never means (035). Keyed on {@code generation} the
  * guard saw nothing, the build restored the pre-re-baseline pointer, and the <em>next</em> build
- * then found {@code frameExists} true at that seq and seeded the fold from the discarded baseline's
+ * then found the frame present at that seq and seeded the fold from the discarded baseline's
  * frame: rows deleted at the source reappeared in every checkpoint Parquet, with no pruning alarm
  * and no refused refold. Hence the guard keys on {@code baseline_epoch} (issue #142), the counter
  * both operations move, while {@code generation} keeps its wire meaning.</p>

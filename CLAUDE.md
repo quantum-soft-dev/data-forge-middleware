@@ -453,6 +453,76 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- s3-presence-tristate: A read denial and an absent object are two different answers again, at the
+  call site that acts on them (issue #157, filed reviewing #154 and made durable by #149).
+  `S3CheckpointStorage.exists` returned `false` for a genuine 404 and for a 403 alike. The
+  404-as-403 half is correct and stays: HEAD answers 404 for a missing key only with
+  `s3:ListBucket`, and without it S3 hides existence behind a 403, so reading that as absence is the
+  only workable choice. The other direction was the bug — a blanket read denial on keys that *do*
+  exist answers 403 as well, so one IAM or bucket-policy change made the checkpoint frame read as
+  absent for every site in the same tick, tripping `delta.checkpoint.builds.aborted`, a meter whose
+  documented contract is "aborts that do not repair themselves", for a condition a permission fix
+  clears. **#149 raised the stakes from noisy to irreversible**: it decides `history_gone` by the
+  same call, and such a site spends one `checkpoints.materialize_attempts` per tick, so after
+  `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` (5) nights its rows give up and — having no segments —
+  the site is named by neither work-list query and **does not recover when the permission does**.
+  New `presence(String)` → `PRESENT|ABSENT|UNKNOWN` combines the ticket's first two options, because
+  neither alone is enough: the tri-state without a probe would answer `UNKNOWN` for **every** missing
+  key wherever HEAD cannot 404, while a probe without the tri-state would still have to collapse a
+  real outage into one of the two lies. **The probe is a one-key `ListObjectsV2`, not the ranged
+  `GetObject` the ticket proposed** — raised in review, and the correction is the crux: AWS applies
+  the same existence-hiding rule to `GetObject` as to `HeadObject`, so a ranged read answers 403 for
+  a missing key on exactly the deployment that needs resolving, and every absence would have
+  degraded into `UNKNOWN` — sites skipped forever, `delta.s3.read-denied` counting one per missing
+  key, which is precisely the noise the counter was named to avoid. `ListObjectsV2` is a **bucket**
+  action with no such rule, and this application **requires `s3:ListBucket` anyway** (site wipe walks
+  two prefixes, #118/#122; the nightly batch retention lists the batch prefix, #100), so the probe is
+  decidable wherever the application can run at all. The result is matched against the exact key,
+  since a prefix listing also returns a longer sibling. `CheckpointService` **ends the build** for a
+  site whose frame presence is unknown: nothing folded, uploaded, saved or counted, no attempt spent,
+  pointer and per-table keys untouched, retried next tick — deliberately **not** on
+  `delta.checkpoint.builds.aborted`, since this one repairs itself. It is **thrown**
+  (`FramePresenceUnknownException`) rather than returned as an empty fold, the second review
+  correction and the same reasoning #162 used for the shutdown case: `DeltaCheckpointRebuildService`
+  cannot tell an empty fold from a finished build, so a forced rebuild would have logged "completed"
+  and spent the durable `rebuild_requested` flag on a build that never ran — on the very action the
+  `history_gone` message names as the recovery. **Round 2 then corrected the other half**: it logs
+  an ERROR rather than "completed", but it still **releases** the flag, because the shutdown
+  analogy does not carry — a shutdown implies the restart that re-drives it, an incident does not,
+  the nightly tick calls `buildCheckpoint` and never `rebuildFromFrame`, and `requestRebuild`
+  short-circuits while the flag is set, so holding it would leave the operator unable to ask again
+  once the permission returned. `CheckpointScheduler` logs the skip apart from a build failure,
+  since during an outage it fires for every site and "build/retention failed" would send an operator
+  to the sites rather than to the bucket policy. **The `s3:ListBucket` premise is checked, not
+  assumed** (also round 2): one `ListObjectsV2` on `ApplicationReadyEvent` logs it confirmed or
+  raises an ERROR naming the grant to add, without failing the context — otherwise a deployment
+  lacking it would degrade quietly, every absence answering `UNKNOWN` and the new counter climbing
+  by one per missing key. Round 3 bounded and aimed that check: it lists under **`checkpoints/`**
+  rather than the bucket root (a grant with an `s3:prefix` condition would 403 at the root while the
+  probe works, i.e. a false alarm on every pod start) and carries a **5 s** `apiCallTimeout` of its
+  own, because a ready listener runs *before* Boot publishes `ACCEPTING_TRAFFIC` and the SDK default
+  (30 s x 3) would have kept the pod out of the Service endpoints long enough to stall a rollout.
+  The deployed task role does grant it (`deploy-script/template-1763397226530.yaml`), so on this
+  deployment HEAD answers 404 for a missing key and the 403 path really is the rare one. Follow-up
+  filed from round 3: **#176** — the Parquet Export listing probes S3 inside its read-only
+  transaction, up to two round trips per row on the denial path, the sibling of #164. New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
+  over the injected `MeterRegistry`, the `CheckpointGivenUpMetrics` shape — infrastructure must not
+  depend on `delta.application`, and `DeltaMetrics` documents it without owning it) counts the
+  **unresolved** denial only, which is also why the ticket's suggested `delta.s3.head-denied` name
+  was not used. `deltaExists` → `deltaPresence`, `frameExists` → `framePresence`; `exists` stays as
+  the yes/no form (`presence == PRESENT`, so an undecidable answer is never a yes) for the
+  integration suite. Parquet Export's file listing drops a delta row only on a **known** absence, so
+  a denial no longer hides a present download — and with the listing probe a genuinely missing object
+  still resolves to `ABSENT` while object reads are denied, so dead links need read *and* list to be
+  refused together. The `lossy_refold` caveat is **removed** rather than reworded in
+  `docs/delta-client-v2-guide.md` and in `DeltaMetrics.checkpointBuildAborted` — the meter is a fact
+  about the site's own data again — and the `history_gone` ERROR line drops its "check for a 403
+  first" note for the same reason. Proven against LocalStack for the half a mock cannot: the probe
+  tells a real object from a missing one and from a prefix sibling, through a real listing; only the
+  denial is injected (`DelegatingS3Client`), because LocalStack community enforces neither IAM nor
+  bucket policies. No REST, gRPC, proto, DTO, migration, configuration-key, S3-key or frontend
+  change. See `docs/delta-client-v2-guide.md` ("S3 will not say", Metrics),
+  `docs/parquet-export-plugin-guide.md`.
 - checkpoint-table-verdict: A per-table checkpoint failure is now bounded when it is deterministic
   and not recorded at all when it is the process ending (issue #149, folding **#162**). Both halves
   are one decision in `CheckpointService` — *when is a per-table failure the table's verdict?* — and
