@@ -264,6 +264,7 @@ class ScheduledTaskTestProfileCadenceTest {
         collectSweepMsKey(keys, scheduled.getString("fixedDelayString"));
         collectSweepMsKey(keys, scheduled.getString("fixedRateString"));
         collectSweepMsKey(keys, scheduled.getString("cron"));
+        collectSweepMsKey(keys, scheduled.getString("initialDelayString"));
         return keys;
     }
 

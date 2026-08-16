@@ -285,8 +285,9 @@ class ScheduledTaskInventoryTest {
     /**
      * Every {@code Class#method} carrying {@link Scheduled} in the production classes.
      *
-     * <p>Package-private so {@link ScheduledTaskTestProfileCadenceTest} (#167) walks the same set
-     * rather than growing a second scanner that could disagree with this one.</p>
+     * <p>Package-private so {@link ScheduledTaskTestProfileCadenceTest} (#167) can assert it
+     * discovered the same names. That test still walks annotations itself — the equality check
+     * is what keeps the two scans from drifting apart.</p>
      *
      * @return fully qualified {@code class#method} names, sorted
      */
