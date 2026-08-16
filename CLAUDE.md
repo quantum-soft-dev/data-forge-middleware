@@ -464,13 +464,19 @@ pages/{feature}/            # Route pages
   unbounded** on top of that (virtual-thread-per-request; grpc-java's default cached pool, since
   `GrpcServerConfig` never calls `.executor(...)`). **So "cover the peak" was never available**: 32
   per replica times seven pods is a quarter of a thousand connections. What makes a pool smaller than
-  its callers *safe* rather than reckless is that **no unit of background work needs two connections
-  at once** — every `REQUIRES_NEW` that could nest is deliberately arranged not to
-  (`CheckpointEpochGuard` under a non-transactional build, `PluginAuditEventListener` `AFTER_COMMIT`
-  + `@Async`, `CheckpointRecordedEvent` published outside the guard's transaction; the plugin audit
-  methods are `REQUIRED`, so even the `CallerRunsPolicy` overflow path joins the caller's transaction
-  instead of opening a second connection) — so a shortage can only make a thread **wait** 30 s and
-  retry on its next tick, never deadlock. The size therefore comes from two bounds: a **floor** over
+  its callers *safe* rather than reckless is that **background work does not hold one connection while
+  waiting for a second** — the shape that turns a shortage into a deadlock instead of a delay — so a
+  thread that cannot get one waits 30 s and runs again on its next tick. `CheckpointEpochGuard`'s
+  `REQUIRES_NEW` runs under a non-transactional build and `CheckpointRecordedEvent` is published
+  outside the guard's transaction. **Two exceptions exist and review corrected the first draft, which
+  had claimed there were none**: `PluginAuditEventListener` is `REQUIRES_NEW` *and* `AFTER_COMMIT`, so
+  with `pluginExecutor` saturated (10 threads plus 50 queue slots) `CallerRunsPolicy` runs it inline on
+  the publishing thread, which still holds its own connection because Spring releases it in
+  `afterCompletion` rather than `afterCommit` (**#171** — the easy misreading is that
+  `PluginAuditService`'s own methods are `REQUIRED`, which they are; the listener is not); and the
+  delta-SQL worker pins a connection while waiting on a semaphore whose permit holders need
+  connections from this same pool to release it (part of **#164**). Both are timed, so they cost a
+  delay rather than a permanent stall, and both are documented rather than asserted away. The size therefore comes from two bounds: a **floor** over
   the consumers that cannot absorb a wait because they pin a connection across S3 I/O instead of
   releasing it between statements, and a **ceiling** from the cluster, since the pool is per replica,
   `max_connections` is not, and a cron tick fires on every replica in the same second —

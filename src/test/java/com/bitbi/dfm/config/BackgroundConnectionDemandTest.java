@@ -47,14 +47,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * facts make it safe:</p>
  *
  * <ol>
- *   <li><b>No background unit of work needs two connections at once.</b> The {@code REQUIRES_NEW}
- *       paths that could nest are all arranged not to: {@code CheckpointEpochGuard} is called from
- *       a deliberately non-transactional build, {@code PluginAuditEventListener} runs
- *       {@code AFTER_COMMIT} on {@code pluginExecutor}, and {@code CheckpointService} publishes
- *       {@code CheckpointRecordedEvent} outside the guard's transaction on purpose. With at most
- *       one connection per thread, a shortage can only make threads <em>wait</em>; it cannot
- *       deadlock them against each other, which is what a pool smaller than its callers would
- *       otherwise risk.</li>
+ *   <li><b>Background work does not hold one connection while waiting for a second</b>, which is
+ *       the shape that turns a shortage into a deadlock rather than a delay. The
+ *       {@code REQUIRES_NEW} paths that could nest are arranged not to: {@code CheckpointEpochGuard}
+ *       is called from a deliberately non-transactional build, and {@code CheckpointService}
+ *       publishes {@code CheckpointRecordedEvent} outside the guard's transaction on purpose (there,
+ *       to avoid a self-deadlock on the {@code site_sync_state} row lock).
+ *       <p><b>Two exceptions are known and neither is asserted away</b> — both are timed, so they
+ *       cost a delay rather than a permanent stall, and both are worth removing:</p>
+ *       <ul>
+ *         <li>{@code PluginAuditEventListener} is {@code REQUIRES_NEW} <em>and</em>
+ *             {@code AFTER_COMMIT}. Normally it runs on {@code pluginExecutor}, well after the
+ *             publisher is done — but when that pool is saturated (10 threads busy and all 50 queue
+ *             slots taken) {@code CallerRunsPolicy} runs it inline on the publishing thread, which
+ *             is still inside the commit synchronization with its own connection bound (release
+ *             happens in {@code afterCompletion}, not {@code afterCommit}). That thread then wants a
+ *             second connection while holding one. Filed as <b>#171</b>.</li>
+ *         <li>{@code DeltaSqlQueueService.processNextPending} pins its connection while blocking up
+ *             to {@code plugin.sql-generation.semaphore-timeout-seconds} on a semaphore whose other
+ *             permit holders need connections from this same pool to release it — a transitive
+ *             hold-and-wait rather than a direct one. Part of <b>#164</b>.</li>
+ *       </ul>
+ *   </li>
  *   <li><b>Waiting is a survivable outcome for background work.</b> The failure is a 30 s
  *       {@code connection-timeout} on a queue worker or a scheduled tick, both of which run again
  *       on their next wake. It is not a survivable outcome for a consumer that has already pinned
@@ -127,11 +141,13 @@ class BackgroundConnectionDemandTest {
         beans.put("com.bitbi.dfm.config.SchedulingConfiguration#taskScheduler",
                 new Consumer(6, Hold.SHORT, "sized by " + POOL_KEY + "; its long ticks counted"
                         + " separately from ScheduledTaskInventoryTest"));
-        // Plugin audit writes and the async SQL-generation entry point: one INSERT each, and
-        // @Transactional (REQUIRED), so even the CallerRunsPolicy overflow path joins the caller's
-        // transaction rather than opening a second connection on the caller's thread.
+        // Plugin audit writes and the async SQL-generation entry point: one INSERT each. The
+        // methods on PluginAuditService are @Transactional (REQUIRED), but PluginAuditEventListener
+        // is REQUIRES_NEW and AFTER_COMMIT, so its CallerRunsPolicy overflow path is the one place
+        // background work wants a second connection on a thread that already holds one — see the
+        // class documentation, and #171.
         beans.put("com.bitbi.dfm.plugin.infrastructure.PluginAsyncConfiguration#pluginExecutor",
-                new Consumer(10, Hold.SHORT, "one audit INSERT per task"));
+                new Consumer(10, Hold.SHORT, "one audit INSERT per task; overflow runs inline (#171)"));
         // Plugin dispatch; the SQL generation it fans out to is gated by the semaphore below.
         beans.put("com.bitbi.dfm.plugin.infrastructure.PluginAsyncConfiguration#pluginExecutionExecutor",
                 new Consumer(8, Hold.SHORT, "dispatch, then the generation's own transaction"));
@@ -197,6 +213,10 @@ class BackgroundConnectionDemandTest {
         constructions.put("com/bitbi/dfm/delta/application/BatchParquetFinalizationWorker.java", 1);
         constructions.put("com/bitbi/dfm/plugin/application/DeltaSqlSweepWorker.java", 1);
         constructions.put("com/bitbi/dfm/delta/application/BatchParquetFinalizationService.java", 1);
+        // Not a pool: one CompletableFuture.runAsync that names pluginExecutionExecutor explicitly,
+        // which is the form that keeps work off ForkJoinPool.commonPool. Recorded so a second
+        // hand-off has to justify its executor rather than inherit the common pool silently.
+        constructions.put("com/bitbi/dfm/plugin/application/PluginEventDispatcher.java", 1);
         return constructions;
     }
 
@@ -272,6 +292,16 @@ class BackgroundConnectionDemandTest {
      * not its six threads: a short tick that has to wait for a connection runs again on its next
      * wake, so it belongs with the queueing consumers however many threads exist to dispatch it.
      * Adding a {@code Cost.LONG} scheduled task therefore tightens this floor automatically.</p>
+     *
+     * <p><b>That borrowed count is a deliberate over-estimate, and worth naming as one</b>, because
+     * this class otherwise insists on the distinction: {@code Cost} measures how long a task holds
+     * its <em>thread</em>, and one of the four long ticks — {@code CheckpointScheduler} — holds no
+     * connection for any of that time, since the build is non-transactional and writes through
+     * short guarded transactions (which is exactly why the same work is {@link Hold#SHORT} when it
+     * arrives through {@code deltaRebuildExecutor}). The connection-true count is three. Four is
+     * used anyway: the two classifications are one per-task audit rather than two that could
+     * disagree, and erring upward makes the floor stricter than reality rather than looser. Both
+     * values leave the shipped pool satisfying it.</p>
      */
     private static int longHoldingThreads() {
         return ScheduledTaskInventoryTest.longRunningTaskCount() + totalThreads(Hold.LONG);
@@ -493,25 +523,78 @@ class BackgroundConnectionDemandTest {
      * Extra pods a rolling update may add on top of the replica ceiling, across the base and every
      * overlay — an overlay that raises the surge raises the real peak just as an overlay that
      * raises {@code maxReplicas} does.
+     *
+     * <p>Selected from the <em>backend</em> Deployment specifically, the way {@link #maxReplicas()}
+     * selects its HPA. The frontend's Deployment declares a surge of its own and adds no pod that
+     * opens a connection, so folding it in would fail this budget for a rollout that cannot affect
+     * it.</p>
      */
     private static int maxSurge() throws IOException {
-        Pattern numeric = Pattern.compile("maxSurge:\\s*(\\d+)\\s*$", Pattern.MULTILINE);
-        Pattern any = Pattern.compile("maxSurge:\\s*(\\S+)");
         int highest = -1;
         for (Path manifest : manifests()) {
-            Matcher declared = any.matcher(Files.readString(manifest));
-            while (declared.find()) {
-                assertTrue(numeric.matcher(declared.group()).find(),
-                        manifest + " declares maxSurge: " + declared.group(1) + ". Only a plain "
-                                + "integer can be budgeted for — a percentage makes the peak pod count "
-                                + "depend on the current replica count");
-                highest = Math.max(highest, Integer.parseInt(declared.group(1)));
+            for (Object document : documents(manifest)) {
+                if (!(document instanceof Map<?, ?> root) || !"Deployment".equals(root.get("kind"))) {
+                    continue;
+                }
+                if (!(root.get("metadata") instanceof Map<?, ?> metadata)
+                        || !BACKEND_DEPLOYMENT.equals(metadata.get("name"))) {
+                    continue;
+                }
+                Object declared = root.get("spec") instanceof Map<?, ?> spec
+                        && spec.get("strategy") instanceof Map<?, ?> strategy
+                        && strategy.get("rollingUpdate") instanceof Map<?, ?> rolling
+                        ? rolling.get("maxSurge") : null;
+                if (declared == null) {
+                    continue;
+                }
+                assertTrue(declared instanceof Number,
+                        manifest + " declares maxSurge: " + declared + ". Only a plain integer can "
+                                + "be budgeted for — a percentage makes the peak pod count depend on "
+                                + "the current replica count");
+                highest = Math.max(highest, ((Number) declared).intValue());
             }
         }
         assertTrue(highest >= 0,
-                "no manifest declares rollingUpdate.maxSurge, so the pod count during a rollout is "
-                        + "Kubernetes' default of 25% rather than something this budget can compute");
+                "no manifest declares rollingUpdate.maxSurge for " + BACKEND_DEPLOYMENT + ", so the "
+                        + "pod count during a rollout is Kubernetes' default of 25% rather than "
+                        + "something this budget can compute");
         return highest;
+    }
+
+    /**
+     * Every key of the derivation, in the relaxed-binding form a manifest would use.
+     *
+     * <p>The reach of this whole class is {@code application.yml}, and every number in the
+     * derivation is overridable from the environment. A ConfigMap that sets one of these would move
+     * the real arithmetic while both bounds above stayed green on the defaults, which is the same
+     * hole {@code ParquetScratchCeilingBudgetTest} closes for the scratch ceilings — and the guide's
+     * own advice ("lower {@code DELTA_EGRESS_MAX_CONCURRENT}") would otherwise be advice to do
+     * exactly that.</p>
+     *
+     * <p>It bounds the manifests, not the world: an override reaching the pod some other way
+     * ({@code SPRING_APPLICATION_JSON}, a Secret, a `kubectl set env`) is outside anything this
+     * repository can check, and is why the derivation asks for the change to be made in the open.</p>
+     */
+    private static final List<String> DERIVATION_ENV_KEYS = List.of(
+            "SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE",
+            "SPRING_TASK_SCHEDULING_POOL_SIZE",
+            "DELTA_EGRESS_MAX_CONCURRENT",
+            "PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT");
+
+    @Test
+    @DisplayName("no manifest overrides a key the derivation is computed from")
+    void shouldNotLetAManifestMoveTheDerivationBehindTheTest() throws IOException {
+        for (Path manifest : manifests()) {
+            String text = Files.readString(manifest);
+            for (String key : DERIVATION_ENV_KEYS) {
+                assertFalse(text.contains(key),
+                        manifest + " sets " + key + ". Every bound in this class is computed from "
+                                + "application.yml, so an override here moves the real arithmetic "
+                                + "while the assertions stay green on the defaults. Change the "
+                                + "default and the derivation beside it instead, or teach this test "
+                                + "to read the override");
+            }
+        }
     }
 
     private static List<Path> manifests() throws IOException {
@@ -616,9 +699,27 @@ class BackgroundConnectionDemandTest {
                 + "beside " + HIKARI_KEY);
     }
 
+    /**
+     * Ways production code can put work on a thread that is not a request thread.
+     *
+     * <p>Deliberately includes the <em>unbounded</em> ones — {@code SimpleAsyncTaskExecutor},
+     * {@code ForkJoinPool.commonPool()} and a {@code CompletableFuture} hand-off — even though none
+     * is used today. A pool with a ceiling is the easy case for this audit; a hand-off with no
+     * ceiling is the one that would quietly break the derivation, so the backstop has to be
+     * tightest exactly where the inventory is currently empty. A {@code CompletableFuture} match is
+     * not necessarily a finding: {@code PluginEventDispatcher} names {@code pluginExecutionExecutor}
+     * explicitly, which is the correct form and is why its count is recorded rather than zero. What
+     * fails the build is a <em>new</em> one, which then has to name its executor too.</p>
+     */
     private static final Pattern POOL_CONSTRUCTION = Pattern.compile(
             "Executors\\.new|new ThreadPoolExecutor\\(|new ThreadPoolTaskExecutor\\(|"
-                    + "new ThreadPoolTaskScheduler\\(|new ScheduledThreadPoolExecutor\\(|new ForkJoinPool\\(");
+                    + "new ThreadPoolTaskScheduler\\(|new ScheduledThreadPoolExecutor\\(|"
+                    + "new ForkJoinPool\\(|ForkJoinPool\\.commonPool\\(|new SimpleAsyncTaskExecutor\\(|"
+                    + "CompletableFuture\\.supplyAsync\\(|CompletableFuture\\.runAsync\\(");
+
+    /** Line and block comments, so prose about a thread pool is not counted as one. */
+    private static final Pattern JAVA_COMMENT =
+            Pattern.compile("/\\*.*?\\*/|//[^\\n]*", Pattern.DOTALL);
 
     private static Map<String, Integer> scanPoolConstructions() throws IOException {
         Path root = Path.of("src/main/java");
@@ -626,8 +727,9 @@ class BackgroundConnectionDemandTest {
         try (Stream<Path> sources = Files.walk(root)) {
             List<Path> files = sources.filter(path -> path.toString().endsWith(".java")).toList();
             for (Path file : files) {
+                String code = JAVA_COMMENT.matcher(Files.readString(file)).replaceAll("");
                 int count = 0;
-                Matcher matcher = POOL_CONSTRUCTION.matcher(Files.readString(file));
+                Matcher matcher = POOL_CONSTRUCTION.matcher(code);
                 while (matcher.find()) {
                     count++;
                 }

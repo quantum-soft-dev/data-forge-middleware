@@ -63,13 +63,22 @@ spring:
       # forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a single HTTP
       # or gRPC request asks for a connection, and both request layers are themselves unbounded
       # (virtual-thread-per-request, and grpc-java's default cached pool). This pool is therefore
-      # SMALLER THAN ITS CALLERS ON PURPOSE, and that is safe for one specific reason: no unit of
-      # background work ever needs two connections at once, so a shortage makes a thread wait for
-      # up to connection-timeout and retry on its next tick — it cannot deadlock threads against
-      # each other. Every REQUIRES_NEW that could have nested is deliberately arranged not to
-      # (CheckpointEpochGuard runs under a non-transactional build, PluginAuditEventListener runs
-      # AFTER_COMMIT and async, CheckpointRecordedEvent is published outside the guard's
-      # transaction). Introducing a nested one changes this reasoning, not just this number.
+      # SMALLER THAN ITS CALLERS ON PURPOSE, and that is safe for one specific reason: background
+      # work does not hold one connection while waiting for a second, which is the shape that turns
+      # a shortage into a deadlock instead of a delay. A thread that cannot get a connection waits
+      # up to connection-timeout and runs again on its next tick. CheckpointEpochGuard's
+      # REQUIRES_NEW runs under a non-transactional build, and CheckpointRecordedEvent is published
+      # outside the guard's transaction on purpose.
+      #
+      # TWO EXCEPTIONS EXIST, both timed and both worth removing rather than budgeting for.
+      # PluginAuditEventListener is REQUIRES_NEW *and* AFTER_COMMIT: normally it runs on
+      # pluginExecutor long after the publisher is done, but with that pool saturated (10 threads
+      # and all 50 queue slots) CallerRunsPolicy runs it inline on the publishing thread, which is
+      # still inside the commit synchronization holding its own connection (release happens in
+      # afterCompletion, not afterCommit) — issue #171. And the delta-SQL worker below pins its
+      # connection while blocking on a semaphore whose other permit holders need connections from
+      # this same pool to release it — part of #164. Introducing a third changes this reasoning,
+      # not just this number.
       #
       # So the size is fixed by two bounds rather than by the peak, and ten satisfies both:
       #

@@ -150,17 +150,14 @@ class ScheduledTaskInventoryTest {
     }
 
     /**
-     * The shipped profile only. A profile may deliberately go below this floor when its own
-     * constraints make the two rules unsatisfiable together — {@code test} shrinks the connection
-     * pool to four, and four scheduler threads would not be below four connections.
-     */
-    /**
      * Scheduled tasks that can hold their thread for minutes or longer.
      *
      * <p>Package-private because {@code BackgroundConnectionDemandTest} (#161) needs the same count
      * for a different bound: these are also the ticks that can hold a <em>connection</em> long
      * enough to matter, so adding one tightens the connection-pool floor as well as this one, and
-     * neither derivation should be able to move without the other noticing.</p>
+     * neither derivation should be able to move without the other noticing. That class documents
+     * why it accepts this count as a deliberate over-estimate — {@link Cost} measures the thread,
+     * and one of the four holds no connection while it runs.</p>
      *
      * @return how many of the audited tasks are {@link Cost#LONG}
      */
@@ -169,6 +166,11 @@ class ScheduledTaskInventoryTest {
                 + (PROGRAMMATIC_TASK_COST == Cost.LONG ? 1 : 0);
     }
 
+    /**
+     * The shipped profile only. A profile may deliberately go below this floor when its own
+     * constraints make the two rules unsatisfiable together — {@code test} shrinks the connection
+     * pool to four, and four scheduler threads would not be below four connections.
+     */
     @Test
     @DisplayName("the pool leaves a thread free for a short tick while every long task runs")
     void shouldSizeThePoolAboveTheLongRunningTasks() {

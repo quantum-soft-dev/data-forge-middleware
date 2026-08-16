@@ -977,9 +977,14 @@ forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a
 request asks for one, and both request layers are unbounded (virtual-thread-per-request, and
 grpc-java's default cached pool). `spring.datasource.hikari.maximum-pool-size` is **10**.
 
-Nothing deadlocks, because **no unit of background work ever needs two connections at once**: every
-`REQUIRES_NEW` that could nest is arranged not to. A shortage therefore costs a wait of up to
-`connection-timeout` and a retry on the next tick, which background work survives. The pool is sized
+Nothing deadlocks, because **background work does not hold one connection while waiting for a
+second** — the shape that turns a shortage into a deadlock rather than a delay. A shortage therefore
+costs a wait of up to `connection-timeout` and a retry on the next tick, which background work
+survives. Two exceptions are known, both timed and both filed rather than asserted away:
+`PluginAuditEventListener` is `REQUIRES_NEW` *and* `AFTER_COMMIT`, so if `pluginExecutor` is
+saturated its `CallerRunsPolicy` runs it inline on a publishing thread that still holds its own
+connection (**#171**); and the delta-SQL worker pins a connection while waiting on a semaphore whose
+permit holders need connections from this same pool to release it (part of **#164**). The pool is sized
 so the consumers that *cannot* absorb a wait are covered outright — the ones that pin a connection
 across S3 I/O instead of releasing it between statements:
 
