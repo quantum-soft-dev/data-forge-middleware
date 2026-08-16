@@ -480,15 +480,22 @@ pages/{feature}/            # Route pages
   the next frame never mentions it and both snapshot passes, which iterate the fold, could never
   reach it again — while its row survived (only a wipe or a re-baseline deletes checkpoint rows) and
   named its site nightly for work not even a forced rebuild could do. That row is now **deleted** by
-  the build that notices, through the epoch guard like every other write; the object it named joins
-  the superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118, sweeper is
-  #160). The third unfixable state, found in round 2 of #148's review, is a site whose frame is
+  the build that notices, through the epoch guard like every other write — **after** that build has
+  written its own tables and **never all of them** (both raised in review): an empty fold would take
+  every row, and `CheckpointFileQueryService` reads "no checkpoint rows" as "not a Delta site yet"
+  and would serve pre-Delta uploaded CSVs as the current baseline. The object it named joins the
+  superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118, sweeper is #160). The third unfixable state, found in round 2 of #148's review, is a site whose frame is
   unreadable with **no segments behind it**: `historyPruned` is unconditionally true there, so it
   raised "refusing lossy refold" every night — wrong in kind, since with no frame and no changelog
   there is no history to refold, lossily or otherwise. It gets its own message and
-  `delta.checkpoint.builds.aborted{reason=history_gone}`, and it spends an attempt on every
-  still-retryable row of the site, which is what drains it: such a site is on the work list *only*
-  because of those rows. `reason=lossy_refold` keeps its meaning for a site whose segments survive —
+  `delta.checkpoint.builds.aborted{reason=history_gone}`, and a scheduled build spends an attempt
+  on every still-retryable row of the site, which is what drains it (a **forced** rebuild re-arms
+  them instead — raised in review: the documented recovery must not be the fastest way to exhaust
+  the retry it restores): such a site is on the work list *only* because of those rows. The drain is
+  durable where the pre-#149 alarm self-healed, and `S3CheckpointStorage.exists` reads a **403 as
+  absence** by design, so a multi-night IAM read outage retires those rows and leaves the site
+  reachable only by a forced rebuild — accepted (an outage that long has already broken every
+  checkpoint download) and documented, with #157 the fix at source. `reason=lossy_refold` keeps its meaning for a site whose segments survive —
   real data, an alarm that must keep shouting, and a site visited for those segments anyway, so no
   counter could ever quiet it. **Part 2 (#162) is the opposite verdict.** Spring publishes
   `ContextClosedEvent` and *then* destroys the singletons, so a build still running when a pod is

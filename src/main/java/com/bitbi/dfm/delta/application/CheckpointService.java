@@ -188,7 +188,7 @@ public class CheckpointService {
             // retention pruning it would silently publish a truncated checkpoint and advance the
             // pointer, making the loss durable. Refuse and let the build fail loudly instead.
             if (checkpointSeq > 0 && !haveFrame && historyPruned) {
-                return refuseRefold(siteId, segments, checkpointSeq, epoch);
+                return refuseRefold(siteId, segments, checkpointSeq, epoch, idlePass);
             }
             if (segments.isEmpty() && !haveFrame) {
                 return Map.of();
@@ -235,7 +235,8 @@ public class CheckpointService {
     private Map<String, Map<String, FoldedRow>> refuseRefold(UUID siteId,
                                                              List<ChangelogSegment> segments,
                                                              long checkpointSeq,
-                                                             SiteEpoch epoch) {
+                                                             SiteEpoch epoch,
+                                                             SnapshotPass pass) {
         // Unless a wipe took them. It deletes the frame and the segments after committing the
         // new epoch, so a build that read the pointer just before it sees exactly this state —
         // and raising the loudest alarm in this subsystem for a routine operator action would
@@ -250,13 +251,27 @@ public class CheckpointService {
         }
         if (segments.isEmpty()) {
             metrics.checkpointBuildAborted("history_gone");
-            spendAnAttemptOnEveryRetryableTable(siteId, epoch);
+            // A forced rebuild re-arms the rows here as it does per table, and must not be the one
+            // thing that pushes them towards giving up: it is the operator saying the cause has
+            // been dealt with, and it is the documented recovery from this very state.
+            if (pass == SnapshotPass.FORCE) {
+                rearmEveryUnmaterializedTable(siteId, epoch);
+            } else {
+                spendAnAttemptOnEveryRetryableTable(siteId, epoch);
+            }
+            log.error("Checkpoint frame@{} for site {} is unreadable and the changelog is empty — "
+                    + "there is no history left to rebuild this site's checkpoints from. Recovery "
+                    + "is a re-baseline or a history wipe; a forced rebuild re-arms the retry but "
+                    + "cannot conjure a frame. NOTE: an S3 HEAD denial reads as absence by design "
+                    + "(least-privilege IAM, see delta.checkpoint.builds.aborted), so check for a "
+                    + "'S3 HEAD denied (403)' warning before treating this as data loss — the "
+                    + "nightly retry gives up after {} such nights and the site is then only "
+                    + "reachable through a forced rebuild",
+                    checkpointSeq, siteId, retryProperties.maxMaterializeAttempts());
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
                             + " is unreadable and the changelog is empty — there is no history left "
-                            + "to rebuild this site's checkpoints from. A re-baseline or a history "
-                            + "wipe is the only recovery; the nightly retry stops after "
-                            + retryProperties.maxMaterializeAttempts() + " attempts",
+                            + "to rebuild this site's checkpoints from",
                     null);
         }
         // Counted with the frame ceiling (issue #153) and for the same reason: the pointer
@@ -284,6 +299,24 @@ public class CheckpointService {
                 continue;
             }
             checkpoint.recordFailedMaterialization();
+            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
+        }
+    }
+
+    /**
+     * The forced-rebuild counterpart of {@link #spendAnAttemptOnEveryRetryableTable}: put every
+     * unmaterialized row of the site back into the nightly population.
+     *
+     * <p>A forced rebuild that ends in a site-wide abort still means what a forced rebuild always
+     * means — the operator asserting the cause has been dealt with. Charging it an attempt would
+     * make the documented recovery action the fastest way to exhaust the retry.</p>
+     */
+    private void rearmEveryUnmaterializedTable(UUID siteId, SiteEpoch epoch) {
+        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
+            if (checkpoint.getS3KeyParquet() != null || checkpoint.materializeAttempts() == 0) {
+                continue;
+            }
+            checkpoint.rearmMaterialization();
             epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
         }
     }
@@ -475,9 +508,9 @@ public class CheckpointService {
                                 long seq,
                                 SnapshotPass pass,
                                 SiteEpoch epoch) {
+        stopIfShuttingDown(siteId);
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
         prepareScratchDirectory();
-        reapTablesAbsentFromTheFold(siteId, state, epoch);
 
         // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
         // additionally materializes the full per-table load as typed Parquet (the only format V2
@@ -592,6 +625,14 @@ public class CheckpointService {
                 deleteQuietly(snapshot, tableName, siteId);
             }
         });
+
+        // After the loop, not before it. The rows this build is about to write exist by now, so
+        // `checkpoints` is never transiently empty for a site that has tables — and a reader
+        // landing in that window would not be a cosmetic problem: CheckpointFileQueryService keys
+        // its pre-Delta fallback on the site having no checkpoint rows at all, and would hand a
+        // Bit BI client historical uploaded CSVs as if they were its current baseline.
+        stopIfShuttingDown(siteId);
+        reapTablesAbsentFromTheFold(siteId, state, epoch);
     }
 
     /**
@@ -607,9 +648,18 @@ public class CheckpointService {
      * <p>Before this, nothing could clear such a row. Both snapshot passes iterate the fold, so the
      * loop never reached the table; only a wipe or a re-baseline deletes checkpoint rows; and with
      * the row's key still null it named its site on the tick's work list every night, forever, for
-     * work no build — not even a forced rebuild — could do. Reaping it is the exit, and it is also
-     * the truthful answer for a row that <em>did</em> keep a key: that snapshot describes a table
+     * work no build — not even a forced rebuild — could do. Reaping it is the exit, and it is the
+     * truthful answer for a row that <em>did</em> keep a key too: that snapshot describes a table
      * the site dropped, and serving it as current would be a lie.</p>
+     *
+     * <p><b>Promptly for the first, eventually for the second.</b> This runs inside
+     * {@code writeSnapshots}, which a scheduled build reaches only when it has work — new segments,
+     * or a still-retryable unmaterialized row (the probe in {@link #build} returns before the fold
+     * otherwise, which is the whole point of issue #149's cheap idle visit). A dropped table whose
+     * row kept a live key therefore survives on a site that is completely idle, until the next build
+     * with any work at all, or a forced rebuild. That is deliberate: making the reap its own reason
+     * to fold a whole site nightly would reintroduce the cost this ticket removed, for a stale
+     * listing entry rather than a missing artifact.</p>
      *
      * <p>The object the row named is left in {@code checkpoints/{siteId}/} as an orphan, which is
      * what every superseded snapshot has always been there (the row carries one key and each build
@@ -623,6 +673,14 @@ public class CheckpointService {
     private void reapTablesAbsentFromTheFold(UUID siteId,
                                              Map<String, Map<String, FoldedRow>> state,
                                              SiteEpoch epoch) {
+        if (state.isEmpty()) {
+            // Every row would go, and "this site has no checkpoint rows" is a load-bearing state
+            // elsewhere: CheckpointFileQueryService reads it as "not a Delta site yet" and falls
+            // back to the pre-Delta uploaded CSVs. A site whose every table was emptied is not the
+            // state this reap exists for — that one loses tables while others survive — so leave
+            // the rows and let the attempt cap retire the unmaterialized ones instead.
+            return;
+        }
         for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
             if (state.containsKey(checkpoint.getTableName())) {
                 continue;

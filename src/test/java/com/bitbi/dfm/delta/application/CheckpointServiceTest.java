@@ -900,6 +900,59 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void aForcedRebuildOnAFramelessSiteRearmsItsRowsInsteadOfSpendingThem() {
+        // Review of PR #169. A forced rebuild is the operator asserting the cause has been dealt
+        // with, and it is the documented recovery from exactly this state — so it must not be the
+        // fastest way to exhaust the retry it is supposed to restore.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
+        owing.recordFailedMaterialization();
+        owing.recordFailedMaterialization();
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.rebuildFromFrame(SITE));
+
+        assertEquals(0, owing.materializeAttempts(),
+                "the documented recovery must re-arm the retry, not consume it");
+        verify(checkpointRepository).save(owing);
+    }
+
+    @Test
+    void neverReapsEveryCheckpointRowOfASite() {
+        // Review of PR #169. If every table were emptied at the source the fold would be empty and
+        // the reap would delete the site's whole `checkpoints` set — and "this site has no
+        // checkpoint rows" is load-bearing elsewhere: CheckpointFileQueryService reads it as "not a
+        // Delta site yet" and answers a Bit BI client with the pre-Delta uploaded CSVs, as its own
+        // comment says it must never do.
+        Checkpoint customers = Checkpoint.create(SITE, "customers", 2L, 0L);
+        Checkpoint orders = Checkpoint.create(SITE, "orders", 2L, 0L);
+        parkAtPointer(2L, frameOf(), customers, orders);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void reapsNothingWhileTheProcessIsShuttingDown() {
+        // The reap is a durable write like any other, so the #162 rule covers it: a build that is
+        // only ending must not delete rows against a DataSource that is being closed.
+        Checkpoint vanished = Checkpoint.create(SITE, "orders", 2L, 0L);
+        Checkpoint customers = Checkpoint.create(SITE, "customers", 2L, 1L);
+        parkAtPointer(2L, frameOf(record("customers", 1L, 1, "Ann")), customers, vanished);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        shuttingDown = true;
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+
+        verify(checkpointRepository, never()).deleteById(any());
+    }
+
+    @Test
     void keepsACheckpointRowWhoseTableIsStillInTheFoldWithNoSurvivingRows() {
         // The boundary of the reap. A table whose rows were all deleted *in this build's own
         // segments* is still a key in the fold, with an empty row map — it gets an empty snapshot,

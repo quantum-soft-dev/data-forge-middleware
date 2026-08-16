@@ -741,17 +741,38 @@ answers pull in opposite directions.
   `checkpoints` row for a table absent from it describes a table whose last row was `DELETE`d at the
   source: `CheckpointFrame` emits nothing for an empty table, so the next frame never mentions it and
   no later build — not even a forced rebuild — could ever reach it again. Such a row is now deleted
-  by the build that notices. The snapshot object it named joins the superseded snapshots already
-  unreferenced under `checkpoints/{siteId}/` (#118, #160).
+  by the build that notices, after that build has written its own tables. The snapshot object it
+  named joins the superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118,
+  #160). Two limits are deliberate. The reap **never empties a site**: if every table were emptied at
+  the source the fold would be empty and every row would go, and "this site has no checkpoint rows"
+  is load-bearing elsewhere — `CheckpointFileQueryService` reads it as "not a Delta site yet" and
+  falls back to the pre-Delta uploaded CSVs, which is exactly what it must not hand a Bit BI client
+  as a current baseline. And it runs **inside a build that has work**, so a dropped table whose row
+  kept a live key survives on a completely idle site until the next build with anything to do, or a
+  forced rebuild; making the reap its own reason to fold a site nightly would put back the cost this
+  ticket removed, for a stale listing entry rather than a missing artifact.
 - **A frame that is gone with no segments behind it is not a lossy refold.** That state used to raise
   the "refusing lossy refold" alarm every night, which is wrong in kind — with no frame *and* no
   changelog there is no history to refold, lossily or otherwise — and had no exit but manual SQL. It
   now has its own message and its own
-  `delta.checkpoint.builds.aborted{reason=history_gone}`, and it spends an attempt on every
-  still-retryable row of the site, which is what ends the nightly alarm: such a site is on the work
-  list only because of those rows. Recovery is a re-baseline or a history wipe.
+  `delta.checkpoint.builds.aborted{reason=history_gone}`, and a **scheduled** build spends an
+  attempt on every still-retryable row of the site, which is what ends the nightly alarm: such a
+  site is on the work list only because of those rows. A **forced** rebuild re-arms them instead —
+  it is the operator asserting the cause is dealt with, and the documented recovery must not be the
+  fastest way to exhaust the retry it restores. Recovery proper is a re-baseline or a history wipe.
   `reason=lossy_refold` keeps its meaning for a site whose segments survive — data that still
   exists, an alarm that must keep shouting, and a site that is visited for those segments anyway.
+
+  **Check for a 403 before reading this as data loss.** `S3CheckpointStorage.exists` treats an S3
+  HEAD denial as absence on purpose (least-privilege IAM has no `s3:ListBucket`), so a bucket-policy
+  or IAM read outage makes every segment-less site look `history_gone`. Unlike the pre-#149
+  behaviour — which repeated the alarm nightly and healed itself the moment the permission came
+  back — the drain is durable: after `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` such nights the
+  rows give up and, having no segments, the site is only reachable again through a forced rebuild.
+  That is an accepted trade (a read outage lasting that many nights has already broken every
+  checkpoint download on the deployment, and the ERROR line plus the `S3 HEAD denied (403)` warning
+  name it), but it is the reason to read this counter **per site**: many sites in one tick is a
+  permissions incident, one site alone is the real thing. Distinguishing the two at source is #157.
 - **A build that is only ending records nothing (#162).** Spring publishes `ContextClosedEvent` and
   then destroys the singletons, so a build still running when a pod is replaced makes its next call
   against a closed `S3Client` or `HikariDataSource` — a failure that reads exactly like a broken
