@@ -122,6 +122,94 @@ class ChangelogFoldTest {
                 "decimal 1.5 and 1.50 must address the same row so the DELETE removes it");
     }
 
+    @Test
+    void applyChargesAnInsertAndRefundsItsDelete() {
+        // The fold is the checkpoint build's real heap bound (issue #152), so applying a record has
+        // to say how much heap the state gained or lost by it — a row put in and taken out again
+        // must leave the running total exactly where it started.
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+
+        long inserted = ChangelogFold.apply(state,
+                rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")));
+        long deleted = ChangelogFold.apply(state, rec("u", Op.DELETE, key("id", 1L), Map.of()));
+
+        assertTrue(inserted > 0, "an inserted row must weigh something: " + inserted);
+        assertEquals(-inserted, deleted, "deleting the row must give back exactly what it cost");
+        assertTrue(state.get("u").isEmpty(), "the row itself is gone");
+    }
+
+    @Test
+    void applyChargesOnlyTheDifferenceWhenARowIsReplaced() {
+        // Re-inserting the same key replaces a row rather than adding one. Charging the new row's
+        // whole weight would make a site that rewrites its rows every night look unboundedly large.
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        ChangelogFold.apply(state, rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")));
+
+        long same = ChangelogFold.apply(state,
+                rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "LA")));
+        long wider = ChangelogFold.apply(state,
+                rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "San Francisco")));
+
+        assertEquals(0, same, "an equally wide replacement costs nothing");
+        assertTrue(wider > 0 && wider < 200, "only the extra characters are charged: " + wider);
+        assertEquals(1, state.get("u").size(), "still one row");
+    }
+
+    @Test
+    void applyWeighsAWideRowAboveANarrowOne() {
+        // The estimate has to scale with what actually fills the heap — columns and their values,
+        // not the record count.
+        Map<String, Map<String, FoldedRow>> narrow = new LinkedHashMap<>();
+        Map<String, Map<String, FoldedRow>> wide = new LinkedHashMap<>();
+
+        long narrowBytes = ChangelogFold.apply(narrow,
+                rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")));
+        long wideBytes = ChangelogFold.apply(wide, rec("u", Op.INSERT, key("id", 1L),
+                data("id", 1L, "city", "NY", "notes", "x".repeat(4096), "tag", "y".repeat(512))));
+
+        assertTrue(wideBytes > narrowBytes + 4096,
+                "the wide row must carry at least its own characters: " + narrowBytes + " vs " + wideBytes);
+    }
+
+    @Test
+    void applyChargesNothingForADeleteThatMatchesNoRow() {
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+
+        assertEquals(0, ChangelogFold.apply(state, rec("u", Op.DELETE, key("id", 9L), Map.of())),
+                "a delete that removed nothing cannot refund anything");
+    }
+
+    @Test
+    void applyInPlaceMatchesFold() {
+        // fold() is now a loop over apply(), and the equivalence is the whole reason the streaming
+        // build may use one and the existing callers the other.
+        List<ChangeRecord> records = List.of(
+                rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")),
+                rec("u", Op.INSERT, key("id", 2L), data("id", 2L, "city", "LA")),
+                rec("u", Op.UPDATE, key("id", 1L), data("city", "Boston")),
+                rec("u", Op.DELETE, key("id", 2L), Map.of()));
+
+        Map<String, Map<String, FoldedRow>> folded = ChangelogFold.fold(Map.of(), records);
+        Map<String, Map<String, FoldedRow>> applied = new LinkedHashMap<>();
+        records.forEach(record -> ChangelogFold.apply(applied, record));
+
+        assertEquals(folded, applied, "streaming the records must fold to the same state");
+    }
+
+    @Test
+    void applyDoesNotMutateTheRecordItFolded() {
+        // The streaming build hands apply() a record it then drops; the state must own its own maps,
+        // or the fold would retain the whole parsed record graph it was meant to release.
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        ChangeRecord record = rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY"));
+
+        ChangelogFold.apply(state, record);
+        FoldedRow row = state.get("u").values().iterator().next();
+
+        assertTrue(row.data() != record.getDataMap(), "the row must copy the record's data map");
+        assertTrue(row.key() != record.getKeyMap(), "the row must copy the record's key map");
+    }
+
     private static Map<String, Value> bytesKey(String col, byte[] v) {
         return Map.of(col, Value.newBuilder().setBytesValue(ByteString.copyFrom(v)).build());
     }

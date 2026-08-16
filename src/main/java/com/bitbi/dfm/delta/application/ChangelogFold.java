@@ -37,6 +37,11 @@ public final class ChangelogFold {
     /**
      * Apply {@code records} on top of {@code initial} (typically a checkpoint state).
      *
+     * <p>Copies {@code initial} first, so the caller's state is untouched — which is also why the
+     * checkpoint build does <b>not</b> use this method for its own fold: the copy means both states
+     * exist at once, and each of them is the whole site (issue #152). It folds records one at a time
+     * through {@link #apply} into a state it owns instead.</p>
+     *
      * @param initial starting state (not mutated)
      * @param records changelog records in sequence order
      * @return resulting state: table → row-identity → folded row
@@ -45,32 +50,125 @@ public final class ChangelogFold {
             Map<String, Map<String, FoldedRow>> initial, List<ChangeRecord> records) {
 
         Map<String, Map<String, FoldedRow>> state = deepCopy(initial);
-
         for (ChangeRecord record : records) {
-            Map<String, FoldedRow> table = state.computeIfAbsent(record.getTable(), k -> new LinkedHashMap<>());
-            String identity = identity(record.getKeyMap());
-            switch (record.getOp()) {
-                case INSERT -> table.put(identity, new FoldedRow(
-                        new LinkedHashMap<>(record.getKeyMap()),
-                        new LinkedHashMap<>(record.getDataMap())));
-                case UPDATE -> {
-                    FoldedRow existing = table.get(identity);
-                    // Seed a brand-new row (no prior INSERT in state) with its key columns so the
-                    // materialized row never loses its primary key; an existing row already carries
-                    // its key columns in data from the original INSERT.
-                    Map<String, Value> mergedData = existing != null
-                            ? new LinkedHashMap<>(existing.data())
-                            : new LinkedHashMap<>(record.getKeyMap());
-                    mergedData.putAll(record.getDataMap());
-                    Map<String, Value> key = existing != null ? existing.key() : new LinkedHashMap<>(record.getKeyMap());
-                    table.put(identity, new FoldedRow(key, mergedData));
-                }
-                case DELETE -> table.remove(identity);
-                default -> {
-                }
-            }
+            apply(state, record);
         }
         return state;
+    }
+
+    /**
+     * Apply one record to {@code state} <b>in place</b>, and report what it did to the state's size.
+     *
+     * <p>The record is not retained: its key and data maps are copied into the row, so a caller
+     * streaming a frame or a segment can drop each record as soon as this returns.</p>
+     *
+     * @param state  the fold so far — mutated
+     * @param record the next changelog record, in sequence order
+     * @return the change in the fold's estimated retained heap, in bytes: positive for a row that
+     *         grew or arrived, negative for one that shrank or was deleted, zero when nothing about
+     *         the state's size changed. See {@link #estimatedRetainedBytes} for what "estimated"
+     *         is worth; summing these is how a build knows how big its fold has become
+     *         (issue #152) without walking it.
+     */
+    public static long apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record) {
+        Map<String, FoldedRow> table = state.computeIfAbsent(record.getTable(), k -> new LinkedHashMap<>());
+        String identity = identity(record.getKeyMap());
+        switch (record.getOp()) {
+            case INSERT -> {
+                FoldedRow row = new FoldedRow(
+                        new LinkedHashMap<>(record.getKeyMap()),
+                        new LinkedHashMap<>(record.getDataMap()));
+                return weightDelta(identity, table.put(identity, row), row);
+            }
+            case UPDATE -> {
+                FoldedRow existing = table.get(identity);
+                // Seed a brand-new row (no prior INSERT in state) with its key columns so the
+                // materialized row never loses its primary key; an existing row already carries
+                // its key columns in data from the original INSERT.
+                Map<String, Value> mergedData = existing != null
+                        ? new LinkedHashMap<>(existing.data())
+                        : new LinkedHashMap<>(record.getKeyMap());
+                mergedData.putAll(record.getDataMap());
+                Map<String, Value> key = existing != null ? existing.key() : new LinkedHashMap<>(record.getKeyMap());
+                FoldedRow row = new FoldedRow(key, mergedData);
+                table.put(identity, row);
+                return weightDelta(identity, existing, row);
+            }
+            case DELETE -> {
+                return weightDelta(identity, table.remove(identity), null);
+            }
+            default -> {
+                return 0L;
+            }
+        }
+    }
+
+    /** What replacing {@code before} (may be absent) with {@code after} (may be absent) costs. */
+    private static long weightDelta(String identity, FoldedRow before, FoldedRow after) {
+        return (after == null ? 0L : estimatedRetainedBytes(identity, after))
+                - (before == null ? 0L : estimatedRetainedBytes(identity, before));
+    }
+
+    /**
+     * A coarse estimate of how much heap one folded row occupies.
+     *
+     * <p><b>Estimated, and deliberately so.</b> The exact answer needs an object-graph walk per row,
+     * which would cost more than the fold; this is arithmetic over the same things that make a row
+     * big — its columns, their names and their values — using flat per-object costs for a 64-bit JVM
+     * with compressed ordinary object pointers. It is within a small factor of the truth rather than
+     * exact, which is what a budget expressed as a fraction of the heap needs it to be. It is
+     * <em>not</em> the row's serialized size: the fold keeps a Java object graph, and for a narrow
+     * row that graph is an order of magnitude larger than its protobuf encoding, so a wire-byte
+     * budget could not be compared against {@code -Xmx} at all.</p>
+     *
+     * <p>Counted: the row's identity string (the map key, built per row and retained with it), both
+     * of its maps entry by entry, each column name, and each value — a string, decimal or bytes
+     * value carries its own payload, while an int, double, boolean or NULL lives inside the wrapper.
+     * The key columns are counted twice on purpose: {@code key} and {@code data} each hold them.</p>
+     *
+     * @param identity the row's identity string, as used for the map key
+     * @param row      the folded row
+     * @return estimated retained bytes
+     */
+    static long estimatedRetainedBytes(String identity, FoldedRow row) {
+        return ROW_BYTES + stringBytes(identity) + mapBytes(row.key()) + mapBytes(row.data());
+    }
+
+    /** {@link FoldedRow}, its two {@link LinkedHashMap}s and the table entry that holds the row. */
+    private static final long ROW_BYTES = 160L;
+
+    /** One {@code LinkedHashMap.Entry} (which carries before/after links) plus its table slot. */
+    private static final long ENTRY_BYTES = 64L;
+
+    /** A {@link String} header plus its (compact, one byte per Latin-1 character) array header. */
+    private static final long STRING_BYTES = 48L;
+
+    /** A protobuf {@code Value}: object header, the oneof case, and one inline field or reference. */
+    private static final long VALUE_BYTES = 24L;
+
+    /** The header of the {@code byte[]} behind a bytes value. */
+    private static final long ARRAY_BYTES = 16L;
+
+    private static long mapBytes(Map<String, Value> columns) {
+        long bytes = 0L;
+        for (Map.Entry<String, Value> column : columns.entrySet()) {
+            bytes += ENTRY_BYTES + stringBytes(column.getKey()) + valueBytes(column.getValue());
+        }
+        return bytes;
+    }
+
+    private static long valueBytes(Value value) {
+        return VALUE_BYTES + switch (value.getVCase()) {
+            case STRING_VALUE -> stringBytes(value.getStringValue());
+            case DECIMAL_VALUE -> stringBytes(value.getDecimalValue());
+            case BYTES_VALUE -> ARRAY_BYTES + value.getBytesValue().size();
+            // int, double, bool and NULL are held inside the wrapper counted above
+            case INT_VALUE, DOUBLE_VALUE, BOOL_VALUE, IS_NULL, V_NOT_SET -> 0L;
+        };
+    }
+
+    private static long stringBytes(String text) {
+        return STRING_BYTES + text.length();
     }
 
     /**
