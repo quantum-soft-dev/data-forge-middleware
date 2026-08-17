@@ -754,9 +754,10 @@ public class CheckpointService {
         // that decides whether the build can finish at all — writing it last meant every abort was
         // paid for with a full set of per-table uploads that the pointer then never adopted. Those
         // objects are unreferenced the moment the next build writes its own (a `checkpoints` row is
-        // one per table and carries a single key), and nothing but a site wipe sweeps
-        // `checkpoints/{siteId}/` (#118). Since crossing the ceiling is deterministic for the same
-        // fold, that was one orphaned generation per nightly tick, indefinitely.
+        // one per table and carries a single key), and at the time nothing but a site wipe swept
+        // `checkpoints/{siteId}/` (#118; the daily sweep of #158 collects them now). Since crossing
+        // the ceiling is deterministic for the same fold, that was one orphaned generation per
+        // nightly tick, indefinitely.
         //
         // The epoch is checked first, with nothing to write. Writing and uploading the frame is the
         // longest stretch of a build that touches no row, and moving it to the front would
@@ -1112,8 +1113,8 @@ public class CheckpointService {
      *
      * <p>The object the row named is left in {@code checkpoints/{siteId}/} as an orphan, which is
      * what every superseded snapshot has always been there (the row carries one key and each build
-     * replaces it): site wipe is the sweeper, and giving that prefix one of its own is issue #160.
-     * Deleting it here would put an S3 round trip on the build for no new guarantee.</p>
+     * replaces it): a site wipe and {@code DeltaS3OrphanSweeper} (#158) both collect it. Deleting it
+     * here would put an S3 round trip on the build for no new guarantee.</p>
      *
      * <p>Deletes run through the epoch guard like every other write of a build, so a wipe or a
      * re-baseline committing mid-build ends the build instead of deleting rows of a baseline it

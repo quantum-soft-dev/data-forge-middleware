@@ -453,6 +453,63 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
+  references are reclaimed, by one mechanism for both prefixes (issue #158, which folded **#160** —
+  the same defect in the second prefix, and the hard part, proving an object is dead without a row
+  to name it, is one design decision rather than two). Every object on these paths is written
+  **before**, or independently of, the row that names it, and nothing reclaimed one that ended up
+  with no row: both deleters collect keys *from* rows, the site history wipe walks these prefixes
+  for the one site being wiped (#118/#122), `ChangelogRetentionService` prunes segments and never
+  touches checkpoints, `ParquetScratchOrphanSweeper` (#127/#141) sweeps *local* scratch, and there
+  is no bucket lifecycle rule for either. **The obvious fix is the wrong one and the ticket says
+  why**: a compensating delete in the caller's `catch` cannot be safe, because an exception can
+  surface *after* the transaction committed — an `afterCommit` synchronization or an `AFTER_COMMIT`
+  listener throwing, and `BatchEventListener` and `BatchParquetFinalizationListener` both run there
+  — so the delete would destroy a live, referenced object. Any compensation has to prove the
+  transaction did **not** commit; a sweep proves the stronger thing directly, by asking the rows.
+  `DeltaS3OrphanSweeper` does the same four things per site per prefix — list, keep the key shapes
+  this application writes, drop everything younger than the age window, subtract the keys the rows
+  still name — and the prefixes differ in one place only: which rows answer the last question.
+  `changelog_segments.s3_key` for one; for the other the `checkpoints` keys **plus the frame at
+  `site_sync_state.last_checkpoint_seq`**, the one live artifact no row stores, which is why
+  `S3CheckpointStorage.frameKey` had to become public. **The site list comes from the bucket, not
+  the database**, and that is not an optimization: `SiteService.deleteSite` hard-deletes the site
+  row and touches neither prefix (its own Javadoc has asked for "periodic orphan detection" since
+  2025), so a deleted site's objects outlive every row that could enumerate them — the population
+  with the most to reclaim. `S3PrefixLister` gains the delimiter twin of its existing walk
+  (`listChildPrefixes`, `S3ChildPrefixListing`), truncating the same way. **Every guard fails
+  towards keeping the object**, which is the half worth reviewing: an object is a candidate only
+  when S3 reports it strictly older than `delta.s3-orphan.min-age-seconds` (**24 h**, and a missing
+  `LastModified` counts as new), which is what protects a segment mid-commit and — much the longer
+  window — a frame between `uploadFrame(N)` and the `recordCheckpoint(N)` that adopts it; only the
+  three key shapes the writers produce are candidates, so an artifact kind added later accumulates
+  as everything did before rather than being deleted by a sweeper that never heard of it; the rows
+  are read **after** the listing, so a row committed in between still protects its object; a row set
+  that could not be read skips the site outright rather than reading "no rows" as "no references";
+  and a truncated listing sweeps only what it read. Both directions are pinned by mutation — with
+  the age filter removed four tests go red, with the frame protection removed one does — and by a
+  LocalStack test for the three things a mock cannot prove (the delimiter listing really answers one
+  prefix per site, the shapes match what the writers emit, the batched delete removes what it was
+  handed). **On by default**, because an orphan is resolved by nothing else: `delta.s3-orphan.enabled`
+  exists as the rollback, not as the safety. New keys `delta.s3-orphan.{enabled,min-age-seconds,
+  sweep-ms,initial-delay-ms}` (24 h cadence, first pass 10 min after start — nothing here is crash
+  recovery, unlike the queue-drain sweeps). New meters `delta.s3-orphan.reclaimed` and
+  `delta.s3-orphan.delete-failed`, tagged `prefix=segments|checkpoints`, every series registered at
+  zero; read them asymmetrically — under `segments` a steady rate means ingestion commits are failing
+  after their upload, under `checkpoints` it is the ordinary superseded generation of every advancing
+  build, so a **zero** rate there is the surprising reading. The tick joins the #146 inventory as
+  `Cost.LONG` (it walks every site prefix in the bucket), which moves the connection-pool floor to
+  `5 long ticks + 2 request reserve = 7 <= 10` — and the borrowed count is now an over-estimate by
+  **two**, since neither the checkpoint build nor this sweep holds a connection across S3 (#164's
+  rule: each repository call is its own short transaction). It is safe beside the other ticks for the
+  reason every deleter there is: it only ever deletes objects older than a day that no row names,
+  and everything a live build, commit or neighbouring tick is working on is younger by orders of
+  magnitude. **The one number an operator must not get wrong** is the age window: below the longest
+  possible checkpoint build a live frame can be deleted, and such a site reads as `history_gone` and
+  gives its checkpoint rows up after `delta.checkpoint.max-materialize-attempts` nights (#149) —
+  raising it costs only storage. No REST, gRPC, proto, DTO, migration, existing configuration-key,
+  existing metric-name, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Objects no
+  row references are reclaimed", Metrics).
 - scratch-directory-budget: One key bounds the whole file-backed Parquet scratch **directory**,
   where every guard before it bounded a single file (issue #150, split out of #138 and named as
   out of scope by #131 before that). `delta.checkpoint.max-temp-bytes` bounds one table snapshot,

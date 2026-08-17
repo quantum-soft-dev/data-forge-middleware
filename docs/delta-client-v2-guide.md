@@ -671,9 +671,9 @@ ceiling is raised or the site is re-baselined. Two things follow, and both are h
 - **A repeat costs nothing durable.** The frame is written first, so an abort leaves no snapshot
   object, no `checkpoints` row and no moved pointer. Before #153 the per-table snapshots were
   uploaded first, at the *new* seq, and their rows saved; the previous seq's objects were then
-  unreferenced — a `checkpoints` row is one per `(site, table)` and holds one key, and nothing but a
-  site wipe sweeps `checkpoints/{siteId}/` (#118) — so every failed nightly build left another
-  orphaned generation in the bucket.
+  unreferenced — a `checkpoints` row is one per `(site, table)` and holds one key, and at the time
+  nothing but a site wipe swept `checkpoints/{siteId}/` (#118) — so every failed nightly build left
+  another orphaned generation in the bucket, one the daily sweep of #158 now reclaims.
 
 **"Nothing durable" is about the bucket, not about the consumers.** Three things do change for as
 long as the abort lasts, and none of them is new damage — they are the freeze itself, made visible:
@@ -714,10 +714,11 @@ invariant that makes it harmless is worth stating exactly: **a build only ever r
 `last_checkpoint_seq`, and `uploadFrame(N)` always precedes the `recordCheckpoint(N)` that names
 it** — so the frame a build seeds from is always the one written by the build that moved the pointer
 there. A later build that legitimately ends at seq N overwrites the orphan; one that ends elsewhere
-never looks at it. Only a site wipe sweeps `checkpoints/{siteId}/` (#118), and its cut-off (#122)
+never looks at it. A site wipe sweeps `checkpoints/{siteId}/` (#118) but its cut-off (#122)
 spares objects newer than its own start, so a frame orphaned *by* a wipe needs a second wipe to
-collect — the same as the snapshot objects a discarded build has always left. Giving that prefix a
-sweeper of its own is **#160**.
+collect — the same as the snapshot objects a discarded build has always left. Since **#158** that
+prefix has a sweeper of its own as well, which collects a stranded frame a day after it was written
+whatever produced it.
 
 **When is a per-table failure the table's verdict? (issues #149, #162)** The rematerialize of #128
 and the work list of #137 together gave every unmaterialized `checkpoints` row a nightly retry with
@@ -749,8 +750,8 @@ answers pull in opposite directions.
   source: `CheckpointFrame` emits nothing for an empty table, so the next frame never mentions it and
   no later build — not even a forced rebuild — could ever reach it again. Such a row is now deleted
   by the build that notices, after that build has written its own tables. The snapshot object it
-  named joins the superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118,
-  #160). Two limits are deliberate. The reap **never empties a site**: if every table were emptied at
+  named joins the superseded snapshots already unreferenced under `checkpoints/{siteId}/`, which
+  a site wipe (#118) and the daily orphan sweep (#158) both collect. Two limits are deliberate. The reap **never empties a site**: if every table were emptied at
   the source the fold would be empty and every row would go, and "this site has no checkpoint rows"
   is load-bearing elsewhere — `CheckpointFileQueryService` reads it as "not a Delta site yet" and
   falls back to the pre-Delta uploaded CSVs, which is exactly what it must not hand a Bit BI client
@@ -1635,9 +1636,10 @@ lifecycle path.
 `(site, table)` and reused across builds: each build writes
 `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` under a new `seq` and replaces the key on
 the row, so the previous build's object is unreferenced from that moment on — and since issue #113 a
-build that cannot materialize Parquet nulls the key outright. Nothing else sweeps them: changelog
-retention prunes segments and no lifecycle rule covers this prefix, so before #118 a long-lived site
-left one orphan per table per build behind the operation whose whole contract is "clean slate". The
+build that cannot materialize Parquet nulls the key outright. Changelog retention prunes segments
+and no lifecycle rule covers this prefix, so before #118 a long-lived site left one orphan per table
+per build behind the operation whose whole contract is "clean slate" — and until #158 gave the
+prefix a daily sweep, this walk was the only thing that removed them at all. The
 wipe therefore paginates `checkpoints/{siteId}/…` after the database work, exactly as it does for
 egress, keeping the keys recorded on the rows as the fallback for a failed listing. The walk also
 takes the `_frame/seq={seq}/frame.pb.gz` reload frames, which no row has ever named — the wipe is the
@@ -1772,15 +1774,68 @@ snapshot tail used to sit inside that hold, pinning a HikariCP connection with i
 
 What it costs: an upload whose transaction then fails leaves an object nobody references. The key
 carries a freshly minted segment id (`delta/{siteId}/segments/{segmentId}.pb.gz`), so the bytes are
-unreachable without the row — but also unreclaimable: segment objects are deleted by key **from
-their rows**, and a site history wipe's prefix walks cover `egress/` and `checkpoints/` only. That is
-not new (the upload always preceded the watermark advance and the batch completion, and nothing
-deleted it when those failed), and moving it ahead of the whole transaction adds one more way to get
-there — a failure inside `reset` itself, i.e. the row-lock wait behind a concurrent wipe. A client
-retries the whole session, so a repeatedly failing large snapshot leaves one full-size copy per
-attempt. Reclaiming them is tracked as **issue #158**; a compensating delete in the caller is
-deliberately *not* it, because an exception can surface after the transaction committed (an
-`AFTER_COMMIT` listener throwing) and the delete would then destroy a live segment.
+unreachable without the row. That is not new (the upload always preceded the watermark advance and
+the batch completion, and nothing deleted it when those failed), and moving it ahead of the whole
+transaction adds one more way to get there — a failure inside `reset` itself, i.e. the row-lock wait
+behind a concurrent wipe. A client retries the whole session, so a repeatedly failing large snapshot
+leaves one full-size copy per attempt. Those objects are reclaimed by the sweep below (**#158**); a
+compensating delete in the caller is deliberately *not* how, because an exception can surface after
+the transaction committed (an `AFTER_COMMIT` listener throwing) and the delete would then destroy a
+live segment.
+
+### Objects no row references are reclaimed (issue #158)
+
+Every object under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` is written **before**, or
+independently of, the row that names it, and until #158 nothing reclaimed one that ended up with no
+row. Both deleters collect keys *from* rows, the site history wipe walks these prefixes for the one
+site being wiped, changelog retention prunes segments and never touches checkpoints,
+`ParquetScratchOrphanSweeper` sweeps local scratch rather than S3, and there is no bucket lifecycle
+rule for either prefix. Three populations accumulated:
+
+- a **segment** whose ingestion transaction did not commit (above), one full-size copy per client
+  retry;
+- the **superseded generation** of every advancing checkpoint build — the `checkpoints` row is one
+  per `(site, table)` and carries a single key, so the previous `seq`'s `snapshot.parquet` is
+  unreferenced the moment the next build writes its own — plus any `_frame/seq={n}/frame.pb.gz`
+  the pointer never adopted, which **no row ever names**;
+- **everything** belonging to a site deleted with `DELETE /api/v1/sites/{siteId}`, which hard-deletes
+  the row and does not touch either prefix.
+
+`DeltaS3OrphanSweeper` runs daily (`delta.s3-orphan.sweep-ms`, first pass 10 minutes after start)
+and does the same four things for each prefix: list one site's objects, keep only the key shapes
+this application writes, drop everything S3 reports younger than `delta.s3-orphan.min-age-seconds`,
+then subtract the keys the rows still name and delete the remainder. The prefixes differ in one
+place only — which rows answer that last question. For segments it is `changelog_segments.s3_key`;
+for checkpoints it is the `checkpoints` keys **plus** the frame at
+`site_sync_state.last_checkpoint_seq`, the one live artifact that exists only by implication.
+
+The site list comes from the **bucket**, not the database, and that is not an optimization: a
+hard-deleted site has no row to enumerate, and it is the population with the most to reclaim.
+
+Every guard fails towards keeping the object:
+
+| Guard | What it stops | What it costs when it fires wrongly |
+|---|---|---|
+| **Age** — strictly older than `min-age-seconds`, default 24 h; a missing `LastModified` counts as new | Deleting an object whose row is not written yet: a segment mid-commit, and the frame between `uploadFrame(N)` and the `recordCheckpoint(N)` that adopts it | One interval of delay |
+| **Shape** — only `{segmentId}.pb.gz`, `_frame/seq={n}/frame.pb.gz`, `{table}/seq={n}/snapshot.parquet\|.csv.gz` | Deleting an artifact kind added later that this sweep has never heard of | That kind accumulates, exactly as everything did before #158 |
+| **Rows read after the listing** | Using a row set from before a row that was written during the walk | Nothing |
+| **A row set that cannot be read skips the site** | Reading "the query failed" as "no references" | One interval of delay |
+| **A truncated listing sweeps only what it read** | Nothing invented | One interval of delay |
+
+**The age window is the key to get right.** Lower it below the longest possible checkpoint build and
+a live frame can be deleted, at which point the site reads as `history_gone` and gives its
+checkpoint rows up after `delta.checkpoint.max-materialize-attempts` nights (#149). Raise it if a
+build on the largest site can take longer than a day; the only cost of raising it is storage.
+
+`delta.s3-orphan.enabled=false` turns the sweep off. It is on by default because an orphan is
+resolved by nothing else — switching it off is how the litter accumulates, not how it is made safe.
+
+Read the two meters accordingly: under `prefix=segments` a steady
+`delta.s3-orphan.reclaimed` rate means ingestion commits are failing after their upload, and is
+worth chasing; under `prefix=checkpoints` it is the ordinary superseded generation of every
+advancing build, so a **zero** rate on a busy fleet is the surprising reading.
+`delta.s3-orphan.delete-failed` counts unreferenced objects the bucket refused — nothing is lost,
+the next sweep sees the same keys, so a sustained rate is a permissions or availability problem.
 
 ---
 
@@ -1908,6 +1963,8 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.checkpoint.builds.deferred`, `delta.checkpoint.fold.wait`,
 `delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.parquet.scratch.bytes`, `delta.parquet.scratch.refused{writer=...}`,
+`delta.s3-orphan.reclaimed{prefix=segments|checkpoints}`,
+`delta.s3-orphan.delete-failed{prefix=segments|checkpoints}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
@@ -1957,6 +2014,8 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.checkpoint.builds.deferred` | `delta_checkpoint_builds_deferred_total` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
 | `delta.s3.read-denied` | `delta_s3_read_denied_total` |
+| `delta.s3-orphan.reclaimed{prefix=segments\|checkpoints}` | `delta_s3_orphan_reclaimed_total{prefix=...}` |
+| `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
 
