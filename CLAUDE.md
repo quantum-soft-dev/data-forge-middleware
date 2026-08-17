@@ -466,19 +466,29 @@ pages/{feature}/            # Route pages
   `SqlGenerationServiceTest`, and `SqlGenerationConcurrencyTest` — the third named by review, and
   the one that matters most as evidence, since it is a class already tracked as intermittently red
   on a clean tree. The comparison is now **strict**, which is the ticket's first option
-  and the only one of its three that fixes both halves at once: heap usage can never exceed 100%, so
+  and the only one of its three that fixes both halves at once: the reading is clamped at 100, so
   100 is a true off switch, **and** for an integer threshold `T` the identity `ceil(x) > T ⟺ x > T`
   removes the rounding artifact the ticket's third option was aimed at — the predicate is exactly
   "usage is strictly above `T`%", where before it fired from `T-1` upwards. A documented sentinel
   (option 2) was rejected as the only one of the three that leaves the arithmetic wrong for the
   shipped default of 80. Production behaviour at 80 shifts by up to one percentage point in the
   direction of aborting **less**, and the threshold now means what `application.yml` says beside it.
-  `init()` also logs the value and whether it disables the check — the abort's only other signal is
-  `sql.generation.aborted.memory_pressure` (name unchanged), since an aborted generation is
-  indistinguishable from an empty one at the caller. Four deterministic unit tests replace a
-  boundary that used to depend on the real heap: the reading is stubbed at 100/81/80/10 against
-  thresholds of 100 and 80. No REST, gRPC, DTO, migration, configuration-**key**, metric, S3-key or
-  frontend change. See `docs/020-sql-generation-optimization.md`.
+  The clamp is the load-bearing half of "100 disables it": without it the guarantee would rest on
+  the collector never reporting `used > max`, and a reading of 101 would abort while startup had
+  just logged the check as disabled — so `heapUsagePercent(used, max)` is a pure function tested
+  directly, and `getHeapUsagePercent()` only reads the `MemoryMXBean` into it. `init()` also logs
+  the value and whether it disables the check, because the abort's only other signal is
+  `sql.generation.aborted.memory_pressure` (name unchanged) and it does not name the batch: an
+  aborted generation is indistinguishable from an empty one at the caller, and on the **admin
+  regeneration** path it is worse than silent — `doRegenerateForBatch` persists a
+  `-- No changes detected` artifact and `PluginHistoryService` then supersedes the original, so an
+  abort there replaces a good generation with an empty one. That is pre-existing and out of this
+  ticket's scope (both call sites are **#181**), but it is why the abort was expensive rather than
+  merely wrong. Five generation-path tests stub the reading (1/10/80/81/100 against thresholds of
+  0/80/100) instead of observing the real heap, and three pin the arithmetic itself: the ceiling at
+  79.01%/80.00%/80.01%, the clamp at `used == max` and `used > max`, and 0 for an undefined maximum.
+  No REST, gRPC, DTO, migration, configuration-**key**, metric, S3-key or frontend change. See
+  `docs/020-sql-generation-optimization.md`.
 - hold-connection-across-s3: A HikariCP connection is no longer held across S3 (or a 120 s
   semaphore wait) at the three call sites the pool audit named (issue #164, folding **#176**).
   `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` drop

@@ -201,6 +201,42 @@ class SqlGenerationStreamingTest {
         }
 
         @Test
+        @DisplayName("should never report above 100 percent, so a threshold of 100 stays unreachable")
+        void shouldClampReportedHeapUsageAtOneHundred() {
+            // Given
+            SqlGenerationService service = createService(100);
+
+            // Then - "100 disables the check" rests on this bound, so it is a property of the
+            // arithmetic rather than an observation about a healthy JVM
+            assertThat(service.heapUsagePercent(4L, 4L)).isEqualTo(100);
+            assertThat(service.heapUsagePercent(5L, 4L)).isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("should round heap usage up to the next whole percent")
+        void shouldRoundHeapUsageUp() {
+            // Given
+            SqlGenerationService service = createService(80);
+
+            // Then - ceil is what makes `ceil(x) > T` equivalent to `x > T`: 79.01% must read as
+            // 80 so that it does not exceed a threshold of 80, and 80.01% must read as 81 so that
+            // it does
+            assertThat(service.heapUsagePercent(7901L, 10000L)).isEqualTo(80);
+            assertThat(service.heapUsagePercent(8001L, 10000L)).isEqualTo(81);
+            assertThat(service.heapUsagePercent(8000L, 10000L)).isEqualTo(80);
+        }
+
+        @Test
+        @DisplayName("should report zero when the JVM declares no heap maximum")
+        void shouldReportZeroWhenNoHeapMaximum() {
+            // Given
+            SqlGenerationService service = createService(80);
+
+            // Then
+            assertThat(service.heapUsagePercent(1024L, -1L)).isZero();
+        }
+
+        @Test
         @DisplayName("should abort SQL generation when memory pressure is high")
         void shouldAbortWhenMemoryPressureHigh() {
             // Given - a threshold of 0 with any usage above it. The reading is stubbed rather
