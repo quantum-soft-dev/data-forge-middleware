@@ -75,7 +75,11 @@ s3:
 # Plugin SQL generation settings for tests
 plugin:
   sql-generation:
-    heap-threshold-percent: 100  # Disable memory pressure check in tests
+    # Disables the memory-pressure abort: it needs heap usage strictly above the threshold, and
+    # 100% is unreachable. Before #174 the comparison was non-strict and the reading is
+    # ceiling-rounded, so this line aborted generation for any usage above 99% — silently, as
+    # "no changes detected", in whichever integration test happened to run at that moment.
+    heap-threshold-percent: 100
     # Slow sweep so tests exercise the explicit wake, not the fallback — the same reason
     # delta.egress.sweep-ms and delta.batch-parquet.sweep-ms are slowed above, and an omission
     # when 026 added this queue (issue #159).

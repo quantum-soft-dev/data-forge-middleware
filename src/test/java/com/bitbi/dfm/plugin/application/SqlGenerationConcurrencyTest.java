@@ -111,7 +111,8 @@ class SqlGenerationConcurrencyTest {
                 org.mockito.Mockito.mock(com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository.class),
                 maxConcurrent,
                 semaphoreTimeoutSeconds,
-                100  // 100% threshold — disable memory pressure check in concurrency tests
+                100  // disables the memory-pressure abort: it needs heap usage strictly
+                     // above the threshold, and 100% is unreachable (#174)
         );
         service.init();
         return service;

@@ -254,7 +254,8 @@ class SqlGenerationServiceTest {
                     pluginDeltaBaselineRepository,
                     2,
                     120,
-                    100  // 100% threshold — disable memory pressure check in this test
+                    100  // disables the memory-pressure abort: it needs heap usage strictly
+                         // above the threshold, and 100% is unreachable (#174)
             );
             serviceWithRealMetrics.init();
 
