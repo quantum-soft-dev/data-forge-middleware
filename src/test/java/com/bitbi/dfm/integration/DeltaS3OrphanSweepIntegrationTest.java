@@ -16,6 +16,7 @@ import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,6 +66,9 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
     private S3FileStorageService objectDeleter;
 
     @Autowired
+    private com.bitbi.dfm.site.domain.SiteRepository siteRepository;
+
+    @Autowired
     private DeltaMetrics metrics;
 
     @Autowired
@@ -93,6 +97,18 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
 
     @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}")
     private String bucketName;
+
+    /**
+     * The bucket is shared by the whole suite and checkpoint keys carry a sequence number rather
+     * than a run identity, so an earlier class's {@code _frame/seq=2/frame.pb.gz} for this site
+     * would make the "the build wrote the frame" precondition true without this build writing
+     * anything (raised in review).
+     */
+    @BeforeEach
+    void purgeLeftovers() {
+        purgeCheckpointPrefix(SITE);
+        purgeSegmentPrefix(SITE);
+    }
 
     @Test
     @DisplayName("what the rows still name survives; what nothing names is reclaimed")
@@ -175,8 +191,11 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
             assertFalse(checkpointStorage.exists(deletedSiteFrame),
                     "a hard-deleted site's frame is reclaimed");
         } finally {
-            // The one object this class leaves behind on purpose is the one the sweep spares.
-            checkpointStorage.deleteBatchParquet(unknownShape);
+            // Everything this class created and the sweep spared, so the next class starts clean.
+            purgeCheckpointPrefix(SITE);
+            purgeSegmentPrefix(SITE);
+            purgeCheckpointPrefix(deletedSite);
+            purgeSegmentPrefix(deletedSite);
         }
     }
 
@@ -200,8 +219,11 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
                 .map(S3CheckpointStorage::checkpointPrefix).toList()))
                 .when(checkpoints).listSitePrefixes();
 
+        // reclaim-unknown-sites=true: `deletedSite` has no `sites` row, which is the hard-deleted
+        // case, and reaching it is the whole point of that acknowledgement.
         return new DeltaS3OrphanSweeper(segments, checkpoints, objectDeleter, segmentRepository,
-                checkpointRepository, syncStateRepository, metrics, true, 86_400L);
+                checkpointRepository, syncStateRepository, siteRepository, metrics, true, true,
+                86_400L);
     }
 
     private void put(String key) {

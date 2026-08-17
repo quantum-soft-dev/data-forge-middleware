@@ -362,7 +362,6 @@ public class DeltaMetrics {
         batchParquetAbandoned.increment();
     }
 
-    /** A claim was taken over because its build lease had expired. */
     /**
      * Objects reclaimed from one delta prefix because no row referenced them (issue #158).
      *
@@ -370,6 +369,11 @@ public class DeltaMetrics {
      * things. Under {@code segments} a steady rate is ingestion commits failing after their upload;
      * under {@code checkpoints} it is the ordinary superseded generation of every advancing build,
      * so a <em>zero</em> rate there on a busy fleet is the surprising reading, not a high one.</p>
+     *
+     * <p><b>Per replica</b>, like every counter here: the sweep is not serialized across the
+     * cluster, so two replicas whose passes overlap both count the same objects (the loser's
+     * {@code DeleteObjects} succeeds on an already-deleted key). Read a rate against the number of
+     * replicas rather than as an object count.</p>
      *
      * @param prefix {@link #ORPHAN_PREFIX_SEGMENTS} or {@link #ORPHAN_PREFIX_CHECKPOINTS}
      * @param count  how many objects were deleted
@@ -385,6 +389,11 @@ public class DeltaMetrics {
      * bucket-health signal rather than a data one. It rises together with the WARN naming the
      * prefix; a sustained non-zero rate is a permissions or availability problem, since the keys
      * themselves are already proven unreferenced.</p>
+     *
+     * <p>Counted as {@code candidates - deleted} rather than as the number of error entries
+     * {@code deleteObjects} returned (raised in review): that call records one entry per failed
+     * 1000-key chunk, so entries would report a bucket-wide denial as a trickle. The subtraction
+     * makes this and {@link #s3OrphansReclaimed} sum to the candidate set.</p>
      *
      * @param prefix {@link #ORPHAN_PREFIX_SEGMENTS} or {@link #ORPHAN_PREFIX_CHECKPOINTS}
      * @param count  how many objects were left behind
@@ -402,6 +411,7 @@ public class DeltaMetrics {
         };
     }
 
+    /** A claim was taken over because its build lease had expired. */
     public void batchParquetReclaimed() {
         batchParquetReclaims.increment();
     }

@@ -510,6 +510,33 @@ pages/{feature}/            # Route pages
   raising it costs only storage. No REST, gRPC, proto, DTO, migration, existing configuration-key,
   existing metric-name, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Objects no
   row references are reclaimed", Metrics).
+  **Two review findings changed the design rather than the prose.** The first: nothing establishes
+  that the bucket belongs to *this* database, and this is the first deleter that reads "no rows for
+  this site" as "dead" — two deployments sharing a bucket keep separate databases and therefore
+  separate site ids, so each would have deleted the other's changelog and checkpoint seed ten
+  minutes after startup. A site's own `sites` row is the ownership proof and is exact, so a prefix
+  whose site this database has never heard of is left alone and logged unless
+  `delta.s3-orphan.reclaim-unknown-sites` (default **false**) declares the bucket exclusive — which
+  keeps the two populations this ticket was opened for (a failed commit's segment, every advancing
+  build's superseded generation) reclaimed by default, since both belong to sites that still exist,
+  and puts only the hard-deleted-site case behind the acknowledgement. The second:
+  `delta.s3-orphan.delete-failed` counted the SDK's error *entries*, and `deleteObjects` records one
+  per failed 1000-key chunk, so a bucket-wide denial — the case the meter exists for — would have
+  read as a trickle; it counts `candidates - deleted`, which is truthful in both branches and makes
+  the two counters sum to the candidate set. Three smaller ones: the age-window validation now runs
+  only when the sweep is enabled (a rollback that crash-loops the pod on the value it is rolling
+  back is not one), the integration test purges both prefixes before and after (checkpoint keys
+  carry a sequence, not a run identity, so an earlier class's `_frame/seq=2/` would have made its
+  precondition false-green — #168's lesson), and `delta.s3-orphan.reclaimed` says out loud that it
+  is per replica. **Two things were deliberately not changed.** The sweep is *not* serialized across
+  replicas: both obvious locks (`pg_advisory_xact_lock`, a session-level lock) would hold a
+  connection for the whole walk, the exact hold #164 removed from the queue workers, while deletes
+  are idempotent — an overlap costs a duplicate listing and a duplicate count, nothing else. And a
+  detached `s3_key_parquet` is now **destructive with a one-day fuse**: the last good object of a
+  table retired by #149 used to sit unreachable in the bucket and is now reclaimed. That is the
+  intended reading of "no row ⇒ dead" — nothing ever re-attaches an old key, a repair writes a new
+  object — and it is stated in the guide rather than special-cased, because no rule could tell that
+  object from a superseded one.
 - delta-sql-inactive-branch-test: The delta-SQL queue's inactive-activation branch has a test
   (issue #175, the gap #159 named and deliberately left open). Since 026 `BitBiPlugin.execute` does
   nothing on `BATCH_COMPLETED` but wake the sweep worker, so the decision that an account without an

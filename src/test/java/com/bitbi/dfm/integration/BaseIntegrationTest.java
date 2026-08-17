@@ -2,6 +2,7 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.auth.infrastructure.JwtTokenProvider;
+import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.site.domain.Site;
@@ -100,6 +101,18 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
      */
     protected void purgeCheckpointPrefix(UUID siteId) {
         purgePrefix(S3CheckpointStorage.checkpointPrefix(siteId));
+    }
+
+    /**
+     * Delete every changelog segment object of a site. Same reason as
+     * {@link #purgeCheckpointPrefix(UUID)}: the keys carry a segment id, not a run identity, so a
+     * class asserting on what is (or is no longer) under {@code delta/{siteId}/segments/} has to
+     * start from a known-empty prefix (issue #158).
+     *
+     * @param siteId site whose segment prefix to purge
+     */
+    protected void purgeSegmentPrefix(UUID siteId) {
+        purgePrefix(S3ChangelogSegmentStorage.segmentPrefix(siteId));
     }
 
     private void purgePrefix(String prefix) {

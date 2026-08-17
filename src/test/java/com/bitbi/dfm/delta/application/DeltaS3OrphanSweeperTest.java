@@ -10,6 +10,8 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -67,6 +69,7 @@ class DeltaS3OrphanSweeperTest {
     private ChangelogSegmentRepository segmentRepository;
     private CheckpointRepository checkpointRepository;
     private SiteSyncStateRepository syncStateRepository;
+    private SiteRepository siteRepository;
     private MeterRegistry registry;
     private DeltaMetrics metrics;
 
@@ -78,6 +81,9 @@ class DeltaS3OrphanSweeperTest {
         segmentRepository = mock(ChangelogSegmentRepository.class);
         checkpointRepository = mock(CheckpointRepository.class);
         syncStateRepository = mock(SiteSyncStateRepository.class);
+        siteRepository = mock(SiteRepository.class);
+        // Known by default: ownership is its own test below.
+        when(siteRepository.findById(SITE)).thenReturn(Optional.of(mock(Site.class)));
         registry = new SimpleMeterRegistry();
         metrics = new DeltaMetrics(registry);
 
@@ -94,9 +100,13 @@ class DeltaS3OrphanSweeperTest {
     }
 
     private DeltaS3OrphanSweeper sweeper(boolean enabled) {
+        return sweeper(enabled, false);
+    }
+
+    private DeltaS3OrphanSweeper sweeper(boolean enabled, boolean reclaimUnknownSites) {
         return new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage, objectDeleter,
-                segmentRepository, checkpointRepository, syncStateRepository, metrics,
-                enabled, AGE_SECONDS);
+                segmentRepository, checkpointRepository, syncStateRepository, siteRepository,
+                metrics, enabled, reclaimUnknownSites, AGE_SECONDS);
     }
 
     private void segmentSite(S3ListedObject... objects) {
@@ -320,18 +330,22 @@ class DeltaS3OrphanSweeperTest {
     }
 
     @Test
-    @DisplayName("keys the bucket refused to delete are counted rather than lost")
+    @DisplayName("objects the bucket refused are counted as objects, not as error entries")
     void countsKeysTheBucketRefusedToDelete() {
-        String orphan = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
-        segmentSite(object(orphan, OLD));
+        List<String> orphans = List.of(
+                SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz",
+                SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz",
+                SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz");
+        segmentSite(orphans.stream().map(key -> object(key, OLD)).toArray(S3ListedObject[]::new));
         when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
+        // What a whole failed chunk looks like: one error entry for any number of objects.
         when(objectDeleter.deleteObjects(anyList()))
-                .thenReturn(new S3FileStorageService.DeleteObjectsResult(0, List.of(orphan)));
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(0, List.of("S3Exception: denied")));
 
         sweeper().sweep(NOW);
 
         assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isZero();
-        assertThat(counter("delta.s3-orphan.delete-failed", "segments")).isEqualTo(1.0);
+        assertThat(counter("delta.s3-orphan.delete-failed", "segments")).isEqualTo(3.0);
     }
 
     @Test
@@ -349,12 +363,50 @@ class DeltaS3OrphanSweeperTest {
     }
 
     @Test
+    @DisplayName("a prefix whose site this database has never heard of is left alone")
+    void leavesAPrefixOfAnUnknownSiteAlone() {
+        segmentSite(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
+        when(siteRepository.findById(SITE)).thenReturn(Optional.empty());
+
+        sweeper().sweep(NOW);
+
+        verify(objectDeleter, never()).deleteObjects(anyList());
+        // Not even asked: "no rows" is what makes this indistinguishable from a stranger's site.
+        verify(segmentRepository, never()).findAllS3KeysBySiteId(SITE);
+    }
+
+    @Test
+    @DisplayName("declaring the bucket exclusive reclaims a hard-deleted site's objects")
+    void reclaimsAnUnknownSiteWhenTheBucketIsDeclaredExclusive() {
+        String orphan = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
+        segmentSite(object(orphan, OLD));
+        when(siteRepository.findById(SITE)).thenReturn(Optional.empty());
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
+
+        sweeper(true, true).sweep(NOW);
+
+        assertThat(deletedKeys()).containsExactly(orphan);
+    }
+
+    @Test
     @DisplayName("disabled, it does not even ask the bucket")
     void doesNothingWhenDisabled() {
         sweeper(false).sweep(NOW);
 
         verifyNoInteractions(segmentStorage, checkpointStorage, objectDeleter,
                 segmentRepository, checkpointRepository, syncStateRepository);
+    }
+
+    @Test
+    @DisplayName("disabled, a bad age window is not a crash-loop — the rollback has to work")
+    void acceptsABadAgeWindowWhileDisabled() {
+        DeltaS3OrphanSweeper disabled = new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage,
+                objectDeleter, segmentRepository, checkpointRepository, syncStateRepository,
+                siteRepository, metrics, false, false, 0L);
+
+        disabled.sweep(NOW);
+
+        verifyNoInteractions(objectDeleter);
     }
 
     @Test
@@ -371,7 +423,7 @@ class DeltaS3OrphanSweeperTest {
     void refusesANonPositiveAgeWindow() {
         assertThatThrownBy(() -> new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage,
                 objectDeleter, segmentRepository, checkpointRepository, syncStateRepository,
-                metrics, true, 0L))
+                siteRepository, metrics, true, false, 0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("delta.s3-orphan.min-age-seconds");
     }

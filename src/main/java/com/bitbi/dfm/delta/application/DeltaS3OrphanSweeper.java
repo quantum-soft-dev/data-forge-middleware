@@ -10,6 +10,7 @@ import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +58,24 @@ import java.util.regex.Pattern;
  * deleted site's objects outlive every row that could have named them and no database-driven walk
  * would ever visit them.</p>
  *
+ * <h2>What proves the bucket belongs to this database</h2>
+ *
+ * <p>Nothing does, so the sweep does not assume it (raised in review). Every deleter before this one
+ * worked forward from a row and was therefore harmless to a stranger's objects; this one reads "no
+ * rows for this site" as "dead", which is only true where the bucket is this instance's alone. Two
+ * deployments sharing one bucket keep separate databases and therefore separate site ids, so each
+ * would read the other's live prefixes as unreferenced and delete the changelog and the checkpoint
+ * seed of every one of them.</p>
+ *
+ * <p>A site's own {@code sites} row is the ownership proof, and it is exact: if this database has
+ * the row, the prefix is this deployment's. A prefix whose site this database has never heard of is
+ * either a site hard-deleted here or a live site of another deployment, and <b>nothing in the bucket
+ * distinguishes them</b> — so it is left alone and counted, unless
+ * {@code delta.s3-orphan.reclaim-unknown-sites} says the bucket is exclusive. Default off: the
+ * populations that made this ticket (a failed commit's segment, every advancing build's superseded
+ * generation) all belong to sites that still exist, so the default reclaims them and only the
+ * hard-deleted-site case waits for the acknowledgement.</p>
+ *
  * <h2>Every guard fails towards keeping the object</h2>
  *
  * <ul>
@@ -72,10 +91,9 @@ import java.util.regex.Pattern;
  *       rather than reading "no rows" as "no references".</li>
  *   <li><b>Truncation.</b> A listing that failed mid-walk returns fewer objects, never more, so the
  *       worst it costs is one interval.</li>
+ *   <li><b>Ownership.</b> A prefix whose site has no {@code sites} row is left alone unless the
+ *       bucket has been declared exclusive, because "no rows" and "not ours" look identical.</li>
  * </ul>
- *
- * <p>A site with no rows at all is therefore swept whole — that is the deleted-site case, and the
- * only one where the answer "nothing references any of this" is the literal truth.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -124,8 +142,10 @@ public class DeltaS3OrphanSweeper {
     private final ChangelogSegmentRepository segmentRepository;
     private final CheckpointRepository checkpointRepository;
     private final SiteSyncStateRepository syncStateRepository;
+    private final SiteRepository siteRepository;
     private final DeltaMetrics metrics;
     private final boolean enabled;
+    private final boolean reclaimUnknownSites;
     private final long minAgeSeconds;
 
     public DeltaS3OrphanSweeper(
@@ -135,11 +155,16 @@ public class DeltaS3OrphanSweeper {
             ChangelogSegmentRepository segmentRepository,
             CheckpointRepository checkpointRepository,
             SiteSyncStateRepository syncStateRepository,
+            SiteRepository siteRepository,
             DeltaMetrics metrics,
             @Value("${delta.s3-orphan.enabled:true}") boolean enabled,
+            @Value("${delta.s3-orphan.reclaim-unknown-sites:false}") boolean reclaimUnknownSites,
             @Value("${delta.s3-orphan.min-age-seconds:" + DEFAULT_MIN_AGE_SECONDS + "}")
             long minAgeSeconds) {
-        if (minAgeSeconds <= 0) {
+        // Only when the sweep can actually run (raised in review): enabled=false is documented as
+        // the rollback, and a rollback that still crash-loops the pod on the value it is rolling
+        // back is not one.
+        if (enabled && minAgeSeconds <= 0) {
             throw new IllegalArgumentException(
                     "delta.s3-orphan.min-age-seconds must be positive, got " + minAgeSeconds);
         }
@@ -149,11 +174,18 @@ public class DeltaS3OrphanSweeper {
         this.segmentRepository = segmentRepository;
         this.checkpointRepository = checkpointRepository;
         this.syncStateRepository = syncStateRepository;
+        this.siteRepository = siteRepository;
         this.metrics = metrics;
         this.enabled = enabled;
+        this.reclaimUnknownSites = reclaimUnknownSites;
         this.minAgeSeconds = minAgeSeconds;
         log.info("Delta S3 orphan sweep is {}{}", enabled ? "on" : "off",
                 enabled ? ", reclaiming unreferenced objects older than " + minAgeSeconds + "s"
+                        + (reclaimUnknownSites
+                                ? ", including prefixes of sites this database has never heard of "
+                                        + "(delta.s3-orphan.reclaim-unknown-sites=true: this bucket "
+                                        + "is declared exclusive to this deployment)"
+                                : ", except prefixes of sites this database has never heard of")
                         : " (delta.s3-orphan.enabled=false): unreferenced objects accumulate");
     }
 
@@ -223,6 +255,16 @@ public class DeltaS3OrphanSweeper {
             return;
         }
 
+        // A site this database has never heard of may be a hard-deleted one of ours or a live one
+        // of another deployment sharing the bucket, and nothing in S3 tells the two apart. Its own
+        // `sites` row is the only proof of ownership there is.
+        if (!reclaimUnknownSites && !siteRepository.findById(siteId).isPresent()) {
+            log.info("Leaving {} alone: no site row, so this prefix cannot be proved to belong to "
+                    + "this database. Set delta.s3-orphan.reclaim-unknown-sites=true if this bucket "
+                    + "is exclusive to this deployment and the site was hard-deleted", prefix);
+            return;
+        }
+
         // Rows are read after the listing on purpose: a row committed in between is then part of
         // the answer, and its object is spared. The other order could see a key before its row and
         // a row set from before that row existed.
@@ -246,12 +288,20 @@ public class DeltaS3OrphanSweeper {
         try {
             S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(orphans);
             metrics.s3OrphansReclaimed(scope.label(), result.deletedCount());
-            if (!result.errors().isEmpty()) {
-                metrics.s3OrphanDeletesFailed(scope.label(), result.errors().size());
-                log.warn("{} unreferenced object(s) under {} could not be deleted; they are still "
-                        + "unreferenced and the next sweep tries again", result.errors().size(), prefix);
+            // Objects, not error entries (raised in review): deleteObjects records one entry per
+            // failed 1000-key chunk, so counting entries would report a bucket-wide denial as a
+            // trickle. The subtraction is truthful in both branches and makes the two counters sum
+            // to the candidate set.
+            long leftBehind = orphans.size() - result.deletedCount();
+            if (leftBehind > 0) {
+                metrics.s3OrphanDeletesFailed(scope.label(), leftBehind);
+                log.warn("{} unreferenced object(s) under {} could not be deleted ({}); they are "
+                                + "still unreferenced and the next sweep tries again",
+                        leftBehind, prefix, result.errors());
             }
-            log.info("Reclaimed {} unreferenced object(s) under {}", result.deletedCount(), prefix);
+            if (result.deletedCount() > 0) {
+                log.info("Reclaimed {} unreferenced object(s) under {}", result.deletedCount(), prefix);
+            }
         } catch (RuntimeException e) {
             // Nothing about how far the phase got is known, so every key counts as left behind —
             // which is true either way, since the next sweep will list them again.

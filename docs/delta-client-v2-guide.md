@@ -1812,6 +1812,17 @@ for checkpoints it is the `checkpoints` keys **plus** the frame at
 The site list comes from the **bucket**, not the database, and that is not an optimization: a
 hard-deleted site has no row to enumerate, and it is the population with the most to reclaim.
 
+**Which raises the question nothing in S3 can answer: does this bucket belong to this database?**
+Every deleter before this one worked forward from a row, so a stranger's objects were never at risk;
+this one reads "no rows for this site" as "dead". Two deployments sharing a bucket keep separate
+databases and therefore separate site ids, so each would read the other's live prefixes as
+unreferenced and delete their changelog and checkpoint seed. A site's own `sites` row is the
+ownership proof and it is exact — so a prefix whose site this database has never heard of is **left
+alone and logged**, unless `delta.s3-orphan.reclaim-unknown-sites` says the bucket is exclusive to
+this deployment. Default off. Everything this ticket was opened for belongs to sites that still
+exist, so the default reclaims it; only the hard-deleted-site case waits for that acknowledgement,
+and turning it on where the bucket is shared is the one way this sweep can destroy live data.
+
 Every guard fails towards keeping the object:
 
 | Guard | What it stops | What it costs when it fires wrongly |
@@ -1821,6 +1832,7 @@ Every guard fails towards keeping the object:
 | **Rows read after the listing** | Using a row set from before a row that was written during the walk | Nothing |
 | **A row set that cannot be read skips the site** | Reading "the query failed" as "no references" | One interval of delay |
 | **A truncated listing sweeps only what it read** | Nothing invented | One interval of delay |
+| **A prefix whose site has no `sites` row is left alone** unless `reclaim-unknown-sites` is set | Deleting another deployment's live objects out of a shared bucket | A hard-deleted site's objects stay until the bucket is declared exclusive |
 
 **The age window is the key to get right.** Lower it below the longest possible checkpoint build and
 a live frame can be deleted, at which point the site reads as `history_gone` and gives its
@@ -1829,13 +1841,37 @@ build on the largest site can take longer than a day; the only cost of raising i
 
 `delta.s3-orphan.enabled=false` turns the sweep off. It is on by default because an orphan is
 resolved by nothing else — switching it off is how the litter accumulates, not how it is made safe.
+A non-positive age window is refused at startup, but only while the sweep is enabled: a rollback
+that still crash-loops the pod on the value it is rolling back would not be one.
+
+**Detaching a key is now a destructive act with a one-day fuse.** When a table cannot be
+materialized on an advancing seq, `abandonStaleSnapshot` nulls `s3_key_parquet`, and the last good
+object at the previous seq used to stay in the bucket — 404 for consumers, but still there for an
+operator willing to re-attach it by hand. From this sweep on it is unreferenced by construction and
+goes a day later, so a row retired by `delta.checkpoint.max-materialize-attempts` (#149) loses that
+snapshot for good rather than merely making it unreachable. The same is true of a row reaped by
+`reapTablesAbsentFromTheFold`. That is the intended reading of "no row ⇒ dead" — nothing in the
+application ever re-attaches an old key, a repair writes a new object — but it is worth knowing
+before the first sweep on a fleet that has been detaching keys for months.
+
+**The sweep is not serialized across replicas, on purpose.** Both obvious locks are the wrong shape
+here: a transaction-scoped `pg_advisory_xact_lock` would hold a connection for the whole walk, and a
+session-level lock the same, which is exactly the hold #164 removed from the queue workers. Deletes
+are idempotent, so an overlap costs a duplicated `ListObjectsV2` walk and a duplicated count — the
+loser's `DeleteObjects` succeeds on an already-deleted key. **Read the counters per replica**: a
+`prefix=segments` rate of two a day across two replicas is one orphan, not two. In practice the
+passes rarely overlap (each replica's first tick is 10 minutes after its own start), and where they
+do the second finds the objects already gone.
 
 Read the two meters accordingly: under `prefix=segments` a steady
 `delta.s3-orphan.reclaimed` rate means ingestion commits are failing after their upload, and is
 worth chasing; under `prefix=checkpoints` it is the ordinary superseded generation of every
 advancing build, so a **zero** rate on a busy fleet is the surprising reading.
-`delta.s3-orphan.delete-failed` counts unreferenced objects the bucket refused — nothing is lost,
-the next sweep sees the same keys, so a sustained rate is a permissions or availability problem.
+`delta.s3-orphan.delete-failed` counts unreferenced objects the bucket refused, as
+`candidates - deleted` rather than as the number of error entries the SDK returned (one entry covers
+a whole failed 1000-key chunk, which would report a bucket-wide denial as a trickle). Nothing is
+lost — the next sweep sees the same keys — so a sustained rate is a permissions or availability
+problem.
 
 ---
 
