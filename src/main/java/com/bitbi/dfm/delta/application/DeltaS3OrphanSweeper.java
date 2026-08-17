@@ -172,9 +172,15 @@ public class DeltaS3OrphanSweeper {
     }
 
     /**
+     * One pass, with the instant the age window counts back from supplied.
+     *
+     * <p>Public because it is the only seam a test can use: the age window is what makes an object
+     * a candidate, and no test can wait a day or backdate an S3 {@code LastModified}, so it moves
+     * {@code now} instead.</p>
+     *
      * @param now the instant the age window counts back from
      */
-    void sweep(Instant now) {
+    public void sweep(Instant now) {
         if (!enabled) {
             return;
         }
