@@ -27,6 +27,12 @@ import java.util.function.Supplier;
  *       {@code reason=frame_too_large|lossy_refold|history_gone}; the pointer does not move, so
  *       retention freezes with it, and no cause repairs itself unaided. <b>Alert on the meter, not
  *       on one tag</b> — that promise is the reason every permanent abort is registered here</li>
+ *   <li>{@code delta.checkpoint.builds.deferred} — builds that did not run because another build
+ *       held the process's fold budget (issue #178). Untagged, and deliberately <b>not</b> a value
+ *       on {@code builds.aborted}: this one repairs itself as soon as the neighbour finishes</li>
+ *   <li>{@code delta.checkpoint.fold.wait} — how long a build waited for the process's fold budget
+ *       (issue #178). The band below {@code delta.checkpoint.fold-wait-seconds}, and the only
+ *       series that shows contention short of a deferral</li>
  *   <li>{@code delta.checkpoint.fold.bytes} — peak estimated heap of one build's folded state,
  *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152)</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
@@ -78,6 +84,8 @@ public class DeltaMetrics {
     private final Counter checkpointLossyRefold;
     private final Counter checkpointHistoryGone;
     private final Counter checkpointFoldTooLarge;
+    private final Counter checkpointBuildsDeferred;
+    private final Timer checkpointFoldWait;
     private final DistributionSummary checkpointFoldBytes;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
@@ -115,6 +123,13 @@ public class DeltaMetrics {
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
         this.checkpointFoldTooLarge = checkpointBuildAborted(registry, "fold_too_large");
+        this.checkpointBuildsDeferred = Counter.builder("delta.checkpoint.builds.deferred")
+                .description("Checkpoint builds that did not run because another build held the "
+                        + "process's fold budget")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.checkpointFoldWait = Timer.builder("delta.checkpoint.fold.wait")
+                .description("Time a checkpoint build spent waiting for the process's fold budget")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointFoldBytes = DistributionSummary.builder("delta.checkpoint.fold.bytes")
                 .description("Peak estimated heap held by one checkpoint build's folded state")
                 .baseUnit("bytes")
@@ -196,7 +211,9 @@ public class DeltaMetrics {
      * and an S3 refusal on the frame are transient and cost only that tick (the first would also
      * hit every site at once, so it is an infrastructure alarm rather than a site's), and a build
      * discarded because the site's history was replaced under it (issues #136, #142) is a normal
-     * outcome of an operator action, not a frozen pointer.</p>
+     * outcome of an operator action, not a frozen pointer. A build deferred behind the process's
+     * fold budget (issue #178) is absent for the first of those reasons and has
+     * {@link #checkpointBuildDeferred()} of its own.</p>
      *
      * <p><b>The caveat that used to sit here is gone (issue #157), and with it the reason to read
      * this meter per site before believing it.</b> {@code S3CheckpointStorage} used to answer a
@@ -237,6 +254,53 @@ public class DeltaMetrics {
             case "history_gone" -> checkpointHistoryGone.increment();
             case "fold_too_large" -> checkpointFoldTooLarge.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
+        }
+    }
+
+    /**
+     * A checkpoint build did not run because another build held the process's fold budget
+     * (issue #178).
+     *
+     * <p>Its own meter rather than a fifth {@code reason} on
+     * {@link #checkpointBuildAborted(String)}, and the distinction is the one that meter's contract
+     * rests on: every value there is a refusal that <b>never repairs itself</b>, which is what makes
+     * a non-zero rate a page. This one repairs itself the moment the neighbouring build finishes —
+     * it says nothing about the deferred site's own data, spends no materialize attempt and writes
+     * nothing — so putting it there would make the page fire for a condition that clears on its
+     * own, and an operator who learned to ignore it would ignore the four that matter with it.</p>
+     *
+     * <p>Untagged: there is one way to be deferred, and Prometheus cannot mix a tagged and an
+     * untagged series under one name, so a later cause would take the tag then. What a sustained
+     * rate means is that the nightly sweep and forced rebuilds are colliding for longer than
+     * {@code delta.checkpoint.fold-wait-seconds} — raise that key, or find the build that is not
+     * finishing.</p>
+     */
+    public void checkpointBuildDeferred() {
+        checkpointBuildsDeferred.increment();
+    }
+
+    /**
+     * Record how long a build waited for the process's fold budget (issue #178).
+     *
+     * <p>The counter above only fires once the wait is <em>spent</em>. This is the band below it,
+     * and without it that band is invisible: the budget is taken outside {@code phase=total}, so a
+     * build that waited nine minutes and then ran looks, on {@code delta.checkpoint.duration},
+     * exactly like one that waited none — and {@code builds.deferred} stays at zero, because it did
+     * run. {@code max(delta_checkpoint_fold_wait_seconds_max)} against
+     * {@code delta.checkpoint.fold-wait-seconds} is how that key is sized before the first
+     * deferral, the same reason {@code delta.checkpoint.fold.bytes} exists beside
+     * {@code max-fold-bytes}.</p>
+     *
+     * <p>Recorded once per attempt at the budget, deferrals included, so the count is builds that
+     * reached the fold rather than builds that finished it. An uncontended build records a sample
+     * near zero on purpose: a series that only appeared under contention could not be told from a
+     * scrape that lost it.</p>
+     *
+     * @param nanos time spent waiting; negative is ignored
+     */
+    public void recordCheckpointFoldWait(long nanos) {
+        if (nanos >= 0) {
+            checkpointFoldWait.record(nanos, TimeUnit.NANOSECONDS);
         }
     }
 
