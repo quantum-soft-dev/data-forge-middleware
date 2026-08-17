@@ -119,19 +119,24 @@ running JVM, so a container restart mid-build does not leave one file per claime
 volume for the whole age window.
 
 `max-temp-bytes` bounds one file, and a batch build opens one per claimed table at once with
-`max-concurrent` builds in flight, so the *directory* is bounded by the deployment rather than by
-this key: on GKE `temp-dir` points at a `parquet-scratch` `emptyDir` whose `sizeLimit` sits inside
-the container's `ephemeral-storage` request/limit (issue #131). Crossing that is a kubelet eviction,
-not an `ABANDONED` artifact. Since issue #138 the deployment sets this key (and the two checkpoint
+`max-concurrent` builds in flight, so the *directory* needs a bound of its own. Two now exist. The
+deployment's is the outer one: on GKE `temp-dir` points at a `parquet-scratch` `emptyDir` whose
+`sizeLimit` sits inside the container's `ephemeral-storage` request/limit (issue #131), and crossing
+that is a kubelet eviction, not an `ABANDONED` artifact. The application's is
+`delta.parquet.max-scratch-bytes` (issue #150), charged as bytes are written by every file-backed
+writer and released when the file is deleted, so the pod refuses before the volume fills. A build
+stopped by *that* is retried with the ordinary backoff rather than abandoned: the artifact is
+ordinary and the directory was busy, which is the opposite of what crossing `max-temp-bytes`
+means. Since issue #138 the deployment sets this key (and the two checkpoint
 ceilings) in `k8s/base/configmap.yaml` so that the sizing note's worst case fits inside that
 `sizeLimit` — 1Gi here — and a single runaway artifact is abandoned before the volume fills; the
 application default stays at 10 GiB. Note the consequence: an artifact above the ceiling is
 abandoned on its **first** attempt, because the failure is deterministic, and answers `404` until
 an operator raises the key and requeues the row (the admin requeue route from 039). Lowering the key
 shrinks the peak roughly in proportion but never bounds it — one file per claimed table is a
-multiplier no per-file key can cap, which is issue **#150**. The budget, its worst case and how to
-recompute it live in `docs/delta-client-v2-guide.md` ("Sizing note") — one place, so the numbers
-cannot drift.
+multiplier no per-file key can cap, which is what `delta.parquet.max-scratch-bytes` is for. The
+budget and how to size it live in `docs/delta-client-v2-guide.md` ("Sizing note") — one place, so
+the numbers cannot drift.
 
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.

@@ -579,7 +579,9 @@ You don't write these — they're how downstream tools read your data:
   sizing note) govern that file; a table that would cross the
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
-  the declared schema cannot render. A later scheduled build (or a forced rebuild) **rematerializes
+  the declared schema cannot render. A table stopped instead by the shared *directory* budget
+  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, issue #150) is skipped the same way but counted as
+  `{reason=scratch_budget}`, because that one says nothing about the table. A later scheduled build (or a forced rebuild) **rematerializes
   a missing snapshot from the frame** without waiting for new segments (issue #128): the pointer,
   the frame and retention stay where they were, and only tables whose `s3_key_parquet` is still
   null are rewritten (a forced rebuild rewrites every table). After a full prune the frame is
@@ -990,8 +992,10 @@ and gives the number that says which sites are near it.
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
 `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` (all 10 GiB by default)
-are enforced **per file**, inside each writer. Nothing in the application bounds the *directory*
-those files share. On GKE that bound is the manifest (issue #131): the backend container mounts a
+are enforced **per file**, inside each writer. Since issue #150 one more key,
+`DELTA_PARQUET_MAX_SCRATCH_BYTES`, bounds the *directory* those files share — see "One key bounds
+the directory" below for what it does and why the three above are still there. On GKE the volume
+under it is the manifest (issue #131): the backend container mounts a
 `parquet-scratch` `emptyDir` with `sizeLimit: 6Gi` at `/scratch/parquet`, both `*_TEMP_DIR` keys
 point at it through `k8s/base/configmap.yaml`, and the container declares
 `ephemeral-storage` **request and limit of 8Gi** — 6 GiB of scratch plus 2 GiB of headroom for the
@@ -1022,30 +1026,61 @@ is the next incremental seed. The frame now answers to its own
 beside the `*_TEMP_DIR` keys that put the writers on the volume — the application defaults stay at
 10 GiB, because nothing in the application knows how large the directory it was handed is.
 
-The deployed values are the formula below solved for 6Gi:
+**One key bounds the directory (issue #150).** `DELTA_PARQUET_MAX_SCRATCH_BYTES` is the only guard
+that is about the sum rather than about a file, and the deployed value is the volume less the
+reserve:
 
 ```
-2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch  <=  sizeLimit - 1Gi
-2 x max(1Gi,              1.5Gi)            + 2              x 1Gi   =   5Gi        <=  5Gi
+DELTA_PARQUET_MAX_SCRATCH_BYTES  <=  sizeLimit - 1Gi
+5Gi                              <=  6Gi       - 1Gi
 ```
 
 The reserved gigabyte is not decoration: scratch a dead container left behind survives on the
-pod-private volume until the next sweep tick (#141), and kubelet acts on usage *exceeding* the
-limit rather than reaching it — solving to exact equality would make the modelled peak an eviction.
+pod-private volume until the next sweep tick (#141) and its owner is gone, so no reservation covers
+it; and kubelet acts on usage *exceeding* the limit rather than reaching it — solving to exact
+equality would make the budget itself an eviction.
 
-`ParquetScratchCeilingBudgetTest` recomputes exactly that from the manifests — including the batch
-concurrency, taken from the ConfigMap or from the `application.yml` default — so raising a ceiling,
-raising `max-concurrent`, or shrinking the `sizeLimit` on its own fails the build rather than
-quietly restoring the eviction. It also requires the **frame** ceiling to be the wider of the two,
-because that is the one whose failure is expensive.
+It is **charged as bytes are written**, by the same two counting streams that already enforce the
+per-file ceilings, and released when the file is deleted. It is not reserved at the ceiling up
+front: the ceilings are 1 GiB against artifacts in the low hundreds of MiB, so a three-table batch
+would reserve 3 GiB it never uses and be refused for ever. What that costs is stated rather than
+hidden — a running total cannot choose *which* writer to refuse, so two large writers can each take
+half and both be stopped where either alone would have fitted. The heap twin of this budget (#178)
+could avoid that by running one fold at a time; disk cannot, because a batch build genuinely needs
+one open file per claimed table and serializing them means replaying the segments once per table,
+the multiplier #038 removed.
 
-**Read the batch term as one claimed table per build, and the whole thing as a floor on the
-guarantee rather than the budget.** A batch build opens one scratch file *per claimed table*, so a
-two-table batch already doubles that term and a 6Gi volume can be overrun again — a count is not
-something a per-file ceiling can bound. Only a directory-wide reservation can, and that is **#150**;
-until it lands the deployment's protection is real but partial. The reserved gigabyte is an
-allowance for restart residue, not a proof about it either — a dead build leaves one file per
-claimed table, the same multiplier.
+**A refusal is transient, and every meter says so.** Crossing a per-file ceiling is a verdict on the
+artifact — deterministic, identical on every retry. Crossing the directory budget says only that the
+volume was busy, so:
+
+- a **checkpoint table** is skipped as
+  `delta.checkpoint.tables.unmaterialized{reason=scratch_budget}` — its own reason, because
+  `parquet_failed` would send an operator to the table's schema and to
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, and both would be a wild goose chase. It still spends one
+  `materialize_attempts` like any other unmaterialized outcome (#149): a directory that stays full
+  for five nights is a deployment that is too small, and `delta.checkpoint.tables.given-up` is the
+  standing signal for it;
+- the **frame** ends the build, as an oversized frame does, but is deliberately **absent** from
+  `delta.checkpoint.builds.aborted`, whose tag values are refusals that never repair themselves;
+- a **completed-batch artifact** takes the ordinary backoff instead of the first-attempt
+  `ABANDONED` its own ceiling earns it, so the download answers `409` rather than a permanent `404`.
+
+`delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
+them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
+unset**, which is the shipped default and how the key is sized before it is turned on
+(`max_over_time(delta_parquet_scratch_bytes[7d])` against the volume).
+
+`ParquetScratchCeilingBudgetTest` recomputes the inequality from the manifests, so raising the
+budget or shrinking the `sizeLimit` on its own fails the build rather than quietly restoring the
+eviction. It also requires the **frame** ceiling to be the wider of the two per-file checkpoint
+keys, because that is the one whose failure is expensive, and every per-file ceiling to sit at or
+under the directory budget — a ceiling above it can never be reached, so it would be dead
+configuration that reads as live.
+
+**Per JVM.** The budget is a real bound only where the directory is pod-private
+(`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`, #141), which the deployed `emptyDir` is. On a shared
+volume it would be a per-replica share, and the volume would need the replica count multiplied in.
 
 **Before rolling new ceilings out to a site that has been running a while, measure instead of
 assuming.** One listing settles whether any of them is already too low, and a frame that is
@@ -1082,52 +1117,38 @@ headroom — but a *deterministically* oversized artifact fails the same way on 
 In every case the records themselves are still in the changelog segments and their per-segment
 Parquet; what is lost is the derived artifact until the ceiling is raised.
 
-**Recomputing the budget.** The peak is a checkpoint build and completed-batch builds running at
-once:
+**Recomputing the budget.** Since #150 there is nothing to recompute on the application side:
 
 ```
-peak = checkpoint_peak + batch_peak + orphan_residue
-checkpoint_peak = 2 x max(largest per-table snapshot, whole-site reload frame)
-                    # each term capped by its own key since #138: DELTA_CHECKPOINT_MAX_TEMP_BYTES
-                    # for the snapshot, DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES for the frame
-                    # one file at a time PER BUILD (the cron sweep walks one site and one table
-                    # at a time, and since #126 the frame is written the same way) — but there
-                    # are two build paths per pod: CheckpointScheduler's ReentrantLock guards
-                    # only the cron thread, while a forced rebuild runs rebuildFromFrame on the
-                    # separate single-thread `deltaRebuildExecutor`. An admin pressing "Rebuild"
-                    # during the 02:00 sweep, or resumePendingRebuilds() firing at startup,
-                    # used to give two concurrent checkpoint scratch files in one JVM.
-                    # Issue #178 made those two paths mutually exclusive for the length of a
-                    # build (CheckpointFoldBudget, taken for heap reasons), so this term is
-                    # now CONSERVATIVE rather than tight: one file is reachable, two are
-                    # budgeted. Deliberately left at 2 x here — the deployed ceilings are not
-                    # this ticket's to move, and the directory-wide reservation that decides
-                    # what the term should be is #150.
-batch_peak      = delta.batch-parquet.max-concurrent (2)
-                    x tables claimed per batch          # one scratch file per claimed table,
-                                                        # all opened before the shared replay
-                    x largest per-table artifact
-orphan_residue  = whatever a container restart left behind, until the next sweep tick
+peak = DELTA_PARQUET_MAX_SCRATCH_BYTES + orphan_residue
+orphan_residue = whatever a container restart left behind, until the next sweep tick
+                    # outside every reservation, because the process that held them is gone
                     # bounded by DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS (1 h) on this
                     # deployment, not by the 4 h age window — see "Orphans outlive a
                     # container restart" below, and "One sweep interval means the tick
                     # runs when it is due" for the scheduler that bound assumes
 ```
 
+**What the estimate used to be, and why it could not be one.** It read
+`2 x max(table snapshot, reload frame) + max-concurrent x tables claimed per batch x artifact`. Both
+multipliers were problems. The `2 x` was the two checkpoint build paths — the cron sweep and a
+forced rebuild on `deltaRebuildExecutor` — which #178 has since made mutually exclusive, so it is
+now conservative rather than tight. The batch term was the real one: a build opens one scratch file
+per claimed table, and no per-file ceiling can bound a *count*, so the inequality only ever fixed
+the single-claimed-table case. Lowering a ceiling shrank the peak roughly in proportion and never
+bounded it. The directory budget replaces both, which is why the deployed per-file ceilings did not
+have to move when it landed.
+
 That budget is disk only. The heap peak of the same build is a separate sum — the fold
 (`DELTA_CHECKPOINT_MAX_FOLD_BYTES`, and since issue #178 that is **one** fold per process, not one
 per build) plus one Parquet row-group buffer per open writer (`DELTA_PARQUET_ROW_GROUP_BYTES`,
-16 MiB) — and it is the one that fails as an eviction-like `OOMKilled` rather than as a skip. The
-exclusion #178 added also makes the disk term above conservative, since two checkpoint builds can
-no longer overlap at all; the number is deliberately left where it is, because the deployed
-ceilings and the directory-wide reservation are #150's decision, not this one's. See "The first
-bound is heap" above.
+16 MiB) — and it is the one that fails as an eviction-like `OOMKilled` rather than as a skip. See
+"The first bound is heap" above.
 
 There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
-its own. `delta.batch-parquet.max-concurrent` and the table count per site are the two multipliers
-to check before assuming the budget still holds; #128 also raised how often large files are written,
-since a scheduled build now rematerializes every table whose snapshot is missing and a forced
-rebuild rewrites all of them.
+its own — and so is the scratch budget, which is why the volume it is measured against must be
+pod-private. #128 also raised how often large files are written, since a scheduled build now
+rematerializes every table whose snapshot is missing and a forced rebuild rewrites all of them.
 
 **Orphans outlive a container restart.** When scratch lived in the container's writable layer, a
 restarted container got an empty `/tmp`. An `emptyDir` is cleared only when the *pod* goes away, so
@@ -1821,6 +1842,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone|fold_too_large}`,
 `delta.checkpoint.builds.deferred`, `delta.checkpoint.fold.wait`,
 `delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
+`delta.parquet.scratch.bytes`, `delta.parquet.scratch.refused{writer=...}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
@@ -1865,11 +1887,13 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.checkpoint.fold.bytes` (summary) | `delta_checkpoint_fold_bytes_count` / `_sum` / `_max` |
 | `delta.checkpoint.fold.wait` (timer) | `delta_checkpoint_fold_wait_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
-| `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
+| `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed\|scratch_budget}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
 | `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
 | `delta.checkpoint.builds.deferred` | `delta_checkpoint_builds_deferred_total` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
 | `delta.s3.read-denied` | `delta_s3_read_denied_total` |
+| `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
+| `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:

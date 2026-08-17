@@ -453,6 +453,72 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- scratch-directory-budget: One key bounds the whole file-backed Parquet scratch **directory**,
+  where every guard before it bounded a single file (issue #150, split out of #138 and named as
+  out of scope by #131 before that). `delta.checkpoint.max-temp-bytes` bounds one table snapshot,
+  `delta.checkpoint.max-frame-temp-bytes` one reload frame, `delta.batch-parquet.max-temp-bytes` one
+  completed-batch artifact — and the thing that evicts the pod is the directory they share, whose
+  file **count** no per-file key can bound: a completed-batch build opens one scratch file per
+  claimed table (#038), so a ten-table batch puts ten files on the 6Gi volume however low that
+  ceiling is set. #138's deployed inequality
+  (`2 x max(table, frame) + max-concurrent x batch <= sizeLimit - 1Gi`) was therefore a **floor on
+  the guarantee, not the budget**, and it said so. New `delta.parquet.max-scratch-bytes`
+  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, **0 = unbounded**, the shipped default, so an upgrade changes
+  nothing) is held by `ParquetScratchBudget` and taken as a `ScratchLease` beside each scratch file,
+  released when the file is deleted — after the delete, not after the upload, since the bytes are on
+  the volume until the file is gone. **Charged as bytes are written, not reserved at the ceiling**:
+  the ticket offered both, and the pessimistic form cannot work here, because the deployed ceilings
+  are 1 GiB against artifacts in the low hundreds of MiB, so a three-table batch would reserve 3 GiB
+  it never uses and be refused for ever on a 5 GiB budget. The two counting streams that already
+  enforce the per-file ceilings (`CappedOutputStream`, `FileOutputFile`) do the charging, so a
+  writer is stopped mid-file by either bound in the same place and by the same mechanism.
+  **The cost of a shared running total is stated rather than hidden**, because it is exactly what
+  #178 rejected for the heap twin of this budget: a total cannot choose *which* writer to refuse —
+  the byte that crosses it belongs to whoever happens to be writing one — so two large writers can
+  each take half and both be stopped where either alone would have fitted. #178 could answer that
+  with exclusion (a fair `Semaphore(1)`, one fold at a time) because one fold at a time is a real
+  mode of operation; disk cannot, because a batch build genuinely needs one open file per claimed
+  table and serializing them means replaying the segments once per table — the multiplier #038
+  removed. What **does** carry over from #178 unchanged is the rule about reporting: transient
+  contention never becomes a tag value on a meter contracted to mean permanent. So
+  `ScratchBudgetExceededException` is its own type (not a subclass of
+  `ArtifactSizeLimitExceededException`, whose catches mean "this artifact is deterministically too
+  big"), and each caller keeps its **existing failure mode** with the diagnosis corrected: a
+  checkpoint table is skipped as
+  `delta.checkpoint.tables.unmaterialized{reason=scratch_budget}` — a **new tag value**, because
+  `parquet_failed`'s own log line sends an operator to the table's schema and to
+  `delta.checkpoint.max-temp-bytes` and both would be a wild goose chase; the **frame** ends the
+  build as an oversized frame does but is deliberately **absent** from
+  `delta.checkpoint.builds.aborted` (#153's contract); a completed-batch artifact takes the ordinary
+  backoff instead of the first-attempt `ABANDONED` its own ceiling earns it, which falls out of
+  `DeltaParquetWriter.failure()` classifying only `ArtifactSizeLimitExceededException` as permanent.
+  The table skip **still spends a materialize attempt** (#149) rather than being exempted: a
+  directory full for five consecutive nights is a deployment that is too small, and
+  `delta.checkpoint.tables.given-up` is the standing signal for it, where an exemption would be the
+  unbounded retry #149 exists to remove. Two meters, both registered in the budget over the injected
+  `MeterRegistry` (the `CheckpointGivenUpMetrics`/`S3CheckpointStorage` shape, avoiding a cycle with
+  `DeltaMetrics`, which documents them without owning them): **`delta.parquet.scratch.refused`**
+  `{writer=checkpoint_frame|checkpoint_table|batch_artifact}`, every value registered at zero so an
+  alert predates the first refusal, and **`delta.parquet.scratch.bytes`**, a gauge of live reserved
+  bytes that follows the writers **even when no budget is configured** — unbounded is the default,
+  so `max_over_time` of that series against the volume is the only way to size the key before
+  turning it on. Reservation is **chunked** at 1 MiB so a per-byte gzip write is not a per-byte
+  atomic operation; the over-reservation that costs is at most one chunk per live writer, and it
+  errs towards refusing early. Deployed value in `k8s/base/configmap.yaml` beside the `*_TEMP_DIR`
+  keys, for #138's reason (the process cannot see how large the directory it was handed is):
+  **5 GiB**, the 6Gi `parquet-scratch` `sizeLimit` less the gigabyte kept free for restart residue —
+  which no lease covers, since the process that held them is gone — and for kubelet acting on usage
+  *exceeding* the limit. Per JVM, so it is a true bound only where
+  `delta.parquet.scratch-private-to-pod` (#141) holds, which the deployed `emptyDir` does.
+  `ParquetScratchCeilingBudgetTest` drops the multiplier and asserts the subtraction, keeps the
+  frame-wider-than-snapshot invariant and the manifest-drift guards, and adds one: every per-file
+  ceiling must sit **at or under** the directory budget, since a ceiling above it can never be
+  reached and would be dead configuration that reads as live. The per-file ceilings and
+  `delta.batch-parquet.max-concurrent` are otherwise **unchanged** — they keep their per-artifact
+  job, and the `2 x` #178 left conservative simply disappears rather than being retuned. No REST,
+  gRPC, proto, DTO, migration, existing configuration-key, existing metric-name, S3-key or frontend
+  change. See `docs/delta-client-v2-guide.md` ("Sizing note", Metrics),
+  `docs/cr-unified-batch-parquet.md`.
 - shared-fold-heap-budget: The checkpoint fold's heap ceiling is a reservation for the **process**,
   not a fresh allowance every build gets a copy of (issue #178, raised reviewing #177).
   `delta.checkpoint.max-fold-bytes` (#152) is enforced by one `BudgetedFold` per build, and one JVM
