@@ -486,6 +486,90 @@ pages/{feature}/            # Route pages
   which is a whole-profile decision (`application-test.yml` plus a Gradle-supplied path) rather than
   an assertion, filed as **#187**. Test-only — no production code, REST, gRPC, DTO, migration,
   configuration-key, metric, S3-key or frontend change.
+- shared-fold-heap-budget: The checkpoint fold's heap ceiling is a reservation for the **process**,
+  not a fresh allowance every build gets a copy of (issue #178, raised reviewing #177).
+  `delta.checkpoint.max-fold-bytes` (#152) is enforced by one `BudgetedFold` per build, and one JVM
+  holds two: `CheckpointScheduler`'s `ReentrantLock` serializes the cron thread alone, while
+  `DeltaCheckpointRebuildService` runs `rebuildFromFrame` on the separate single-thread
+  `deltaRebuildExecutor` (and `resumePendingRebuilds()` fires one at startup). Two folds at 45% of
+  the budget each therefore crossed nothing, were refused nothing, left
+  `delta.checkpoint.builds.aborted` at zero — and `OOMKilled` the pod with in-flight ingest, which
+  is the exact failure #152 exists to replace. **Exclusion rather than a shared running total**, the
+  ticket's second option instead of its `AtomicLong` sketch, and the reason is what the sketch could
+  not answer: when the sum crosses, the record that crosses it belongs to whichever build happens to
+  be applying one, so the nightly build of a small site could be refused because an operator clicked
+  "rebuild" on a large one — a regression against the path #152 actually protected — and that
+  refusal would have to be reported somewhere, which for a condition clearing the moment the
+  neighbour finishes cannot be `builds.aborted` without breaking that meter's "never repairs itself"
+  contract (#153). New `CheckpointFoldBudget` (a **fair** `Semaphore(1)`) lets one build fold at a
+  time, which is what makes the existing number a bound on the process at all; a collision's victim
+  is deterministically the build that arrived second, and its outcome is a **deferral**. The
+  reservation covers the **whole build**, not the fold loop — the folded state is what
+  `writeSnapshots` iterates, so the heap is held until the last table is uploaded. A build that
+  cannot have it within new `delta.checkpoint.fold-wait-seconds`
+  (`DELTA_CHECKPOINT_FOLD_WAIT_SECONDS`, default **600**; 0 = do not wait, negative treated as 0)
+  throws `CheckpointFoldBudget.BuildDeferredException` — thrown rather than returned as an empty
+  fold for the #157/#162 reason, since `DeltaCheckpointRebuildService` cannot tell an empty fold
+  from a finished build — and is counted on new **`delta.checkpoint.builds.deferred`** (untagged,
+  registered at zero so an alert predates the first occurrence). `CheckpointScheduler` logs it,
+  skips retention for that site (the pointer did not move) and carries on to the next;
+  the forced rebuild **releases** `rebuild_requested` and says to ask again, settled like the #157
+  read denial and not like the #162 shutdown, because nothing re-drives a held flag here — the
+  nightly tick calls `buildCheckpoint`, never `rebuildFromFrame`, and `requestRebuild`
+  short-circuits while the flag is set. Two rounds of review then corrected **the wait**, and each
+  correction is load-bearing. It is paid **once per pass, not once per site**
+  (`buildCheckpoint(siteId, mayWait)`): a holder that never finished would otherwise turn a
+  200-site tick into `200 x` the wait, over which `CheckpointScheduler`'s own `tryLock` skips the
+  following nights and retention freezes for **every** site rather than the contended one — the
+  sweep now keeps visiting and simply stops paying the wait, resuming the ordinary terms as soon as
+  a site does get the budget. Round 2 then caught the opposite extreme in that same fix: latched for
+  the rest of the tick, one 40-minute forced rebuild would cost the **whole night** (every remaining
+  site missing its non-blocking acquire), so deferred sites are collected and retried in **one**
+  further pass at the end — a tick spends at most two waits, and a passing collision costs only the
+  sites visited while it lasted. Round 2 also moved the budget **in front of the reads**: `run()`
+  loaded the sync state, the segment list and the frame's presence and only then queued for the
+  budget, so a rebuild parked behind the sweep folded a segment list up to `fold-wait-seconds` plus
+  a whole build stale — and since the neighbour advances the pointer and `ChangelogRetentionService`
+  then deletes the below-checkpoint objects, the waiter woke up and folded keys that were gone. The
+  window existed before this ticket but was a few S3 round trips wide; now everything is read inside
+  the exclusion, at the cost of an idle visit holding it for one query and one HEAD. Round 3 then
+  named the residual out loud instead of leaving it implied: the per-pass rule bounds the **tick's
+  duration, not the collision's reach** — a holder outlasting both waits defers every site and the
+  night builds nothing — and that is the deliberate trade against a stuck build parking a scheduler
+  thread and the build lock for `N x` the wait across the following nights; the deployment-level
+  answer is the key, which `delta.checkpoint.fold.wait` now measures. Round 3 also found that the
+  latch was dropped only on a clean return (so a read denial, which fires for **every** site of a
+  tick, left the rest of the pass probing although the collision was over); that
+  `delta.checkpoint.builds.deferred` counted the non-blocking probes as well, ~400 increments per
+  collision whose prescribed remedy — raise the wait — is wrong for 398 of them, so only a
+  **spent** wait is now counted and logged at WARN (`waitWasSpent()`); and that the permit was
+  acquired outside the `try` whose `finally` releases it, so a throwing meter would have leaked the
+  process's only permit for the life of the pod.
+  It is **shutdown-aware** (sliced `tryAcquire` re-reading `ApplicationShutdownSignal`),
+  because `deltaRebuildExecutor` has `waitForTasksToCompleteOnShutdown(true)` and non-daemon
+  threads — Spring never interrupts a task parked there, so an unaware wait would hold context close
+  for the whole `awaitTerminationSeconds` and then time out; a shutdown ends the wait as a deferral
+  and `DeltaCheckpointRebuildService` settles *that* one as #162 (flag kept) rather than as #157
+  (flag released), and `CheckpointService` re-checks the signal immediately after acquiring so an
+  inherited budget does not fold a whole site during the termination grace period. And the wait got
+  a meter, **`delta.checkpoint.fold.wait`**: the budget is taken *outside* `phase=total`, so a
+  deferred build contributes no duration sample at all (a ten-minute wait would otherwise be the
+  maximum an operator reads that timer from) — **and neither does a build that waited nine minutes
+  and then ran**, which `builds.deferred` also misses because it did run, so without this series
+  contention was invisible right up to the first deferral. A wait **cut short** by the shutdown is
+  kept off that counter (`BuildDeferredException.endedEarly()`): it is not contention, and a rollout
+  that catches a build waiting must not move an alerting series — #162's rule again. The wait is
+  also clamped at a day, because saturating seconds→millis moved the overflow into the nanosecond
+  deadline, where a very large key collapsed the wait to one 500 ms slice. Per JVM
+  deliberately — heap is per pod, so N replicas have N budgets exactly as they have N heaps; no
+  distributed lock is implied and `CheckpointScheduler`'s "run the sweep on one instance" note is
+  unchanged. Fairness plus taking it **per site** is what bounds the wait: a rebuild queues behind
+  one site's build rather than behind the whole sweep. **The `2 x` in the disk formula is now
+  conservative** rather than tight, since two checkpoint builds can no longer overlap at all — but
+  it is deliberately left where it is, because the deployed ceilings and the directory-wide
+  reservation are **#150**, for which this exclusion is a candidate shape. No REST, gRPC, proto,
+  DTO, migration, S3-key, existing configuration-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("The first bound is heap", Metrics).
 - heap-threshold-disable: `plugin.sql-generation.heap-threshold-percent: 100` disables the
   memory-pressure abort, which is what it was always taken to mean and never did (issue #174).
   `SqlGenerationService.isMemoryPressureHigh()` compared `>=` against a reading that
