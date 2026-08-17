@@ -453,6 +453,52 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- audit-listener-own-lane: The deferred plugin audit write can no longer be handed back to the
+  thread that published it (issue #171, the last of the two exceptions #161 documented rather than
+  asserted away). `PluginAuditEventListener.onAuditEntryReady` carried `@Async("pluginExecutor")`
+  + `@Transactional(REQUIRES_NEW)` + `@TransactionalEventListener(AFTER_COMMIT)`. On the normal path
+  the hand-off makes `REQUIRES_NEW` equivalent to `REQUIRED`; with `pluginExecutor` full (10 threads,
+  50 queue slots) its `CallerRunsPolicy` ran the listener **inline on the publishing thread**, which
+  is inside the commit synchronization with its own `ConnectionHolder` still bound — Spring releases
+  it in `afterCompletion`, not `afterCommit` — so the write asked the pool for a **second connection
+  while holding one**, the single hold-and-wait shape in the application's background work. The
+  second cost is the one easy to miss: an exception from an `afterCommit` callback propagates to the
+  caller of `commit()`, so a 30 s `connection-timeout` surfaced as a failure of an operation that had
+  already committed. **The ticket's second candidate — drop `REQUIRES_NEW` and rely on the
+  `AFTER_COMMIT` guarantee — is wrong, and that is the correction this ticket needed**: on precisely
+  the inline path, `REQUIRED` finds the publisher's transaction still `isExistingTransaction()`
+  (`ConnectionHolder.transactionActive` is cleared in `doCleanupAfterCompletion`, after the trigger),
+  joins a transaction that has already committed, and the row is silently lost — which is what the
+  method's own comment had always warned about. So the fix is the first candidate, made specific:
+  **a lane of its own plus a guard**, deliberately both. New `pluginAuditExecutor` (2 threads, queue
+  500, `DropAndLogPolicy`) carries the two listener methods; `pluginExecutor` keeps `CallerRunsPolicy`
+  untouched for plugin dispatch and the immediate `PluginAuditService` methods, which are plain
+  `REQUIRED` and do not have this shape. Two threads because each task is one INSERT, a 500-deep
+  queue because filling it means the database is not accepting writes at all, and **drop rather than
+  `AbortPolicy`** because a rejection from a `void @Async` method is thrown at submit time on the
+  caller's thread — that is the publisher again, past the commit point, i.e. the very failure being
+  removed. A dropped entry is logged at ERROR, the same swallow the audit path already applies to
+  every other write failure. The guard is the half that survives a future edit: `persist` refuses
+  outright when `TransactionSynchronizationManager.isActualTransactionActive()`, so the invariant is
+  enforced where the write happens instead of inferred from a pool's configuration, and it still
+  holds if the `@Async` hand-off is removed or fails to apply. It needed the transaction to move off
+  the listener — a new package-private `PluginAuditEntryWriter` bean owns the `REQUIRES_NEW`, since a
+  `@Transactional` method invoked on `this` is not proxied and the check has to run *before* the
+  transaction opens (the `DeltaSessionCommitTransaction` shape of #147). The listener's catch also
+  logs the exception rather than only `getMessage()` — the failure that surfaced this in review
+  carried no message at all. Proven by an integration test on the wired application, because the
+  hand-off is a proxy and the inline path exists only under saturation: it resolves the executor
+  **from the listener's own `@Async` annotation** (so it keeps testing the real path if the name
+  changes), fills every thread and queue slot, publishes inside a real transaction and asserts the
+  row is absent the instant the publishing thread returns — an entry already committed by then can
+  only have been written by that thread inside `afterCommit`. Verified red against the pre-fix
+  listener. `BackgroundConnectionDemandTest` drops the exception from its class documentation (the
+  ticket's third checkbox), adds the new bean at `Hold.SHORT` and moves the audited total **32 → 34**;
+  the floor is unchanged at `4 long ticks + 2 request reserve = 6 <= 10`, since the new threads are
+  short holders. **The trade an operator is buying**: under saturation the entry is lost rather than
+  written late, which is new — before, it was written inline at the cost of the publisher. No REST,
+  gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("The deferred plugin audit write has a lane of its own").
 - hold-connection-across-s3: A HikariCP connection is no longer held across S3 (or a 120 s
   semaphore wait) at the three call sites the pool audit named (issue #164, folding **#176**).
   `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` drop

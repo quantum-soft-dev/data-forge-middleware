@@ -7,18 +7,23 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Unit tests for PluginAsyncConfiguration.
  *
- * <p>Verifies thread pool sizing for both plugin executors:</p>
+ * <p>Verifies thread pool sizing for the three plugin executors:</p>
  * <ul>
  *   <li>{@code pluginExecutor} - dispatch orchestration (unchanged)</li>
  *   <li>{@code pluginExecutionExecutor} - actual plugin execution (reduced pool)</li>
+ *   <li>{@code pluginAuditExecutor} - deferred audit writes, which must never run inline (#171)</li>
  * </ul>
  */
 @DisplayName("PluginAsyncConfiguration Unit Tests")
@@ -66,6 +71,62 @@ class PluginAsyncConfigurationTest {
             assertThat(taskExecutor.getCorePoolSize()).isEqualTo(4);
             assertThat(taskExecutor.getMaxPoolSize()).isEqualTo(8);
             assertThat(taskExecutor.getThreadPoolExecutor().getQueue().remainingCapacity()).isEqualTo(50);
+        }
+    }
+
+    @Nested
+    @DisplayName("pluginAuditExecutor (deferred audit writes, #171)")
+    class PluginAuditExecutor {
+
+        @Test
+        @DisplayName("Should configure pluginAuditExecutor as a small fixed pool")
+        void shouldConfigurePluginAuditExecutorAsASmallFixedPool() {
+            // When
+            Executor executor = configuration.pluginAuditExecutor();
+
+            // Then
+            assertThat(executor).isInstanceOf(ThreadPoolTaskExecutor.class);
+            ThreadPoolTaskExecutor taskExecutor = (ThreadPoolTaskExecutor) executor;
+            assertThat(taskExecutor.getCorePoolSize()).isEqualTo(2);
+            assertThat(taskExecutor.getMaxPoolSize()).isEqualTo(2);
+            assertThat(taskExecutor.getThreadPoolExecutor().getQueue().remainingCapacity()).isEqualTo(500);
+
+            taskExecutor.shutdown();
+        }
+
+        /**
+         * The defect of #171 in miniature: with no capacity left, a {@code CallerRunsPolicy} would
+         * run the audit write on the thread that submitted it — which, for this executor, is a
+         * thread inside the publisher's commit synchronization still holding its connection.
+         */
+        @Test
+        @DisplayName("Should drop rather than run a rejected audit write on the caller's thread")
+        void shouldDropRatherThanRunARejectedWriteOnTheCallersThread() {
+            ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) configuration.pluginAuditExecutor();
+            CountDownLatch release = new CountDownLatch(1);
+            AtomicReference<Thread> ranOn = new AtomicReference<>();
+            try {
+                int slots = executor.getMaxPoolSize() + executor.getQueueCapacity();
+                for (int i = 0; i < slots; i++) {
+                    executor.execute(() -> awaitQuietly(release));
+                }
+
+                // Then — the rejected task neither runs here nor throws back at the caller
+                assertThatCode(() -> executor.execute(() -> ranOn.set(Thread.currentThread())))
+                        .doesNotThrowAnyException();
+                assertThat(ranOn.get()).isNull();
+            } finally {
+                release.countDown();
+                executor.shutdown();
+            }
+        }
+
+        private void awaitQuietly(CountDownLatch release) {
+            try {
+                release.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

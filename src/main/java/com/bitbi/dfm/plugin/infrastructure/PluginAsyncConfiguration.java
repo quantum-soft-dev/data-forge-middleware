@@ -1,11 +1,14 @@
 package com.bitbi.dfm.plugin.infrastructure;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -13,10 +16,12 @@ import java.util.concurrent.ThreadPoolExecutor;
  * Provides dedicated thread pools for plugin event dispatch.
  *
  * <p>Per FR-008, plugin execution must be isolated with 30-second timeout.
- * This configuration provides two separate thread pools:</p>
+ * This configuration provides three separate thread pools:</p>
  * <ul>
- *   <li>{@code pluginDispatchExecutor} - for @Async dispatch orchestration</li>
+ *   <li>{@code pluginExecutor} - for @Async dispatch orchestration</li>
  *   <li>{@code pluginExecutionExecutor} - for actual plugin.execute() calls</li>
+ *   <li>{@code pluginAuditExecutor} - for the deferred audit writes of
+ *       {@code PluginAuditEventListener}, which must never run inline (issue #171)</li>
  * </ul>
  *
  * <p><b>Thread Starvation Prevention:</b> Using separate executors ensures that
@@ -81,5 +86,68 @@ public class PluginAsyncConfiguration {
         executor.setAwaitTerminationSeconds(60);
         executor.initialize();
         return executor;
+    }
+
+    /**
+     * Creates the executor that carries the deferred audit writes of
+     * {@code PluginAuditEventListener} (issue #171).
+     *
+     * <p>A lane of its own, for two reasons that both come from the same fact: this listener runs
+     * in the publisher's {@code afterCommit} synchronization, where the publishing thread still
+     * holds its own connection ({@code ConnectionHolder} is released in {@code afterCompletion}).
+     * On {@code pluginExecutor} a saturated pool would hand the write back to that thread through
+     * {@code CallerRunsPolicy}, and the audit write's own {@code REQUIRES_NEW} would then ask for a
+     * <b>second</b> connection while the first is held — the one hold-and-wait shape the pool
+     * sizing of #161 rules out everywhere else. And the write would queue behind plugin dispatch
+     * work that takes seconds, when it is one INSERT.</p>
+     *
+     * <ul>
+     *   <li>Core and max pool size: 2 threads — one INSERT each, so two drain far more than the
+     *       audit stream produces, while a single thread would serialize the whole trail behind one
+     *       slow write</li>
+     *   <li>Queue capacity: 500 tasks — deep enough that filling it means the database itself is
+     *       unavailable, in which case the write would fail rather than queue</li>
+     *   <li>Rejection policy: {@link DropAndLogPolicy} — never inline, never thrown back at the
+     *       caller</li>
+     * </ul>
+     */
+    @Bean(name = "pluginAuditExecutor")
+    public Executor pluginAuditExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("plugin-audit-");
+        executor.setRejectedExecutionHandler(new DropAndLogPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * Drops the task and says so, instead of running it on the caller's thread or throwing.
+     *
+     * <p>The two policies this replaces are both wrong for an audit write.
+     * {@code CallerRunsPolicy} would run it on the publishing thread, which is the defect of
+     * issue #171. {@code AbortPolicy} throws {@code RejectedExecutionException} out of the
+     * {@code @Async} proxy and therefore back at the publisher — for a {@code void} method the
+     * rejection happens at submit time, on the caller's thread, so it would surface as a failure of
+     * an operation that has already committed. Auditing must never break what it records, and the
+     * audit path already swallows every other write failure, so a lost entry is logged at ERROR and
+     * that is the whole of it.</p>
+     */
+    static final class DropAndLogPolicy implements RejectedExecutionHandler {
+
+        private static final Logger log = LoggerFactory.getLogger(DropAndLogPolicy.class);
+
+        @Override
+        public void rejectedExecution(Runnable task, ThreadPoolExecutor executor) {
+            log.error("Dropping a plugin audit write: the audit executor has no capacity left "
+                            + "({} of {} threads busy, {} queued{}). The entry is lost; the operation "
+                            + "it describes is not affected",
+                    executor.getActiveCount(), executor.getMaximumPoolSize(),
+                    executor.getQueue().size(), executor.isShutdown() ? ", shutting down" : "");
+        }
     }
 }
