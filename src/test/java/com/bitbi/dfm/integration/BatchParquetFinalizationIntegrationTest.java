@@ -345,16 +345,20 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
     private BatchParquetFinalizationService service(S3CheckpointStorage storageToUse, int maxAttempts) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
                 segmentService, schemaService, batchRepository, storageToUse, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), transactionManager,
-                tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600);
+                new DeltaParquetProperties(8L * 1024 * 1024),
+                new com.bitbi.dfm.delta.application.ParquetScratchBudget(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), 0L),
+                transactionManager, tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600);
     }
 
     /** Same finalizer, but with an already-elapsed build lease so stale claims are reclaimed. */
     private BatchParquetFinalizationService leasedService(S3CheckpointStorage storageToUse) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
                 segmentService, schemaService, batchRepository, storageToUse, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), transactionManager,
-                tempDir.toString(), 10_000_000L, 0, 5, 0);
+                new DeltaParquetProperties(8L * 1024 * 1024),
+                new com.bitbi.dfm.delta.application.ParquetScratchBudget(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), 0L),
+                transactionManager, tempDir.toString(), 10_000_000L, 0, 5, 0);
     }
 
     /** Take the retry-delay out of play so a test can drive consecutive attempts. */

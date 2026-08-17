@@ -37,6 +37,14 @@ import java.util.function.Supplier;
  *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152)</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
  *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
+ *   <li>{@code delta.parquet.scratch.bytes} — gauge: bytes of file-backed Parquet scratch reserved
+ *       by live writers, the band below {@code delta.parquet.max-scratch-bytes} (issue #150,
+ *       registered in {@code ParquetScratchBudget}). It follows the writers even when no budget is
+ *       configured, which is how that key is sized before it is turned on</li>
+ *   <li>{@code delta.parquet.scratch.refused} — writers stopped because the shared scratch
+ *       directory was full, tagged {@code writer=checkpoint_frame|checkpoint_table|batch_artifact}.
+ *       Transient by nature — it says the directory was busy, not that the artifact was too big —
+ *       so it is its own counter rather than a value on any of the permanent meters below</li>
  *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
@@ -80,6 +88,7 @@ public class DeltaMetrics {
     private final Counter egressSegments;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
+    private final Counter checkpointScratchBudget;
     private final Counter checkpointFrameTooLarge;
     private final Counter checkpointLossyRefold;
     private final Counter checkpointHistoryGone;
@@ -119,6 +128,7 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
+        this.checkpointScratchBudget = checkpointUnmaterialized(registry, "scratch_budget");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
@@ -186,12 +196,25 @@ public class DeltaMetrics {
      * declared schema ({@code no_schema}) or one whose Parquet write threw ({@code parquet_failed})
      * has nothing to download until the next build. Both used to be masked by the CSV snapshot.</p>
      *
-     * @param reason {@code no_schema} or {@code parquet_failed}
+     * <p>{@code scratch_budget} is the third and it is not a fact about the table at all (issue
+     * #150): the shared scratch directory was full of <em>other</em> writers' files when this one
+     * asked for room. It is separated from {@code parquet_failed} because the operator's next move
+     * differs — that one says "check the declared schema against the data, or
+     * {@code delta.checkpoint.max-temp-bytes} against the table's size", and both would be a wild
+     * goose chase here, where the lever is {@code delta.parquet.max-scratch-bytes}, the volume behind
+     * it, or {@code delta.batch-parquet.max-concurrent}. It still spends a materialize attempt like
+     * any other unmaterialized outcome (#149): a directory that stays full for
+     * {@code delta.checkpoint.max-materialize-attempts} nights is a deployment that is too small,
+     * and {@code delta.checkpoint.tables.given-up} is the standing signal for it — the alternative,
+     * an exemption, is the unbounded retry #149 exists to remove.</p>
+     *
+     * @param reason {@code no_schema}, {@code parquet_failed} or {@code scratch_budget}
      */
     public void checkpointTableUnmaterialized(String reason) {
         switch (reason) {
             case "no_schema" -> checkpointNoSchema.increment();
             case "parquet_failed" -> checkpointParquetFailed.increment();
+            case "scratch_budget" -> checkpointScratchBudget.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
     }

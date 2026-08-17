@@ -66,6 +66,11 @@ public class CheckpointService {
     private final ApplicationShutdownSignal shutdownSignal;
     /** One fold at a time in this JVM, so {@link #maxFoldBytes} bounds the process (issue #178). */
     private final CheckpointFoldBudget foldBudget;
+    /**
+     * The bound on the scratch <em>directory</em> this build shares with the completed-batch
+     * workers (issue #150) — the per-file ceilings below cannot bound a count of files.
+     */
+    private final ParquetScratchBudget scratchBudget;
     private final Path tempDirectory;
     /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
     private final long maxTempBytes;
@@ -90,6 +95,7 @@ public class CheckpointService {
                              CheckpointRetryProperties retryProperties,
                              ApplicationShutdownSignal shutdownSignal,
                              CheckpointFoldBudget foldBudget,
+                             ParquetScratchBudget scratchBudget,
                              // fully qualified: the delta wire Value is imported above
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
@@ -122,6 +128,7 @@ public class CheckpointService {
         this.retryProperties = retryProperties;
         this.shutdownSignal = shutdownSignal;
         this.foldBudget = foldBudget;
+        this.scratchBudget = scratchBudget;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.maxFrameTempBytes = maxFrameTempBytes;
@@ -806,10 +813,14 @@ public class CheckpointService {
     private void uploadFrame(UUID siteId, long seq, Map<String, Map<String, FoldedRow>> state) {
         prepareScratchDirectory();
         Path frame = createScratchFile(siteId, ".pb.gz");
+        // Closed after the delete, not after the upload: the bytes are on the volume until the file
+        // is gone, and releasing the lease earlier would let another writer be told there is room
+        // that does not exist yet.
+        ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
         try {
             metrics.timeCheckpointPhase("upload", () -> {
                 try (OutputStream out = new CappedOutputStream(
-                        Files.newOutputStream(frame), maxFrameTempBytes)) {
+                        Files.newOutputStream(frame), maxFrameTempBytes, lease)) {
                     ChangelogCodec.write(CheckpointFrame.records(state), out);
                 } catch (IOException e) {
                     throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
@@ -841,8 +852,23 @@ public class CheckpointService {
                     siteId, seq, maxFrameTempBytes);
             metrics.checkpointBuildAborted("frame_too_large");
             throw e;
+        } catch (ScratchBudgetExceededException e) {
+            // The frame's existing failure mode — the build ends, because the frame is the next
+            // incremental seed and there is nothing to fall back on. What it is deliberately NOT is
+            // a fifth value on delta.checkpoint.builds.aborted: every value there is a refusal that
+            // never repairs itself (#153), and this one clears the moment the batch workers holding
+            // the directory finish. delta.parquet.scratch.refused{writer=checkpoint_frame} already
+            // counted it inside the budget.
+            log.error("The checkpoint reload frame for site {} at seq {} could not be written "
+                    + "because the shared Parquet scratch directory was full — the build is "
+                    + "abandoned before any snapshot was written, so nothing durable changed and "
+                    + "the next tick tries again. This is contention, not a fact about the site: "
+                    + "raise delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
+                    + "delta.batch-parquet.max-concurrent", siteId, seq, e);
+            throw e;
         } finally {
             deleteQuietly(frame, "_frame", siteId);
+            lease.close();
         }
     }
 
@@ -943,10 +969,12 @@ public class CheckpointService {
             // unbounded. Skip that table and keep going — the same skip-and-continue contract
             // as DeltaEgressService.
             Path snapshot = createScratchFile(siteId);
+            ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_TABLE);
             try {
                 metrics.timeCheckpointPhase("parquet", () ->
                         ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
-                                dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes()));
+                                dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
+                                lease));
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
@@ -970,11 +998,28 @@ public class CheckpointService {
                 // Report the cause first: the detach below goes through the epoch guard, which
                 // throws rather than returns when the site was wiped mid-build, and this table's
                 // actual failure (schema drift, an oversized table) would leave no trace at all.
-                metrics.checkpointTableUnmaterialized("parquet_failed");
-                log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                        + "artifact this build (check the declared schema against the data, or "
-                        + "delta.checkpoint.max-temp-bytes against the table's size)",
-                        tableName, siteId, e);
+                //
+                // A directory-budget refusal (issue #150) stays a per-table skip — the table's
+                // existing failure mode — but under its own reason, because the operator's next
+                // move is a different one: nothing is wrong with this table, the scratch directory
+                // was full of other writers' files. It still spends a materialize attempt like any
+                // other unmaterialized outcome; a directory that stays full for
+                // delta.checkpoint.max-materialize-attempts nights is a deployment that is too
+                // small, and exempting it would be the unbounded retry #149 removed.
+                if (e instanceof ScratchBudgetExceededException) {
+                    metrics.checkpointTableUnmaterialized("scratch_budget");
+                    log.warn("Checkpoint Parquet for table {} of site {} was stopped by the shared "
+                            + "Parquet scratch budget — the table has no artifact this build and "
+                            + "will be retried by the nightly rematerialize. Raise "
+                            + "delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
+                            + "delta.batch-parquet.max-concurrent", tableName, siteId, e);
+                } else {
+                    metrics.checkpointTableUnmaterialized("parquet_failed");
+                    log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
+                            + "artifact this build (check the declared schema against the data, or "
+                            + "delta.checkpoint.max-temp-bytes against the table's size)",
+                            tableName, siteId, e);
+                }
                 // When seq advanced, the previous key would sit beside a newer seq and be served
                 // as its snapshot — detach it. On a same-seq rematerialize the last-good object
                 // is still at that key; keep the row pointing at it.
@@ -990,6 +1035,7 @@ public class CheckpointService {
                 // The scratch file is this build's litter whichever way the table ended: kept,
                 // it would fill the node one checkpoint cycle at a time.
                 deleteQuietly(snapshot, tableName, siteId);
+                lease.close();
             }
         });
 

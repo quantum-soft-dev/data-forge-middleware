@@ -76,7 +76,7 @@ class ParquetCheckpointWriterTest {
 
         Path file = tempDir.resolve("customers.parquet");
         ParquetCheckpointWriter.writeParquet(file, "customers", schema, List.of(row1, row2),
-                Long.MAX_VALUE, ROW_GROUP_BYTES);
+                Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
         assertTrue(Files.size(file) > 0, "parquet bytes written straight to the file");
 
@@ -136,7 +136,7 @@ class ParquetCheckpointWriterTest {
         f.put("active", strVal("f"));
 
         Path file = tempDir.resolve("bools.parquet");
-        ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(t, f), Long.MAX_VALUE, ROW_GROUP_BYTES);
+        ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(t, f), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
         try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
@@ -158,7 +158,7 @@ class ParquetCheckpointWriterTest {
 
         org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                 () -> ParquetCheckpointWriter.writeParquet(tempDir.resolve("bad.parquet"), "t", schema,
-                        List.of(bad), Long.MAX_VALUE, ROW_GROUP_BYTES),
+                        List.of(bad), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded()),
                 "an unrecognized boolean text must throw (per-table skip), not silently write false");
     }
 
@@ -175,7 +175,7 @@ class ParquetCheckpointWriterTest {
         row.put("price", decVal("1234567.89"));
 
         Path file = tempDir.resolve("widened.parquet");
-        ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES);
+        ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
         try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
@@ -200,9 +200,9 @@ class ParquetCheckpointWriterTest {
         List<Map<String, Value>> rows = highEntropyRows(4000);
 
         Path split = tempDir.resolve("split.parquet");
-        ParquetCheckpointWriter.writeParquet(split, "t", schema, rows, Long.MAX_VALUE, 64L * 1024);
+        ParquetCheckpointWriter.writeParquet(split, "t", schema, rows, Long.MAX_VALUE, 64L * 1024, TestScratchLeases.unbounded());
         Path single = tempDir.resolve("single.parquet");
-        ParquetCheckpointWriter.writeParquet(single, "t", schema, rows, Long.MAX_VALUE, 128L * 1024 * 1024);
+        ParquetCheckpointWriter.writeParquet(single, "t", schema, rows, Long.MAX_VALUE, 128L * 1024 * 1024, TestScratchLeases.unbounded());
 
         assertTrue(rowGroupCount(split) > 1,
                 "a 64 KiB budget must flush several row groups for ~1 MB of data");
@@ -219,7 +219,7 @@ class ParquetCheckpointWriterTest {
         Path file = tempDir.resolve("bounded.parquet");
 
         org.junit.jupiter.api.Assertions.assertThrows(ArtifactSizeLimitExceededException.class,
-                () -> ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(row), 8, ROW_GROUP_BYTES));
+                () -> ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(row), 8, ROW_GROUP_BYTES, TestScratchLeases.unbounded()));
 
         assertTrue(Files.size(file) <= 8,
                 "the limit is a write guard, not a policy checked after the full file exists");
@@ -245,10 +245,10 @@ class ParquetCheckpointWriterTest {
 
         CountingRows decimalRows = new CountingRows(List.of(decimalRow));
         ParquetCheckpointWriter.writeParquet(tempDir.resolve("decimal.parquet"), "t", withDecimal,
-                decimalRows, Long.MAX_VALUE, ROW_GROUP_BYTES);
+                decimalRows, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
         CountingRows plainRows = new CountingRows(List.of(plainRow));
         ParquetCheckpointWriter.writeParquet(tempDir.resolve("plain.parquet"), "t", withoutDecimal,
-                plainRows, Long.MAX_VALUE, ROW_GROUP_BYTES);
+                plainRows, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
         assertEquals(2, decimalRows.traversals, "decimal envelope scan + write");
         assertEquals(1, plainRows.traversals, "nothing to measure — one traversal");

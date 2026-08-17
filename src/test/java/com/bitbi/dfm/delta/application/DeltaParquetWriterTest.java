@@ -200,7 +200,7 @@ class DeltaParquetWriterTest {
                 output, "customers", narrow, consumer -> {
                     passes.incrementAndGet();
                     records.forEach(consumer);
-                }, Long.MAX_VALUE, ROW_GROUP_BYTES);
+                }, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
         assertEquals(2, passes.get(), "decimal scan + file write; neither pass retains the dataset");
         assertEquals(3, result.rowCount());
@@ -234,7 +234,7 @@ class DeltaParquetWriterTest {
                 output, "customers", noDecimals, consumer -> {
                     passes.incrementAndGet();
                     records.forEach(consumer);
-                }, Long.MAX_VALUE, ROW_GROUP_BYTES);
+                }, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
         assertEquals(1, passes.get(), "nothing to measure — the changelog is replayed once");
         assertEquals(2, result.rowCount());
@@ -263,9 +263,9 @@ class DeltaParquetWriterTest {
         AtomicInteger passes = new AtomicInteger();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("customers.parquet"), customersSchema));
+                tempDir.resolve("customers.parquet"), customersSchema, TestScratchLeases.unbounded()));
         requests.put("orders", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("orders.parquet"), ordersSchema));
+                tempDir.resolve("orders.parquet"), ordersSchema, TestScratchLeases.unbounded()));
 
         DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
                 requests, consumer -> {
@@ -301,9 +301,9 @@ class DeltaParquetWriterTest {
         AtomicInteger passes = new AtomicInteger();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("payments.parquet"), moneySchema));
+                tempDir.resolve("payments.parquet"), moneySchema, TestScratchLeases.unbounded()));
         requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("customers-decimal-batch.parquet"), namesSchema));
+                tempDir.resolve("customers-decimal-batch.parquet"), namesSchema, TestScratchLeases.unbounded()));
 
         DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
                 requests, consumer -> {
@@ -330,7 +330,7 @@ class DeltaParquetWriterTest {
         PhaseClock clock = new PhaseClock();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("payments-phased.parquet"), moneySchema));
+                tempDir.resolve("payments-phased.parquet"), moneySchema, TestScratchLeases.unbounded()));
 
         DeltaParquetWriter.writeBatchDeltaParquet(
                 requests,
@@ -356,7 +356,7 @@ class DeltaParquetWriterTest {
         PhaseClock clock = new PhaseClock();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("customers-phased.parquet"), namesSchema));
+                tempDir.resolve("customers-phased.parquet"), namesSchema, TestScratchLeases.unbounded()));
 
         DeltaParquetWriter.writeBatchDeltaParquet(
                 requests,
@@ -380,7 +380,7 @@ class DeltaParquetWriterTest {
         PhaseClock clock = new PhaseClock();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("payments-scan-throw.parquet"), moneySchema));
+                tempDir.resolve("payments-scan-throw.parquet"), moneySchema, TestScratchLeases.unbounded()));
 
         assertThrows(IllegalStateException.class, () ->
                 DeltaParquetWriter.writeBatchDeltaParquet(
@@ -411,9 +411,9 @@ class DeltaParquetWriterTest {
                         Map.of("id", intVal(4))));
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("customers-isolated.parquet"), schema));
+                tempDir.resolve("customers-isolated.parquet"), schema, TestScratchLeases.unbounded()));
         requests.put("orders", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("orders-out-of-order.parquet"), schema));
+                tempDir.resolve("orders-out-of-order.parquet"), schema, TestScratchLeases.unbounded()));
 
         DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
                 requests, consumer -> records.forEach(consumer), Long.MAX_VALUE, ROW_GROUP_BYTES);
@@ -434,9 +434,9 @@ class DeltaParquetWriterTest {
                 new ColumnDefinition("_op", "varchar(20)", false)), List.of("_op"), List.of());
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("customers-valid-schema.parquet"), valid));
+                tempDir.resolve("customers-valid-schema.parquet"), valid, TestScratchLeases.unbounded()));
         requests.put("broken", new DeltaParquetWriter.TableWriteRequest(
-                tempDir.resolve("broken-schema.parquet"), reservedColumn));
+                tempDir.resolve("broken-schema.parquet"), reservedColumn, TestScratchLeases.unbounded()));
 
         DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
                 requests, consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
@@ -457,7 +457,8 @@ class DeltaParquetWriterTest {
         assertThrows(ArtifactSizeLimitExceededException.class,
                 () -> DeltaParquetWriter.writeDeltaParquet(output, "customers", noDecimals,
                         consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
-                                Map.of("id", intVal(1)), Map.of("id", intVal(1)))), 8, ROW_GROUP_BYTES));
+                                Map.of("id", intVal(1)), Map.of("id", intVal(1)))), 8, ROW_GROUP_BYTES,
+                        TestScratchLeases.unbounded()));
 
         assertTrue(Files.size(output) <= 8,
                 "the limit is a write guard, not a policy checked after the full file exists");
@@ -471,7 +472,7 @@ class DeltaParquetWriterTest {
 
         assertThrows(IllegalArgumentException.class, () -> DeltaParquetWriter.writeDeltaParquet(
                 tempDir.resolve("out-of-order.parquet"), "customers", SCHEMA,
-                consumer -> records.forEach(consumer), Long.MAX_VALUE, ROW_GROUP_BYTES));
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded()));
     }
 
     @Test
@@ -483,9 +484,9 @@ class DeltaParquetWriterTest {
         Path single = tempDir.resolve("delta-single.parquet");
 
         DeltaParquetWriter.writeDeltaParquet(split, "customers", NOISY_SCHEMA,
-                consumer -> records.forEach(consumer), Long.MAX_VALUE, 64L * 1024);
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, 64L * 1024, TestScratchLeases.unbounded());
         DeltaParquetWriter.writeDeltaParquet(single, "customers", NOISY_SCHEMA,
-                consumer -> records.forEach(consumer), Long.MAX_VALUE, 128L * 1024 * 1024);
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, 128L * 1024 * 1024, TestScratchLeases.unbounded());
 
         assertTrue(rowGroupCount(split) > 1, "a 64 KiB budget must flush several row groups");
         assertEquals(1, rowGroupCount(single), "a 128 MiB budget must keep one row group");
@@ -500,10 +501,10 @@ class DeltaParquetWriterTest {
         Path single = tempDir.resolve("batch-single.parquet");
 
         DeltaParquetWriter.writeBatchDeltaParquet(
-                Map.of("customers", new DeltaParquetWriter.TableWriteRequest(split, NOISY_SCHEMA)),
+                Map.of("customers", new DeltaParquetWriter.TableWriteRequest(split, NOISY_SCHEMA, TestScratchLeases.unbounded())),
                 consumer -> records.forEach(consumer), Long.MAX_VALUE, 64L * 1024);
         DeltaParquetWriter.writeBatchDeltaParquet(
-                Map.of("customers", new DeltaParquetWriter.TableWriteRequest(single, NOISY_SCHEMA)),
+                Map.of("customers", new DeltaParquetWriter.TableWriteRequest(single, NOISY_SCHEMA, TestScratchLeases.unbounded())),
                 consumer -> records.forEach(consumer), Long.MAX_VALUE, 128L * 1024 * 1024);
 
         assertTrue(rowGroupCount(split) > 1, "a 64 KiB budget must flush several row groups");
