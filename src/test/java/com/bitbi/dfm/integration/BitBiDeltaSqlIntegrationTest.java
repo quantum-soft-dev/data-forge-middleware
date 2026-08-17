@@ -54,7 +54,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
     /** Published contract — the operator-visible signal that a segment was skipped, not lost. */
     private static final String SKIPPED_INACTIVE_COUNTER = "sql.generation.delta.segments.skipped.inactive";
     /** How long a drain may make progress before it is called a runaway; see {@link #drainQueue()}. */
-    private static final Duration MAX_DRAIN_TIME = Duration.ofSeconds(60);
+    private static final Duration MAX_DRAIN_TIME = Duration.ofMinutes(3);
     private static final String VALID_API_KEY = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     /** store-01 — seeded site under ACCOUNT_ID; flipped to V2 in setup. */
@@ -153,7 +153,13 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
      * possible causes, because the queue this loop drains is <em>global</em> —
      * {@code findNextPendingPluginSql} has no site predicate and {@code test-data.sql} only clears
      * {@code changelog_segments} of the {@code %.example.com} sites — so "more work than expected"
-     * and "a row that will not leave the queue" are not distinguishable from in here.</p>
+     * and "a row that will not leave the queue" are not distinguishable from in here. Two limits
+     * of the bound, both deliberate: a genuinely slow but progressing drain (someone else's backlog
+     * rendering SQL through S3 behind a {@code max-concurrent 2} semaphore) fails here, which is
+     * why the budget is minutes rather than seconds; and the deadline is only read between calls,
+     * so a single call blocked on a row lock still hangs — bounding that needs a
+     * {@code lock_timeout} the profile does not set, and it is the pre-existing behaviour of every
+     * drain in this class rather than something this bound introduced.</p>
      */
     private void drainQueue() {
         Instant deadline = Instant.now().plus(MAX_DRAIN_TIME);
@@ -309,43 +315,64 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
      * {@code return}: a segment left pending is claimed again on every sweep, for ever, since
      * nothing about the account's activation is going to change on its own.</p>
      *
-     * <p>The counter needs the claim to be attributable, because the registry belongs to <em>this</em>
-     * Spring context while the row is claimable by any of them: a
-     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} in another cached context that
-     * won the {@code FOR UPDATE SKIP LOCKED} race would increment its own registry and leave every
-     * database-observable property here still true. So the queue is emptied first and then claimed
-     * <em>once</em>: with the queue empty and one segment seeded, a claim that returns
-     * {@code true} took this method's segment — which the {@code plugin_sql_at} assertion then
-     * confirms — and the counter is read across that single call. Inferring the same thing from
-     * "pending before my call, processed after it" was the earlier shape and was strictly weaker:
-     * it could not tell a peer's claim landing during the call from its own.</p>
+     * <p>The counter is the assertion that needs care, because the registry belongs to <em>this</em>
+     * Spring context while the row is claimable by any of them. What must hold is narrower than
+     * "this thread won the claim", and demanding that would itself be a flake: this context's own
+     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} drains asynchronously (woken by
+     * the reinit in a sibling method, and once per context at refresh), and a segment it takes
+     * increments the very registry read here. So the loop below keeps claiming until the segment is
+     * processed <em>by someone</em>, and does not care which call did it. Only a worker in another
+     * cached context would move a different registry — the residual, narrowed by emptying the queue
+     * first (so this method's claim has nothing else to take) and by the hour-long
+     * {@code plugin.sql-generation.delta-sweep-ms} of the test profile.</p>
      *
-     * <p>The counter is still read as a delta rather than as an absolute (the series is shared with
-     * every other site's skips) and asserted as an increase rather than an exact +1 (this context's
-     * own worker pool may claim in parallel) — but the window is now one queue call rather than a
-     * whole drain.</p>
+     * <p>The counter is read as a delta rather than as an absolute (the series is shared with every
+     * other site's skips) and asserted as an increase rather than an exact +1 (this context's own
+     * pool may claim in parallel), across the claim rather than across a whole drain.</p>
      */
     private void assertSegmentIsSkippedButProcessed() {
-        // Start from an empty queue so the single claim below can only take this method's segment.
+        // Start from an empty queue so the claims below have nothing but this method's segment.
         drainQueue();
         ChangelogSegment segment = changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 1L, List.of(
                 rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
 
         double skippedBefore = skippedInactiveCount();
-        assertThat(queueService.processNextPending())
-                .as("the queue had this method's segment to claim")
-                .isTrue();
+        claimUntilProcessed(segment.getId());
 
-        awaitSegmentProcessed(segment.getId());
         assertNoGenerationsAppear();
         assertThat(skippedInactiveCount()).isGreaterThanOrEqualTo(skippedBefore + 1);
+    }
+
+    /**
+     * Claim from the queue until the seeded segment has left it.
+     *
+     * <p>A call returning {@code false} means the queue is empty as far as this thread can see,
+     * which the segment being still pending contradicts — an asynchronous worker is holding it —
+     * so the loop waits and looks again rather than concluding anything.</p>
+     *
+     * @param segmentId the segment this method seeded
+     */
+    private void claimUntilProcessed(UUID segmentId) {
+        Instant deadline = Instant.now().plus(MAX_DRAIN_TIME);
+        while (!isProcessed(segmentId)) {
+            if (!queueService.processNextPending()) {
+                awaitSegmentProcessed(segmentId);
+                return;
+            }
+            if (Instant.now().isAfter(deadline)) {
+                throw new IllegalStateException("Segment " + segmentId + " was still pending after "
+                        + MAX_DRAIN_TIME + " of claiming — either it is not being marked processed, "
+                        + "or the shared queue holds more work than this class expects.");
+            }
+        }
     }
 
     /**
      * Wait until the segment has left the queue ({@code plugin_sql_at} set).
      *
      * <p>Waited for rather than sampled for the reason {@link #awaitGenerations(int)} gives: the
-     * manual {@link #drainQueue()} is not the only claimant of a pending segment.</p>
+     * manual {@link #drainQueue()} is not the only claimant of a pending segment — an asynchronous
+     * worker that took it may not have marked it yet.</p>
      *
      * @param segmentId the segment this method seeded
      */

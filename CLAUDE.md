@@ -466,13 +466,25 @@ pages/{feature}/            # Route pages
   `sql.generation.delta.segments.skipped.inactive` incremented. The second is the property the
   ticket is really about — the branch is not a plain `return` precisely so those segments do not
   accumulate for ever — and the counter is what tells an operator a segment was *skipped* rather
-  than lost; it is read as a **delta** around the drain, since the registry belongs to the shared
-  Spring context and a sibling class draining some other account's segment lands on the same series.
-  #159's discipline is kept: scoped to the batches the method seeded, waited for rather than
-  sampled. `drainQueue()` is now **bounded**, which is a real consequence of the same property: a
-  claimed-but-unmarked segment is handed straight back by `findNextPendingPluginSql`, so the loop
-  never ends — the exact failure mode being pinned used to **hang** the suite instead of failing it,
-  and the drain now throws after 100 iterations naming what is still pending. **The tests were
+  than lost. The counter is the assertion that needed care, and two review rounds went into it: the
+  registry is **this** Spring context's while the row is claimable by any of them, so it is read as
+  a **delta** (the series is shared with every other site's skips) across a queue that was **emptied
+  first**, and the claim loop deliberately does **not** require this thread to win — a worker of
+  this same context increments this same registry, and demanding the local call win the race was
+  itself a flake. Only a peer in another cached context could move a different registry; that
+  residual is what the hour-long `plugin.sql-generation.delta-sweep-ms` of the test profile (#159,
+  #167) keeps improbable. Inferring "my call marked it" from *pending before, processed after* was
+  an intermediate shape and was **strictly weaker** — it could not tell a peer's claim landing
+  during the call from its own, and when it could not attribute at all it silently skipped the
+  counter, so a build that stopped incrementing would have passed. #159's discipline is kept
+  otherwise: scoped to the batches the method seeded, waited for rather than sampled.
+  `drainQueue()` is now **bounded** by a deadline, which is a real consequence of the same
+  property: a claimed-but-unmarked segment is handed straight back by `findNextPendingPluginSql`,
+  so the loop never ends — the exact failure mode being pinned used to **hang** the suite instead of
+  failing it. The bound is a wall clock and not an iteration count because the queue is **global**
+  (no site predicate, and `test-data.sql` only clears the `%.example.com` sites), so a count "well
+  above what this class seeds" would call another class's healthy backlog a stuck row; the message
+  names both causes for the same reason. **The tests were
   proven red by mutation**, since the branch already exists and no test can start red against it:
   dropping `.filter(AccountPlugin::isActive)` fails the deactivated case (a generation appears),
   returning early instead of marking fails both (the bounded drain fires), and dropping the counter
