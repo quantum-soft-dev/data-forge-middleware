@@ -39,6 +39,7 @@ import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -255,9 +256,14 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
         assertNotEquals(shared, configured,
                 "the checkpoint scratch directory must belong to this class alone");
 
+        // Named exactly as the old prefix filter matched, so before the fix this file was part of
+        // the listing the leak assertion compared. The assertion is about the decoy alone: making
+        // it "the directory is empty" would restate the leak assertion and, worse, make this method
+        // fail whenever a sibling method leaked — reporting a leak of our own as a foreign file,
+        // which is the misdiagnosis #168 exists to remove.
         Path foreign = Files.createTempFile(shared, "checkpoint-" + SITE + "-", ".parquet");
         try {
-            assertEquals(List.of(), scratchFiles(),
+            assertFalse(scratchFiles().contains(foreign),
                     "another JVM's scratch must not be visible to this class");
         } finally {
             Files.deleteIfExists(foreign);
@@ -279,9 +285,27 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
         try {
             // Deliberately not a checkpoint-/batch-parquet- prefix: this directory itself lives in
             // the shared tmpdir, and those prefixes are what every JVM's orphan sweeper hunts for.
-            return Files.createTempDirectory("dfm-it-scratch-" + purpose + "-");
+            Path directory = Files.createTempDirectory("dfm-it-scratch-" + purpose + "-");
+            // @AfterAll is the normal exit. Because nothing sweeps this name, a run that never
+            // reaches it — ctrl-C on the Gradle run, a killed daemon, a context that fails to
+            // boot — would otherwise park the directory in the host's tmpdir forever, where the
+            // scratch it replaced was aged out after four hours. The hook covers every exit the
+            // JVM gets to observe; only SIGKILL escapes it.
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> deleteQuietly(directory),
+                    "remove-" + directory.getFileName()));
+            return directory;
         } catch (IOException e) {
             throw new UncheckedIOException("Could not create the " + purpose + " scratch directory", e);
+        }
+    }
+
+    private static void deleteQuietly(Path directory) {
+        try {
+            deleteRecursively(directory);
+        } catch (IOException e) {
+            // A shutdown hook has nowhere to report to, and a failure here costs one stale
+            // directory rather than a wrong test result.
+            System.err.println("Could not remove the scratch directory " + directory + ": " + e);
         }
     }
 
