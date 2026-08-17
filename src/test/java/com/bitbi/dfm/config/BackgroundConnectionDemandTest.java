@@ -153,8 +153,11 @@ class BackgroundConnectionDemandTest {
         beans.put("com.bitbi.dfm.config.AsyncConfiguration#deltaRebuildExecutor",
                 new Consumer(1, Hold.SHORT, "checkpoint build takes short guarded transactions"));
         // `comparisonExecutor` used to sit here as Hold.NONE — declared, initialized and reachable
-        // by nothing. It was deleted by #165; this inventory is what fails if it, or anything else
-        // with no caller, is declared again.
+        // by nothing — until #165 deleted it. What this inventory guarantees about a re-declaration
+        // is narrower than "it would be caught": the scan fails on *any* new @Bean returning an
+        // Executor and is satisfied once someone classifies it, Hold.NONE included, which is
+        // precisely what happened here for the whole of #161. It forces the judgement; noticing
+        // that the answer is "nothing can reach it" is still the reviewer's.
         return beans;
     }
 

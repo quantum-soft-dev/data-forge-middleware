@@ -486,8 +486,12 @@ pages/{feature}/            # Route pages
   not by `@Async`). The test-first half is the inventory itself: removing the entry from
   `BackgroundConnectionDemandTest` while the bean still existed failed
   `shouldFindExactlyTheAuditedExecutorBeans` and `shouldFindExactlyTheAuditedPoolConstructions`
-  (`AsyncConfiguration.java` 2 → 1), and that same discovery is what now fails the build if a pool
-  with no caller is declared again — so no new test was added. `specs/009-markdown-user-story/`
+  (`AsyncConfiguration.java` 2 → 1), so no new test was added. **What that guard is worth on a
+  re-declaration is narrower than it looks**, and review made both the comment and this entry say so:
+  the scan fails on *any* new `@Bean` returning an `Executor` and is satisfied once someone
+  classifies it — `Hold.NONE` included, which is exactly what carried this bean through the whole of
+  #161. It forces the judgement; noticing that the answer is "nothing can reach it" stays a
+  reviewer's job. `specs/009-markdown-user-story/`
   is deliberately untouched: its `tasks.md` T061 and `quickstart.md` snippet record what that feature
   planned in 2025, and the plan was already contradicted by its own PR-review commit. No REST, gRPC,
   proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend change.
