@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +41,13 @@ import static org.awaitility.Awaitility.await;
  * joins the context every other integration class already shares: a context of its own would be one
  * more cached context, and each one drains the queue workers once when it refreshes (the residual
  * noted in #167), which is exactly the kind of interference the suite has been paying down.</p>
+ *
+ * <p><b>While the saturated test runs, the whole application's deferred audit writes are dropped</b>
+ * — the executor is the context's singleton, and background work publishes entries of its own
+ * ({@code logSqlGenerationCompleted} and friends). The window is a couple of seconds in a suite
+ * with no parallel execution, and the alternative — a context of this class's own — is what made
+ * two unrelated delta classes red in CI, so it is accepted rather than designed away. It is
+ * recorded here because it would otherwise be invisible.</p>
  *
  * <p><b>What is observed is the row, not a mocked call.</b> An inline write has a signature nothing
  * else has: the entry is already committed by the time {@code TransactionTemplate.execute} returns,
@@ -123,27 +131,35 @@ class PluginAuditListenerSaturationIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Fills the executor until it refuses, so the next task can only be rejected.
+     * Fills the executor until it refuses <em>and</em> is observably full, so the next task can
+     * only be rejected.
      *
-     * <p>Submitting exactly {@code maxPoolSize + queueCapacity} tasks would not be enough: this is
-     * the context's own singleton, shared with every other integration class, so an audit write
-     * left in flight by an earlier test can occupy a slot at fill time and free it a moment later —
-     * after which the published entry would be queued rather than rejected, and this class would go
-     * red for a reason that has nothing to do with what it asserts.</p>
+     * <p>Submitting exactly {@code maxPoolSize + queueCapacity} would not be enough: this is the
+     * context's own singleton, shared with every other integration class, so an audit write left in
+     * flight by an earlier class can hold a slot at fill time and free it a moment later — after
+     * which the published entry would be queued rather than rejected, and this class would go red
+     * for a reason that has nothing to do with what it asserts. Filling until refusal is not enough
+     * either, for the same reason one instant later: a leftover write completing just <em>after</em>
+     * the refusal frees a queue slot too. So the fill is re-attempted until both invariants hold at
+     * once, which they do as soon as no leftover work remains.</p>
      */
     private void occupyEverySlot() {
+        await().atMost(Duration.ofSeconds(30)).until(() -> {
+            fillUntilRefused();
+            ThreadPoolExecutor pool = auditExecutor.getThreadPoolExecutor();
+            return pool.getQueue().remainingCapacity() == 0
+                    && pool.getActiveCount() == pool.getMaximumPoolSize();
+        });
+    }
+
+    private void fillUntilRefused() {
         while (true) {
             try {
                 auditExecutor.execute(this::awaitRelease);
             } catch (TaskRejectedException e) {
-                break;
+                return;
             }
         }
-        assertThat(auditExecutor.getThreadPoolExecutor().getQueue().remainingCapacity())
-                .as("the executor refused a task, so its queue must be full")
-                .isZero();
-        assertThat(auditExecutor.getThreadPoolExecutor().getActiveCount())
-                .isEqualTo(auditExecutor.getThreadPoolExecutor().getMaximumPoolSize());
     }
 
     private void awaitRelease() {

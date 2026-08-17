@@ -110,13 +110,18 @@ public class PluginAuditEventListener {
             auditExecutor.execute(() -> persist(entry, phase));
         } catch (RejectedExecutionException e) {
             // The entry is named here because the rejection is the only place it can be: the task
-            // never runs, so persist() never logs it. Filling this queue means the writes are not
-            // draining, which is a database problem — re-queueing would only deepen it, and waiting
-            // is what an audit write must never make the publisher do.
+            // never runs, so persist() never logs it.
+            //
+            // Two causes reach this branch and an operator has to tell them apart: a full queue,
+            // which means the writes are not draining and is a database problem, and an executor
+            // that has been shut down, which is a pod stopping and is not. The rejection's own
+            // message carries the pool's state ("Shutting down" among it), so it is quoted rather
+            // than a stack trace being logged for what is routine on one of the two paths.
             log.error("Dropping deferred audit entry {}: {} plugin={} account={} — the audit "
-                            + "executor has no capacity left. The entry is lost; the operation it "
+                            + "executor refused it: {}. The entry is lost; the operation it "
                             + "describes is not affected",
-                    phase, entry.getActionType(), entry.getPluginId(), entry.getAccountId());
+                    phase, entry.getActionType(), entry.getPluginId(), entry.getAccountId(),
+                    e.getMessage());
         } catch (Exception e) {
             log.error("Failed to hand off deferred audit entry {}: {} plugin={} account={}",
                     phase, entry.getActionType(), entry.getPluginId(), entry.getAccountId(), e);

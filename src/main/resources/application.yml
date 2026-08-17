@@ -61,8 +61,8 @@ spring:
       # The audited background pools declare THIRTY-FOUR threads between them — the scheduler (6),
       # pluginExecutor (10), pluginExecutionExecutor (8), pluginAuditExecutor (2), the three queue
       # workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) —
-      # before a single HTTP
-      # or gRPC request asks for a connection, and both request layers are themselves unbounded
+      # before a single HTTP or gRPC request asks for a connection, and both request layers are
+      # themselves unbounded
       # (virtual-thread-per-request, and grpc-java's default cached pool). This pool is therefore
       # SMALLER THAN ITS CALLERS ON PURPOSE, and that is safe for one specific reason: background
       # work does not hold one connection while waiting for a second, which is the shape that turns

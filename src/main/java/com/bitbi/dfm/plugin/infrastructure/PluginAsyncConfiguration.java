@@ -105,17 +105,28 @@ public class PluginAsyncConfiguration {
      *   <li>Queue capacity: 500 tasks — deep enough that filling it means the database itself is
      *       unavailable, in which case the write would fail rather than queue</li>
      *   <li>Rejection policy: the default {@code AbortPolicy}, deliberately, and it is the one
-     *       place these three pools differ. {@code CallerRunsPolicy} is the defect of #171. The
-     *       listener submits explicitly rather than through {@code @Async} precisely so that it
-     *       catches the rejection with the entry still in hand and can name it in the log; a policy
-     *       that swallowed the task here would take that away and leave only the pool's
-     *       statistics.</li>
-     *   <li>Shutdown: queued writes are given a chance, but only <b>5 seconds</b> of one — the
-     *       queue is ten times the siblings' and this is the pool whose queue only fills when the
-     *       database is slow, which is exactly when a pod is likely to be replaced.
-     *       {@code terminationGracePeriodSeconds} is 30 in {@code k8s/base/deployment-backend.yaml},
-     *       and an entry these writes already declare droppable under pressure must not be what
-     *       turns a graceful stop into a SIGKILL.</li>
+     *       place the three pools' <em>rejection policies</em> differ. {@code CallerRunsPolicy} is
+     *       the defect of #171. The listener submits explicitly rather than through {@code @Async}
+     *       precisely so that it catches the rejection with the entry still in hand and can name it
+     *       in the log; a policy that swallowed the task here would take that away and leave only
+     *       the pool's statistics.</li>
+     *   <li>Shutdown: the queue is <b>dropped</b>, the two in-flight writes are given
+     *       <b>5 seconds</b>, and the threads are daemons. The siblings wait 60 s for a 50-deep
+     *       queue; this queue is ten times that and fills only when the database is slow, which is
+     *       exactly when a pod is being replaced — draining it would be 500 INSERTs against the
+     *       thing that is already failing, and these entries are the ones this design has already
+     *       declared droppable under pressure.
+     *       <p>All three settings are load-bearing together, which is why waiting is not the
+     *       conservative choice it looks like. {@code setWaitForTasksToCompleteOnShutdown(true)}
+     *       means an <em>orderly</em> {@code shutdown()}: the whole queue still executes, and
+     *       {@code awaitTerminationSeconds} only bounds how long {@code destroy()} blocks — it does
+     *       not stop the work. Since {@code ThreadPoolTaskExecutor} threads are not daemons by
+     *       default, those writes would then keep the JVM alive past the wait, which is the
+     *       SIGKILL at {@code terminationGracePeriodSeconds} (30 in
+     *       {@code k8s/base/deployment-backend.yaml}) that the bound is supposed to prevent.
+     *       {@code false} makes it {@code shutdownNow()} — queue discarded, workers interrupted —
+     *       and it also lets the executor take Spring's early stop signal, so it stops accepting
+     *       before the {@code DataSource} closes rather than after.</p></li>
      * </ul>
      */
     @Bean(name = "pluginAuditExecutor")
@@ -125,7 +136,8 @@ public class PluginAsyncConfiguration {
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("plugin-audit-");
-        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setDaemon(true);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
         executor.setAwaitTerminationSeconds(5);
         executor.initialize();
         return executor;

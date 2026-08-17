@@ -490,10 +490,21 @@ pages/{feature}/            # Route pages
   `@Transactional` method invoked on `this` is not proxied and the check has to run *before* the
   transaction opens (the `DeltaSessionCommitTransaction` shape of #147). Two smaller review
   corrections: the listener's catch logs the exception rather than only `getMessage()` (the failure
-  that surfaced this carried no message at all), and this pool's shutdown is bounded at **5 s**
-  rather than the siblings' 60 — its queue is ten times theirs and fills only when the database is
-  slow, which is when a pod is likely to be replaced, so draining it would run past
-  `terminationGracePeriodSeconds: 30` and turn a graceful stop into a SIGKILL. Proven by an integration test on the wired application, because the
+  that surfaced this carried no message at all), and this pool **discards its queue on shutdown**
+  (`shutdownNow`, 5 s for the two in-flight writes, daemon threads) where the siblings wait 60 s for
+  a queue a tenth the size. Round 2 corrected that last one twice over: waiting *looks* like the
+  conservative choice and is not, because an orderly shutdown keeps executing the whole queue while
+  `awaitTerminationSeconds` only bounds how long the container blocks — and `ThreadPoolTaskExecutor`
+  threads are not daemons, so those 500 INSERTs would hold the JVM open past
+  `terminationGracePeriodSeconds: 30` and produce the SIGKILL the bound was written to prevent, in
+  the middle of the slow-database episode that filled the queue. The test moved with it: it now
+  asserts the queued tasks **never ran**, since "shutdown() returned quickly" is true either way.
+  Two more from round 2: the rejection ERROR quotes the refusal's own message, because
+  `TaskRejectedException` also means "executor shutting down" and sending an operator to the database
+  during a routine rollout is the same defect the previous fix removed elsewhere; and one gain worth
+  recording that came free — the catch now sits **outside** the `REQUIRES_NEW` boundary, so a failed
+  `save` no longer marks the transaction rollback-only and throws `UnexpectedRollbackException` out
+  of the listener, which on the old inline path went straight into `commit()`. Proven by an integration test on the wired application, because the
   listener is invoked by Spring's transaction synchronization and the inline path exists only under
   saturation: it fills the executor **until it actually refuses** (submitting exactly
   `max + queueCapacity` would flake, since the pool is the shared context's singleton and an earlier
@@ -506,9 +517,12 @@ pages/{feature}/            # Route pages
   red in CI before that. `BackgroundConnectionDemandTest` drops the exception from its class documentation (the
   ticket's third checkbox), adds the new bean at `Hold.SHORT` and moves the audited total **32 → 34**;
   the floor is unchanged at `4 long ticks + 2 request reserve = 6 <= 10`, since the new threads are
-  short holders. **The trade an operator is buying**: under saturation the entry is lost rather than
-  written late, which is new — before, it was written inline at the cost of the publisher. No REST,
-  gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change. See
+  short holders. **The trade an operator is buying**: under saturation — and now also when the pod
+  stops — the entry is lost rather than written late, which is new; before, it was written inline at
+  the cost of the publisher. No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**,
+  S3-key or frontend change; `/actuator/prometheus` does gain an
+  `executor_*{name="pluginAuditExecutor"}` family, because Boot binds every `ThreadPoolTaskExecutor`
+  (the #146 precedent for calling a new series out). See
   `docs/delta-client-v2-guide.md` ("The deferred plugin audit write has a lane of its own").
 - heap-threshold-disable: `plugin.sql-generation.heap-threshold-percent: 100` disables the
   memory-pressure abort, which is what it was always taken to mean and never did (issue #174).

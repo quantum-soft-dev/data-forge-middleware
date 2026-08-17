@@ -1274,13 +1274,23 @@ on, so the invariant is a property of the write rather than of the executor wire
 What an operator should know: **a full audit executor loses entries**, deliberately. Filling a
 500-deep queue that two threads drain one INSERT at a time means the database is not accepting
 writes, in which case the entry was not going to be written anyway; auditing must never become the
-reason an operation fails or waits. That ERROR line is the only trace such an entry leaves. For the
-same reason the pool's shutdown is bounded at **5 seconds** rather than the siblings' 60: its queue
-fills only when the database is slow, which is exactly when a pod is likely to be replaced, and a
-droppable entry must not be what turns a graceful stop into a SIGKILL at
-`terminationGracePeriodSeconds`. `PluginAuditService`'s immediate (non-deferred) audit methods are
-unchanged: they are plain `@Transactional`, still run on `pluginExecutor`, and do not have this
-shape.
+reason an operation fails or waits. That ERROR line is the only trace such an entry leaves, and it
+quotes the rejection's own message so a full queue (a database problem) reads differently from an
+executor shutting down (a pod stopping, and not a problem at all).
+
+**A stopping pod drops them too, and that is the same decision.** This pool discards its queue on
+shutdown — `shutdownNow`, 5 seconds for the two writes already in flight, daemon threads — where
+the sibling pools wait up to 60 s for a queue a tenth the size. So an entry still queued when the
+context closes is lost, and one being written has 5 s to finish. Waiting instead would not be the
+safe choice it looks like: an orderly shutdown keeps executing the whole queue while
+`awaitTermination` merely bounds how long the container blocks, and non-daemon threads would then
+hold the JVM open past `terminationGracePeriodSeconds` (30) — a SIGKILL, in the middle of exactly
+the slow-database episode that filled the queue.
+
+`PluginAuditService`'s immediate (non-deferred) audit methods are unchanged: they are plain
+`@Transactional`, still run on `pluginExecutor`, and do not have this shape. One new metric series
+appears, nothing is renamed: Boot's `TaskExecutorMetricsAutoConfiguration` binds every
+`ThreadPoolTaskExecutor`, so `/actuator/prometheus` gains `executor_*{name="pluginAuditExecutor"}`.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
