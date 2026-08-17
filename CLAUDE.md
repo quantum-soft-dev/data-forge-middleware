@@ -475,9 +475,12 @@ pages/{feature}/            # Route pages
   `executor_*{name="comparisonExecutor"}` family — a series that only ever reported an idle pool
   (`executor_active_threads` 0 for the life of every pod), but a dashboard panel or a recording rule
   naming it will go empty rather than to zero. Nothing is renamed; the #146/#171 precedent is that a
-  changed `executor_*` series is called out. `@EnableAsync` stays on the class — it is what makes
-  every `@Async("pluginExecutor")` site work, and dropping it would not fail the build, it would
-  silently run those methods on the caller's thread — and the class Javadoc, which described only the
+  changed `executor_*` series is called out. `@EnableAsync` stays on the class, and the review
+  corrected the reason: `PluginAsyncConfiguration` carries it too, every `@Async` site in the
+  application is an `@Async("pluginExecutor")` method in the plugin package, and the annotation is
+  idempotent — so this one is **redundant** rather than load-bearing, kept as the application-wide
+  declaration instead of leaving async proxying to depend on a configuration in the plugin package.
+  The class Javadoc, which described only the
   deleted pool down to a usage example of the method that no longer exists, is rewritten around that
   and around `deltaRebuildExecutor` (the one pool left, reached by `@Qualifier` and a direct submit,
   not by `@Async`). The test-first half is the inventory itself: removing the entry from

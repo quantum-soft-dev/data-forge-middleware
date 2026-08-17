@@ -10,10 +10,13 @@ import java.util.concurrent.Executor;
 /**
  * Turns on {@code @Async} for the application, and declares the forced checkpoint rebuild pool.
  *
- * <p>{@link EnableAsync} lives here rather than beside any one pool: it is what makes every
- * {@code @Async("...")} site in the application work, including the ones whose executors are
- * declared elsewhere ({@code PluginAsyncConfiguration}). Removing it would not fail the build — the
- * annotated methods would silently start running on the caller's thread.</p>
+ * <p>{@link EnableAsync} is here <em>and</em> on {@code PluginAsyncConfiguration}, which is worth
+ * knowing before reading either as load-bearing: every {@code @Async} site in the application is an
+ * {@code @Async("pluginExecutor")} method in the plugin package, so that one is what actually
+ * enables them, and the annotation is idempotent (Spring registers a single
+ * {@code AsyncAnnotationBeanPostProcessor} however many configurations ask for it). This one is
+ * therefore redundant today, and is kept as the application-wide declaration rather than leaving
+ * async proxying to depend on a configuration in the plugin package.</p>
  *
  * <p>The one pool declared here is {@link #deltaRebuildExecutor()}. It is <em>not</em> reached
  * through {@code @Async}: {@code DeltaCheckpointRebuildService} injects it by
