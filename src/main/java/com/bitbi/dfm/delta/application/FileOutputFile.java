@@ -18,6 +18,12 @@ import java.nio.file.StandardOpenOption;
  * <em>during</em> output rather than on the finished file, so an oversized table stops at the limit
  * instead of filling the node first.</p>
  *
+ * <p>The same bytes are charged to the {@link ScratchLease} of the shared scratch directory
+ * (issue #150). A per-file ceiling cannot bound a directory whose file <em>count</em> is set by the
+ * batch's table count, so both checks run on every write and either can stop the writer — the
+ * difference being what it means: crossing the ceiling is a verdict on the artifact, crossing the
+ * budget is a fact about the volume at that moment.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -25,10 +31,12 @@ final class FileOutputFile implements OutputFile {
 
     private final Path path;
     private final long maxBytes;
+    private final ScratchLease lease;
 
-    FileOutputFile(Path path, long maxBytes) {
+    FileOutputFile(Path path, long maxBytes, ScratchLease lease) {
         this.path = path;
         this.maxBytes = maxBytes;
+        this.lease = lease;
     }
 
     @Override
@@ -94,6 +102,14 @@ final class FileOutputFile implements OutputFile {
                     // checkpoint path the build survives the ceiling and runs again every night.
                     output.close();
                     throw new ArtifactSizeLimitExceededException(maxBytes);
+                }
+                try {
+                    lease.charge(length);
+                } catch (ScratchBudgetExceededException e) {
+                    // Same descriptor argument as above: the budget refusal unwinds through the
+                    // same Parquet close() paths.
+                    output.close();
+                    throw e;
                 }
             }
         };

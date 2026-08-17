@@ -100,16 +100,18 @@ public final class DeltaParquetWriter {
      * replay mixed-table segments.
      *
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross the limit
+     * @throws ScratchBudgetExceededException      when the shared scratch directory has no room
      */
     public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
-                                                    RecordReplay replay, long maxBytes, long rowGroupBytes) {
+                                                    RecordReplay replay, long maxBytes, long rowGroupBytes,
+                                                    ScratchLease lease) {
         Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
         Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
         AtomicLong rowCount = new AtomicLong();
         AtomicLong previousSeq = new AtomicLong(Long.MIN_VALUE);
 
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
-                        new FileOutputFile(output, maxBytes))
+                        new FileOutputFile(output, maxBytes, lease))
                 .withSchema(avro)
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())
@@ -387,7 +389,15 @@ public final class DeltaParquetWriter {
     public record FileWriteResult(long rowCount, long fileSize, String checksum) {
     }
 
-    record TableWriteRequest(Path output, TableSchema schema) {
+    /**
+     * One table's scratch file, its schema and its share of the shared scratch directory.
+     *
+     * <p>The lease travels with the file rather than with the writer because the caller keeps the
+     * file after every writer is closed — a batch build uploads them one at a time — so it is the
+     * caller that closes the lease, in the same {@code finally} that deletes the file
+     * (issue #150).</p>
+     */
+    record TableWriteRequest(Path output, TableSchema schema, ScratchLease lease) {
     }
 
     record FileWriteFailure(String error, boolean permanent) {
@@ -402,6 +412,10 @@ public final class DeltaParquetWriter {
         boolean permanent = false;
         while (cause != null) {
             if (cause instanceof ArtifactSizeLimitExceededException) {
+                // Deterministically too large for its own ceiling: the artifact fails identically
+                // on every retry, so the caller abandons it now instead of spending seven attempts.
+                // A ScratchBudgetExceededException is deliberately NOT here (issue #150) — the
+                // artifact is fine and the directory was busy, so it takes the ordinary backoff.
                 permanent = true;
                 break;
             }
@@ -425,7 +439,7 @@ public final class DeltaParquetWriter {
             this.request = request;
             this.avro = avro;
             this.writer = AvroParquetWriter.<GenericRecord>builder(
-                            new FileOutputFile(request.output(), maxBytes))
+                            new FileOutputFile(request.output(), maxBytes, request.lease()))
                     .withSchema(avro)
                     .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                     .withConf(new PlainParquetConfiguration())

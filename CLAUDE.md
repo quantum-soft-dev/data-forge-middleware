@@ -479,6 +479,161 @@ pages/{feature}/            # Route pages
   increment fails both. The metric name is a published contract and is unchanged. Test-only — no
   production code, REST, gRPC, DTO, migration, configuration-key, metric-name, S3-key or frontend
   change.
+- scratch-directory-budget: One key bounds the whole file-backed Parquet scratch **directory**,
+  where every guard before it bounded a single file (issue #150, split out of #138 and named as
+  out of scope by #131 before that). `delta.checkpoint.max-temp-bytes` bounds one table snapshot,
+  `delta.checkpoint.max-frame-temp-bytes` one reload frame, `delta.batch-parquet.max-temp-bytes` one
+  completed-batch artifact — and the thing that evicts the pod is the directory they share, whose
+  file **count** no per-file key can bound: a completed-batch build opens one scratch file per
+  claimed table (#038), so a ten-table batch puts ten files on the 6Gi volume however low that
+  ceiling is set. #138's deployed inequality
+  (`2 x max(table, frame) + max-concurrent x batch <= sizeLimit - 1Gi`) was therefore a **floor on
+  the guarantee, not the budget**, and it said so. New `delta.parquet.max-scratch-bytes`
+  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, **0 = unbounded**, the shipped default, so an upgrade changes
+  nothing) is held by `ParquetScratchBudget` and taken as a `ScratchLease` beside each scratch file,
+  released when the file is deleted — after the delete, not after the upload, since the bytes are on
+  the volume until the file is gone. **Charged as bytes are written, not reserved at the ceiling**:
+  the ticket offered both, and the pessimistic form cannot work here, because the deployed ceilings
+  are 1 GiB against artifacts in the low hundreds of MiB, so a three-table batch would reserve 3 GiB
+  it never uses and be refused for ever on a 5 GiB budget. The two counting streams that already
+  enforce the per-file ceilings (`CappedOutputStream`, `FileOutputFile`) do the charging, so a
+  writer is stopped mid-file by either bound in the same place and by the same mechanism.
+  **The cost of a shared running total is stated rather than hidden**, because it is exactly what
+  #178 rejected for the heap twin of this budget: a total cannot choose *which* writer to refuse —
+  the byte that crosses it belongs to whoever happens to be writing one — so two large writers can
+  each take half and both be stopped where either alone would have fitted. #178 could answer that
+  with exclusion (a fair `Semaphore(1)`, one fold at a time) because one fold at a time is a real
+  mode of operation; disk cannot, because a batch build genuinely needs one open file per claimed
+  table and serializing them means replaying the segments once per table — the multiplier #038
+  removed. What **does** carry over from #178 unchanged is the rule about reporting: transient
+  contention never becomes a tag value on a meter contracted to mean permanent. So
+  `ScratchBudgetExceededException` is its own type (not a subclass of
+  `ArtifactSizeLimitExceededException`, whose catches mean "this artifact is deterministically too
+  big"), and a completed-batch artifact takes the ordinary
+  backoff instead of the first-attempt `ABANDONED` its own ceiling earns it (which falls out of
+  `DeltaParquetWriter.failure()` classifying only `ArtifactSizeLimitExceededException` as
+  permanent), while on the **checkpoint** side — frame *or* table snapshot — the build ends, off
+  `delta.checkpoint.builds.aborted` and off `delta.checkpoint.tables.unmaterialized` alike.
+  **Two review rounds went into that last sentence and both corrections matter.** The first draft
+  skipped the table and fell through to `abandonStaleSnapshot`, which on an advancing seq detaches
+  `s3_key_parquet` — a healthy last-good snapshot 404ing for Bit BI, Parquet Export and the Delta
+  Sync download, plus a spent `materialize_attempts` against `delta.checkpoint.tables.given-up`,
+  for a neighbouring batch worker's disk use. Round 1 replaced that with leaving the row untouched;
+  **round 2 showed that was worse**, and the case is worth remembering: the pointer still advanced,
+  so the table's row stayed at the old seq with *nothing* marking it as owing a rewrite — the
+  nightly rematerialize keys on a **null** `s3_key_parquet` — and a site that then went quiet served
+  a snapshot silently missing every change in between, indefinitely, with retention having already
+  pruned the segments below the new pointer. Sharper still on a site's **first** build, where
+  `findOrCreate`'s row is never saved either: a refusal across every table left `checkpoints` empty
+  with the pointer advanced, and `CheckpointFileQueryService` reads "no checkpoint rows" as "not a
+  Delta site yet" and would have handed a Bit BI client the historical uploaded CSVs as its current
+  baseline. Ending the build has none of that, and it is not a new policy but the one **#112 already
+  wrote down** for an unusable scratch directory, in the same words: a systemic scratch failure must
+  not be counted as per-table skips, because "skipping would detach every last-good snapshot while
+  the pointer advanced". So `delta.checkpoint.tables.unmaterialized` gains **no new tag value** after
+  all, and `delta.parquet.scratch.refused{writer=...}` is the whole of the reporting. The
+  classification walks the **cause chain** (as `DeltaParquetWriter.failure()` already does for the
+  per-file exception), because nothing wraps it today but a future wrap would fall through to
+  `parquet_failed` and do the detach this decision exists to avoid. Two more corrections from round
+  1: the refusal message printed the
+  **whole** budget where it said "left to it" — with 4.9 GiB held by neighbours a writer refused for
+  1 MiB read like the "artifact too big" verdict this type exists to distinguish itself from, and
+  `DeltaParquetWriter.failure()` copies that text verbatim into `batch_parquet_artifacts.last_error`
+  where it is the operator's primary diagnostic — so it now names the bytes actually free; and the
+  refusal is counted **once per lease** rather than once per refused write, because `FileOutputFile`
+  does not latch the way `CappedOutputStream` does (Parquet unwinds a write failure through a
+  `close()` that still emits its footer), which would otherwise have reported two or more refusals
+  per refused artifact and a different number for the frame. Two meters, both registered in the budget over the injected
+  `MeterRegistry` (the `CheckpointGivenUpMetrics`/`S3CheckpointStorage` shape, avoiding a cycle with
+  `DeltaMetrics`, which documents them without owning them): **`delta.parquet.scratch.refused`**
+  `{writer=checkpoint_frame|checkpoint_table|batch_artifact}`, every value registered at zero so an
+  alert predates the first refusal, and **`delta.parquet.scratch.bytes`**, a gauge of live reserved
+  bytes that follows the writers **even when no budget is configured** — unbounded is the default,
+  so `max_over_time` of that series against the volume is the only way to size the key before
+  turning it on. Reservation is **chunked** at 1 MiB so a per-byte gzip write is not a per-byte
+  atomic operation; the over-reservation that costs is at most one chunk per live writer, and it
+  errs towards refusing early. Deployed value in `k8s/base/configmap.yaml` beside the `*_TEMP_DIR`
+  keys, for #138's reason (the process cannot see how large the directory it was handed is):
+  **5 GiB**, the 6Gi `parquet-scratch` `sizeLimit` less the gigabyte kept free for restart residue —
+  which no lease covers, since the process that held them is gone — and for kubelet acting on usage
+  *exceeding* the limit. Per JVM, so it is a true bound only where
+  `delta.parquet.scratch-private-to-pod` (#141) holds, which the deployed `emptyDir` does.
+  `ParquetScratchCeilingBudgetTest` drops the multiplier and asserts the subtraction, keeps the
+  frame-wider-than-snapshot invariant and the manifest-drift guards, and adds one: every per-file
+  ceiling must sit **at or under** the directory budget, since a ceiling above it can never be
+  reached and would be dead configuration that reads as live. The per-file ceilings and
+  `delta.batch-parquet.max-concurrent` are otherwise **unchanged** — they keep their per-artifact
+  job, and the `2 x` #178 left conservative simply disappears rather than being retuned. **One
+  asymmetry is documented rather than fixed** and was filed from the same review as **#193**: since
+  #153 the frame is written first and is the largest file a build produces, and
+  `CheckpointScheduler` walks sites serially, so a directory held full for the length of the 02:00
+  sweep aborts *every* site's build at its first write and freezes retention fleet-wide for that
+  night — where the batch side degrades one artifact at a time. Nothing is lost (the next night
+  repeats the fold) and the pre-#150 behaviour was a kubelet eviction of the pod, which is worse,
+  but the right split of the pool needs a number nobody has yet, which is what
+  `delta.parquet.scratch.bytes` is now there to supply. Round 3 added three more, all small and all
+  about the contract rather than the arithmetic: a closed `ScratchLease` now ignores a later charge
+  (through a closed lease `granted` is zero again, so the whole file's bytes would be taken from the
+  directory with nobody left to release them — a permanent shrink for the life of the pod, and the
+  exact shape a future ordering slip would take); the "409, not 404" claim for a refused batch
+  artifact is qualified in both guides, since the type distinction buys back the **first attempt,
+  not the cap** — a directory full across the whole backoff window still exhausts
+  `max-attempts` and ends `ABANDONED`; and the leases are released even when the scratch file could
+  not be deleted, which is now stated with its reasoning rather than left contradicting the comment
+  above it (holding one would shrink the directory permanently and end every later build, while an
+  undeleted file is the same ownerless residue the reserved gigabyte and
+  `ParquetScratchOrphanSweeper` already cover). No REST,
+  gRPC, proto, DTO, migration, existing configuration-key, existing metric-name, S3-key or frontend
+  change. See `docs/delta-client-v2-guide.md` ("Sizing note", Metrics),
+  `docs/cr-unified-batch-parquet.md`.
+- rollback-audit-guard: `Should not audit a regeneration that rolled back` guards its invariant at
+  the listener that owns it, instead of through a path that stopped working (issue #172). **Neither
+  of the ticket's two candidate causes was right, and the evidence was in the failure line all
+  along**: both recorded reds — PR #166 sha `41a15110` and PR #180 sha `6f076501` — are
+  `AssertionError at PluginHistoryIntegrationTest.java:127`, which is the fixture's
+  `orElseThrow(... "fixture did not produce a generation")`, not the audit assertion twenty lines
+  below it. That is #174: `plugin.sql-generation.heap-threshold-percent: 100` did not disable the
+  memory-pressure abort, `generateSqlForBatch` returned `Optional.empty()` whenever the single
+  `./gradlew test` JVM went above 99% of `max`, and the test could not build its fixture. Fixed in
+  `4fe3150d`; the audit assertion had never once been the thing that failed. The **second** finding
+  is why this is not a one-line ticket: that assertion had by then stopped being able to fail at
+  all. #164 gave `SqlGenerationService.regenerateForBatch` a `refuseIfTransactionActive()` guard and
+  left `PluginHistoryService.regenerateSql` `@Transactional` around it, so the call throws before it
+  regenerates anything — and `assertThatThrownBy(...).isInstanceOf(IllegalStateException.class)`
+  accepted that refusal as the test's own sentinel failure, since both are
+  `IllegalStateException`. Zero audit rows then meant "nothing ran". Proven by adding
+  `.hasMessage("caller fails after regenerating")`, which is red on `develop` against the #164
+  refusal text — and the same hole is a **live 409 on both Regenerate SQL endpoints and the
+  My Plugins button behind them**, filed as **#190** rather than fixed here, because moving the
+  regeneration out of the caller's transaction is a behaviour decision with its own consequence for
+  the audit (published with no transaction active, `fallbackExecution = true` writes it
+  immediately, so no rollback can take it back — already true for `SQL_GENERATION_COMPLETED` since
+  #164). So the vehicle is retired rather than repaired: the entry is published through
+  `PluginAuditService.logSqlRegenerationCompleted`, the production writer of that action type, into
+  a `TransactionTemplate` that then throws. **What that buys, point by point.** The account is the
+  method's own `UUID`, so the count names what this method produced instead of every row the shared
+  `TEST_ACCOUNT_ID` has (the ticket's isolation hypothesis, closed by construction — and with it the
+  DELETE-then-count window a neighbour could land in). No batch, no CSV, no S3 and no
+  `SqlGenerationService`, so the one thing that actually went red is gone rather than made less
+  likely. And a **committing** publication is asserted right after the rolled-back one, because
+  "zero rows" is exactly the assertion that cannot tell a working guard from a write that is broken,
+  dropped or never wired — which is how this test came to assert nothing. Its power was checked the
+  way #171 checked its own: with `AFTER_COMMIT` mutated to `AFTER_COMPLETION` — the escape the
+  ticket hypothesised — the test is red, and review turned that one-off into a standing guard.
+  Every test in `PluginAuditEventListenerTest` invokes a listener method **directly**, so the
+  annotations that decide whether Spring calls it at all were pinned by nothing; two reflective
+  assertions in the `BatchEventListenerPhaseTest` shape now hold the phase *and*
+  `fallbackExecution` on both methods, so the same mutation is caught at unit cost and the
+  Testcontainers test is no longer the only thing between the suite and a phase change. One hazard
+  is deliberately **not** guarded here and is recorded on **#190** instead: `regenerateSql` writes
+  after the generation returns (`markAsSuperseded` + save), so once #190 moves the generation out
+  of the caller's transaction, a failure in those two lines rolls the supersede back while the
+  entry — published with no transaction active, hence written at once by `fallbackExecution` —
+  stands. That is this invariant reached by a route that does not exist yet.
+  The `during(2s)` window and the sibling
+  `shouldAuditRolledBackHistoryClear` (whose `clearHistory` vehicle still works) are untouched.
+  Test-only — no production code, REST, gRPC, DTO, migration, configuration-key, metric, S3-key or
+  frontend change.
 - drop-comparison-executor: `AsyncConfiguration#comparisonExecutor` is gone — a `@Bean` declaring
   core 2 / max 5 / queue 10 and calling `initialize()`, with no `@Async("comparisonExecutor")` site,
   no `@Qualifier` and no injection anywhere in `src/main` or `src/test` (issue #165, found by #161's

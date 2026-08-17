@@ -450,6 +450,24 @@ delta:
     # several replicas on one host path): there a file older than this JVM can belong to a live
     # sibling. k8s/base/configmap.yaml sets it true next to the temp-dir keys it describes.
     scratch-private-to-pod: ${DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD:false}
+    # The only key that bounds the scratch DIRECTORY rather than a file in it (issue #150). The
+    # three *_MAX_TEMP_BYTES ceilings above are per file, and nothing bounds how many files are
+    # open at once: a completed-batch build opens one per claimed table, so a ten-table batch puts
+    # ten files on the volume however low that ceiling is set. This is charged as bytes are written
+    # (not reserved at the ceiling, which for artifacts in the low hundreds of MiB would refuse a
+    # three-table batch outright), and a writer that crosses it is stopped mid-file exactly as one
+    # crossing its own ceiling is — but as a TRANSIENT refusal: the artifact is fine, the directory
+    # is busy. A completed-batch artifact is retried with backoff; on the checkpoint side (frame or
+    # a table snapshot) the build ends, because a full directory is systemic and skipping one table
+    # would advance the pointer past a snapshot nothing would ever rewrite. Neither touches
+    # delta.checkpoint.builds.aborted, whose values are permanent by contract (#153) — see
+    # delta.parquet.scratch.refused.
+    # 0 = unbounded, the shipped default, because the application cannot know how large the
+    # directory it was handed is — the deployed value is declared beside the volume in
+    # k8s/base/configmap.yaml. Unbounded still MEASURES: delta.parquet.scratch.bytes follows the
+    # writers either way, and max(that gauge) is how this key is sized before it is turned on.
+    # Per JVM, so it is a real bound only where scratch-private-to-pod above holds.
+    max-scratch-bytes: ${DELTA_PARQUET_MAX_SCRATCH_BYTES:0}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
