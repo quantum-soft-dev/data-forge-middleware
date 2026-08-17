@@ -53,19 +53,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       is called from a deliberately non-transactional build, and {@code CheckpointService}
  *       publishes {@code CheckpointRecordedEvent} outside the guard's transaction on purpose (there,
  *       to avoid a self-deadlock on the {@code site_sync_state} row lock).
- *       <p><b>One exception is known and is not asserted away</b> — it is timed, so it costs a
- *       delay rather than a permanent stall, and it is worth removing:</p>
- *       <ul>
- *         <li>{@code PluginAuditEventListener} is {@code REQUIRES_NEW} <em>and</em>
- *             {@code AFTER_COMMIT}. Normally it runs on {@code pluginExecutor}, well after the
- *             publisher is done — but when that pool is saturated (10 threads busy and all 50 queue
- *             slots taken) {@code CallerRunsPolicy} runs it inline on the publishing thread, which
- *             is still inside the commit synchronization with its own connection bound (release
- *             happens in {@code afterCompletion}, not {@code afterCommit}). That thread then wants a
- *             second connection while holding one. Filed as <b>#171</b>.</li>
- *       </ul>
- *       <p>The other exception this class used to name — {@code DeltaSqlQueueService.processNextPending}
- *       pinning a connection across the generation semaphore — was removed by <b>#164</b>.</p>
+ *       <p><b>No exception remains.</b> The two this class used to name are both closed:
+ *       {@code DeltaSqlQueueService.processNextPending} pinning a connection across the generation
+ *       semaphore was removed by <b>#164</b>, and {@code PluginAuditEventListener} — an
+ *       {@code AFTER_COMMIT} listener whose own write is {@code REQUIRES_NEW}, handed back to the
+ *       publishing thread by {@code pluginExecutor}'s {@code CallerRunsPolicy} once that pool
+ *       saturated — by <b>#171</b>: the write now goes to {@code pluginAuditExecutor}, whose
+ *       rejection policy drops and logs instead of running inline, and the listener refuses to write
+ *       at all on a thread that already has a transaction open. <b>Adding one back is a change to
+ *       this reasoning, not just to a pool.</b></p>
  *   </li>
  *   <li><b>Waiting is a survivable outcome for background work.</b> The failure is a 30 s
  *       {@code connection-timeout} on a queue worker or a scheduled tick, both of which run again
@@ -139,13 +135,16 @@ class BackgroundConnectionDemandTest {
         beans.put("com.bitbi.dfm.config.SchedulingConfiguration#taskScheduler",
                 new Consumer(6, Hold.SHORT, "sized by " + POOL_KEY + "; its long ticks counted"
                         + " separately from ScheduledTaskInventoryTest"));
-        // Plugin audit writes and the async SQL-generation entry point: one INSERT each. The
-        // methods on PluginAuditService are @Transactional (REQUIRED), but PluginAuditEventListener
-        // is REQUIRES_NEW and AFTER_COMMIT, so its CallerRunsPolicy overflow path is the one place
-        // background work wants a second connection on a thread that already holds one — see the
-        // class documentation, and #171.
+        // Immediate plugin audit writes and the async SQL-generation entry point: one INSERT each.
+        // The methods on PluginAuditService are @Transactional (REQUIRED), so a CallerRunsPolicy
+        // overflow joins the caller's transaction rather than asking for a second connection.
         beans.put("com.bitbi.dfm.plugin.infrastructure.PluginAsyncConfiguration#pluginExecutor",
-                new Consumer(10, Hold.SHORT, "one audit INSERT per task; overflow runs inline (#171)"));
+                new Consumer(10, Hold.SHORT, "one audit INSERT per task"));
+        // The deferred audit writes of PluginAuditEventListener, given a lane of their own by #171:
+        // one INSERT each, and a rejection policy that drops rather than handing the write back to
+        // the publishing thread, which is inside afterCommit still holding its own connection.
+        beans.put("com.bitbi.dfm.plugin.infrastructure.PluginAsyncConfiguration#pluginAuditExecutor",
+                new Consumer(2, Hold.SHORT, "one audit INSERT per task; never runs inline (#171)"));
         // Plugin dispatch; the SQL generation it fans out to is gated by the semaphore below.
         beans.put("com.bitbi.dfm.plugin.infrastructure.PluginAsyncConfiguration#pluginExecutionExecutor",
                 new Consumer(8, Hold.SHORT, "dispatch, then the generation's own transaction"));
@@ -204,7 +203,7 @@ class BackgroundConnectionDemandTest {
     private static Map<String, Integer> poolConstructions() {
         Map<String, Integer> constructions = new TreeMap<>();
         constructions.put("com/bitbi/dfm/config/AsyncConfiguration.java", 2);
-        constructions.put("com/bitbi/dfm/plugin/infrastructure/PluginAsyncConfiguration.java", 2);
+        constructions.put("com/bitbi/dfm/plugin/infrastructure/PluginAsyncConfiguration.java", 3);
         constructions.put("com/bitbi/dfm/delta/application/DeltaEgressWorker.java", 1);
         constructions.put("com/bitbi/dfm/delta/application/BatchParquetFinalizationWorker.java", 1);
         constructions.put("com/bitbi/dfm/plugin/application/DeltaSqlSweepWorker.java", 1);
@@ -275,7 +274,7 @@ class BackgroundConnectionDemandTest {
      * documentation above and in the derivation beside the key; recomputed by
      * {@link #theAuditedTotalIsWhatItSays}.
      */
-    static final int AUDITED_BACKGROUND_THREADS = 32;
+    static final int AUDITED_BACKGROUND_THREADS = 34;
 
     // ---------------------------------------------------------------------------------------
     // The two bounds
