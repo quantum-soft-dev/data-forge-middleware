@@ -113,6 +113,11 @@ public class SqlGenerationService {
         this.sqlGenerationSemaphore = new Semaphore(maxConcurrent, true);
         meterRegistry.gauge("sql.generation.semaphore.queue.size", sqlGenerationSemaphore,
                 Semaphore::getQueueLength);
+        // Registered at zero from startup, the DeltaMetrics treatment of
+        // delta.checkpoint.builds.aborted: this counter is the memory-pressure abort's only
+        // signal, so an alert written on it must be able to predate the first occurrence
+        // instead of appearing together with it.
+        meterRegistry.counter("sql.generation.aborted.memory_pressure");
         log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}, "
                         + "heapThresholdPercent={} ({})",
                 maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent,

@@ -484,10 +484,16 @@ pages/{feature}/            # Route pages
   `-- No changes detected` artifact and `PluginHistoryService` then supersedes the original, so an
   abort there replaces a good generation with an empty one. That is pre-existing and out of this
   ticket's scope (both call sites are **#181**), but it is why the abort was expensive rather than
-  merely wrong. Five generation-path tests stub the reading (1/10/80/81/100 against thresholds of
+  merely wrong. Since it is the only signal, `init()` also **registers the counter at zero** — the
+  `DeltaMetrics`/`delta.checkpoint.builds.aborted` treatment, so an alert can predate the first
+  occurrence instead of appearing with it; the name is unchanged, but `/actuator/prometheus` now
+  carries the series from startup rather than from the first abort. Five generation-path tests stub the reading (1/10/80/81/100 against thresholds of
   0/80/100) instead of observing the real heap, and three pin the arithmetic itself: the ceiling at
   79.01%/80.00%/80.01%, the clamp at `used == max` and `used > max`, and 0 for an undefined maximum.
-  No REST, gRPC, DTO, migration, configuration-**key**, metric, S3-key or frontend change. See
+  Left undone deliberately and filed as **#185**: the key is still accepted unvalidated, so a
+  mistyped `800` disables the guard and a negative value aborts every generation — silently, by way
+  of #181. No REST, gRPC, DTO, migration, configuration-**key**, metric-**name**, S3-key or
+  frontend change. See
   `docs/020-sql-generation-optimization.md`.
 - hold-connection-across-s3: A HikariCP connection is no longer held across S3 (or a 120 s
   semaphore wait) at the three call sites the pool audit named (issue #164, folding **#176**).

@@ -201,6 +201,20 @@ class SqlGenerationStreamingTest {
         }
 
         @Test
+        @DisplayName("should register the abort counter at zero before any abort happens")
+        void shouldRegisterAbortCounterAtStartup() {
+            // Given
+            createService(80);
+
+            // Then - the counter is the abort's only signal, so an alert on it must be able to
+            // predate the first occurrence rather than appear with it
+            assertThat(meterRegistry.find("sql.generation.aborted.memory_pressure").counter())
+                    .isNotNull()
+                    .extracting(io.micrometer.core.instrument.Counter::count)
+                    .isEqualTo(0.0);
+        }
+
+        @Test
         @DisplayName("should never report above 100 percent, so a threshold of 100 stays unreachable")
         void shouldClampReportedHeapUsageAtOneHundred() {
             // Given
