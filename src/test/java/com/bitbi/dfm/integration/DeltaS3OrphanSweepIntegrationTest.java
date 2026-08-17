@@ -2,6 +2,7 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
+import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.application.DeltaS3OrphanSweeper;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
@@ -13,6 +14,8 @@ import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,9 +30,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 
 /**
  * Issue #158 — the orphan sweep against a real bucket.
@@ -42,12 +48,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Age is the one guard a test cannot exercise by waiting, so the sweep is driven with a
  * {@code now} two days ahead instead of backdating an S3 {@code LastModified} the bucket owns.</p>
  *
- * <p><b>This class sweeps the shared bucket, deliberately.</b> With the cutoff in the future every
- * unreferenced object in it is a candidate, including ones earlier classes left. Those are already
- * dead: {@code test-data.sql} deletes the accounts and sites of every previous class at the start
- * of this one, and their {@code changelog_segments} and {@code checkpoints} rows cascade with them,
- * so nothing that survives this sweep was reachable from a row anyway. It asserts only on the keys
- * it created, and puts back nothing it did not.</p>
+ * <p><b>The sweep is narrowed to this class's two sites, on purpose.</b> A cutoff in the future
+ * makes every unreferenced object in the shared bucket a candidate, including ones earlier classes
+ * left, and a test that deletes across the suite is the hazard #168 was filed for. So the real
+ * delimiter listing is asserted to contain both site prefixes — that is the part a mock cannot
+ * prove — and the sweep is then driven through a spy that answers only those two. Everything below
+ * it stays real: the per-site listing, the rows, and the batched delete.</p>
  */
 @DisplayName("Delta S3 orphan sweep against LocalStack (#158)")
 class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
@@ -56,7 +62,10 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
     private static final UUID BATCH = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
     @Autowired
-    private DeltaS3OrphanSweeper sweeper;
+    private S3FileStorageService objectDeleter;
+
+    @Autowired
+    private DeltaMetrics metrics;
 
     @Autowired
     private ChangelogSegmentService changelogSegmentService;
@@ -132,8 +141,18 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
             put(key);
         }
 
+        // The delimiter walk against the real bucket: both sites must be in it, including the one
+        // with no rows at all, which is the whole reason the site list comes from S3.
+        assertTrue(segmentStorage.listSitePrefixes().prefixes()
+                        .containsAll(List.of("delta/" + SITE + "/", "delta/" + deletedSite + "/")),
+                "the delimiter listing of delta/ answers one prefix per site with objects");
+        assertTrue(checkpointStorage.listSitePrefixes().prefixes()
+                        .containsAll(List.of(S3CheckpointStorage.checkpointPrefix(SITE),
+                                S3CheckpointStorage.checkpointPrefix(deletedSite))),
+                "the delimiter listing of checkpoints/ answers one prefix per site with objects");
+
         try {
-            sweeper.sweep(Instant.now().plus(2, ChronoUnit.DAYS));
+            scopedTo(SITE, deletedSite).sweep(Instant.now().plus(2, ChronoUnit.DAYS));
 
             assertTrue(segmentStorage.exists(liveSegment),
                     "a segment object its changelog row still names must survive");
@@ -159,6 +178,30 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
             // The one object this class leaves behind on purpose is the one the sweep spares.
             checkpointStorage.deleteBatchParquet(unknownShape);
         }
+    }
+
+    /**
+     * The production sweeper with one thing replaced: the list of sites it visits. Every other
+     * collaborator is the real bean, so the per-site listing, the row cross-check and the delete all
+     * run for real — this only keeps a cutoff two days in the future from reaching objects other
+     * classes left in the shared bucket.
+     */
+    private DeltaS3OrphanSweeper scopedTo(UUID... sites) {
+        S3ChangelogSegmentStorage segments = spy(segmentStorage);
+        doReturn(S3ChildPrefixListing.complete(Stream.of(sites)
+                .map(S3ChangelogSegmentStorage::segmentPrefix)
+                // The scope discovers sites from delta/{siteId}/, one level above the segments.
+                .map(prefix -> prefix.substring(0, prefix.length() - "segments/".length()))
+                .toList()))
+                .when(segments).listSitePrefixes();
+
+        S3CheckpointStorage checkpoints = spy(checkpointStorage);
+        doReturn(S3ChildPrefixListing.complete(Stream.of(sites)
+                .map(S3CheckpointStorage::checkpointPrefix).toList()))
+                .when(checkpoints).listSitePrefixes();
+
+        return new DeltaS3OrphanSweeper(segments, checkpoints, objectDeleter, segmentRepository,
+                checkpointRepository, syncStateRepository, metrics, true, 86_400L);
     }
 
     private void put(String key) {
