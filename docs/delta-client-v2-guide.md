@@ -1262,20 +1262,25 @@ pool was full (10 threads, 50 queue slots, `CallerRunsPolicy`), and the cost was
 an exception thrown from an `afterCommit` callback propagates to the caller of `commit()`, so a
 connection timeout there surfaced as a failure of an operation that had already succeeded.
 
-Those writes now go to **`pluginAuditExecutor`** — 2 threads, a 500-deep queue, and a rejection
-policy that **drops the entry and logs it at ERROR** rather than running it on the caller's thread or
-throwing back at the publisher. A lane of its own also stops one INSERT queueing behind plugin
-dispatch work that takes seconds. The listener additionally refuses to write when a transaction is
-active on its own thread, so the invariant is enforced where the write happens rather than inferred
-from a pool's configuration — and it still holds if the `@Async` hand-off is ever removed.
+Those writes now go to **`pluginAuditExecutor`** — 2 threads and a 500-deep queue, with the default
+`AbortPolicy`, the one place the three plugin pools differ. The listener hands the entry over with an
+explicit `execute` rather than `@Async`, so a full executor is a `RejectedExecutionException` *it*
+catches, with the entry still in hand: the ERROR line names the plugin, the account and the action,
+which a rejection handler could not, because by then the task is an opaque `FutureTask`. A lane of
+its own also stops one INSERT queueing behind plugin dispatch work that takes seconds. The listener
+additionally refuses to write when a transaction is active on the thread the write ends up running
+on, so the invariant is a property of the write rather than of the executor wired in front of it.
 
 What an operator should know: **a full audit executor loses entries**, deliberately. Filling a
 500-deep queue that two threads drain one INSERT at a time means the database is not accepting
 writes, in which case the entry was not going to be written anyway; auditing must never become the
-reason an operation fails or waits. The log line names the plugin, the account and the action, and
-is the only trace such an entry leaves. `PluginAuditService`'s immediate (non-deferred) audit
-methods are unchanged: they are plain `@Transactional`, still run on `pluginExecutor`, and do not
-have this shape.
+reason an operation fails or waits. That ERROR line is the only trace such an entry leaves. For the
+same reason the pool's shutdown is bounded at **5 seconds** rather than the siblings' 60: its queue
+fills only when the database is slow, which is exactly when a pod is likely to be replaced, and a
+droppable entry must not be what turns a graceful stop into a SIGKILL at
+`terminationGracePeriodSeconds`. `PluginAuditService`'s immediate (non-deferred) audit methods are
+unchanged: they are plain `@Transactional`, still run on `pluginExecutor`, and do not have this
+shape.
 
 ## Upload History (dashboard) shows per-table stats, not files
 

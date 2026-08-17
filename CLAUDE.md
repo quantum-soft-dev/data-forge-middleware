@@ -471,28 +471,39 @@ pages/{feature}/            # Route pages
   joins a transaction that has already committed, and the row is silently lost — which is what the
   method's own comment had always warned about. So the fix is the first candidate, made specific:
   **a lane of its own plus a guard**, deliberately both. New `pluginAuditExecutor` (2 threads, queue
-  500, `DropAndLogPolicy`) carries the two listener methods; `pluginExecutor` keeps `CallerRunsPolicy`
-  untouched for plugin dispatch and the immediate `PluginAuditService` methods, which are plain
-  `REQUIRED` and do not have this shape. Two threads because each task is one INSERT, a 500-deep
-  queue because filling it means the database is not accepting writes at all, and **drop rather than
-  `AbortPolicy`** because a rejection from a `void @Async` method is thrown at submit time on the
-  caller's thread — that is the publisher again, past the commit point, i.e. the very failure being
-  removed. A dropped entry is logged at ERROR, the same swallow the audit path already applies to
-  every other write failure. The guard is the half that survives a future edit: `persist` refuses
-  outright when `TransactionSynchronizationManager.isActualTransactionActive()`, so the invariant is
-  enforced where the write happens instead of inferred from a pool's configuration, and it still
-  holds if the `@Async` hand-off is removed or fails to apply. It needed the transaction to move off
+  500) carries the two listener methods; `pluginExecutor` keeps `CallerRunsPolicy` untouched for
+  plugin dispatch and the immediate `PluginAuditService` methods, which are plain `REQUIRED` and do
+  not have this shape. Two threads because each task is one INSERT, and a 500-deep queue because
+  filling it means the database is not accepting writes at all. **The hand-off is an explicit
+  `execute`, not `@Async`** — the correction review forced, and the reason is the log line: a
+  rejection handler receives the `@Async` proxy's opaque `FutureTask` and could only ever print pool
+  statistics, so a burst of drops would be forty identical lines naming none of the activations,
+  reinits or rotations that went unrecorded. Submitting by hand puts the `RejectedExecutionException`
+  where the entry still is, so the ERROR names plugin, account and action; the executor therefore
+  keeps the default `AbortPolicy`, which is safe precisely because the listener catches it rather
+  than letting it reach the publisher (that is what a `void @Async` rejection would have done, at
+  submit time, on the publishing thread — the very failure being removed). The guard is the half
+  that survives a future edit: `persist` refuses outright when
+  `TransactionSynchronizationManager.isActualTransactionActive()`, so the invariant is a property of
+  the write rather than of the executor wired in front of it. It needed the transaction to move off
   the listener — a new package-private `PluginAuditEntryWriter` bean owns the `REQUIRES_NEW`, since a
   `@Transactional` method invoked on `this` is not proxied and the check has to run *before* the
-  transaction opens (the `DeltaSessionCommitTransaction` shape of #147). The listener's catch also
-  logs the exception rather than only `getMessage()` — the failure that surfaced this in review
-  carried no message at all. Proven by an integration test on the wired application, because the
-  hand-off is a proxy and the inline path exists only under saturation: it resolves the executor
-  **from the listener's own `@Async` annotation** (so it keeps testing the real path if the name
-  changes), fills every thread and queue slot, publishes inside a real transaction and asserts the
-  row is absent the instant the publishing thread returns — an entry already committed by then can
-  only have been written by that thread inside `afterCommit`. Verified red against the pre-fix
-  listener. `BackgroundConnectionDemandTest` drops the exception from its class documentation (the
+  transaction opens (the `DeltaSessionCommitTransaction` shape of #147). Two smaller review
+  corrections: the listener's catch logs the exception rather than only `getMessage()` (the failure
+  that surfaced this carried no message at all), and this pool's shutdown is bounded at **5 s**
+  rather than the siblings' 60 — its queue is ten times theirs and fills only when the database is
+  slow, which is when a pod is likely to be replaced, so draining it would run past
+  `terminationGracePeriodSeconds: 30` and turn a graceful stop into a SIGKILL. Proven by an integration test on the wired application, because the
+  listener is invoked by Spring's transaction synchronization and the inline path exists only under
+  saturation: it fills the executor **until it actually refuses** (submitting exactly
+  `max + queueCapacity` would flake, since the pool is the shared context's singleton and an earlier
+  class's write in flight frees a slot a moment later), publishes inside a real transaction and
+  asserts the row is absent the instant the publishing thread returns — an entry already committed by
+  then can only have been written by that thread inside `afterCommit`. Verified red against an inline
+  executor with the guard removed, which is what a saturated `CallerRunsPolicy` degenerates to. It
+  extends `BaseIntegrationTest` so it joins the shared context rather than caching one more, each of
+  which drains the queue workers once at refresh (#167's residual) — two unrelated delta classes went
+  red in CI before that. `BackgroundConnectionDemandTest` drops the exception from its class documentation (the
   ticket's third checkbox), adds the new bean at `Hold.SHORT` and moves the audited total **32 → 34**;
   the floor is unchanged at `4 long ticks + 2 request reserve = 6 <= 10`, since the new threads are
   short holders. **The trade an operator is buying**: under saturation the entry is lost rather than

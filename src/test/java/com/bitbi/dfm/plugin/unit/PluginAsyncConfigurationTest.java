@@ -7,14 +7,16 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for PluginAsyncConfiguration.
@@ -95,29 +97,65 @@ class PluginAsyncConfigurationTest {
         }
 
         /**
-         * The defect of #171 in miniature: with no capacity left, a {@code CallerRunsPolicy} would
-         * run the audit write on the thread that submitted it — which, for this executor, is a
-         * thread inside the publisher's commit synchronization still holding its connection.
+         * The defect of #171 in miniature: {@code CallerRunsPolicy} would run the audit write on
+         * the thread that submitted it — which, for this executor, is a thread inside the
+         * publisher's commit synchronization still holding its connection. The rejection is thrown
+         * instead, so that {@code PluginAuditEventListener} can catch it with the entry in hand and
+         * name what was lost.
          */
         @Test
-        @DisplayName("Should drop rather than run a rejected audit write on the caller's thread")
-        void shouldDropRatherThanRunARejectedWriteOnTheCallersThread() {
+        @DisplayName("Should reject rather than run an audit write on the caller's thread")
+        void shouldRejectRatherThanRunAWriteOnTheCallersThread() {
             ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) configuration.pluginAuditExecutor();
             CountDownLatch release = new CountDownLatch(1);
             AtomicReference<Thread> ranOn = new AtomicReference<>();
             try {
-                int slots = executor.getMaxPoolSize() + executor.getQueueCapacity();
-                for (int i = 0; i < slots; i++) {
-                    executor.execute(() -> awaitQuietly(release));
-                }
+                fillEverySlot(executor, release);
 
-                // Then — the rejected task neither runs here nor throws back at the caller
-                assertThatCode(() -> executor.execute(() -> ranOn.set(Thread.currentThread())))
-                        .doesNotThrowAnyException();
+                assertThatThrownBy(() -> executor.execute(() -> ranOn.set(Thread.currentThread())))
+                        .isInstanceOf(RejectedExecutionException.class);
                 assertThat(ranOn.get()).isNull();
             } finally {
                 release.countDown();
                 executor.shutdown();
+            }
+        }
+
+        /**
+         * A shutdown must not outlast the pod's grace period: this queue is ten times the siblings'
+         * and only fills when the database is slow, which is when a pod is likely to be replaced.
+         */
+        @Test
+        @DisplayName("Should bound its shutdown well inside terminationGracePeriodSeconds")
+        void shouldBoundItsShutdownWellInsideTheGracePeriod() throws Exception {
+            ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) configuration.pluginAuditExecutor();
+            CountDownLatch release = new CountDownLatch(1);
+            try {
+                fillEverySlot(executor, release);
+
+                long start = System.nanoTime();
+                Thread shutdown = new Thread(executor::shutdown);
+                shutdown.start();
+                shutdown.join(Duration.ofSeconds(20).toMillis());
+
+                assertThat(shutdown.isAlive())
+                        .as("shutdown must return rather than drain a 500-deep queue")
+                        .isFalse();
+                assertThat(Duration.ofNanos(System.nanoTime() - start))
+                        .isLessThan(Duration.ofSeconds(15));
+            } finally {
+                release.countDown();
+            }
+        }
+
+        /** Submits until the executor refuses, so the pool is provably full. */
+        private void fillEverySlot(ThreadPoolTaskExecutor executor, CountDownLatch release) {
+            while (true) {
+                try {
+                    executor.execute(() -> awaitQuietly(release));
+                } catch (RejectedExecutionException e) {
+                    return;
+                }
             }
         }
 

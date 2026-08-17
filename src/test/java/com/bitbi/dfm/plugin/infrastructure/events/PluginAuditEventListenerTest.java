@@ -11,6 +11,8 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -35,7 +37,9 @@ class PluginAuditEventListenerTest {
     @BeforeEach
     void setUp() {
         writer = mock(PluginAuditEntryWriter.class);
-        listener = new PluginAuditEventListener(writer);
+        // Runs the hand-off on this thread: what the executor does with the task is
+        // PluginAsyncConfigurationTest's subject, so these tests need only the decision.
+        listener = new PluginAuditEventListener(writer, Runnable::run);
         accountId = UUID.randomUUID();
     }
 
@@ -81,6 +85,20 @@ class PluginAuditEventListenerTest {
     @DisplayName("a rollback of a wholly transactional change writes nothing")
     void shouldWriteNothingWhenRollbackUndidEverything() {
         listener.onAuditEntryRolledBack(new PluginAuditEntryReadyEvent(success()));
+
+        verifyNoInteractions(writer);
+    }
+
+    @Test
+    @DisplayName("a rejected hand-off never escapes, and names the entry it lost (#171)")
+    void shouldSwallowARejectedHandOff() {
+        Executor full = task -> {
+            throw new RejectedExecutionException("no capacity");
+        };
+        PluginAuditEventListener saturated = new PluginAuditEventListener(writer, full);
+
+        assertThatCode(() -> saturated.onAuditEntryReady(new PluginAuditEntryReadyEvent(success())))
+                .doesNotThrowAnyException();
 
         verifyNoInteractions(writer);
     }

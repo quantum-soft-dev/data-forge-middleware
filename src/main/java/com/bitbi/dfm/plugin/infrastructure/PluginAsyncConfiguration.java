@@ -1,14 +1,11 @@
 package com.bitbi.dfm.plugin.infrastructure;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -107,8 +104,18 @@ public class PluginAsyncConfiguration {
      *       slow write</li>
      *   <li>Queue capacity: 500 tasks — deep enough that filling it means the database itself is
      *       unavailable, in which case the write would fail rather than queue</li>
-     *   <li>Rejection policy: {@link DropAndLogPolicy} — never inline, never thrown back at the
-     *       caller</li>
+     *   <li>Rejection policy: the default {@code AbortPolicy}, deliberately, and it is the one
+     *       place these three pools differ. {@code CallerRunsPolicy} is the defect of #171. The
+     *       listener submits explicitly rather than through {@code @Async} precisely so that it
+     *       catches the rejection with the entry still in hand and can name it in the log; a policy
+     *       that swallowed the task here would take that away and leave only the pool's
+     *       statistics.</li>
+     *   <li>Shutdown: queued writes are given a chance, but only <b>5 seconds</b> of one — the
+     *       queue is ten times the siblings' and this is the pool whose queue only fills when the
+     *       database is slow, which is exactly when a pod is likely to be replaced.
+     *       {@code terminationGracePeriodSeconds} is 30 in {@code k8s/base/deployment-backend.yaml},
+     *       and an entry these writes already declare droppable under pressure must not be what
+     *       turns a graceful stop into a SIGKILL.</li>
      * </ul>
      */
     @Bean(name = "pluginAuditExecutor")
@@ -118,36 +125,9 @@ public class PluginAsyncConfiguration {
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("plugin-audit-");
-        executor.setRejectedExecutionHandler(new DropAndLogPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(60);
+        executor.setAwaitTerminationSeconds(5);
         executor.initialize();
         return executor;
-    }
-
-    /**
-     * Drops the task and says so, instead of running it on the caller's thread or throwing.
-     *
-     * <p>The two policies this replaces are both wrong for an audit write.
-     * {@code CallerRunsPolicy} would run it on the publishing thread, which is the defect of
-     * issue #171. {@code AbortPolicy} throws {@code RejectedExecutionException} out of the
-     * {@code @Async} proxy and therefore back at the publisher — for a {@code void} method the
-     * rejection happens at submit time, on the caller's thread, so it would surface as a failure of
-     * an operation that has already committed. Auditing must never break what it records, and the
-     * audit path already swallows every other write failure, so a lost entry is logged at ERROR and
-     * that is the whole of it.</p>
-     */
-    static final class DropAndLogPolicy implements RejectedExecutionHandler {
-
-        private static final Logger log = LoggerFactory.getLogger(DropAndLogPolicy.class);
-
-        @Override
-        public void rejectedExecution(Runnable task, ThreadPoolExecutor executor) {
-            log.error("Dropping a plugin audit write: the audit executor has no capacity left "
-                            + "({} of {} threads busy, {} queued{}). The entry is lost; the operation "
-                            + "it describes is not affected",
-                    executor.getActiveCount(), executor.getMaximumPoolSize(),
-                    executor.getQueue().size(), executor.isShutdown() ? ", shutting down" : "");
-        }
     }
 }
