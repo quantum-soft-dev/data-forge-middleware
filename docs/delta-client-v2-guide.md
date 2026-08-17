@@ -1192,7 +1192,7 @@ build's files are exactly as old as the build, so a lower age deletes live work.
 **"One sweep interval" means the tick runs when it is due.** That is a statement about the
 scheduler, so the scheduler is pinned rather than inherited (issue **#146**).
 `SchedulingConfiguration` declares the application's `TaskScheduler` — a `ThreadPoolTaskScheduler`
-of `spring.task.scheduling.pool.size` (**6**, overridable with `SPRING_TASK_SCHEDULING_POOL_SIZE`)
+of `spring.task.scheduling.pool.size` (**7**, overridable with `SPRING_TASK_SCHEDULING_POOL_SIZE`)
 — so the nightly checkpoint build, which can hold its thread for hours, leaves threads for the
 scratch sweep, the batch timeout sweep and the monthly partition creation. Without the bean the
 choice followed `spring.threads.virtual.enabled`: with it on, Spring Boot builds a
@@ -1202,8 +1202,8 @@ consequences for an operator:
 
 - **Setting `SPRING_TASK_SCHEDULING_POOL_SIZE` to 1 restores the bug.** The residue term above then
   has no bound anyone can quote, because a sweep tick can sit behind a whole checkpoint build.
-- **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Ten of the
-  fifteen scheduled tasks open a connection; a pool as wide as Hikari's lets a burst of ticks take
+- **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Eleven of the
+  sixteen scheduled tasks open a connection; a pool as wide as Hikari's lets a burst of ticks take
   the connections request threads need. Raising it also moves the connection-pool derivation
   described next, because this pool is its largest single term.
 
@@ -1314,7 +1314,7 @@ catalog-watermark write on every poll of every worker.
 ## The connection pool is smaller than the threads that can ask it for a connection
 
 That is deliberate (issue **#161**), and worth knowing before reading a `connection-timeout` in the
-logs as a bug. The audited background pools declare **34** threads between them — the scheduler (6),
+logs as a bug. The audited background pools declare **35** threads between them — the scheduler (7),
 `pluginExecutor` (10), `pluginExecutionExecutor` (8), `pluginAuditExecutor` (2), the three queue
 workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a
 single HTTP or gRPC request asks for one, and both request layers are unbounded
@@ -1331,11 +1331,15 @@ consumers that *cannot* absorb a wait are covered outright — the ones that pin
 across S3 I/O instead of releasing it between statements:
 
 ```
-4 scheduled ticks classified Cost.LONG   (not the scheduler's 6 threads — a short tick that
+5 scheduled ticks classified Cost.LONG   (not the scheduler's 7 threads — a short tick that
                                           waits simply runs again on its next wake)
 + 2 kept for request threads
-= 6 <= 10
+= 7 <= 10
 ```
+
+Two of those five — the checkpoint build and the S3 orphan sweep of **#158** — hold their *thread*
+for minutes and never a connection across S3, so the floor is an over-estimate by two on purpose:
+one per-task audit rather than two that could disagree.
 
 The bound from the other side is the cluster's, and it is the one to check before raising anything:
 the pool is per replica, `max_connections` is not, and a cron tick fires on **every replica at the
@@ -1881,9 +1885,12 @@ loser's `DeleteObjects` succeeds on an already-deleted key. **Read the counters 
 passes rarely overlap (each replica's first tick is 10 minutes after its own start), and where they
 do the second finds the objects already gone.
 
-Read the three meters accordingly. **`delta.s3-orphan.candidates` is the one to alert on**: it
-counts what the sweep found unreferenced whether or not it was allowed to delete it, so it is the
-only one that moves while `dry-run` is on — which is the shipped default, and an alert written on a
+Read the three meters accordingly. **`delta.s3-orphan.candidates` is the one to alert on**, but read
+it as a **census, not an arrival rate**, whenever the sweep is not deleting: nothing removes the
+backlog between passes, so while `dry-run` is on (or `reclaim-unknown-sites` is holding a population
+back, or deletes keep failing) the same N objects are re-counted every day and a rate alert would
+read a static backlog as "N new orphans a day". It counts what the sweep found unreferenced whether
+or not it was allowed to delete it, so it is the only one that moves while `dry-run` is on — which is the shipped default, and an alert written on a
 flat `reclaimed` would page on a deployment that is simply not deleting yet. Under `prefix=segments`
 a steady rate means ingestion commits are failing after their upload, and is worth chasing; under
 `prefix=checkpoints` it is the ordinary superseded generation of every advancing build, so a

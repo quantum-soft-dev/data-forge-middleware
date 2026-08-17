@@ -386,6 +386,10 @@ public class DeltaMetrics {
      * population is sized before that switch, and afterwards
      * {@code candidates - reclaimed - delete-failed} is zero by construction.</p>
      *
+     * <p><b>A census, not an arrival rate</b>, whenever the sweep is not deleting: nothing removes
+     * the backlog between passes, so the same objects are counted again every day and a rate alert
+     * would read a static backlog as that many new orphans a day.</p>
+     *
      * @param prefix {@link #ORPHAN_PREFIX_SEGMENTS} or {@link #ORPHAN_PREFIX_CHECKPOINTS}
      * @param count  how many unreferenced objects were found
      */

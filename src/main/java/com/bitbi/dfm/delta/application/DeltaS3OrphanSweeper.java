@@ -259,7 +259,17 @@ public class DeltaS3OrphanSweeper {
     }
 
     private void sweepScope(ReclaimScope scope, Instant cutoff) {
-        S3ChildPrefixListing sites = scope.listSites();
+        S3ChildPrefixListing sites;
+        try {
+            sites = scope.listSites();
+        } catch (RuntimeException e) {
+            // The lister turns an S3Exception into a truncated result, but not every failure is one
+            // (a credentials provider, an interceptor). Losing this prefix must not lose the other
+            // one as well (raised in review).
+            log.warn("Could not list the sites under the {} prefix; the other prefix is unaffected",
+                    scope.label(), e);
+            return;
+        }
         if (sites.truncated()) {
             log.warn("Listing of the sites under the {} prefix stopped after {}; the ones already "
                             + "read are swept and the rest wait for the next pass",
@@ -305,16 +315,12 @@ public class DeltaS3OrphanSweeper {
         // a row set from before that row existed. Every read is inside the catch — including the
         // ownership one (raised in review), whose failure would otherwise end the whole pass.
         Predicate<String> protectedKeys;
+        boolean known;
         try {
             // A site this database has never heard of may be a hard-deleted one of ours or a live
             // one of another deployment sharing the bucket, and nothing in S3 tells the two apart.
             // Its own `sites` row is the closest thing to a proof of ownership there is.
-            if (!reclaimUnknownSites && siteRepository.findById(siteId).isEmpty()) {
-                log.info("Leaving {} alone: no site row, so this prefix cannot be tied to this "
-                        + "database. Set delta.s3-orphan.reclaim-unknown-sites=true if this bucket "
-                        + "is exclusive to this deployment and the site was hard-deleted", prefix);
-                return;
-            }
+            known = siteRepository.findById(siteId).isPresent();
             protectedKeys = scope.protectedKeys(siteId);
         } catch (RuntimeException e) {
             log.warn("Could not read the rows for {}; nothing is deleted for this site until they "
@@ -326,14 +332,22 @@ public class DeltaS3OrphanSweeper {
         if (orphans.isEmpty()) {
             return;
         }
+        // Counted before either gate, so a dry run sizes the whole population — including the one
+        // reclaim-unknown-sites governs, which is otherwise invisible until the flag asserting its
+        // precondition is already set (raised in review).
+        metrics.s3OrphanCandidates(scope.label(), orphans.size());
+        if (!known && !reclaimUnknownSites) {
+            log.info("Holding back {} unreferenced object(s) under {}: no site row, so this prefix "
+                            + "cannot be tied to this database. Set "
+                            + "delta.s3-orphan.reclaim-unknown-sites=true if this bucket is "
+                            + "exclusive to this deployment and the site was hard-deleted",
+                    orphans.size(), prefix);
+            return;
+        }
         delete(scope, prefix, orphans);
     }
 
     private void delete(ReclaimScope scope, String prefix, List<String> orphans) {
-        // Counted before the mode is consulted, so the population is visible in Prometheus on the
-        // shipped default too (raised in review): with dry-run on, `reclaimed` stays flat at zero
-        // for ever, and that is exactly the reading the guide calls surprising.
-        metrics.s3OrphanCandidates(scope.label(), orphans.size());
         if (dryRun) {
             log.info("Dry run (delta.s3-orphan.dry-run): {} unreferenced object(s) under {} would "
                             + "be reclaimed, e.g. {}. Clear the flag to delete them",

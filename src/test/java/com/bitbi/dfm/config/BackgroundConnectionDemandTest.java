@@ -129,11 +129,11 @@ class BackgroundConnectionDemandTest {
         // Every @Scheduled method plus BatchRetentionScheduler's programmatic cron. Its whole
         // ceiling is background demand, but only the tasks ScheduledTaskInventoryTest classifies
         // Cost.LONG are demand the pool has to *cover* — see longHoldingThreads(), which counts
-        // them rather than the six threads. A short tick that waits for a connection simply runs
+        // them rather than the seven threads. A short tick that waits for a connection simply runs
         // again on its next wake, and conflating "holds a thread" with "holds a connection" here
         // would be the same mistake this class exists to correct elsewhere.
         beans.put("com.bitbi.dfm.config.SchedulingConfiguration#taskScheduler",
-                new Consumer(6, Hold.SHORT, "sized by " + POOL_KEY + "; its long ticks counted"
+                new Consumer(7, Hold.SHORT, "sized by " + POOL_KEY + "; its long ticks counted"
                         + " separately from ScheduledTaskInventoryTest"));
         // Immediate plugin audit writes and the async SQL-generation entry point: one INSERT each.
         // The methods on PluginAuditService are @Transactional (REQUIRED), so a CallerRunsPolicy
@@ -275,7 +275,7 @@ class BackgroundConnectionDemandTest {
      * documentation above and in the derivation beside the key; recomputed by
      * {@link #theAuditedTotalIsWhatItSays}.
      */
-    static final int AUDITED_BACKGROUND_THREADS = 34;
+    static final int AUDITED_BACKGROUND_THREADS = 35;
 
     // ---------------------------------------------------------------------------------------
     // The two bounds
@@ -285,7 +285,7 @@ class BackgroundConnectionDemandTest {
      * Background threads that can hold a connection across S3 I/O or a bounded wait.
      *
      * <p>The scheduler contributes the tasks {@code ScheduledTaskInventoryTest} classifies as long,
-     * not its six threads: a short tick that has to wait for a connection runs again on its next
+     * not its seven threads: a short tick that has to wait for a connection runs again on its next
      * wake, so it belongs with the queueing consumers however many threads exist to dispatch it.
      * Adding a {@code Cost.LONG} scheduled task therefore tightens this floor automatically.</p>
      *

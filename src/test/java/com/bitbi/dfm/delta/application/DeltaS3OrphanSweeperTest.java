@@ -469,16 +469,19 @@ class DeltaS3OrphanSweeperTest {
     }
 
     @Test
-    @DisplayName("a prefix whose site this database has never heard of is left alone")
-    void leavesAPrefixOfAnUnknownSiteAlone() {
+    @DisplayName("a prefix whose site this database has never heard of is counted, then held back")
+    void holdsBackAPrefixOfAnUnknownSite() {
         segmentSite(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
         when(siteRepository.findById(SITE)).thenReturn(Optional.empty());
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
 
         sweeper().sweep(NOW);
 
         verify(objectDeleter, never()).deleteObjects(anyList());
-        // Not even asked: "no rows" is what makes this indistinguishable from a stranger's site.
-        verify(segmentRepository, never()).findAllS3KeysBySiteId(SITE);
+        // Counted all the same, or the population reclaim-unknown-sites governs stays invisible
+        // until the flag asserting its precondition is already set.
+        assertThat(counter("delta.s3-orphan.candidates", "segments")).isEqualTo(1.0);
+        assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isZero();
     }
 
     @Test

@@ -581,6 +581,24 @@ pages/{feature}/            # Route pages
   bounded by one site's history rather than the bucket's, a few megabytes for a site with fifty
   tables and two years of builds, and the same listing a wipe already takes, so it ships as is and
   the page-by-page walk is **#199**.
+  **Round 4** was mostly about a contradiction this ticket introduced elsewhere:
+  `spring.task.scheduling.pool.size` is derived as "the long ticks plus one for the burst of short
+  ticks on the same second", and adding a fifth `Cost.LONG` tick spent that margin without the
+  derivation beside the key being updated — the prose still said four of fifteen while the
+  connection-floor paragraph in the same file already said five. **The pool moves 6 → 7**, which is
+  what the comment's own "adding a scheduled task that blocks means revisiting this" prescribes; it
+  stays below `spring.datasource.hikari.maximum-pool-size` (10), and the connection floor is
+  unchanged at `5 long ticks + 2 request reserve = 7` because that term counts long *ticks*, not
+  scheduler threads. `BackgroundConnectionDemandTest` caught it (its audited total moves 34 → 35),
+  which is the guard doing exactly what #161 built it for. Three smaller ones: `listSites()` was the
+  last S3 call outside a catch, so a failure the lister does not convert into a truncated result
+  would have cost the *other* prefix as well; an unknown site now has its candidates **counted
+  before** it is held back, since otherwise the population `reclaim-unknown-sites` governs is
+  invisible until the flag asserting its precondition is already set — a dry run that cannot size
+  the thing it exists to size; and both the guide and the meter's Javadoc now say that
+  `delta.s3-orphan.candidates` is a **census, not an arrival rate** while the sweep is not deleting,
+  because nothing removes the backlog between passes and a rate alert would read a static backlog as
+  that many new orphans a day.
 - delta-sql-inactive-branch-test: The delta-SQL queue's inactive-activation branch has a test
   (issue #175, the gap #159 named and deliberately left open). Since 026 `BitBiPlugin.execute` does
   nothing on `BATCH_COMPLETED` but wake the sweep worker, so the decision that an account without an

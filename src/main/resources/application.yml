@@ -14,14 +14,18 @@ spring:
         # a checkpoint build, which can run for hours, postponed the scratch sweep, the batch
         # timeout sweep and the monthly partition creation behind it.
         #
-        # Six is derived, not guessed: FOUR of the fifteen scheduled tasks can hold their thread for
-        # minutes — the nightly checkpoint build and the retention cleanup (both due at 02:00 by
-        # default), the orphaned-provisional sweep in its 500-segment worst case, and the batch
-        # timeout sweep once a backlog makes its unbounded query and single transaction long. So the
-        # floor is FIVE, for a short tick never to queue behind them; six is that floor plus one for
-        # the burst of short ticks that fall on the same second, and
+        # Seven is derived, not guessed: FIVE of the sixteen scheduled tasks can hold their thread
+        # for minutes — the nightly checkpoint build and the retention cleanup (both due at 02:00 by
+        # default), the orphaned-provisional sweep in its 500-segment worst case, the batch timeout
+        # sweep once a backlog makes its unbounded query and single transaction long, and the S3
+        # orphan sweep of #158, which lists every site prefix in the bucket. So the floor is SIX,
+        # for a short tick never to queue behind them; seven is that floor plus one for the burst of
+        # short ticks that fall on the same second, and
         # stays below spring.datasource.hikari.maximum-pool-size (10). Adding a scheduled task that
         # blocks means revisiting this — ScheduledTaskInventoryTest fails until the audit is redone.
+        # It went from six to seven when #158 added its tick: the value moves with the count of long
+        # tasks, which is exactly what "revisiting this" means, and leaving it at six would have
+        # spent the burst margin instead.
         #
         # Read that last bound for exactly what it is: the scheduler on its own cannot empty the
         # connection pool. It is not a guarantee about total background demand — the queue workers
@@ -29,17 +33,19 @@ spring:
         # lives beside spring.datasource.hikari.maximum-pool-size below; this pool is one of its
         # terms, and the largest, so moving it moves that derivation as well.
         #
-        # Five of the fifteen tasks never open a connection at all (the three queue-worker sweeps,
+        # Five of the sixteen tasks never open a connection at all (the three queue-worker sweeps,
         # which only wake their own pool, the scratch sweep, which touches the filesystem, and the
-        # Auth0 token refresh, which is an HTTP call). Ten can — but only the four classified
+        # Auth0 token refresh, which is an HTTP call). Eleven can — but only the five classified
         # Cost.LONG hold one long enough for the connection pool to have to reserve for them, which
-        # is the term the derivation below actually uses. The rest release between statements.
+        # is the term the derivation below actually uses, and even that is an over-estimate by two
+        # (the checkpoint build and the S3 orphan sweep hold their thread, never a connection across
+        # S3). The rest release between statements.
         #
         # The key is the standard Spring Boot one, so SPRING_TASK_SCHEDULING_POOL_SIZE overrides it
         # without a placeholder of our own. It only takes effect because SchedulingConfiguration
         # declares the TaskScheduler bean: under spring.threads.virtual.enabled the auto-configured
         # scheduler is a SimpleAsyncTaskScheduler, which this key does not configure at all.
-        size: 6
+        size: 7
 
   security:
     oauth2:
@@ -58,7 +64,7 @@ spring:
       # BackgroundConnectionDemandTest keeps every number below honest and fails when a new
       # background pool lands without this arithmetic being redone.
       #
-      # The audited background pools declare THIRTY-FOUR threads between them — the scheduler (6),
+      # The audited background pools declare THIRTY-FIVE threads between them — the scheduler (7),
       # pluginExecutor (10), pluginExecutionExecutor (8), pluginAuditExecutor (2), the three queue
       # workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) —
       # before a single HTTP or gRPC request asks for a connection, and both request layers are
@@ -88,7 +94,7 @@ spring:
       #            A "long" holder pins the connection across S3 I/O or a bounded wait instead of
       #            releasing it between statements, so queueing would stall it rather than slow it.
       #            NOTE WHICH THREADS THOSE ARE — for the scheduler it is the five ticks
-      #            ScheduledTaskInventoryTest classifies Cost.LONG, NOT its six threads: a short
+      #            ScheduledTaskInventoryTest classifies Cost.LONG, NOT its seven threads: a short
       #            tick that waits for a connection simply runs on its next wake, so counting the
       #            whole pool here would be the same conflation of "holds a thread" with "holds a
       #            connection" that this derivation exists to undo.
