@@ -8,77 +8,30 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.concurrent.Executor;
 
 /**
- * Configuration for asynchronous processing.
+ * Turns on {@code @Async} for the application, and declares the forced checkpoint rebuild pool.
  *
- * <p>Provides dedicated thread pool for comparison operations to prevent
- * blocking the main application threads during large file comparisons.
+ * <p>{@link EnableAsync} is here <em>and</em> on {@code PluginAsyncConfiguration}, which is worth
+ * knowing before reading either as load-bearing: every {@code @Async} site in the application is an
+ * {@code @Async("pluginExecutor")} method in the plugin package, so that one is what actually
+ * enables them, and the annotation is idempotent (Spring registers a single
+ * {@code AsyncAnnotationBeanPostProcessor} however many configurations ask for it). This one is
+ * therefore redundant today, and is kept as the application-wide declaration rather than leaving
+ * async proxying to depend on a configuration in the plugin package.</p>
  *
- * <p>Configuration:
- * <ul>
- *   <li>Core pool size: 2 threads (minimum active threads)</li>
- *   <li>Max pool size: 5 threads (maximum concurrent comparisons)</li>
- *   <li>Queue capacity: 10 (pending comparisons before rejection)</li>
- *   <li>Thread name prefix: comparison-executor-</li>
- * </ul>
+ * <p>The one pool declared here is {@link #deltaRebuildExecutor()}. It is <em>not</em> reached
+ * through {@code @Async}: {@code DeltaCheckpointRebuildService} injects it by
+ * {@code @Qualifier("deltaRebuildExecutor")} and submits to it directly.</p>
  *
- * <p>Usage in services:
- * <pre>
- * {@code
- * @Async("comparisonExecutor")
- * public CompletableFuture<ComparisonResponseDto> createComparisonAsync(...) {
- *     // Long-running comparison logic
- *     return CompletableFuture.completedFuture(result);
- * }
- * }
- * </pre>
- *
- * Feature: File Diff Comparison Between Upload Sessions
- * Task: T061 - Add @Async support for large comparisons (>100 files)
- * Phase: Phase 4 - User Story 2 (Compare Files)
+ * <p><b>A pool added here is background demand on the connection pool</b>, which is smaller than
+ * the threads that can ask it for a connection (issue #161). {@code BackgroundConnectionDemandTest}
+ * discovers every {@code @Bean} returning an {@link Executor} and fails until the newcomer is
+ * classified there — including a pool with no caller at all, which is how
+ * {@code comparisonExecutor} (declared in feature 009, orphaned when its only {@code @Async} method
+ * was deleted before that feature shipped) was found and removed by issue #165.</p>
  */
 @Configuration
 @EnableAsync
 public class AsyncConfiguration {
-
-    /**
-     * Creates dedicated executor for comparison operations.
-     *
-     * <p>This executor is used for async comparison processing to:
-     * <ul>
-     *   <li>Prevent blocking main application threads</li>
-     *   <li>Control concurrent comparison operations (max 5)</li>
-     *   <li>Queue up to 10 pending comparisons before rejecting</li>
-     *   <li>Improve responsiveness for large file comparisons (>100 files)</li>
-     * </ul>
-     *
-     * @return configured thread pool executor for comparison operations
-     */
-    @Bean(name = "comparisonExecutor")
-    public Executor comparisonExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-
-        // Core pool size: minimum number of threads to keep alive
-        executor.setCorePoolSize(2);
-
-        // Max pool size: maximum number of concurrent comparison operations
-        executor.setMaxPoolSize(5);
-
-        // Queue capacity: number of pending tasks before rejection
-        // With capacity 10, we can queue 10 comparisons before rejecting new requests
-        executor.setQueueCapacity(10);
-
-        // Thread name prefix for easier debugging in logs
-        executor.setThreadNamePrefix("comparison-executor-");
-
-        // Wait for tasks to complete on shutdown (graceful shutdown)
-        executor.setWaitForTasksToCompleteOnShutdown(true);
-
-        // Maximum time to wait for tasks to complete during shutdown (30 seconds)
-        executor.setAwaitTerminationSeconds(30);
-
-        executor.initialize();
-        return executor;
-    }
 
     /**
      * Single-thread executor for forced checkpoint rebuilds (feature 023, B7).

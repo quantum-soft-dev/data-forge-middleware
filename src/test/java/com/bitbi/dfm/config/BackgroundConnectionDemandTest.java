@@ -152,11 +152,12 @@ class BackgroundConnectionDemandTest {
         // design (#136): its writes are short guarded transactions between S3 round trips.
         beans.put("com.bitbi.dfm.config.AsyncConfiguration#deltaRebuildExecutor",
                 new Consumer(1, Hold.SHORT, "checkpoint build takes short guarded transactions"));
-        // Declared but unreachable: nothing carries @Async("comparisonExecutor") and nothing
-        // injects it, so its five threads are never started. Recorded as NONE rather than deleted
-        // here — removing a dead bean is issue #165, not this ticket.
-        beans.put("com.bitbi.dfm.config.AsyncConfiguration#comparisonExecutor",
-                new Consumer(5, Hold.NONE, "dead bean: no @Async site and no injection (#165)"));
+        // `comparisonExecutor` used to sit here as Hold.NONE — declared, initialized and reachable
+        // by nothing — until #165 deleted it. What this inventory guarantees about a re-declaration
+        // is narrower than "it would be caught": the scan fails on *any* new @Bean returning an
+        // Executor and is satisfied once someone classifies it, Hold.NONE included, which is
+        // precisely what happened here for the whole of #161. It forces the judgement; noticing
+        // that the answer is "nothing can reach it" is still the reviewer's.
         return beans;
     }
 
@@ -202,7 +203,7 @@ class BackgroundConnectionDemandTest {
 
     private static Map<String, Integer> poolConstructions() {
         Map<String, Integer> constructions = new TreeMap<>();
-        constructions.put("com/bitbi/dfm/config/AsyncConfiguration.java", 2);
+        constructions.put("com/bitbi/dfm/config/AsyncConfiguration.java", 1);
         constructions.put("com/bitbi/dfm/plugin/infrastructure/PluginAsyncConfiguration.java", 3);
         constructions.put("com/bitbi/dfm/delta/application/DeltaEgressWorker.java", 1);
         constructions.put("com/bitbi/dfm/delta/application/BatchParquetFinalizationWorker.java", 1);

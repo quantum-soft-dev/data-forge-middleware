@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -47,6 +48,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  *
  * <p>Feature 014: Plugin History Management</p>
+ *
+ * <p>Every nested class below is {@code @Disabled}; the two live tests are the pair that guards
+ * what a <em>rollback</em> does to a deferred audit entry — one where the change was wholly
+ * transactional and nothing may be recorded, one where S3 objects were destroyed before the commit
+ * point and the divergence must be. They are the end-to-end half of
+ * {@code PluginAuditEventListenerTest}: that class invokes the listener directly, so only a wired
+ * application can show which of its two methods Spring actually calls for a given outcome.</p>
  */
 @DisplayName("Plugin History Integration Tests")
 class PluginHistoryIntegrationTest extends BaseIntegrationTest {
@@ -82,6 +90,9 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
     private SqlGenerationService sqlGenerationService;
 
     @Autowired
+    private PluginAuditService pluginAuditService;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
@@ -97,6 +108,18 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
 
     private AccountPlugin testAccountPlugin;
 
+    /**
+     * Set by the methods that audit against an account of their own, so their rows are removed on
+     * the failing path too rather than by a statement at the end of the method that never runs.
+     * {@code plugin_audit_logs} is partitioned and {@code test-data.sql} never touches it.
+     *
+     * <p>Not a guarantee that the table is left as found: the write is queued on
+     * {@code pluginAuditExecutor}, so one landing between the last poll of a failing await and this
+     * DELETE survives it. The id is a fresh {@code UUID} nothing else counts by, so the residue is
+     * inert — which is why this is a tidy-up rather than a latch on the executor.</p>
+     */
+    private UUID ownAuditAccountId;
+
     @BeforeEach
     void setUp() {
         // Activate Bit BI plugin for test account
@@ -105,51 +128,76 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         accountPluginRepository.save(testAccountPlugin);
     }
 
+    @AfterEach
+    void removeOwnAuditRows() {
+        if (ownAuditAccountId != null) {
+            jdbcTemplate.update("DELETE FROM plugin_audit_logs WHERE account_id = ?", ownAuditAccountId);
+        }
+    }
+
     @Test
     @DisplayName("Should not audit a regeneration that rolled back")
     void shouldNotAuditRolledBackRegeneration() {
-        // regenerateSql() owns the transaction and calls into SqlGenerationService inline, so
-        // the completion audit is written from inside it. If the caller then fails, the new
-        // generation and the superseded flag are undone — and the audit must go with them.
-        // Generated synchronously rather than through the BatchCompletedEvent path: the async
-        // fixture is why the neighbouring regeneration tests are @Disabled, and a rollback test
-        // that silently never runs is worse than no test.
-        // The first batch becomes the baseline and yields no SQL, so a second one is required
-        // before there is anything to regenerate.
-        Batch baseline = createBatchWithCsvFile("rollback-audit-baseline.csv",
-                "id,name,email\n1,Alice,alice@example.com");
-        sqlGenerationService.generateSqlForBatch(baseline.getId(), testAccountPlugin.getId());
-
-        Batch batch = createBatchWithCsvFile("rollback-audit.csv",
-                "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
-        UUID originalGenerationId = sqlGenerationService
-                .generateSqlForBatch(batch.getId(), testAccountPlugin.getId())
-                .orElseThrow(() -> new AssertionError("fixture did not produce a generation"))
-                .getId();
-
-        jdbcTemplate.update(
-                "DELETE FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
-                TEST_ACCOUNT_ID, PluginActionType.SQL_REGENERATION_COMPLETED.name());
+        // The invariant: SQL_REGENERATION_COMPLETED is a deferred entry, so a caller whose
+        // transaction rolls back must leave nothing claiming the regeneration completed.
+        //
+        // Published through PluginAuditService — the production writer of this action type — into
+        // a transaction that then fails, rather than through PluginHistoryService.regenerateSql().
+        // Two reasons, both from issue #172:
+        //
+        //  1. The old vehicle asserts nothing. Since #164 SqlGenerationService.regenerateForBatch
+        //     refuses to run with a transaction active, and regenerateSql() is @Transactional, so
+        //     it throws before it regenerates anything — an IllegalStateException the old
+        //     assertThatThrownBy(...).isInstanceOf(IllegalStateException.class) accepted as the
+        //     caller's own failure. Zero rows then meant "nothing ran", not "the rollback took the
+        //     audit with it". That regression is #190; when it is fixed the regeneration will run
+        //     outside the caller's transaction, so no rollback will span it and this test could
+        //     never be routed back through it. #190 carries the successor guard: regenerateSql()
+        //     still writes after the generation returns (markAsSuperseded + save), so a failure
+        //     there will roll back the supersede while the entry — published with no transaction
+        //     active, hence written at once by fallbackExecution — stands. That is this test's
+        //     invariant reached by a route that does not exist yet, and it belongs to the ticket
+        //     that creates the route.
+        //  2. The old fixture is what actually went red in CI. Both recorded failures were
+        //     AssertionError at the `orElseThrow` of generateSqlForBatch — the #174 memory-pressure
+        //     abort returning Optional.empty(), not the audit assertion. Nothing about this
+        //     invariant needs a batch, a CSV or S3, so none is built.
+        //
+        // The account is this method's own, so the count names what this method produced rather
+        // than every row the shared account has (the second candidate cause on #172), and no
+        // DELETE-then-count window remains for a neighbour to land in.
+        //
+        // What only this test covers: PluginAuditEventListenerTest invokes the listener methods
+        // itself, and PluginAuditServiceDeferralTest verifies that the event is published rather
+        // than written — neither can show which listener method Spring calls when the publisher's
+        // transaction rolls back, because that is decided by the @TransactionalEventListener phase
+        // on the wired application. PluginAuditListenerSaturationIntegrationTest does run wired,
+        // but only over a committing publisher. This is the rollback half.
+        ownAuditAccountId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
 
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
-            pluginHistoryService.regenerateSql(PLUGIN_ID, TEST_ACCOUNT_ID, originalGenerationId);
+            logRegenerationCompleted(batchId);
             throw new IllegalStateException("caller fails after regenerating");
-        })).isInstanceOf(IllegalStateException.class);
+        })).isInstanceOf(IllegalStateException.class)
+                .hasMessage("caller fails after regenerating");
 
         // during() so a late async write cannot be mistaken for absence.
-        await().during(ofSeconds(2)).atMost(ofSeconds(6)).untilAsserted(() -> {
-            Long completed = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
-                    Long.class, TEST_ACCOUNT_ID, PluginActionType.SQL_REGENERATION_COMPLETED.name());
-            assertThat(completed)
-                    .as("the regeneration was rolled back, so nothing may claim it completed")
-                    .isZero();
-        });
+        await().during(ofSeconds(2)).atMost(ofSeconds(6)).untilAsserted(() ->
+                assertThat(regenerationCompletedEntries())
+                        .as("the regeneration was rolled back, so nothing may claim it completed")
+                        .isZero());
 
-        assertThat(pluginSqlGenerationRepository.findById(originalGenerationId).orElseThrow().isSuperseded())
-                .as("the rollback must also have undone the superseded flag")
-                .isFalse();
+        // The same publication under a committing caller, so "zero" above can never be zero
+        // because the write is broken, dropped or never wired — which is exactly how this test
+        // came to assert nothing at all.
+        transactionTemplate.executeWithoutResult(status -> logRegenerationCompleted(batchId));
+
+        await().atMost(ofSeconds(10)).untilAsserted(() ->
+                assertThat(regenerationCompletedEntries())
+                        .as("a committed regeneration must be on record")
+                        .isOne());
     }
 
     @Test
@@ -166,7 +214,13 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
                 "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
         UUID generationId = sqlGenerationService
                 .generateSqlForBatch(batch.getId(), testAccountPlugin.getId())
-                .orElseThrow(() -> new AssertionError("fixture did not produce a generation"))
+                // Not the assertion this test is about. clearHistory needs something to clear, so
+                // this fixture stays — but it is the line that failed on PRs #166 and #180 (the
+                // #174 memory-pressure abort answering Optional.empty()), so it names that rather
+                // than sending the next reader after a history-clear defect.
+                .orElseThrow(() -> new AssertionError(
+                        "fixture did not produce a generation to clear — the audit assertions below "
+                                + "never ran; suspect an aborted SQL generation (#174), not clearHistory"))
                 .getId();
 
         jdbcTemplate.update(
@@ -177,7 +231,11 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
             pluginHistoryService.clearHistory(PLUGIN_ID, TEST_ACCOUNT_ID);
             throw new IllegalStateException("caller fails after clearing");
-        })).isInstanceOf(IllegalStateException.class);
+            // The message, not only the type: clearHistory raises IllegalStateException for its own
+            // reasons, and accepting one of those as this sentinel is how the sibling test above
+            // came to assert nothing at all for two months (#172).
+        })).isInstanceOf(IllegalStateException.class)
+                .hasMessage("caller fails after clearing");
 
         await().atMost(ofSeconds(10)).untilAsserted(() -> {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -476,6 +534,24 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
     }
 
     // ==================== Helper Methods ====================
+
+    /**
+     * Publishes a deferred {@code SQL_REGENERATION_COMPLETED} entry the way production does, for
+     * {@link #ownAuditAccountId}.
+     */
+    private void logRegenerationCompleted(UUID batchId) {
+        pluginAuditService.logSqlRegenerationCompleted(PLUGIN_ID, ownAuditAccountId, batchId,
+                UUID.randomUUID(), UUID.randomUUID(), new SqlGenerationStats(1, 0, 0, 1), 5L);
+    }
+
+    /**
+     * Counts the completion entries written for {@link #ownAuditAccountId}.
+     */
+    private Long regenerationCompletedEntries() {
+        return jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
+                Long.class, ownAuditAccountId, PluginActionType.SQL_REGENERATION_COMPLETED.name());
+    }
 
     /**
      * Creates a SQL generation by triggering the batch completion event.
