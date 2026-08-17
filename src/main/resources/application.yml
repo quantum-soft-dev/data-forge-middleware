@@ -58,10 +58,11 @@ spring:
       # BackgroundConnectionDemandTest keeps every number below honest and fails when a new
       # background pool lands without this arithmetic being redone.
       #
-      # The audited background pools declare THIRTY-TWO threads between them — the scheduler (6),
-      # pluginExecutor (10), pluginExecutionExecutor (8), the three queue workers (2 each), the
-      # forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a single HTTP
-      # or gRPC request asks for a connection, and both request layers are themselves unbounded
+      # The audited background pools declare THIRTY-FOUR threads between them — the scheduler (6),
+      # pluginExecutor (10), pluginExecutionExecutor (8), pluginAuditExecutor (2), the three queue
+      # workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) —
+      # before a single HTTP or gRPC request asks for a connection, and both request layers are
+      # themselves unbounded
       # (virtual-thread-per-request, and grpc-java's default cached pool). This pool is therefore
       # SMALLER THAN ITS CALLERS ON PURPOSE, and that is safe for one specific reason: background
       # work does not hold one connection while waiting for a second, which is the shape that turns
@@ -70,14 +71,16 @@ spring:
       # REQUIRES_NEW runs under a non-transactional build, and CheckpointRecordedEvent is published
       # outside the guard's transaction on purpose.
       #
-      # ONE EXCEPTION EXISTS, timed and worth removing rather than budgeting for.
-      # PluginAuditEventListener is REQUIRES_NEW *and* AFTER_COMMIT: normally it runs on
-      # pluginExecutor long after the publisher is done, but with that pool saturated (10 threads
-      # and all 50 queue slots) CallerRunsPolicy runs it inline on the publishing thread, which is
-      # still inside the commit synchronization holding its own connection (release happens in
-      # afterCompletion, not afterCommit) — issue #171. The other exception this derivation used
-      # to name — the delta-SQL worker pinning a connection across the generation semaphore —
-      # was removed by #164. Introducing another changes this reasoning, not just this number.
+      # NO EXCEPTION REMAINS. Two used to be named here and both are closed. The delta-SQL worker
+      # pinning a connection across the generation semaphore was removed by #164. The deferred
+      # plugin audit listener — REQUIRES_NEW *and* AFTER_COMMIT, so a saturated pluginExecutor
+      # handed the write back to the publishing thread through CallerRunsPolicy, while that thread
+      # was still inside the commit synchronization holding its own connection (release happens in
+      # afterCompletion, not afterCommit) — was closed by #171: the write goes to its own
+      # pluginAuditExecutor, handed over by an explicit execute() whose rejection the listener
+      # catches (so a full pool loses the entry with an ERROR naming it, rather than running it
+      # inline), and the listener refuses to write on a thread that already has a transaction open.
+      # Introducing another exception changes this reasoning, not just this number.
       #
       # So the size is fixed by two bounds rather than by the peak, and ten satisfies both:
       #

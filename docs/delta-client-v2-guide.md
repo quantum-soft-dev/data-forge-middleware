@@ -1267,20 +1267,19 @@ catalog-watermark write on every poll of every worker.
 ## The connection pool is smaller than the threads that can ask it for a connection
 
 That is deliberate (issue **#161**), and worth knowing before reading a `connection-timeout` in the
-logs as a bug. The audited background pools declare **32** threads between them — the scheduler (6),
-`pluginExecutor` (10), `pluginExecutionExecutor` (8), the three queue workers (2 each), the
-forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a single HTTP or gRPC
-request asks for one, and both request layers are unbounded (virtual-thread-per-request, and
-grpc-java's default cached pool). `spring.datasource.hikari.maximum-pool-size` is **10**.
+logs as a bug. The audited background pools declare **34** threads between them — the scheduler (6),
+`pluginExecutor` (10), `pluginExecutionExecutor` (8), `pluginAuditExecutor` (2), the three queue
+workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a
+single HTTP or gRPC request asks for one, and both request layers are unbounded
+(virtual-thread-per-request, and grpc-java's default cached pool).
+`spring.datasource.hikari.maximum-pool-size` is **10**.
 
 Nothing deadlocks, because **background work does not hold one connection while waiting for a
 second** — the shape that turns a shortage into a deadlock rather than a delay. A shortage therefore
 costs a wait of up to `connection-timeout` and a retry on the next tick, which background work
-survives. One exception is known, timed and filed rather than asserted away:
-`PluginAuditEventListener` is `REQUIRES_NEW` *and* `AFTER_COMMIT`, so if `pluginExecutor` is
-saturated its `CallerRunsPolicy` runs it inline on a publishing thread that still holds its own
-connection (**#171**). The other exception this section used to name — the delta-SQL worker pinning
-a connection across the generation semaphore — was removed by **#164**. The pool is sized so the
+survives. **No exception remains**: the two this section used to name are both closed — the
+delta-SQL worker pinning a connection across the generation semaphore by **#164**, and the deferred
+plugin audit listener by **#171** (see below). The pool is sized so the
 consumers that *cannot* absorb a wait are covered outright — the ones that pin a connection
 across S3 I/O instead of releasing it between statements:
 
@@ -1318,6 +1317,47 @@ So, in order, to give the pool more room:
 `BackgroundConnectionDemandTest` discovers the inventory three ways — every `@Bean` returning an
 `Executor`, every `max-concurrent` property, and every pool constructed directly in
 `src/main/java` — so a new background pool fails the build rather than the connection pool.
+
+### The deferred plugin audit write has a lane of its own
+
+Issue **#171**. A plugin audit entry that describes a *state change* is written by
+`PluginAuditEventListener` after the publishing transaction resolves — and `afterCommit` runs
+**before** Spring unbinds the publisher's `ConnectionHolder`, so anything that writes on that thread
+still holds the connection of the transaction that just committed. The listener's own write is
+`REQUIRES_NEW`, so it would ask for a second one. On `pluginExecutor` that happened whenever the
+pool was full (10 threads, 50 queue slots, `CallerRunsPolicy`), and the cost was not only a stall:
+an exception thrown from an `afterCommit` callback propagates to the caller of `commit()`, so a
+connection timeout there surfaced as a failure of an operation that had already succeeded.
+
+Those writes now go to **`pluginAuditExecutor`** — 2 threads and a 500-deep queue, with the default
+`AbortPolicy`, the one place the three plugin pools differ. The listener hands the entry over with an
+explicit `execute` rather than `@Async`, so a full executor is a `RejectedExecutionException` *it*
+catches, with the entry still in hand: the ERROR line names the plugin, the account and the action,
+which a rejection handler could not, because by then the task is an opaque `FutureTask`. A lane of
+its own also stops one INSERT queueing behind plugin dispatch work that takes seconds. The listener
+additionally refuses to write when a transaction is active on the thread the write ends up running
+on, so the invariant is a property of the write rather than of the executor wired in front of it.
+
+What an operator should know: **a full audit executor loses entries**, deliberately. Filling a
+500-deep queue that two threads drain one INSERT at a time means the database is not accepting
+writes, in which case the entry was not going to be written anyway; auditing must never become the
+reason an operation fails or waits. That ERROR line is the only trace such an entry leaves, and it
+quotes the rejection's own message so a full queue (a database problem) reads differently from an
+executor shutting down (a pod stopping, and not a problem at all).
+
+**A stopping pod drops them too, and that is the same decision.** This pool discards its queue on
+shutdown — `shutdownNow`, 5 seconds for the two writes already in flight, daemon threads — where
+the sibling pools wait up to 60 s for a queue a tenth the size. So an entry still queued when the
+context closes is lost, and one being written has 5 s to finish. Waiting instead would not be the
+safe choice it looks like: an orderly shutdown keeps executing the whole queue while
+`awaitTermination` merely bounds how long the container blocks, and non-daemon threads would then
+hold the JVM open past `terminationGracePeriodSeconds` (30) — a SIGKILL, in the middle of exactly
+the slow-database episode that filled the queue.
+
+`PluginAuditService`'s immediate (non-deferred) audit methods are unchanged: they are plain
+`@Transactional`, still run on `pluginExecutor`, and do not have this shape. One new metric series
+appears, nothing is renamed: Boot's `TaskExecutorMetricsAutoConfiguration` binds every
+`ThreadPoolTaskExecutor`, so `/actuator/prometheus` gains `executor_*{name="pluginAuditExecutor"}`.
 
 ## Upload History (dashboard) shows per-table stats, not files
 

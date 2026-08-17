@@ -453,6 +453,77 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- audit-listener-own-lane: The deferred plugin audit write can no longer be handed back to the
+  thread that published it (issue #171, the last of the two exceptions #161 documented rather than
+  asserted away). `PluginAuditEventListener.onAuditEntryReady` carried `@Async("pluginExecutor")`
+  + `@Transactional(REQUIRES_NEW)` + `@TransactionalEventListener(AFTER_COMMIT)`. On the normal path
+  the hand-off makes `REQUIRES_NEW` equivalent to `REQUIRED`; with `pluginExecutor` full (10 threads,
+  50 queue slots) its `CallerRunsPolicy` ran the listener **inline on the publishing thread**, which
+  is inside the commit synchronization with its own `ConnectionHolder` still bound — Spring releases
+  it in `afterCompletion`, not `afterCommit` — so the write asked the pool for a **second connection
+  while holding one**, the single hold-and-wait shape in the application's background work. The
+  second cost is the one easy to miss: an exception from an `afterCommit` callback propagates to the
+  caller of `commit()`, so a 30 s `connection-timeout` surfaced as a failure of an operation that had
+  already committed. **The ticket's second candidate — drop `REQUIRES_NEW` and rely on the
+  `AFTER_COMMIT` guarantee — is wrong, and that is the correction this ticket needed**: on precisely
+  the inline path, `REQUIRED` finds the publisher's transaction still `isExistingTransaction()`
+  (`ConnectionHolder.transactionActive` is cleared in `doCleanupAfterCompletion`, after the trigger),
+  joins a transaction that has already committed, and the row is silently lost — which is what the
+  method's own comment had always warned about. So the fix is the first candidate, made specific:
+  **a lane of its own plus a guard**, deliberately both. New `pluginAuditExecutor` (2 threads, queue
+  500) carries the two listener methods; `pluginExecutor` keeps `CallerRunsPolicy` untouched for
+  plugin dispatch and the immediate `PluginAuditService` methods, which are plain `REQUIRED` and do
+  not have this shape. Two threads because each task is one INSERT, and a 500-deep queue because
+  filling it means the database is not accepting writes at all. **The hand-off is an explicit
+  `execute`, not `@Async`** — the correction review forced, and the reason is the log line: a
+  rejection handler receives the `@Async` proxy's opaque `FutureTask` and could only ever print pool
+  statistics, so a burst of drops would be forty identical lines naming none of the activations,
+  reinits or rotations that went unrecorded. Submitting by hand puts the `RejectedExecutionException`
+  where the entry still is, so the ERROR names plugin, account and action; the executor therefore
+  keeps the default `AbortPolicy`, which is safe precisely because the listener catches it rather
+  than letting it reach the publisher (that is what a `void @Async` rejection would have done, at
+  submit time, on the publishing thread — the very failure being removed). The guard is the half
+  that survives a future edit: `persist` refuses outright when
+  `TransactionSynchronizationManager.isActualTransactionActive()`, so the invariant is a property of
+  the write rather than of the executor wired in front of it. It needed the transaction to move off
+  the listener — a new package-private `PluginAuditEntryWriter` bean owns the `REQUIRES_NEW`, since a
+  `@Transactional` method invoked on `this` is not proxied and the check has to run *before* the
+  transaction opens (the `DeltaSessionCommitTransaction` shape of #147). Two smaller review
+  corrections: the listener's catch logs the exception rather than only `getMessage()` (the failure
+  that surfaced this carried no message at all), and this pool **discards its queue on shutdown**
+  (`shutdownNow`, 5 s for the two in-flight writes, daemon threads) where the siblings wait 60 s for
+  a queue a tenth the size. Round 2 corrected that last one twice over: waiting *looks* like the
+  conservative choice and is not, because an orderly shutdown keeps executing the whole queue while
+  `awaitTerminationSeconds` only bounds how long the container blocks — and `ThreadPoolTaskExecutor`
+  threads are not daemons, so those 500 INSERTs would hold the JVM open past
+  `terminationGracePeriodSeconds: 30` and produce the SIGKILL the bound was written to prevent, in
+  the middle of the slow-database episode that filled the queue. The test moved with it: it now
+  asserts the queued tasks **never ran**, since "shutdown() returned quickly" is true either way.
+  Two more from round 2: the rejection ERROR quotes the refusal's own message, because
+  `TaskRejectedException` also means "executor shutting down" and sending an operator to the database
+  during a routine rollout is the same defect the previous fix removed elsewhere; and one gain worth
+  recording that came free — the catch now sits **outside** the `REQUIRES_NEW` boundary, so a failed
+  `save` no longer marks the transaction rollback-only and throws `UnexpectedRollbackException` out
+  of the listener, which on the old inline path went straight into `commit()`. Proven by an integration test on the wired application, because the
+  listener is invoked by Spring's transaction synchronization and the inline path exists only under
+  saturation: it fills the executor **until it actually refuses** (submitting exactly
+  `max + queueCapacity` would flake, since the pool is the shared context's singleton and an earlier
+  class's write in flight frees a slot a moment later), publishes inside a real transaction and
+  asserts the row is absent the instant the publishing thread returns — an entry already committed by
+  then can only have been written by that thread inside `afterCommit`. Verified red against an inline
+  executor with the guard removed, which is what a saturated `CallerRunsPolicy` degenerates to. It
+  extends `BaseIntegrationTest` so it joins the shared context rather than caching one more, each of
+  which drains the queue workers once at refresh (#167's residual) — two unrelated delta classes went
+  red in CI before that. `BackgroundConnectionDemandTest` drops the exception from its class documentation (the
+  ticket's third checkbox), adds the new bean at `Hold.SHORT` and moves the audited total **32 → 34**;
+  the floor is unchanged at `4 long ticks + 2 request reserve = 6 <= 10`, since the new threads are
+  short holders. **The trade an operator is buying**: under saturation — and now also when the pod
+  stops — the entry is lost rather than written late, which is new; before, it was written inline at
+  the cost of the publisher. No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**,
+  S3-key or frontend change; `/actuator/prometheus` does gain an
+  `executor_*{name="pluginAuditExecutor"}` family, because Boot binds every `ThreadPoolTaskExecutor`
+  (the #146 precedent for calling a new series out). See
+  `docs/delta-client-v2-guide.md` ("The deferred plugin audit write has a lane of its own").
 - shared-fold-heap-budget: The checkpoint fold's heap ceiling is a reservation for the **process**,
   not a fresh allowance every build gets a copy of (issue #178, raised reviewing #177).
   `delta.checkpoint.max-fold-bytes` (#152) is enforced by one `BudgetedFold` per build, and one JVM
