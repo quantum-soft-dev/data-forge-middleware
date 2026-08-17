@@ -457,10 +457,11 @@ delta:
     # (not reserved at the ceiling, which for artifacts in the low hundreds of MiB would refuse a
     # three-table batch outright), and a writer that crosses it is stopped mid-file exactly as one
     # crossing its own ceiling is — but as a TRANSIENT refusal: the artifact is fine, the directory
-    # is busy. A checkpoint table is skipped
-    # (delta.checkpoint.tables.unmaterialized{reason=scratch_budget}), a completed-batch artifact is
-    # retried with backoff, the frame ends the build without touching
-    # delta.checkpoint.builds.aborted (whose values are permanent by contract, #153).
+    # is busy. A completed-batch artifact is retried with backoff; on the checkpoint side (frame or
+    # a table snapshot) the build ends, because a full directory is systemic and skipping one table
+    # would advance the pointer past a snapshot nothing would ever rewrite. Neither touches
+    # delta.checkpoint.builds.aborted, whose values are permanent by contract (#153) — see
+    # delta.parquet.scratch.refused.
     # 0 = unbounded, the shipped default, because the application cannot know how large the
     # directory it was handed is — the deployed value is declared beside the volume in
     # k8s/base/configmap.yaml. Unbounded still MEASURES: delta.parquet.scratch.bytes follows the

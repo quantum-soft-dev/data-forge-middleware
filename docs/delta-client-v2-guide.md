@@ -580,9 +580,9 @@ You don't write these — they're how downstream tools read your data:
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
   the declared schema cannot render. A table stopped instead by the shared *directory* budget
-  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, issue #150) is skipped but counted as
-  `{reason=scratch_budget}` and leaves its row alone — no detach, no spent attempt — because that
-  one says nothing about the table. A later scheduled build (or a forced rebuild) **rematerializes
+  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, issue #150) is **not** counted here at all: that refusal is
+  systemic rather than a verdict on one table, so it ends the build and shows on
+  `delta.parquet.scratch.refused` instead. A later scheduled build (or a forced rebuild) **rematerializes
   a missing snapshot from the frame** without waiting for new segments (issue #128): the pointer,
   the frame and retention stay where they were, and only tables whose `s3_key_parquet` is still
   null are rewritten (a forced rebuild rewrites every table). After a full prune the frame is
@@ -1055,24 +1055,27 @@ the multiplier #038 removed.
 artifact — deterministic, identical on every retry. Crossing the directory budget says only that the
 volume was busy, so:
 
-- a **checkpoint table** is skipped as
-  `delta.checkpoint.tables.unmaterialized{reason=scratch_budget}` — its own reason, because
-  `parquet_failed` would send an operator to the table's schema and to
-  `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, and both would be a wild goose chase. Unlike every other
-  unmaterialized outcome it leaves the row **untouched**: no detach, no spent
-  `materialize_attempts`, nothing saved. The table keeps the snapshot it already had — stale by a
-  seq, never wrong — and the next build that folds the site writes it again. Detaching would 404 a
-  healthy artifact for Bit BI, Parquet Export and the Delta Sync download until the next nightly
-  rematerialize, and spending an attempt would walk a healthy row towards
-  `delta.checkpoint.tables.given-up`, both because a completed-batch worker happened to be holding
-  the directory. It is the argument the shutdown carve-out (#162) already makes for a cause that
-  belongs to the process rather than to the table;
+- a **checkpoint table** ends the build, and is deliberately **not** a value on
+  `delta.checkpoint.tables.unmaterialized`. A full directory is a *systemic* scratch failure — every
+  remaining table would meet it too — which is the same answer an unusable scratch directory has had
+  since #112, for the reason stated there: skipping would detach every last-good snapshot while the
+  pointer advanced. Skipping just this table looks gentler and is not. The pointer would move to the
+  new seq with the table's row still at the old one and nothing marking it as owing a rewrite (the
+  nightly rematerialize keys on a **null** `s3_key_parquet`), so a site that then went quiet would
+  serve a snapshot silently missing every change in between, indefinitely, with retention having
+  already pruned the segments below the new pointer. Detaching instead would fix the retry and 404 a
+  healthy artifact for a neighbour's disk use — and on a site's **first** build, where no row exists
+  to detach, a refusal across every table would leave `checkpoints` empty with the pointer advanced,
+  which the Bit BI files API reads as "not a Delta site yet" and answers with the historical
+  uploaded CSVs as if they were the current baseline. Ending the build has none of that: no object,
+  no row, no pointer, no attempt spent, and the whole seq redone on the next tick;
 - the **frame** ends the build, as an oversized frame does, but is deliberately **absent** from
   `delta.checkpoint.builds.aborted`, whose tag values are refusals that never repair themselves.
-  **Know what that costs before sizing the key.** Since #153 the frame is written first and is the
-  largest file a build produces, and `CheckpointScheduler` walks sites serially — so a directory
-  held full for the length of the 02:00 sweep aborts *every* site's build at its first write, and
-  retention is frozen fleet-wide for that night. The batch side degrades one artifact at a time;
+  **Know what that costs before sizing the key** — and it is the same for the snapshots above, since
+  both end the build. Since #153 the frame is written first and is the largest file a build
+  produces, and `CheckpointScheduler` walks sites serially — so a directory held full for the length
+  of the 02:00 sweep aborts *every* site's build at its first write, and retention is frozen
+  fleet-wide for that night. The batch side degrades one artifact at a time;
   this side degrades by whole sites. Nothing is lost (the next night repeats the fold), the pre-#150
   behaviour on this deployment was a kubelet eviction of the pod, which is worse — but the asymmetry
   is real, `delta.parquet.scratch.refused{writer=checkpoint_frame}` is the series to alert on, and
@@ -1941,7 +1944,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.checkpoint.fold.bytes` (summary) | `delta_checkpoint_fold_bytes_count` / `_sum` / `_max` |
 | `delta.checkpoint.fold.wait` (timer) | `delta_checkpoint_fold_wait_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
-| `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed\|scratch_budget}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
+| `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
 | `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
 | `delta.checkpoint.builds.deferred` | `delta_checkpoint_builds_deferred_total` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |

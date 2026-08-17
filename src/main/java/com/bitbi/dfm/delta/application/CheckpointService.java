@@ -986,6 +986,30 @@ public class CheckpointService {
             } catch (BuildEndedByShutdownException e) {
                 throw e;
             } catch (RuntimeException e) {
+                // A full scratch directory is a SYSTEMIC scratch failure, so it ends the build —
+                // the same answer prepareScratchDirectory() gives an unusable directory, for the
+                // reason stated there: skipping would detach every last-good snapshot while the
+                // pointer advanced. Skipping this one table looks gentler and is not (issue #150,
+                // review round 2). The pointer would move to the new seq with this table's row left
+                // at the old one, and nothing would mark it as owing a rewrite: the nightly
+                // rematerialize keys on a NULL s3_key_parquet, so a site that then goes quiet
+                // serves a snapshot silently missing every change in between, indefinitely, while
+                // retention has already pruned the segments below the new pointer. Detaching
+                // instead would fix the retry and 404 a healthy artifact for a neighbour's disk
+                // use. And on a site's FIRST build, findOrCreate's row is not saved either, so a
+                // refusal across every table leaves `checkpoints` empty with the pointer advanced —
+                // which CheckpointFileQueryService reads as "not a Delta site yet" and answers with
+                // the historical uploaded CSVs as if they were the current baseline.
+                //
+                // Ending the build has none of those: no object, no row, no pointer, no attempt
+                // spent, retention frozen for one night and the whole seq redone on the next tick.
+                // Deliberately NOT on delta.checkpoint.builds.aborted (#153's tag values never
+                // repair themselves); delta.parquet.scratch.refused{writer=checkpoint_table}
+                // counted it inside the budget, and issue #193 tracks the asymmetry with the
+                // completed-batch side, which degrades one artifact at a time.
+                if (isScratchBudgetRefusal(e)) {
+                    throw scratchDirectoryFull(siteId, tableName, e);
+                }
                 // A failure seen while the context is closing is a fact about the process, not
                 // about this table (issue #162). The S3Client and the DataSource are destroyed
                 // right after ContextClosedEvent is published, so every call from here on fails
@@ -994,29 +1018,6 @@ public class CheckpointService {
                 // and Parquet Export until the next nightly rematerialize.
                 if (shutdownSignal.isShuttingDown()) {
                     throw new BuildEndedByShutdownException(siteId, tableName, e);
-                }
-                // A directory-budget refusal (issue #150) is a fact about the volume, not about
-                // this table — the same argument the shutdown carve-out above makes, and it lands
-                // in the same place. The row is left exactly as it was: no detach, no spent
-                // attempt, nothing saved. Detaching would 404 a perfectly good last-good snapshot
-                // for Bit BI, Parquet Export and the Delta Sync download until the next nightly
-                // rematerialize, and spending an attempt would walk a healthy row towards
-                // delta.checkpoint.tables.given-up — both because a completed-batch worker
-                // happened to be holding the directory. What the table loses is this build: it
-                // keeps serving the previous seq's snapshot (stale, never wrong) and the next
-                // build that folds the site writes it again. A row that had no key yet stays
-                // unmaterialized and is picked up by the nightly rematerialize as before.
-                // The retry is deliberately not bounded by #149's cap here, because the cause is
-                // not the table's and cannot be repaired by giving up on it;
-                // delta.parquet.scratch.refused{writer=checkpoint_table} is the standing signal.
-                if (e instanceof ScratchBudgetExceededException) {
-                    metrics.checkpointTableUnmaterialized("scratch_budget");
-                    log.warn("Checkpoint Parquet for table {} of site {} was stopped by the shared "
-                            + "Parquet scratch budget — the table keeps the snapshot it already had "
-                            + "and is written again by the next build. Raise "
-                            + "delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
-                            + "delta.batch-parquet.max-concurrent", tableName, siteId, e);
-                    return;
                 }
                 // Report the cause first: the detach below goes through the epoch guard, which
                 // throws rather than returns when the site was wiped mid-build, and this table's
@@ -1142,6 +1143,45 @@ public class CheckpointService {
      *
      * @return {@code true} when the row changed and must be saved
      */
+    /**
+     * End the build: the shared scratch directory had no room for this table's snapshot.
+     *
+     * <p>Returns the exception rather than throwing it, so the call site reads
+     * {@code throw scratchDirectoryFull(...)} and the compiler can see the branch ends.</p>
+     */
+    private static RuntimeException scratchDirectoryFull(UUID siteId, String tableName,
+                                                        RuntimeException error) {
+        log.error("The checkpoint snapshot for table {} of site {} could not be written because the "
+                + "shared Parquet scratch directory was full — the build is abandoned, so nothing "
+                + "durable changed: the per-table keys and last_checkpoint_seq stay where they were "
+                + "and the next tick tries again. This is contention, not a fact about the site: "
+                + "raise delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
+                + "delta.batch-parquet.max-concurrent", tableName, siteId, error);
+        return error;
+    }
+
+    /**
+     * Is this failure the shared scratch directory refusing room (issue #150)?
+     *
+     * <p>The whole cause chain, as {@code DeltaParquetWriter.failure()} already walks it for the
+     * per-file ceiling's exception. Nothing wraps this one today, so a direct {@code instanceof}
+     * would work — but a future wrap would be silently <em>worse</em> here than on the batch path:
+     * the refusal would fall through to {@code parquet_failed}, which detaches a healthy last-good
+     * snapshot on an advancing seq and spends a materialize attempt against
+     * {@code delta.checkpoint.tables.given-up} (raised in review).</p>
+     */
+    private static boolean isScratchBudgetRefusal(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ScratchBudgetExceededException) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                return false;
+            }
+        }
+        return false;
+    }
+
     private static boolean abandonStaleSnapshot(Checkpoint checkpoint, SnapshotPass pass) {
         if (pass == SnapshotPass.INCREMENTAL || checkpoint.getS3KeyParquet() == null) {
             checkpoint.detachParquet();

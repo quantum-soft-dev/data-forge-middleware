@@ -44,7 +44,8 @@ import java.util.function.Supplier;
  *   <li>{@code delta.parquet.scratch.refused} — writers stopped because the shared scratch
  *       directory was full, tagged {@code writer=checkpoint_frame|checkpoint_table|batch_artifact}.
  *       Transient by nature — it says the directory was busy, not that the artifact was too big —
- *       so it is its own counter rather than a value on any of the permanent meters below</li>
+ *       so it is its own counter rather than a value on any of the meters below, neither the
+ *       permanent {@code builds.aborted} nor the per-table {@code tables.unmaterialized}</li>
  *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
@@ -88,7 +89,6 @@ public class DeltaMetrics {
     private final Counter egressSegments;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
-    private final Counter checkpointScratchBudget;
     private final Counter checkpointFrameTooLarge;
     private final Counter checkpointLossyRefold;
     private final Counter checkpointHistoryGone;
@@ -128,7 +128,6 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
-        this.checkpointScratchBudget = checkpointUnmaterialized(registry, "scratch_budget");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
@@ -196,32 +195,18 @@ public class DeltaMetrics {
      * declared schema ({@code no_schema}) or one whose Parquet write threw ({@code parquet_failed})
      * has nothing to download until the next build. Both used to be masked by the CSV snapshot.</p>
      *
-     * <p>{@code scratch_budget} is the third and it is not a fact about the table at all (issue
-     * #150): the shared scratch directory was full of <em>other</em> writers' files when this one
-     * asked for room. It is separated from {@code parquet_failed} because the operator's next move
-     * differs — that one says "check the declared schema against the data, or
-     * {@code delta.checkpoint.max-temp-bytes} against the table's size", and both would be a wild
-     * goose chase here, where the lever is {@code delta.parquet.max-scratch-bytes}, the volume behind
-     * it, or {@code delta.batch-parquet.max-concurrent}.</p>
+     * <p>A table stopped by the shared scratch <em>directory</em> (issue #150) is deliberately
+     * <b>not</b> here. That refusal is systemic — the directory is full of other writers' files, so
+     * every remaining table would meet it too — and it ends the build rather than recording a
+     * verdict on one table, the same answer an unusable scratch directory has had since #112.
+     * {@code delta.parquet.scratch.refused} is its meter.</p>
      *
-     * <p><b>It is also the one value here that leaves the row untouched.</b> The other two end a
-     * build owing a snapshot, so the row is saved with its key detached on an advancing seq and one
-     * {@code materialize_attempts} spent (#149). This one does neither: the table keeps the snapshot
-     * it already had — stale by a seq, never wrong — because detaching it would 404 a healthy
-     * artifact for Bit BI, Parquet Export and the Delta Sync download, and spending an attempt would
-     * walk a healthy row towards {@code delta.checkpoint.tables.given-up}, both on account of a
-     * neighbouring writer's disk use. That is the reasoning {@code BuildEndedByShutdownException}
-     * already applies to a cause that belongs to the process rather than to the table (#162). So a
-     * count here means "this build did not rewrite that table", not "that table has nothing to
-     * serve".</p>
-     *
-     * @param reason {@code no_schema}, {@code parquet_failed} or {@code scratch_budget}
+     * @param reason {@code no_schema} or {@code parquet_failed}
      */
     public void checkpointTableUnmaterialized(String reason) {
         switch (reason) {
             case "no_schema" -> checkpointNoSchema.increment();
             case "parquet_failed" -> checkpointParquetFailed.increment();
-            case "scratch_budget" -> checkpointScratchBudget.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
     }

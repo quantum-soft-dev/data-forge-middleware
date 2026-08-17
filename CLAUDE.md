@@ -483,25 +483,33 @@ pages/{feature}/            # Route pages
   contention never becomes a tag value on a meter contracted to mean permanent. So
   `ScratchBudgetExceededException` is its own type (not a subclass of
   `ArtifactSizeLimitExceededException`, whose catches mean "this artifact is deterministically too
-  big"), and each caller keeps its **existing failure mode** with the diagnosis corrected: a
-  checkpoint table is skipped as
-  `delta.checkpoint.tables.unmaterialized{reason=scratch_budget}` — a **new tag value**, because
-  `parquet_failed`'s own log line sends an operator to the table's schema and to
-  `delta.checkpoint.max-temp-bytes` and both would be a wild goose chase; the **frame** ends the
-  build as an oversized frame does but is deliberately **absent** from
-  `delta.checkpoint.builds.aborted` (#153's contract); a completed-batch artifact takes the ordinary
-  backoff instead of the first-attempt `ABANDONED` its own ceiling earns it, which falls out of
-  `DeltaParquetWriter.failure()` classifying only `ArtifactSizeLimitExceededException` as permanent.
-  **The table skip leaves its row untouched** — no detach, no spent `materialize_attempts`, nothing
-  saved — which is the one place this differs from every other unmaterialized outcome, and review
-  round 1 corrected it: the first draft fell through to `abandonStaleSnapshot`, so a healthy
-  last-good snapshot would have 404'd for Bit BI, Parquet Export and the Delta Sync download until
-  the next nightly rematerialize, and a healthy row would have walked towards
-  `delta.checkpoint.tables.given-up` — both because a completed-batch worker happened to be holding
-  the directory. The table keeps serving the previous seq's snapshot (stale, never wrong) and the
-  next build that folds the site rewrites it; it is exactly the argument
-  `BuildEndedByShutdownException` already makes for a cause that belongs to the process rather than
-  to the table (#162). Two more corrections from that round: the refusal message printed the
+  big"), and a completed-batch artifact takes the ordinary
+  backoff instead of the first-attempt `ABANDONED` its own ceiling earns it (which falls out of
+  `DeltaParquetWriter.failure()` classifying only `ArtifactSizeLimitExceededException` as
+  permanent), while on the **checkpoint** side — frame *or* table snapshot — the build ends, off
+  `delta.checkpoint.builds.aborted` and off `delta.checkpoint.tables.unmaterialized` alike.
+  **Two review rounds went into that last sentence and both corrections matter.** The first draft
+  skipped the table and fell through to `abandonStaleSnapshot`, which on an advancing seq detaches
+  `s3_key_parquet` — a healthy last-good snapshot 404ing for Bit BI, Parquet Export and the Delta
+  Sync download, plus a spent `materialize_attempts` against `delta.checkpoint.tables.given-up`,
+  for a neighbouring batch worker's disk use. Round 1 replaced that with leaving the row untouched;
+  **round 2 showed that was worse**, and the case is worth remembering: the pointer still advanced,
+  so the table's row stayed at the old seq with *nothing* marking it as owing a rewrite — the
+  nightly rematerialize keys on a **null** `s3_key_parquet` — and a site that then went quiet served
+  a snapshot silently missing every change in between, indefinitely, with retention having already
+  pruned the segments below the new pointer. Sharper still on a site's **first** build, where
+  `findOrCreate`'s row is never saved either: a refusal across every table left `checkpoints` empty
+  with the pointer advanced, and `CheckpointFileQueryService` reads "no checkpoint rows" as "not a
+  Delta site yet" and would have handed a Bit BI client the historical uploaded CSVs as its current
+  baseline. Ending the build has none of that, and it is not a new policy but the one **#112 already
+  wrote down** for an unusable scratch directory, in the same words: a systemic scratch failure must
+  not be counted as per-table skips, because "skipping would detach every last-good snapshot while
+  the pointer advanced". So `delta.checkpoint.tables.unmaterialized` gains **no new tag value** after
+  all, and `delta.parquet.scratch.refused{writer=...}` is the whole of the reporting. The
+  classification walks the **cause chain** (as `DeltaParquetWriter.failure()` already does for the
+  per-file exception), because nothing wraps it today but a future wrap would fall through to
+  `parquet_failed` and do the detach this decision exists to avoid. Two more corrections from round
+  1: the refusal message printed the
   **whole** budget where it said "left to it" — with 4.9 GiB held by neighbours a writer refused for
   1 MiB read like the "artifact too big" verdict this type exists to distinguish itself from, and
   `DeltaParquetWriter.failure()` copies that text verbatim into `batch_parquet_artifacts.last_error`
