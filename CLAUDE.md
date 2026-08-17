@@ -486,7 +486,18 @@ pages/{feature}/            # Route pages
   "zero rows" is exactly the assertion that cannot tell a working guard from a write that is broken,
   dropped or never wired — which is how this test came to assert nothing. Its power was checked the
   way #171 checked its own: with `AFTER_COMMIT` mutated to `AFTER_COMPLETION` — the escape the
-  ticket hypothesised — the test is red. The `during(2s)` window and the sibling
+  ticket hypothesised — the test is red, and review turned that one-off into a standing guard.
+  Every test in `PluginAuditEventListenerTest` invokes a listener method **directly**, so the
+  annotations that decide whether Spring calls it at all were pinned by nothing; two reflective
+  assertions in the `BatchEventListenerPhaseTest` shape now hold the phase *and*
+  `fallbackExecution` on both methods, so the same mutation is caught at unit cost and the
+  Testcontainers test is no longer the only thing between the suite and a phase change. One hazard
+  is deliberately **not** guarded here and is recorded on **#190** instead: `regenerateSql` writes
+  after the generation returns (`markAsSuperseded` + save), so once #190 moves the generation out
+  of the caller's transaction, a failure in those two lines rolls the supersede back while the
+  entry — published with no transaction active, hence written at once by `fallbackExecution` —
+  stands. That is this invariant reached by a route that does not exist yet.
+  The `during(2s)` window and the sibling
   `shouldAuditRolledBackHistoryClear` (whose `clearHistory` vehicle still works) are untouched.
   Test-only — no production code, REST, gRPC, DTO, migration, configuration-key, metric, S3-key or
   frontend change.
