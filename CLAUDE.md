@@ -453,6 +453,54 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- rollback-audit-guard: `Should not audit a regeneration that rolled back` guards its invariant at
+  the listener that owns it, instead of through a path that stopped working (issue #172). **Neither
+  of the ticket's two candidate causes was right, and the evidence was in the failure line all
+  along**: both recorded reds — PR #166 sha `41a15110` and PR #180 sha `6f076501` — are
+  `AssertionError at PluginHistoryIntegrationTest.java:127`, which is the fixture's
+  `orElseThrow(... "fixture did not produce a generation")`, not the audit assertion twenty lines
+  below it. That is #174: `plugin.sql-generation.heap-threshold-percent: 100` did not disable the
+  memory-pressure abort, `generateSqlForBatch` returned `Optional.empty()` whenever the single
+  `./gradlew test` JVM went above 99% of `max`, and the test could not build its fixture. Fixed in
+  `4fe3150d`; the audit assertion had never once been the thing that failed. The **second** finding
+  is why this is not a one-line ticket: that assertion had by then stopped being able to fail at
+  all. #164 gave `SqlGenerationService.regenerateForBatch` a `refuseIfTransactionActive()` guard and
+  left `PluginHistoryService.regenerateSql` `@Transactional` around it, so the call throws before it
+  regenerates anything — and `assertThatThrownBy(...).isInstanceOf(IllegalStateException.class)`
+  accepted that refusal as the test's own sentinel failure, since both are
+  `IllegalStateException`. Zero audit rows then meant "nothing ran". Proven by adding
+  `.hasMessage("caller fails after regenerating")`, which is red on `develop` against the #164
+  refusal text — and the same hole is a **live 409 on both Regenerate SQL endpoints and the
+  My Plugins button behind them**, filed as **#190** rather than fixed here, because moving the
+  regeneration out of the caller's transaction is a behaviour decision with its own consequence for
+  the audit (published with no transaction active, `fallbackExecution = true` writes it
+  immediately, so no rollback can take it back — already true for `SQL_GENERATION_COMPLETED` since
+  #164). So the vehicle is retired rather than repaired: the entry is published through
+  `PluginAuditService.logSqlRegenerationCompleted`, the production writer of that action type, into
+  a `TransactionTemplate` that then throws. **What that buys, point by point.** The account is the
+  method's own `UUID`, so the count names what this method produced instead of every row the shared
+  `TEST_ACCOUNT_ID` has (the ticket's isolation hypothesis, closed by construction — and with it the
+  DELETE-then-count window a neighbour could land in). No batch, no CSV, no S3 and no
+  `SqlGenerationService`, so the one thing that actually went red is gone rather than made less
+  likely. And a **committing** publication is asserted right after the rolled-back one, because
+  "zero rows" is exactly the assertion that cannot tell a working guard from a write that is broken,
+  dropped or never wired — which is how this test came to assert nothing. Its power was checked the
+  way #171 checked its own: with `AFTER_COMMIT` mutated to `AFTER_COMPLETION` — the escape the
+  ticket hypothesised — the test is red, and review turned that one-off into a standing guard.
+  Every test in `PluginAuditEventListenerTest` invokes a listener method **directly**, so the
+  annotations that decide whether Spring calls it at all were pinned by nothing; two reflective
+  assertions in the `BatchEventListenerPhaseTest` shape now hold the phase *and*
+  `fallbackExecution` on both methods, so the same mutation is caught at unit cost and the
+  Testcontainers test is no longer the only thing between the suite and a phase change. One hazard
+  is deliberately **not** guarded here and is recorded on **#190** instead: `regenerateSql` writes
+  after the generation returns (`markAsSuperseded` + save), so once #190 moves the generation out
+  of the caller's transaction, a failure in those two lines rolls the supersede back while the
+  entry — published with no transaction active, hence written at once by `fallbackExecution` —
+  stands. That is this invariant reached by a route that does not exist yet.
+  The `during(2s)` window and the sibling
+  `shouldAuditRolledBackHistoryClear` (whose `clearHistory` vehicle still works) are untouched.
+  Test-only — no production code, REST, gRPC, DTO, migration, configuration-key, metric, S3-key or
+  frontend change.
 - drop-comparison-executor: `AsyncConfiguration#comparisonExecutor` is gone — a `@Bean` declaring
   core 2 / max 5 / queue 10 and calling `initialize()`, with no `@Async("comparisonExecutor")` site,
   no `@Qualifier` and no injection anywhere in `src/main` or `src/test` (issue #165, found by #161's
