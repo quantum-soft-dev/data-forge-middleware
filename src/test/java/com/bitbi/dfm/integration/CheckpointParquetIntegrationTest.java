@@ -67,8 +67,8 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
      * running this same suite and its {@link com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeper},
      * which deletes {@code checkpoint-*} by age. The leak assertion could therefore see a file
      * <em>disappear</em> between its two listings and blame a build that leaked nothing. A
-     * directory nobody else can name makes the listing exact rather than differential: anything
-     * left in it is this class's own leak.
+     * directory nobody else can name lets the assertion be a single listing rather than the
+     * difference of two — see {@link #scratchFiles()} for what still has to be filtered out of it.
      * </p>
      */
     private static final Path CHECKPOINT_SCRATCH = createScratchDirectory("checkpoint");
@@ -87,10 +87,18 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
         registry.add("delta.batch-parquet.temp-dir", BATCH_PARQUET_SCRATCH::toString);
     }
 
+    /**
+     * Best-effort, never fatal. The Spring context is not dirtied, so it stays cached and alive
+     * with its scheduled workers still pointed at these directories: a completed-batch drain
+     * claiming a row another class enqueued could create a file while {@code Files.walk} is
+     * removing them, and a failure here would red this class for a cleanup problem — the very kind
+     * of order-dependent flake issue #168 is removing. The shutdown hook is the guarantee; this
+     * only keeps a long run tidy earlier.
+     */
     @AfterAll
-    static void removeScratchDirectories() throws IOException {
-        deleteRecursively(CHECKPOINT_SCRATCH);
-        deleteRecursively(BATCH_PARQUET_SCRATCH);
+    static void removeScratchDirectories() {
+        deleteQuietly(CHECKPOINT_SCRATCH);
+        deleteQuietly(BATCH_PARQUET_SCRATCH);
     }
 
     @TempDir
@@ -261,7 +269,7 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
         // it "the directory is empty" would restate the leak assertion and, worse, make this method
         // fail whenever a sibling method leaked — reporting a leak of our own as a foreign file,
         // which is the misdiagnosis #168 exists to remove.
-        Path foreign = Files.createTempFile(shared, "checkpoint-" + SITE + "-", ".parquet");
+        Path foreign = Files.createTempFile(shared, "checkpoint-" + SITE + "-", ".parquet").toRealPath();
         try {
             assertFalse(scratchFiles().contains(foreign),
                     "another JVM's scratch must not be visible to this class");
@@ -271,13 +279,41 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Everything in the directory the service actually writes its checkpoint scratch to. The
-     * directory belongs to this class (see {@link #CHECKPOINT_SCRATCH}), so the listing is exact:
-     * no prefix filter narrows it, and any entry at all is a file this class's build left behind.
+     * This site's checkpoint scratch in the directory the service actually writes to — one listing,
+     * not the difference of two, which is what {@link #CHECKPOINT_SCRATCH} buys.
+     * <p>
+     * The site filter stays. The private directory removes the <em>other JVM</em>; the filter
+     * removes the <em>other site in this JVM</em>, which is a real writer:
+     * {@code DeltaCheckpointRebuildService.resumePendingRebuilds()} runs on
+     * {@code ApplicationReadyEvent}, reads {@code site_sync_state.rebuild_requested} from the
+     * suite-wide database, and rebuilds asynchronously — {@code test-data.sql} clears those rows
+     * only for {@code %.example.com} and only after the refresh. Asserting on every entry would
+     * make this class fail on a flag another class left set, which is the cross-class dependency
+     * issue #168 is removing rather than relocating.
+     * </p>
+     * <p>
+     * Paths are canonical because {@code java.io.tmpdir} is a symlink on macOS
+     * ({@code /var/folders/…} → {@code /private/var/folders/…}): comparing an unresolved listing
+     * against a resolved path would never match, and
+     * {@link #keepsItsCheckpointScratchOutOfTheMachineWideTempDirectory} would pass by accident in
+     * exactly the broken configuration it exists to catch.
+     * </p>
      */
-    private List<Path> scratchFiles() throws Exception {
+    private List<Path> scratchFiles() throws IOException {
         try (Stream<Path> files = Files.list(Path.of(checkpointTempDirectory))) {
-            return files.sorted().toList();
+            return files.filter(path -> path.getFileName().toString().startsWith("checkpoint-" + SITE))
+                    .map(CheckpointParquetIntegrationTest::canonical)
+                    .sorted()
+                    .toList();
+        }
+    }
+
+    private static Path canonical(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            // The file was there a moment ago; report it as it was listed rather than lose it.
+            return path.toAbsolutePath();
         }
     }
 
@@ -302,9 +338,11 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
     private static void deleteQuietly(Path directory) {
         try {
             deleteRecursively(directory);
-        } catch (IOException e) {
-            // A shutdown hook has nowhere to report to, and a failure here costs one stale
-            // directory rather than a wrong test result.
+        } catch (IOException | RuntimeException e) {
+            // Neither caller can act on this: a shutdown hook has nowhere to report to, and in
+            // @AfterAll a stale directory is a far smaller price than a red class. RuntimeException
+            // is caught too because Files.walk reports a vanished entry as UncheckedIOException,
+            // which is precisely what a worker still writing into this directory produces.
             System.err.println("Could not remove the scratch directory " + directory + ": " + e);
         }
     }
