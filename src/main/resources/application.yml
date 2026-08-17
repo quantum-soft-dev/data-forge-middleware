@@ -77,8 +77,9 @@ spring:
       # handed the write back to the publishing thread through CallerRunsPolicy, while that thread
       # was still inside the commit synchronization holding its own connection (release happens in
       # afterCompletion, not afterCommit) — was closed by #171: the write goes to its own
-      # pluginAuditExecutor, whose rejection policy drops and logs instead of running inline, and
-      # the listener refuses to write on a thread that already has a transaction open.
+      # pluginAuditExecutor, handed over by an explicit execute() whose rejection the listener
+      # catches (so a full pool loses the entry with an ERROR naming it, rather than running it
+      # inline), and the listener refuses to write on a thread that already has a transaction open.
       # Introducing another exception changes this reasoning, not just this number.
       #
       # So the size is fixed by two bounds rather than by the peak, and ten satisfies both:
@@ -259,7 +260,8 @@ plugin:
     max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}
     # Timeout in seconds waiting for a semaphore permit before aborting
     semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
-    # JVM heap usage percentage threshold; generation aborts if exceeded
+    # JVM heap usage percentage threshold; generation aborts when usage is strictly above it.
+    # 100 disables the check outright (heap usage can never exceed 100%) — issue #174.
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
     # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size and fallback sweep interval
     delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}
