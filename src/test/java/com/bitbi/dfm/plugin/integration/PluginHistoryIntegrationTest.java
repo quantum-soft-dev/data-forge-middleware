@@ -101,12 +101,26 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
 
     private AccountPlugin testAccountPlugin;
 
+    /**
+     * Set by the methods that audit against an account of their own, so their rows can be removed
+     * even when the assertion in between them fails. {@code plugin_audit_logs} is partitioned and
+     * {@code test-data.sql} never touches it.
+     */
+    private UUID ownAuditAccountId;
+
     @BeforeEach
     void setUp() {
         // Activate Bit BI plugin for test account
         testAccountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, PLUGIN_ID,
                 Map.of("tenantId", "test-tenant"));
         accountPluginRepository.save(testAccountPlugin);
+    }
+
+    @AfterEach
+    void removeOwnAuditRows() {
+        if (ownAuditAccountId != null) {
+            jdbcTemplate.update("DELETE FROM plugin_audit_logs WHERE account_id = ?", ownAuditAccountId);
+        }
     }
 
     @Test
@@ -135,45 +149,31 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         // The account is this method's own, so the count names what this method produced rather
         // than every row the shared account has (the second candidate cause on #172), and no
         // DELETE-then-count window remains for a neighbour to land in.
-        UUID auditAccountId = UUID.randomUUID();
+        ownAuditAccountId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
 
         TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
-            logRegenerationCompleted(auditAccountId, batchId);
+            logRegenerationCompleted(batchId);
             throw new IllegalStateException("caller fails after regenerating");
         })).isInstanceOf(IllegalStateException.class)
                 .hasMessage("caller fails after regenerating");
 
         // during() so a late async write cannot be mistaken for absence.
         await().during(ofSeconds(2)).atMost(ofSeconds(6)).untilAsserted(() ->
-                assertThat(regenerationCompletedEntries(auditAccountId))
+                assertThat(regenerationCompletedEntries())
                         .as("the regeneration was rolled back, so nothing may claim it completed")
                         .isZero());
 
         // The same publication under a committing caller, so "zero" above can never be zero
         // because the write is broken, dropped or never wired — which is exactly how this test
         // came to assert nothing at all.
-        transactionTemplate.executeWithoutResult(status ->
-                logRegenerationCompleted(auditAccountId, batchId));
+        transactionTemplate.executeWithoutResult(status -> logRegenerationCompleted(batchId));
 
         await().atMost(ofSeconds(10)).untilAsserted(() ->
-                assertThat(regenerationCompletedEntries(auditAccountId))
+                assertThat(regenerationCompletedEntries())
                         .as("a committed regeneration must be on record")
                         .isOne());
-
-        jdbcTemplate.update("DELETE FROM plugin_audit_logs WHERE account_id = ?", auditAccountId);
-    }
-
-    private void logRegenerationCompleted(UUID accountId, UUID batchId) {
-        pluginAuditService.logSqlRegenerationCompleted(PLUGIN_ID, accountId, batchId,
-                UUID.randomUUID(), UUID.randomUUID(), new SqlGenerationStats(1, 0, 0, 1), 5L);
-    }
-
-    private Long regenerationCompletedEntries(UUID accountId) {
-        return jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
-                Long.class, accountId, PluginActionType.SQL_REGENERATION_COMPLETED.name());
     }
 
     @Test
@@ -500,6 +500,24 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
     }
 
     // ==================== Helper Methods ====================
+
+    /**
+     * Publishes a deferred {@code SQL_REGENERATION_COMPLETED} entry the way production does, for
+     * {@link #ownAuditAccountId}.
+     */
+    private void logRegenerationCompleted(UUID batchId) {
+        pluginAuditService.logSqlRegenerationCompleted(PLUGIN_ID, ownAuditAccountId, batchId,
+                UUID.randomUUID(), UUID.randomUUID(), new SqlGenerationStats(1, 0, 0, 1), 5L);
+    }
+
+    /**
+     * Counts the completion entries written for {@link #ownAuditAccountId}.
+     */
+    private Long regenerationCompletedEntries() {
+        return jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
+                Long.class, ownAuditAccountId, PluginActionType.SQL_REGENERATION_COMPLETED.name());
+    }
 
     /**
      * Creates a SQL generation by triggering the batch completion event.
