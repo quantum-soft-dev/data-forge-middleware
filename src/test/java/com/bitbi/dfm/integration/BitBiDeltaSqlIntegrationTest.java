@@ -139,25 +139,51 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         return batchId;
     }
 
+    private void drainQueue() {
+        drainQueueWatching(null);
+    }
+
     /**
-     * Drain deterministically — the same loop the sweep worker runs, but bounded.
+     * Drain deterministically — the same loop the sweep worker runs, but bounded, and reporting
+     * whether <em>this</em> context was the one that took the watched segment.
      *
      * <p>The bound is what a segment the queue claims and never marks processed looks like from
      * here: {@code findNextPendingPluginSql} hands the same row back on the next iteration and the
      * loop never ends. A hung suite says nothing about which property broke, so the drain fails
-     * with the segment named instead (issue #175, whose branch exists precisely so that a segment
-     * with nothing to generate still leaves the queue).</p>
+     * with the pending rows named instead (issue #175, whose branch exists precisely so that a
+     * segment with nothing to generate still leaves the queue). The queue this loop drains is
+     * global — {@code findNextPendingPluginSql} has no site predicate — so both the bound and the
+     * diagnostic are about every site, not this one.</p>
+     *
+     * @param watched segment whose claim to attribute, or {@code null} to just drain
+     * @return {@code true} if one of this loop's own calls marked {@code watched} processed
      */
-    private void drainQueue() {
+    private boolean drainQueueWatching(UUID watched) {
+        boolean claimedHere = false;
         for (int processed = 0; processed < MAX_DRAIN_ITERATIONS; processed++) {
+            boolean pendingBefore = watched != null && !claimedHere && !isProcessed(watched);
             if (!queueService.processNextPending()) {
-                return;
+                return claimedHere;
             }
+            if (pendingBefore && isProcessed(watched)) {
+                claimedHere = true;
+            }
+        }
+        // The loop above never asks whether the queue is now empty, so a drain of exactly
+        // MAX_DRAIN_ITERATIONS live segments would be reported as a runaway.
+        if (!queueService.processNextPending()) {
+            return claimedHere;
         }
         throw new IllegalStateException("The delta-SQL queue did not drain in " + MAX_DRAIN_ITERATIONS
                 + " iterations — a claimed segment is not being marked processed. Still pending: "
-                + jdbc.queryForList("SELECT id FROM changelog_segments "
-                        + "WHERE site_id = ? AND plugin_sql_at IS NULL", UUID.class, SITE_ID));
+                + jdbc.queryForList("SELECT id, site_id FROM changelog_segments "
+                        + "WHERE plugin_sql_at IS NULL ORDER BY created_at LIMIT 20"));
+    }
+
+    private boolean isProcessed(UUID segmentId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT plugin_sql_at IS NOT NULL FROM changelog_segments WHERE id = ?",
+                Boolean.class, segmentId));
     }
 
     /**
@@ -296,18 +322,28 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
      *
      * <p>The counter is read as a delta around the drain rather than as an absolute: the registry
      * belongs to the shared Spring context, so a sibling class draining a segment of some other
-     * account without an activation contributes to the same series.</p>
+     * account without an activation contributes to the same series. For the same reason it is
+     * asserted only when this context's own drain was what marked the segment: a
+     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} of <em>another</em> cached
+     * context can win the {@code FOR UPDATE SKIP LOCKED} claim (its once-per-context drain at
+     * refresh, or a `wake()` from a sibling class), and it would then increment its own registry
+     * while every database-observable property here still holds. The two assertions above are
+     * unconditional because they are read from the shared database; this one cannot be. A build in
+     * which the branch stopped counting still fails, because the drain that reaches the branch is
+     * then this one.</p>
      */
     private void assertSegmentIsSkippedButProcessed() {
         double skippedBefore = skippedInactiveCount();
         ChangelogSegment segment = changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 1L, List.of(
                 rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
 
-        drainQueue();
+        boolean claimedHere = drainQueueWatching(segment.getId());
 
         awaitSegmentProcessed(segment.getId());
         assertNoGenerationsAppear();
-        assertThat(skippedInactiveCount()).isGreaterThanOrEqualTo(skippedBefore + 1);
+        if (claimedHere) {
+            assertThat(skippedInactiveCount()).isGreaterThanOrEqualTo(skippedBefore + 1);
+        }
     }
 
     /**
@@ -322,9 +358,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         Awaitility.await("segment " + segmentId + " marked processed")
                 .atMost(Duration.ofSeconds(15))
                 .pollInterval(Duration.ofMillis(200))
-                .until(() -> Boolean.TRUE.equals(jdbc.queryForObject(
-                        "SELECT plugin_sql_at IS NOT NULL FROM changelog_segments WHERE id = ?",
-                        Boolean.class, segmentId)));
+                .until(() -> isProcessed(segmentId));
     }
 
     /**
