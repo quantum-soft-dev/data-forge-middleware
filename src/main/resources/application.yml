@@ -87,14 +87,18 @@ spring:
       #   floor    long-holding background threads + a request reserve <= pool
       #            A "long" holder pins the connection across S3 I/O or a bounded wait instead of
       #            releasing it between statements, so queueing would stall it rather than slow it.
-      #            NOTE WHICH THREADS THOSE ARE — for the scheduler it is the four ticks
+      #            NOTE WHICH THREADS THOSE ARE — for the scheduler it is the five ticks
       #            ScheduledTaskInventoryTest classifies Cost.LONG, NOT its six threads: a short
       #            tick that waits for a connection simply runs on its next wake, so counting the
       #            whole pool here would be the same conflation of "holds a thread" with "holds a
       #            connection" that this derivation exists to undo.
-      #                4 long scheduled ticks
+      #                5 long scheduled ticks
       #              + 2 reserved for request threads
-      #              = 6 <= 10
+      #              = 7 <= 10
+      #            Five is itself an over-estimate kept on purpose: two of those ticks (the
+      #            checkpoint build and the S3 orphan sweep of #158) hold no connection while they
+      #            hold their thread. BackgroundConnectionDemandTest says why it borrows the count
+      #            anyway rather than keeping a second, disagreeing classification.
       #            Everything else is short (one INSERT, a claim, a publish) and may queue. The
       #            two workers this used to budget as long — delta.egress and delta-sql — were
       #            shortened by #164: they no longer hold a connection across S3 or the generation
@@ -502,6 +506,31 @@ delta:
     # budget: docs/delta-client-v2-guide.md ("Sizing note"), issues #131 and #138.
     max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}
     temp-dir: ${DELTA_BATCH_PARQUET_TEMP_DIR:${java.io.tmpdir}}
+  s3-orphan:
+    # Reclaims objects under delta/{siteId}/segments/ and checkpoints/{siteId}/ that no row
+    # references (issue #158). Nothing else can: every deleter above collects keys FROM rows, the
+    # site wipe walks these prefixes for one site only, retention prunes segments and never touches
+    # checkpoints, and there is no bucket lifecycle rule for either. On by default because an
+    # orphan is never resolved by anything else — turning it off is how the litter accumulates,
+    # not how it is made safe.
+    enabled: ${DELTA_S3_ORPHAN_ENABLED:true}
+    # THE GUARD THAT MATTERS. An object is only a candidate when S3 reports it strictly older than
+    # this, which is what protects an object whose row has not been written yet: a segment uploaded
+    # before its ingestion transaction (#147), and — much the longer of the two — a checkpoint frame
+    # between uploadFrame(N) and the recordCheckpoint(N) that adopts it, which spans a whole
+    # site's snapshot loop. A day is a margin, not a measurement. Raise it if a build can take
+    # longer; lowering it below the longest possible build is how a live frame gets deleted, and a
+    # site that loses its frame reads as history_gone and gives its checkpoint rows up after
+    # delta.checkpoint.max-materialize-attempts nights (#149).
+    min-age-seconds: ${DELTA_S3_ORPHAN_MIN_AGE_SECONDS:86400}
+    # The population changes once per nightly checkpoint build, so daily is as often as this can
+    # find anything new. It walks every site prefix in the bucket, so it is a Cost.LONG tick in the
+    # ScheduledTaskInventoryTest audit — it holds no connection across S3 (#164), but it does hold
+    # its scheduler thread.
+    sweep-ms: ${DELTA_S3_ORPHAN_SWEEP_MS:86400000}
+    # Nothing here is crash recovery — an orphan is a day old by definition — so the first pass
+    # stays out of the startup window, unlike the queue-drain sweeps.
+    initial-delay-ms: ${DELTA_S3_ORPHAN_INITIAL_DELAY_MS:600000}
 
 # OpenAPI Configuration
 springdoc:

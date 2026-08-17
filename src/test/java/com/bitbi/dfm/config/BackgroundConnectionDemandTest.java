@@ -291,13 +291,15 @@ class BackgroundConnectionDemandTest {
      *
      * <p><b>That borrowed count is a deliberate over-estimate, and worth naming as one</b>, because
      * this class otherwise insists on the distinction: {@code Cost} measures how long a task holds
-     * its <em>thread</em>, and one of the four long ticks — {@code CheckpointScheduler} — holds no
-     * connection for any of that time, since the build is non-transactional and writes through
-     * short guarded transactions (which is exactly why the same work is {@link Hold#SHORT} when it
-     * arrives through {@code deltaRebuildExecutor}). The connection-true count is three. Four is
-     * used anyway: the two classifications are one per-task audit rather than two that could
-     * disagree, and erring upward makes the floor stricter than reality rather than looser. Both
-     * values leave the shipped pool satisfying it.</p>
+     * its <em>thread</em>, and two of the five long ticks hold no connection for any of that time —
+     * {@code CheckpointScheduler}, whose build is non-transactional and writes through short guarded
+     * transactions (which is exactly why the same work is {@link Hold#SHORT} when it arrives through
+     * {@code deltaRebuildExecutor}), and {@code DeltaS3OrphanSweeper} (#158), which reads its rows
+     * one short query at a time and runs every S3 round trip with nothing open, the rule #164
+     * established for the queue workers. The connection-true count is three. Five is used anyway:
+     * the two classifications are one per-task audit rather than two that could disagree, and
+     * erring upward makes the floor stricter than reality rather than looser. Both values leave the
+     * shipped pool satisfying it.</p>
      */
     private static int longHoldingThreads() {
         return ScheduledTaskInventoryTest.longRunningTaskCount() + totalThreads(Hold.LONG);

@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.infrastructure;
 
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
+import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import io.micrometer.core.instrument.Counter;
@@ -352,8 +353,26 @@ public class S3CheckpointStorage {
         return presence(frameKey(siteId, seq));
     }
 
-    private static String frameKey(UUID siteId, long seq) {
+    /**
+     * @param siteId site identifier
+     * @param seq    the sequence the frame was written at
+     * @return the key of one reload frame — named by no row, only implied by
+     *         {@code site_sync_state.last_checkpoint_seq}, which is why the orphan sweep (#158) has
+     *         to be able to build it rather than read it
+     */
+    public static String frameKey(UUID siteId, long seq) {
         return String.format("checkpoints/%s/_frame/seq=%d/frame.pb.gz", siteId, seq);
+    }
+
+    /**
+     * The sites that still have checkpoint objects, asked of the bucket rather than of the database
+     * (issue #158). {@code SiteService.deleteSite} hard-deletes the site row without touching this
+     * prefix, so a site with no rows at all is a normal — and entirely reclaimable — answer here.
+     *
+     * @return child prefixes of {@code checkpoints/}, one per site; possibly truncated
+     */
+    public S3ChildPrefixListing listSitePrefixes() {
+        return S3PrefixLister.listChildPrefixes(s3Client, bucketName, CHECKPOINT_ROOT_PREFIX);
     }
 
     public byte[] download(String s3Key) {

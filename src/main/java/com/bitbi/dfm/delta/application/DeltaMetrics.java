@@ -50,6 +50,9 @@ import java.util.function.Supplier;
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
  *       rather than concluded, so there is nothing to undo once the permission is back</li>
+ *   <li>{@code delta.s3-orphan.reclaimed} / {@code delta.s3-orphan.delete-failed} — objects the
+ *       orphan sweep found unreferenced and deleted, or could not delete, tagged
+ *       {@code prefix=segments|checkpoints} (issue #158)</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -73,6 +76,11 @@ public class DeltaMetrics {
     private static final String APP_TAG_KEY = "application";
     private static final String APP_TAG_VALUE = "data-forge-middleware";
     private static final String PHASE_TAG = "phase";
+    private static final String ORPHAN_PREFIX_TAG = "prefix";
+    /** Tag value for {@code delta/{siteId}/segments/}. */
+    public static final String ORPHAN_PREFIX_SEGMENTS = "segments";
+    /** Tag value for {@code checkpoints/{siteId}/}. */
+    public static final String ORPHAN_PREFIX_CHECKPOINTS = "checkpoints";
     static final String PHASE_TOTAL = "total";
     static final Set<String> BATCH_PARQUET_PHASES =
             Set.of("download", "decode", "decimal_scan", "write", "upload", PHASE_TOTAL);
@@ -100,6 +108,10 @@ public class DeltaMetrics {
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
     private final Counter batchParquetReclaims;
+    private final Counter segmentOrphansReclaimed;
+    private final Counter checkpointOrphansReclaimed;
+    private final Counter segmentOrphanDeletesFailed;
+    private final Counter checkpointOrphanDeletesFailed;
     private final Map<String, Timer> batchParquetPhases;
     private final Map<String, Timer> egressPhases;
     private final Map<String, Timer> checkpointPhases;
@@ -149,6 +161,10 @@ public class DeltaMetrics {
         this.batchParquetReclaims = Counter.builder("delta.batch-parquet.reclaims")
                 .description("Completed-batch Parquet claims taken over after their lease expired")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.segmentOrphansReclaimed = orphansReclaimed(registry, ORPHAN_PREFIX_SEGMENTS);
+        this.checkpointOrphansReclaimed = orphansReclaimed(registry, ORPHAN_PREFIX_CHECKPOINTS);
+        this.segmentOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_SEGMENTS);
+        this.checkpointOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.batchParquetPhases = phaseTimers(registry, "delta.batch-parquet.duration",
                 "Time spent in one completed-batch Parquet phase", BATCH_PARQUET_PHASES);
         this.egressPhases = phaseTimers(registry, "delta.egress.duration",
@@ -180,6 +196,18 @@ public class DeltaMetrics {
         return Counter.builder("delta.checkpoint.builds.aborted")
                 .description("Checkpoint builds abandoned whole, leaving the pointer where it was, by reason")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
+    private static Counter orphansReclaimed(MeterRegistry registry, String prefix) {
+        return Counter.builder("delta.s3-orphan.reclaimed")
+                .description("S3 objects deleted because no row referenced them, by prefix")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag(ORPHAN_PREFIX_TAG, prefix).register(registry);
+    }
+
+    private static Counter orphanDeletesFailed(MeterRegistry registry, String prefix) {
+        return Counter.builder("delta.s3-orphan.delete-failed")
+                .description("Unreferenced S3 objects the bucket would not delete, by prefix")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag(ORPHAN_PREFIX_TAG, prefix).register(registry);
     }
 
     private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
@@ -335,6 +363,45 @@ public class DeltaMetrics {
     }
 
     /** A claim was taken over because its build lease had expired. */
+    /**
+     * Objects reclaimed from one delta prefix because no row referenced them (issue #158).
+     *
+     * <p>Tagged by prefix rather than counted once, because the two populations mean different
+     * things. Under {@code segments} a steady rate is ingestion commits failing after their upload;
+     * under {@code checkpoints} it is the ordinary superseded generation of every advancing build,
+     * so a <em>zero</em> rate there on a busy fleet is the surprising reading, not a high one.</p>
+     *
+     * @param prefix {@link #ORPHAN_PREFIX_SEGMENTS} or {@link #ORPHAN_PREFIX_CHECKPOINTS}
+     * @param count  how many objects were deleted
+     */
+    public void s3OrphansReclaimed(String prefix, long count) {
+        orphanCounter(prefix, segmentOrphansReclaimed, checkpointOrphansReclaimed).increment(count);
+    }
+
+    /**
+     * Unreferenced objects this pass could not delete (issue #158).
+     *
+     * <p>Nothing is lost — the next sweep sees the same keys and tries again — so this is a
+     * bucket-health signal rather than a data one. It rises together with the WARN naming the
+     * prefix; a sustained non-zero rate is a permissions or availability problem, since the keys
+     * themselves are already proven unreferenced.</p>
+     *
+     * @param prefix {@link #ORPHAN_PREFIX_SEGMENTS} or {@link #ORPHAN_PREFIX_CHECKPOINTS}
+     * @param count  how many objects were left behind
+     */
+    public void s3OrphanDeletesFailed(String prefix, long count) {
+        orphanCounter(prefix, segmentOrphanDeletesFailed, checkpointOrphanDeletesFailed)
+                .increment(count);
+    }
+
+    private static Counter orphanCounter(String prefix, Counter segments, Counter checkpoints) {
+        return switch (prefix) {
+            case ORPHAN_PREFIX_SEGMENTS -> segments;
+            case ORPHAN_PREFIX_CHECKPOINTS -> checkpoints;
+            default -> throw new IllegalArgumentException("Unknown prefix: " + prefix);
+        };
+    }
+
     public void batchParquetReclaimed() {
         batchParquetReclaims.increment();
     }

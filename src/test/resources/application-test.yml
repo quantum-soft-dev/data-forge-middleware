@@ -20,6 +20,11 @@ delta:
     # Production is already 1 h; declare it here so a later cut of the production
     # default cannot silently restore a fast tick under test (issue #167).
     scratch-orphan-sweep-ms: 3600000
+  s3-orphan:
+    # Production is 24 h; declare it so a later cut of the production default cannot restore a
+    # fast tick under test (issue #167). The 10-minute initial delay keeps it out of every
+    # context anyway — the integration test drives sweep(Instant) by hand.
+    sweep-ms: 3600000
   ingestion:
     # 5 min / 15 min in production. A suite longer than that would otherwise race
     # these ticks in every cached context; tests that need them call the methods.
