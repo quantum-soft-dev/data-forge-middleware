@@ -95,7 +95,8 @@ class CheckpointServiceTest {
      * The real budget (issue #178), with no wait: a test that holds it wants the deferral now, and
      * every other test is the only build in the process and never contends for it.
      */
-    private final CheckpointFoldBudget foldBudget = new CheckpointFoldBudget(0L);
+    private final CheckpointFoldBudget foldBudget =
+            new CheckpointFoldBudget(shutdownSignal, metrics, 0L);
 
     private CheckpointService service;
 

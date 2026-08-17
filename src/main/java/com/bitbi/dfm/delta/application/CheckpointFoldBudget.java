@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,10 +41,16 @@ import java.util.function.Supplier;
  *
  * <p>The semaphore is <b>fair</b>, which is what bounds the wait. The nightly tick takes and
  * releases the budget once per site, so a forced rebuild queues behind one site's build rather than
- * behind the whole sweep, and vice versa. A wait is not cut short by a shutdown, and does not need
- * to be: the holder checks {@code ApplicationShutdownSignal} between tables and before the frame
- * upload, so during a rollout it ends promptly and the waiter inherits the budget only to hit the
- * same checks — on a daemon thread, having written nothing.</p>
+ * behind the whole sweep, and vice versa.</p>
+ *
+ * <p><b>The wait is shutdown-aware</b>, and it has to be: {@code deltaRebuildExecutor} is a
+ * {@code ThreadPoolTaskExecutor} with {@code waitForTasksToCompleteOnShutdown(true)} and
+ * non-daemon threads, so Spring never interrupts a task parked here — an unaware wait would hold
+ * context close for the executor's whole {@code awaitTerminationSeconds} and then time out. It is
+ * therefore taken in slices, checking {@link ApplicationShutdownSignal} between them, and a
+ * shutdown ends the wait as a deferral that each caller settles against the same signal. Slicing
+ * re-queues on a fair semaphore, which would matter under a stream of arrivals; here there are two
+ * possible waiters in a JVM, so it costs nothing.</p>
  *
  * <p>Per JVM, deliberately: heap is per pod. A deployment running the sweep on several replicas has
  * that many independent budgets, exactly as it has that many heaps.</p>
@@ -59,10 +66,19 @@ public class CheckpointFoldBudget {
     /** A wait worth mentioning: below this, contention is invisible and uninteresting. */
     private static final long LOG_WAIT_ABOVE_MILLIS = 1_000L;
 
+    /** How long one {@code tryAcquire} may park before the shutdown flag is re-read. */
+    private static final long WAIT_SLICE_MILLIS = 500L;
+
     private final Semaphore budget = new Semaphore(1, true);
+    private final ApplicationShutdownSignal shutdownSignal;
+    private final DeltaMetrics metrics;
     private final long waitMillis;
 
-    public CheckpointFoldBudget(@Value("${delta.checkpoint.fold-wait-seconds:600}") long waitSeconds) {
+    public CheckpointFoldBudget(ApplicationShutdownSignal shutdownSignal,
+                                DeltaMetrics metrics,
+                                @Value("${delta.checkpoint.fold-wait-seconds:600}") long waitSeconds) {
+        this.shutdownSignal = shutdownSignal;
+        this.metrics = metrics;
         // toMillis saturates rather than wrapping, so an absurd value stays an absurd wait instead
         // of overflowing into a negative one — which tryAcquire would read as "do not wait at all",
         // the opposite of what was asked for.
@@ -73,12 +89,6 @@ public class CheckpointFoldBudget {
      * Run one checkpoint build with the process's fold budget held, waiting for it if another build
      * has it.
      *
-     * <p>Bounded rather than indefinite: an indefinite wait behind a build that has stalled would
-     * freeze the nightly sweep for every site, silently and until the pod is replaced. Spending the
-     * wait defers this one site, says so, and lets the tick carry on to the next. It is also what
-     * keeps the permit from being able to deadlock anything: a future nested call would spend its
-     * wait and be deferred rather than hang, since nothing here is reentrant.</p>
-     *
      * @param siteId the site whose build wants the budget, for the deferral's message
      * @param build  the build to run while the budget is held
      * @param <T>    what the build returns
@@ -86,21 +96,71 @@ public class CheckpointFoldBudget {
      * @throws BuildDeferredException when the wait was spent without the budget coming free
      */
     public <T> T runExclusively(UUID siteId, Supplier<T> build) {
+        return runExclusively(siteId, true, build);
+    }
+
+    /**
+     * As above, with the wait itself optional.
+     *
+     * <p>Bounded rather than indefinite: an indefinite wait behind a build that has stalled would
+     * freeze the nightly sweep for every site, silently and until the pod is replaced. Spending the
+     * wait defers this one site, says so, and lets the tick carry on to the next. It is also what
+     * keeps the permit from being able to deadlock anything: a future nested call would spend its
+     * wait and be deferred rather than hang, since nothing here is reentrant.</p>
+     *
+     * <p>{@code mayWait} is how a caller with <em>many</em> builds to run keeps the wait a property
+     * of the tick rather than of each site (issue #178, review). {@code CheckpointScheduler} pays
+     * one full wait per tick and asks for the budget without waiting afterwards: at 200 sites the
+     * alternative is a tick of {@code 200 x fold-wait-seconds}, during which its own
+     * {@code tryLock} skips the following nights and retention freezes for every site rather than
+     * for the contended one. A zero wait still <em>takes</em> the budget the moment it is free, so
+     * the rest of the tick proceeds normally as soon as the neighbour finishes.</p>
+     *
+     * @param siteId   the site whose build wants the budget, for the deferral's message
+     * @param mayWait  {@code false} to take the budget only if it is free right now
+     * @param build    the build to run while the budget is held
+     * @param <T>      what the build returns
+     * @return the build's own value
+     * @throws BuildDeferredException when the budget did not come free within the allowed wait
+     */
+    public <T> T runExclusively(UUID siteId, boolean mayWait, Supplier<T> build) {
+        long deadlineNanos = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(mayWait ? waitMillis : 0L);
         long startedAt = System.nanoTime();
-        boolean acquired;
+        boolean acquired = false;
+        boolean endedEarly = false;
         try {
-            acquired = budget.tryAcquire(waitMillis, TimeUnit.MILLISECONDS);
+            do {
+                long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
+                acquired = budget.tryAcquire(Math.min(remainingMillis, WAIT_SLICE_MILLIS),
+                        TimeUnit.MILLISECONDS);
+                // Checked between slices, and only when the budget was not free. A shutdown must
+                // not refuse an acquire that would have succeeded at once — the caller has its own
+                // check for that, which ends the build as a shutdown rather than as a deferral —
+                // but it must end a *wait*: deltaRebuildExecutor waits for its tasks on context
+                // close and never interrupts them, so an unaware wait would hold the shutdown for
+                // the whole awaitTerminationSeconds and then time out.
+                if (!acquired && shutdownSignal.isShuttingDown()) {
+                    endedEarly = true;
+                    break;
+                }
+            } while (!acquired && System.nanoTime() < deadlineNanos);
         } catch (InterruptedException e) {
             // Interrupted waiting for the budget: this build has not started, so it is deferred
             // rather than failed. The flag is restored — swallowing it would leave the thread's
             // interrupt state lying to whatever runs next on it.
             Thread.currentThread().interrupt();
-            throw new BuildDeferredException(siteId, waitMillis, true);
+            endedEarly = true;
         }
+        long waitedNanos = System.nanoTime() - startedAt;
+        // Recorded whichever way it ended: the near miss — a build that waited nine minutes and
+        // then ran — is invisible on delta.checkpoint.duration, because the budget is taken outside
+        // phase=total, and it is exactly the signal that precedes the first deferral.
+        metrics.recordCheckpointFoldWait(waitedNanos);
         if (!acquired) {
-            throw new BuildDeferredException(siteId, waitMillis, false);
+            throw new BuildDeferredException(siteId, waitMillis, endedEarly, mayWait);
         }
-        long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        long waitedMillis = TimeUnit.NANOSECONDS.toMillis(waitedNanos);
         if (waitedMillis >= LOG_WAIT_ABOVE_MILLIS) {
             log.info("The checkpoint build for site {} waited {} ms for the process's fold budget "
                     + "(delta.checkpoint.max-fold-bytes is reserved for one build at a time)",
@@ -126,17 +186,31 @@ public class CheckpointFoldBudget {
      * deliberately absent from {@code delta.checkpoint.builds.aborted}, whose tag values are the
      * refusals that never repair themselves. {@code delta.checkpoint.builds.deferred} is the meter
      * for the ones that do.</p>
+     *
+     * <p>A shutdown and an interrupt arrive here too, which is why every caller settles this against
+     * {@link ApplicationShutdownSignal} rather than treating it as a plain deferral: the forced
+     * rebuild must keep its durable flag when the process is going away (issue #162), and clearing
+     * it would lose the request {@code resumePendingRebuilds()} exists to re-drive.</p>
      */
     public static final class BuildDeferredException extends RuntimeException {
 
-        BuildDeferredException(UUID siteId, long waitMillis, boolean interrupted) {
+        BuildDeferredException(UUID siteId, long waitMillis, boolean endedEarly, boolean mayWait) {
             super("The checkpoint build for site " + siteId + " was deferred: another build held the "
-                    + "process's fold budget"
-                    + (interrupted
-                            ? " and this thread was interrupted while waiting for it"
-                            : " for the whole " + waitMillis + " ms of delta.checkpoint.fold-wait-seconds")
+                    + "process's fold budget" + why(waitMillis, endedEarly, mayWait)
                     + ". Nothing was folded and nothing was recorded — the pointer, the per-table "
                     + "keys and the frame stay where they were, and the next tick tries again");
+        }
+
+        private static String why(long waitMillis, boolean endedEarly, boolean mayWait) {
+            if (endedEarly) {
+                return " and this thread was interrupted or the application began shutting down "
+                        + "while waiting for it";
+            }
+            if (!mayWait) {
+                return " and this build was not allowed to wait (the tick had already spent its "
+                        + waitMillis + " ms of delta.checkpoint.fold-wait-seconds on an earlier site)";
+            }
+            return " for the whole " + waitMillis + " ms of delta.checkpoint.fold-wait-seconds";
         }
     }
 }

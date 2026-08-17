@@ -173,6 +173,25 @@ class DeltaMetricsTest {
     }
 
     @Test
+    void recordsHowLongABuildWaitedForTheFoldBudget() {
+        // Issue #178, review round 1. The budget is taken outside phase=total, so a build that
+        // waited nine minutes and then ran is invisible on delta.checkpoint.duration and never
+        // touches builds.deferred either — this is the band below the ceiling, the same role
+        // delta.checkpoint.fold.bytes plays for max-fold-bytes.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        Timer wait = registry.get("delta.checkpoint.fold.wait").timer();
+        assertEquals(0L, wait.count(), "the series must exist before the first contended build");
+
+        metrics.recordCheckpointFoldWait(TimeUnit.MILLISECONDS.toNanos(250));
+        metrics.recordCheckpointFoldWait(-1L);
+
+        assertEquals(1L, wait.count(), "a negative wait is not a sample");
+        assertTrue(wait.totalTime(TimeUnit.MILLISECONDS) >= 250.0);
+    }
+
+    @Test
     void rejectsAnUnknownCheckpointAbortReason() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaMetrics metrics = new DeltaMetrics(registry);

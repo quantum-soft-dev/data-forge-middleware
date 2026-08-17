@@ -483,14 +483,27 @@ pages/{feature}/            # Route pages
   the forced rebuild **releases** `rebuild_requested` and says to ask again, settled like the #157
   read denial and not like the #162 shutdown, because nothing re-drives a held flag here — the
   nightly tick calls `buildCheckpoint`, never `rebuildFromFrame`, and `requestRebuild`
-  short-circuits while the flag is set. Two consequences stated rather than hidden: an **idle visit
-  takes the budget too**, for the length of the one query answering "nothing to rematerialize", and
-  can in principle be deferred — the alternative was to move that probe outside `phase=total`, which
-  #149 deliberately put inside it; and the **wait is bounded**, because waiting indefinitely behind
-  a stalled build would freeze the whole sweep silently until the pod is replaced. The budget is
-  taken *outside* `phase=total`, so a deferred build contributes **no** duration sample (a
-  ten-minute wait would otherwise be the maximum an operator reads that timer from) while a build
-  that waited and then ran does include the wait, which is what its cycle genuinely cost. Per JVM
+  short-circuits while the flag is set. Review then corrected **four things about the wait**, and
+  each is load-bearing. It is paid **once per tick, not once per site**
+  (`buildCheckpoint(siteId, mayWait)`): a holder that never finished would otherwise turn a
+  200-site tick into `200 x` the wait, over which `CheckpointScheduler`'s own `tryLock` skips the
+  following nights and retention freezes for **every** site rather than the contended one — the
+  sweep now keeps visiting and simply stops paying the wait, so it resumes the moment the budget is
+  free. It is **shutdown-aware** (sliced `tryAcquire` re-reading `ApplicationShutdownSignal`),
+  because `deltaRebuildExecutor` has `waitForTasksToCompleteOnShutdown(true)` and non-daemon
+  threads — Spring never interrupts a task parked there, so an unaware wait would hold context close
+  for the whole `awaitTerminationSeconds` and then time out; a shutdown ends the wait as a deferral
+  and `DeltaCheckpointRebuildService` settles *that* one as #162 (flag kept) rather than as #157
+  (flag released), and `CheckpointService` re-checks the signal immediately after acquiring so an
+  inherited budget does not fold a whole site during the termination grace period. And the wait got
+  a meter, **`delta.checkpoint.fold.wait`**: the budget is taken *outside* `phase=total`, so a
+  deferred build contributes no duration sample at all (a ten-minute wait would otherwise be the
+  maximum an operator reads that timer from) — **and neither does a build that waited nine minutes
+  and then ran**, which `builds.deferred` also misses because it did run, so without this series
+  contention was invisible right up to the first deferral. One consequence is stated rather than
+  hidden: an **idle visit takes the budget too**, for the length of the one query answering
+  "nothing to rematerialize", and can in principle be deferred — the alternative was to move that
+  probe outside `phase=total`, which #149 deliberately put inside it. Per JVM
   deliberately — heap is per pod, so N replicas have N budgets exactly as they have N heaps; no
   distributed lock is implied and `CheckpointScheduler`'s "run the sweep on one instance" note is
   unchanged. Fairness plus taking it **per site** is what bounds the wait: a rebuild queues behind

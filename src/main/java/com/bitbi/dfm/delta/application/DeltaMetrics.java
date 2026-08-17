@@ -30,6 +30,9 @@ import java.util.function.Supplier;
  *   <li>{@code delta.checkpoint.builds.deferred} — builds that did not run because another build
  *       held the process's fold budget (issue #178). Untagged, and deliberately <b>not</b> a value
  *       on {@code builds.aborted}: this one repairs itself as soon as the neighbour finishes</li>
+ *   <li>{@code delta.checkpoint.fold.wait} — how long a build waited for the process's fold budget
+ *       (issue #178). The band below {@code delta.checkpoint.fold-wait-seconds}, and the only
+ *       series that shows contention short of a deferral</li>
  *   <li>{@code delta.checkpoint.fold.bytes} — peak estimated heap of one build's folded state,
  *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152)</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
@@ -82,6 +85,7 @@ public class DeltaMetrics {
     private final Counter checkpointHistoryGone;
     private final Counter checkpointFoldTooLarge;
     private final Counter checkpointBuildsDeferred;
+    private final Timer checkpointFoldWait;
     private final DistributionSummary checkpointFoldBytes;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
@@ -122,6 +126,9 @@ public class DeltaMetrics {
         this.checkpointBuildsDeferred = Counter.builder("delta.checkpoint.builds.deferred")
                 .description("Checkpoint builds that did not run because another build held the "
                         + "process's fold budget")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.checkpointFoldWait = Timer.builder("delta.checkpoint.fold.wait")
+                .description("Time a checkpoint build spent waiting for the process's fold budget")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointFoldBytes = DistributionSummary.builder("delta.checkpoint.fold.bytes")
                 .description("Peak estimated heap held by one checkpoint build's folded state")
@@ -270,6 +277,31 @@ public class DeltaMetrics {
      */
     public void checkpointBuildDeferred() {
         checkpointBuildsDeferred.increment();
+    }
+
+    /**
+     * Record how long a build waited for the process's fold budget (issue #178).
+     *
+     * <p>The counter above only fires once the wait is <em>spent</em>. This is the band below it,
+     * and without it that band is invisible: the budget is taken outside {@code phase=total}, so a
+     * build that waited nine minutes and then ran looks, on {@code delta.checkpoint.duration},
+     * exactly like one that waited none — and {@code builds.deferred} stays at zero, because it did
+     * run. {@code max(delta_checkpoint_fold_wait_seconds_max)} against
+     * {@code delta.checkpoint.fold-wait-seconds} is how that key is sized before the first
+     * deferral, the same reason {@code delta.checkpoint.fold.bytes} exists beside
+     * {@code max-fold-bytes}.</p>
+     *
+     * <p>Recorded once per attempt at the budget, deferrals included, so the count is builds that
+     * reached the fold rather than builds that finished it. An uncontended build records a sample
+     * near zero on purpose: a series that only appeared under contention could not be told from a
+     * scrape that lost it.</p>
+     *
+     * @param nanos time spent waiting; negative is ignored
+     */
+    public void recordCheckpointFoldWait(long nanos) {
+        if (nanos >= 0) {
+            checkpointFoldWait.record(nanos, TimeUnit.NANOSECONDS);
+        }
     }
 
     /** One table's completed-batch artifact is published and downloadable. */

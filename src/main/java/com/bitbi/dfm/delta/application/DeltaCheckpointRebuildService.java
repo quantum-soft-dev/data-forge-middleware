@@ -123,12 +123,14 @@ public class DeltaCheckpointRebuildService {
      * ask again once the permission returned — on the very action the {@code history_gone} message
      * names as the recovery.</p>
      *
-     * <p>A rebuild deferred behind the process's fold budget (issue #178) is settled the same way,
-     * and for the same reason: the nightly sweep held the budget for longer than
-     * {@code delta.checkpoint.fold-wait-seconds}, nothing ran, and nothing will re-drive a held
-     * flag. It is not a failure of the site — {@code CheckpointService} keeps it off
-     * {@code delta.checkpoint.builds.aborted} — so the line says what to do rather than what
-     * broke.</p>
+     * <p>A rebuild deferred behind the process's fold budget (issue #178) is settled the same way
+     * <b>unless the process is going away</b>, and the split matters because both endings arrive as
+     * the same exception: the wait is shutdown-aware, so a rollout during it produces a deferral
+     * that is really #162's case and must keep the flag. A genuine deferral — the nightly sweep
+     * held the budget for longer than {@code delta.checkpoint.fold-wait-seconds} — releases it,
+     * because nothing re-drives a held flag here. Neither is a failure of the site;
+     * {@code CheckpointService} keeps both off {@code delta.checkpoint.builds.aborted}, so the line
+     * says what to do rather than what broke.</p>
      */
     private void runRebuild(UUID siteId) {
         boolean keepFlagForARetry = false;
@@ -153,15 +155,24 @@ public class DeltaCheckpointRebuildService {
                     + "and the flag is released — request the rebuild again once S3 reads are "
                     + "allowed (see delta.s3.read-denied)", siteId, e.getMessage());
         } catch (CheckpointFoldBudget.BuildDeferredException e) {
-            // Settled exactly like the read denial above (issue #178): not completed, because
-            // nothing ran, and not held, because nothing re-drives it. The nightly sweep held the
-            // process's fold budget for longer than the wait allows, and holding the flag would
-            // leave the operator unable to ask again once the sweep finished — requestRebuild
-            // short-circuits while it is set.
-            log.error("Forced checkpoint rebuild for site {} did not run: {}. The flag is released "
-                    + "— request the rebuild again once the nightly build has finished, or raise "
-                    + "delta.checkpoint.fold-wait-seconds if the two collide regularly", siteId,
-                    e.getMessage());
+            // Two different endings share this exception, and settling them alike would lose the
+            // operator's request (raised in review of #178). A shutdown — or an interrupt — ends
+            // the wait as a deferral too, and that is #162's case exactly: the flag must survive,
+            // because resumePendingRebuilds() is what re-drives it in the next process. A genuine
+            // deferral behind the nightly sweep is the read-denial case instead (issue #157):
+            // released, because nothing re-drives a held flag here — the tick calls
+            // buildCheckpoint, never rebuildFromFrame, and requestRebuild short-circuits while the
+            // flag is set, so holding it would leave the operator unable to ask again.
+            keepFlagForARetry = shutdownSignal.isShuttingDown();
+            if (!keepFlagForARetry) {
+                log.error("Forced checkpoint rebuild for site {} did not run: {}. The flag is "
+                        + "released — request the rebuild again once the nightly build has "
+                        + "finished, or raise delta.checkpoint.fold-wait-seconds if the two collide "
+                        + "regularly (delta.checkpoint.fold.wait is how close it gets)",
+                        siteId, e.getMessage());
+            } else {
+                logShutdown(siteId);
+            }
         } catch (Exception e) {
             keepFlagForARetry = shutdownSignal.isShuttingDown();
             if (!keepFlagForARetry) {

@@ -115,11 +115,28 @@ class DeltaCheckpointRebuildServiceTest {
         // again once the sweep finished.
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
         when(checkpointService.rebuildFromFrame(SITE))
-                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(SITE, 600_000L, false));
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(SITE, 600_000L, false, true));
 
         assertTrue(service.requestRebuild(SITE));
 
         verify(syncStateService).clearRebuildRequested(SITE);
+    }
+
+    @Test
+    void keepsTheFlagWhenTheDeferralWasTheProcessShuttingDown() {
+        // Raised in review of #178. The wait for the fold budget is shutdown-aware, so a rollout
+        // during it ends as a deferral too — and that one is #162's case, not #157's: settling it
+        // like an ordinary deferral would clear the durable flag and lose the request that
+        // resumePendingRebuilds() exists to re-drive in the next process.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE)).thenAnswer(invocation -> {
+            shuttingDown = true;
+            throw new CheckpointFoldBudget.BuildDeferredException(SITE, 600_000L, true, true);
+        });
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(syncStateService, never()).clearRebuildRequested(SITE);
     }
 
     @Test

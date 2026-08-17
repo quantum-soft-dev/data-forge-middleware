@@ -193,7 +193,25 @@ public class CheckpointService {
      * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
     public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId) {
-        return run(siteId, SnapshotPass.RETRY_MISSING);
+        return buildCheckpoint(siteId, true);
+    }
+
+    /**
+     * As {@link #buildCheckpoint(UUID)}, with the wait for the process's fold budget optional
+     * (issue #178).
+     *
+     * <p>For a caller with many sites to visit. {@code CheckpointScheduler} pays one full wait per
+     * tick and asks without waiting afterwards, so a build that never finishes costs one wait
+     * rather than one per remaining site — at 200 sites the difference is a tick of
+     * {@code 200 x delta.checkpoint.fold-wait-seconds}, over which its own lock skips the following
+     * nights and retention freezes for every site instead of the contended one.</p>
+     *
+     * @param siteId               site identifier
+     * @param mayWaitForFoldBudget {@code false} to take the fold budget only if it is free now
+     * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
+     */
+    public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId, boolean mayWaitForFoldBudget) {
+        return run(siteId, SnapshotPass.RETRY_MISSING, mayWaitForFoldBudget);
     }
 
     /**
@@ -204,10 +222,11 @@ public class CheckpointService {
      * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
     public Map<String, Map<String, FoldedRow>> rebuildFromFrame(UUID siteId) {
-        return run(siteId, SnapshotPass.FORCE);
+        return run(siteId, SnapshotPass.FORCE, true);
     }
 
-    private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass) {
+    private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass,
+                                                    boolean mayWaitForFoldBudget) {
         // The epoch is read *before* the segments, and the order is load-bearing. Read the other way
         // round, a re-baseline (or a wipe) committing between the two would hand the build the
         // pre-reset segment list together with the new epoch: every guarded write would then compare
@@ -259,7 +278,8 @@ public class CheckpointService {
             if (segments.isEmpty() && !haveFrame) {
                 return Map.of();
             }
-            return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
+            return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame,
+                    mayWaitForFoldBudget);
         } catch (FoldTooLargeException e) {
             // The heap twin of the frame ceiling (issue #152), and it belongs on the same meter for
             // the same reason (#153): the fold is deterministic for the same history and a site only
@@ -418,11 +438,13 @@ public class CheckpointService {
     /**
      * Run the build with the process's fold budget held (issue #178).
      *
-     * <p>The budget is taken <b>outside</b> {@code phase=total}, so a build that spent its wait and
-     * was deferred contributes no duration sample at all: it did no work, and a ten-minute wait
-     * recorded as a build would be the one sample an operator reads the timer's maximum from. A
-     * build that waited and then ran does include the wait, which is honest — that cycle really did
-     * take that long.</p>
+     * <p>The budget is taken <b>outside</b> {@code phase=total}, so no wait reaches
+     * {@code delta.checkpoint.duration} — neither a deferred build, which did no work and would
+     * otherwise contribute the one sample an operator reads that timer's maximum from, nor a build
+     * that waited and then ran. That second case is why the wait has a meter of its own:
+     * {@code delta.checkpoint.fold.wait} is the only place contention short of a deferral is
+     * visible, since {@code delta.checkpoint.builds.deferred} stays at zero for a build that
+     * eventually got the budget.</p>
      *
      * <p>It is taken around the whole build rather than around the fold loop, because the folded
      * state is what {@code writeSnapshots} iterates: the heap is held until the last table has been
@@ -436,9 +458,16 @@ public class CheckpointService {
                                                       List<ChangelogSegment> segments,
                                                       long checkpointSeq,
                                                       SiteEpoch epoch,
-                                                      boolean haveFrame) {
-        return foldBudget.runExclusively(siteId,
-                () -> buildWithBudgetHeld(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame));
+                                                      boolean haveFrame,
+                                                      boolean mayWaitForFoldBudget) {
+        return foldBudget.runExclusively(siteId, mayWaitForFoldBudget, () -> {
+            // Checked here and not only inside the loops below: a build can have spent minutes
+            // waiting for the budget, so the process may be going away by the time it inherits it.
+            // Without this the waiter would download the frame and fold the whole site during the
+            // termination grace period, for a verdict issue #162 says it must not record.
+            stopIfShuttingDown(siteId);
+            return buildWithBudgetHeld(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
+        });
     }
 
     private Map<String, Map<String, FoldedRow>> buildWithBudgetHeld(UUID siteId,

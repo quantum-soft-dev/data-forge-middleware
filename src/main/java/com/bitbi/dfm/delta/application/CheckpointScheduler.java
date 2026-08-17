@@ -57,6 +57,14 @@ public class CheckpointScheduler {
             return;
         }
         try {
+            // The wait for the process's fold budget (issue #178) belongs to the tick, not to each
+            // site. Paid per site it would multiply: a build that never finishes would turn a
+            // 200-site tick into 200 x delta.checkpoint.fold-wait-seconds, over which the lock
+            // above skips the following nights' ticks and retention freezes for every site instead
+            // of the contended one. After one spent wait the tick keeps visiting sites but takes
+            // the budget only when it is free, so it resumes normally the moment the neighbouring
+            // build releases it.
+            boolean foldBudgetWasContended = false;
             for (UUID siteId : sitesToVisit()) {
                 // The sweep is the outer half of the same decision CheckpointService makes between
                 // tables (issue #162): once the context is closing, the remaining sites would each
@@ -67,7 +75,7 @@ public class CheckpointScheduler {
                     return;
                 }
                 try {
-                    checkpointService.buildCheckpoint(siteId);
+                    checkpointService.buildCheckpoint(siteId, !foldBudgetWasContended);
                     retentionService.prune(siteId);
                 } catch (CheckpointService.FramePresenceUnknownException e) {
                     // Not a failure of this site: S3 would not say whether its seed frame is there,
@@ -78,12 +86,12 @@ public class CheckpointScheduler {
                     // with it — the pointer did not move, so there is nothing new to prune.
                     log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
                 } catch (CheckpointFoldBudget.BuildDeferredException e) {
-                    // Another build held the process's fold budget for longer than the wait allows
-                    // (issue #178) — a forced rebuild beside this sweep, in practice. The site was
-                    // not visited, so retention is skipped with it (the pointer did not move), and
-                    // the tick carries on: a budget still held by the next site's turn defers that
-                    // one too, which is the loud, bounded version of a sweep silently stalled
-                    // behind one build.
+                    // Another build held the process's fold budget (issue #178) — a forced rebuild
+                    // beside this sweep, in practice. The site was not visited, so retention is
+                    // skipped with it (the pointer did not move), and the tick carries on without
+                    // waiting again: the loud, bounded version of a sweep silently stalled behind
+                    // one build.
+                    foldBudgetWasContended = true;
                     log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
                 } catch (RuntimeException e) {
                     log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());

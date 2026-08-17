@@ -934,13 +934,34 @@ incremented and a WARN naming the site. The nightly sweep skips that site's rete
 pointer did not move, so there is nothing new to prune — and carries on to the next; a forced
 rebuild releases its `rebuild_requested` flag and says to ask again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
 value there is a refusal that never repairs itself, and this one clears the moment the neighbouring
-build finishes. Two consequences worth knowing before this lands: an *idle* visit takes the budget
-too, for as long as the one query that answers "nothing to rematerialize", so it can in principle be
-deferred as well; and the wait is bounded on purpose, because waiting for ever behind a build that
-has stalled would freeze the whole sweep silently until the pod is replaced. The semaphore is fair
-and taken per site, so a rebuild queues behind **one** site's build rather than behind the sweep —
-if `delta.checkpoint.builds.deferred` moves at all on this deployment, single-site builds are
-running longer than the wait and that key is what to raise.
+build finishes.
+
+Four properties of the wait, in the order they are likely to matter:
+
+- **It is paid once per tick, not once per site.** After one spent wait the nightly sweep keeps
+  visiting sites but takes the budget only when it is free. Paid per site, a build that never
+  finished would turn a 200-site tick into `200 x fold-wait-seconds`, over which the scheduler's own
+  lock skips the following nights and retention freezes for *every* site rather than the contended
+  one. As soon as the neighbour releases, the rest of the tick proceeds normally.
+- **Contention is visible before the first deferral.** `delta.checkpoint.fold.wait` (a timer,
+  recorded for every build that reached the fold, deferrals included) is the band below
+  `fold-wait-seconds` — the budget is taken outside `phase=total`, so a build that waited nine
+  minutes and then ran looks exactly like one that waited none on `delta.checkpoint.duration`, and
+  `builds.deferred` stays at zero because it did run.
+  `max(delta_checkpoint_fold_wait_seconds_max)` against the configured wait is the query.
+- **It ends when the context starts closing.** `deltaRebuildExecutor` waits for its tasks on
+  shutdown and never interrupts them, so an unaware wait would hold a rollout for the executor's
+  whole termination period and then time out. A shutdown ends the wait as a deferral, and the forced
+  rebuild keeps its `rebuild_requested` flag for that one (issue #162's case) instead of releasing
+  it.
+- **It is bounded on purpose.** Waiting for ever behind a build that has stalled would freeze the
+  sweep silently until the pod is replaced.
+
+One consequence worth stating rather than hiding: an *idle* visit takes the budget too, for as long
+as the one query that answers "nothing to rematerialize", so it can in principle be deferred as
+well. The semaphore is fair and taken per site, so a rebuild queues behind **one** site's build
+rather than behind the sweep — if `delta.checkpoint.builds.deferred` moves at all on this
+deployment, single-site builds are running longer than the wait and that key is what to raise.
 
 The exclusion is per JVM, which is the right scope for heap: a deployment running the sweep on
 several replicas has that many independent budgets, exactly as it has that many heaps.
@@ -1782,7 +1803,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
 `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone|fold_too_large}`,
-`delta.checkpoint.builds.deferred`,
+`delta.checkpoint.builds.deferred`, `delta.checkpoint.fold.wait`,
 `delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
@@ -1826,6 +1847,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.batch-parquet.duration{phase=...}` (timer) | `delta_batch_parquet_duration_seconds_count` / `_sum` / `_max` |
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
 | `delta.checkpoint.fold.bytes` (summary) | `delta_checkpoint_fold_bytes_count` / `_sum` / `_max` |
+| `delta.checkpoint.fold.wait` (timer) | `delta_checkpoint_fold_wait_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
 | `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
