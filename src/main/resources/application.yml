@@ -389,6 +389,28 @@ delta:
     # PEAK estimate at DEBUG, and WARNs once a site passes 75% of this. One night at DEBUG on
     # CheckpointService is how to size this key before lowering it.
     max-fold-bytes: ${DELTA_CHECKPOINT_MAX_FOLD_BYTES:0}
+    # How long a build waits for the process's fold budget before it is DEFERRED (issue #178).
+    # max-fold-bytes above bounds one fold, and one JVM can hold two — the nightly sweep and a
+    # forced rebuild on deltaRebuildExecutor — so two folds at 45% of the budget each crossed
+    # nothing and still OOMKilled the pod. CheckpointFoldBudget lets one build fold at a time, which
+    # is what makes the number above a bound on the process rather than on a build; this key is how
+    # long the second one waits for its turn.
+    # Deferred, never refused: nothing is folded, uploaded, saved or counted against the site, no
+    # materialize attempt is spent, and the outcome is delta.checkpoint.builds.deferred — NOT
+    # delta.checkpoint.builds.aborted, whose values are the refusals that do not repair themselves.
+    # The wait is bounded rather than indefinite because a build that has stalled would otherwise
+    # freeze the whole nightly sweep silently and until the pod is replaced. The semaphore is fair
+    # and is taken per site, so a rebuild queues behind ONE site's build, not behind the sweep:
+    # 600 s is generous for that. The nightly sweep pays this wait ONCE per pass, not once per
+    # site — after one spent wait it keeps visiting sites but takes the budget only when it is free,
+    # and sites deferred along the way get one retry pass at the end of the tick, so a tick spends
+    # at most two waits. The wait also ends early when the application starts shutting down (that
+    # ending is NOT counted as a deferral), and is clamped at a day however large this is set.
+    # Size it from delta.checkpoint.fold.wait (a timer over every build that reached the fold),
+    # not from delta.checkpoint.duration: the budget is taken outside phase=total, so a build that
+    # waited nine minutes and then ran is invisible there and never touches builds.deferred either.
+    # 0 = do not wait at all.
+    fold-wait-seconds: ${DELTA_CHECKPOINT_FOLD_WAIT_SECONDS:600}
     # How many nights the tick keeps retrying a table that came out of a build with no snapshot
     # (issue #149). Since #128 such a row is retried by every scheduled build, and since #137 it
     # also puts its site on the tick's work list — so a table nothing can ever materialize (no

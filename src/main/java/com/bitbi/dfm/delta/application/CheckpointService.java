@@ -64,6 +64,8 @@ public class CheckpointService {
     private final CheckpointEpochGuard epochGuard;
     private final CheckpointRetryProperties retryProperties;
     private final ApplicationShutdownSignal shutdownSignal;
+    /** One fold at a time in this JVM, so {@link #maxFoldBytes} bounds the process (issue #178). */
+    private final CheckpointFoldBudget foldBudget;
     private final Path tempDirectory;
     /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
     private final long maxTempBytes;
@@ -87,6 +89,7 @@ public class CheckpointService {
                              CheckpointEpochGuard epochGuard,
                              CheckpointRetryProperties retryProperties,
                              ApplicationShutdownSignal shutdownSignal,
+                             CheckpointFoldBudget foldBudget,
                              // fully qualified: the delta wire Value is imported above
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
@@ -118,6 +121,7 @@ public class CheckpointService {
         this.epochGuard = epochGuard;
         this.retryProperties = retryProperties;
         this.shutdownSignal = shutdownSignal;
+        this.foldBudget = foldBudget;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.maxFrameTempBytes = maxFrameTempBytes;
@@ -189,7 +193,25 @@ public class CheckpointService {
      * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
     public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId) {
-        return run(siteId, SnapshotPass.RETRY_MISSING);
+        return buildCheckpoint(siteId, true);
+    }
+
+    /**
+     * As {@link #buildCheckpoint(UUID)}, with the wait for the process's fold budget optional
+     * (issue #178).
+     *
+     * <p>For a caller with many sites to visit. {@code CheckpointScheduler} pays one full wait per
+     * tick and asks without waiting afterwards, so a build that never finishes costs one wait
+     * rather than one per remaining site — at 200 sites the difference is a tick of
+     * {@code 200 x delta.checkpoint.fold-wait-seconds}, over which its own lock skips the following
+     * nights and retention freezes for every site instead of the contended one.</p>
+     *
+     * @param siteId               site identifier
+     * @param mayWaitForFoldBudget {@code false} to take the fold budget only if it is free now
+     * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
+     */
+    public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId, boolean mayWaitForFoldBudget) {
+        return run(siteId, SnapshotPass.RETRY_MISSING, mayWaitForFoldBudget);
     }
 
     /**
@@ -200,27 +222,82 @@ public class CheckpointService {
      * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
     public Map<String, Map<String, FoldedRow>> rebuildFromFrame(UUID siteId) {
-        return run(siteId, SnapshotPass.FORCE);
+        return run(siteId, SnapshotPass.FORCE, true);
     }
 
-    private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass) {
-        // The epoch is read *before* the segments, and the order is load-bearing. Read the other way
-        // round, a re-baseline (or a wipe) committing between the two would hand the build the
-        // pre-reset segment list together with the new epoch: every guarded write would then compare
-        // equal and be approved, and the build would fold the discarded baseline, upload a frame at
-        // its last seq and move the pointer there — the resurrection the guard exists to stop,
-        // arrived at through the guard. This way the epoch can only be older-or-equal to the data it
-        // guards, which is the direction the guard refuses.
-        DeltaSyncStateService.SyncStateView syncState = syncStateService.getSyncState(siteId);
-        List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
-        long checkpointSeq = syncState.lastCheckpointSeq();
-        // The epoch this build belongs to. Every row it writes is checked against it under the
-        // site_sync_state row lock, so a history wipe (issue #136) or a re-baseline (issue #142)
-        // that commits mid-build discards the build instead of having its deletes undone by it.
-        SiteEpoch epoch = syncState.epoch();
-        ObjectPresence framePresence = checkpointSeq > 0
-                ? checkpointStorage.framePresence(siteId, checkpointSeq)
-                : ObjectPresence.ABSENT;
+    /**
+     * Take the process's fold budget, then do everything else (issue #178).
+     *
+     * <p>The order is the point, and it was the other way round in the first cut of this ticket:
+     * the site's sync state, its segment list and the frame's presence are all read <b>after</b> the
+     * budget is held. Read before it, they would be as stale as the wait is long — up to
+     * {@code delta.checkpoint.fold-wait-seconds} plus the whole of the neighbouring build — and a
+     * forced rebuild parked on the semaphore while the nightly sweep built the same site would then
+     * fold a segment list that {@code ChangelogRetentionService.prune} had already deleted from S3
+     * behind the advanced pointer. That fails the build on a missing key, which is a fact about
+     * nothing. Before this ticket the same gap existed but was a few S3 round trips wide.</p>
+     *
+     * <p>The cost is that a site with nothing to do holds the budget for one query and one S3
+     * presence check rather than for nothing at all. That is the same trade the idle probe makes
+     * (see {@link #build}), and it buys a build that folds what the site looks like now.</p>
+     */
+    private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass,
+                                                    boolean mayWaitForFoldBudget) {
+        try {
+            return foldBudget.runExclusively(siteId, mayWaitForFoldBudget,
+                    () -> runWithBudgetHeld(siteId, idlePass));
+        } catch (CheckpointFoldBudget.BuildDeferredException e) {
+            // The concurrency half of the same ceiling (issue #178), and the opposite verdict to the
+            // fold ceiling's. Nothing was folded, so nothing about this site was learned: another
+            // build held the process's fold budget. Counted on delta.checkpoint.builds.deferred
+            // rather than on delta.checkpoint.builds.aborted, whose values are the refusals that
+            // never repair themselves — this one is repaired by the neighbouring build finishing.
+            //
+            // Unless the wait was cut short, which is not contention at all: the wait ends itself
+            // when the context starts closing, and counting that would move an alerting series
+            // during every rollout that catches a build waiting — the same reason
+            // BuildEndedByShutdownException records nothing (issue #162). Still re-thrown, so
+            // DeltaCheckpointRebuildService can keep its durable flag for the next process.
+            // And only a *spent* wait is contention worth counting. Once the nightly sweep has spent
+            // its wait it probes every remaining site without waiting, so counting those would add
+            // hundreds of increments to one collision — and the remedy this meter's own text
+            // prescribes, raising the wait, is wrong for every one of them (raised in review).
+            if (e.waitWasSpent()) {
+                log.warn("{}", e.getMessage());
+                metrics.checkpointBuildDeferred();
+            } else if (e.endedEarly()) {
+                log.info("Ending the checkpoint build for site {} before it started: {}",
+                        siteId, e.getMessage());
+            } else {
+                log.debug("{}", e.getMessage());
+            }
+            throw e;
+        }
+    }
+
+    private Map<String, Map<String, FoldedRow>> runWithBudgetHeld(UUID siteId, SnapshotPass idlePass) {
+        try {
+            // A build can have spent minutes waiting, so the process may be going away by the time
+            // it inherits the budget. Without this it would read, download and fold a whole site
+            // during the termination grace period, for a verdict issue #162 says it must not record.
+            stopIfShuttingDown(siteId);
+            // The epoch is read *before* the segments, and the order is load-bearing. Read the other
+            // way round, a re-baseline (or a wipe) committing between the two would hand the build
+            // the pre-reset segment list together with the new epoch: every guarded write would then
+            // compare equal and be approved, and the build would fold the discarded baseline, upload
+            // a frame at its last seq and move the pointer there — the resurrection the guard exists
+            // to stop, arrived at through the guard. This way the epoch can only be older-or-equal
+            // to the data it guards, which is the direction the guard refuses.
+            DeltaSyncStateService.SyncStateView syncState = syncStateService.getSyncState(siteId);
+            List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
+            long checkpointSeq = syncState.lastCheckpointSeq();
+            // The epoch this build belongs to. Every row it writes is checked against it under the
+            // site_sync_state row lock, so a history wipe (issue #136) or a re-baseline (issue #142)
+            // that commits mid-build discards the build instead of having its deletes undone by it.
+            SiteEpoch epoch = syncState.epoch();
+            ObjectPresence framePresence = checkpointSeq > 0
+                    ? checkpointStorage.framePresence(siteId, checkpointSeq)
+                    : ObjectPresence.ABSENT;
         // S3 refused to say whether the seed frame is there (issue #157). Every conclusion below
         // rests on absence being a fact, and this is not one: a blanket read denial on keys that do
         // exist answers exactly like a key that is gone. Acting on it would raise this subsystem's
@@ -236,13 +313,12 @@ public class CheckpointService {
         // case distinguishable: DeltaCheckpointRebuildService cannot tell an empty fold from a
         // finished build, so it would log "rebuild completed" and spend the durable
         // rebuild_requested flag on a build that never ran.
-        if (framePresence == ObjectPresence.UNKNOWN) {
-            throw new FramePresenceUnknownException(siteId, checkpointSeq);
-        }
-        boolean haveFrame = framePresence == ObjectPresence.PRESENT;
-        boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
+            if (framePresence == ObjectPresence.UNKNOWN) {
+                throw new FramePresenceUnknownException(siteId, checkpointSeq);
+            }
+            boolean haveFrame = framePresence == ObjectPresence.PRESENT;
+            boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
-        try {
             // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
             // recordCheckpoint). If it is genuinely gone — deleted; not merely unreadable, which
             // the tri-state above has already taken out of this path — a refold is lossless only
@@ -399,6 +475,25 @@ public class CheckpointService {
         }
     }
 
+    /**
+     * The fold and everything it feeds, with the process's fold budget already held by
+     * {@link #run} (issue #178).
+     *
+     * <p>The budget is taken <b>outside</b> {@code phase=total}, so no wait reaches
+     * {@code delta.checkpoint.duration} — neither a deferred build, which did no work and would
+     * otherwise contribute the one sample an operator reads that timer's maximum from, nor a build
+     * that waited and then ran. That second case is why the wait has a meter of its own:
+     * {@code delta.checkpoint.fold.wait} is the only place contention short of a deferral is
+     * visible, since {@code delta.checkpoint.builds.deferred} stays at zero for a build that
+     * eventually got the budget.</p>
+     *
+     * <p>The budget covers the whole build rather than the fold loop, because the folded state is
+     * what {@code writeSnapshots} iterates: the heap is held until the last table has been
+     * uploaded. The cost is that an <em>idle</em> visit — the query below answering "nothing to
+     * rematerialize" — holds the budget for the length of that query, and can in principle be
+     * deferred. Answering it before taking the budget would mean reading the site's state outside
+     * the exclusion, which is the staleness this ticket's second review round removed.</p>
+     */
     private Map<String, Map<String, FoldedRow>> build(UUID siteId,
                                                       SnapshotPass idlePass,
                                                       List<ChangelogSegment> segments,
@@ -594,13 +689,14 @@ public class CheckpointService {
      * compared against a budget expressed in the same units, so the two are wrong together or not
      * at all.</p>
      *
-     * <p><b>The ceiling is per build, not per process</b>, and that gap is the same one the scratch
-     * ceilings have on disk (issue #150): two folds at 45% of the budget each cross nothing and
-     * still exhaust the heap between them. It takes a forced rebuild running beside the nightly
-     * sweep — the only way two builds exist in one JVM, and the {@code 2 x} the scratch budget
-     * reserves for. Closing it needs a reservation shared across concurrent folds rather than a
-     * per-fold limit, which is the heap twin of #150 and is filed as issue #178; what is
-     * bounded here is the single-build case, which is the nightly one.</p>
+     * <p><b>The ceiling is per build and the process holds one build at a time</b>, so it bounds the
+     * process (issue #178). It did not before: two folds at 45% of the budget each crossed nothing
+     * and still exhausted the heap between them, which takes a forced rebuild running beside the
+     * nightly sweep — the {@code 2 x} the scratch budget still reserves for on disk. What closes it
+     * is {@link CheckpointFoldBudget}, an exclusion held for the whole build rather than a running
+     * total shared between folds; a build that cannot have it within
+     * {@code delta.checkpoint.fold-wait-seconds} is <em>deferred</em>, never refused, so no
+     * concurrency-caused outcome reaches the abort counter.</p>
      */
     private static final class BudgetedFold {
 
