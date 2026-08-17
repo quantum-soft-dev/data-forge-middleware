@@ -76,13 +76,16 @@ public final class ParquetCheckpointWriter {
      * @param rows          each row's column → wire value (present columns only; absent = null cell)
      * @param maxBytes      refuse to put more than this many bytes on local disk
      * @param rowGroupBytes the configured row-group budget ({@link DeltaParquetProperties})
+     * @param lease         this file's share of the shared scratch directory (issue #150)
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross {@code maxBytes}
+     * @throws ScratchBudgetExceededException     when the shared scratch directory has no room
      */
     public static void writeParquet(Path output, String tableName, TableSchema tableSchema,
-                                    Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes) {
+                                    Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes,
+                                    ScratchLease lease) {
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
-                        new FileOutputFile(output, maxBytes))
+                        new FileOutputFile(output, maxBytes, lease))
                 .withSchema(avro)
                 .withDataModel(logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())

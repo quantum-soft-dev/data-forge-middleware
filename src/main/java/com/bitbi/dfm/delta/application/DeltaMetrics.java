@@ -37,6 +37,15 @@ import java.util.function.Supplier;
  *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152)</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
  *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
+ *   <li>{@code delta.parquet.scratch.bytes} — gauge: bytes of file-backed Parquet scratch reserved
+ *       by live writers, the band below {@code delta.parquet.max-scratch-bytes} (issue #150,
+ *       registered in {@code ParquetScratchBudget}). It follows the writers even when no budget is
+ *       configured, which is how that key is sized before it is turned on</li>
+ *   <li>{@code delta.parquet.scratch.refused} — writers stopped because the shared scratch
+ *       directory was full, tagged {@code writer=checkpoint_frame|checkpoint_table|batch_artifact}.
+ *       Transient by nature — it says the directory was busy, not that the artifact was too big —
+ *       so it is its own counter rather than a value on any of the meters below, neither the
+ *       permanent {@code builds.aborted} nor the per-table {@code tables.unmaterialized}</li>
  *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
@@ -185,6 +194,12 @@ public class DeltaMetrics {
      * <p>Since issue #113 Parquet is the only format the build writes, so a table without a
      * declared schema ({@code no_schema}) or one whose Parquet write threw ({@code parquet_failed})
      * has nothing to download until the next build. Both used to be masked by the CSV snapshot.</p>
+     *
+     * <p>A table stopped by the shared scratch <em>directory</em> (issue #150) is deliberately
+     * <b>not</b> here. That refusal is systemic — the directory is full of other writers' files, so
+     * every remaining table would meet it too — and it ends the build rather than recording a
+     * verdict on one table, the same answer an unusable scratch directory has had since #112.
+     * {@code delta.parquet.scratch.refused} is its meter.</p>
      *
      * @param reason {@code no_schema} or {@code parquet_failed}
      */

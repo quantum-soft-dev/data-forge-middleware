@@ -62,7 +62,8 @@ class ChangelogCodecTest {
         Path file = tempDir.resolve("frame.pb.gz");
 
         assertThrows(ArtifactSizeLimitExceededException.class, () -> {
-            try (java.io.OutputStream out = new CappedOutputStream(Files.newOutputStream(file), 8L)) {
+            try (java.io.OutputStream out = new CappedOutputStream(Files.newOutputStream(file), 8L,
+                    TestScratchLeases.unbounded())) {
                 ChangelogCodec.write(source, out);
             }
         });

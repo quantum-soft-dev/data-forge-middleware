@@ -18,7 +18,7 @@ class CappedOutputStreamTest {
     @Test
     void writesUntilTheCeilingThenThrows() throws IOException {
         ByteArrayOutputStream sink = new ByteArrayOutputStream();
-        CappedOutputStream capped = new CappedOutputStream(sink, 4);
+        CappedOutputStream capped = new CappedOutputStream(sink, 4, TestScratchLeases.unbounded());
 
         capped.write(new byte[] {1, 2, 3});
         assertThrows(ArtifactSizeLimitExceededException.class, () -> capped.write(new byte[] {4, 5}));
@@ -28,7 +28,7 @@ class CappedOutputStreamTest {
     @Test
     void furtherWritesAfterTheCeilingDoNotThrow() throws IOException {
         ByteArrayOutputStream sink = new ByteArrayOutputStream();
-        CappedOutputStream capped = new CappedOutputStream(sink, 0);
+        CappedOutputStream capped = new CappedOutputStream(sink, 0, TestScratchLeases.unbounded());
 
         assertThrows(ArtifactSizeLimitExceededException.class, () -> capped.write(1));
         capped.write(2);

@@ -58,6 +58,12 @@ public class BatchParquetFinalizationService {
     private final S3CheckpointStorage storage;
     private final DeltaMetrics metrics;
     private final DeltaParquetProperties parquetProperties;
+    /**
+     * The bound on the scratch <em>directory</em> (issue #150). This is the path that made one
+     * necessary: a build opens one scratch file per claimed table, a count no per-file ceiling can
+     * bound.
+     */
+    private final ParquetScratchBudget scratchBudget;
     private final TransactionTemplate transactions;
     private final ScheduledExecutorService leaseRenewals;
     private final Path tempDirectory;
@@ -75,6 +81,7 @@ public class BatchParquetFinalizationService {
             S3CheckpointStorage storage,
             DeltaMetrics metrics,
             DeltaParquetProperties parquetProperties,
+            ParquetScratchBudget scratchBudget,
             PlatformTransactionManager transactionManager,
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String tempDirectory,
             @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
@@ -89,6 +96,7 @@ public class BatchParquetFinalizationService {
         this.storage = storage;
         this.metrics = metrics;
         this.parquetProperties = parquetProperties;
+        this.scratchBudget = scratchBudget;
         // Explicit template rather than @Transactional on the steps below: they are called from
         // finalizeNext() on this same bean, and a self-invocation never reaches the proxy — the
         // annotation would silently do nothing, which is exactly what the claim must not do.
@@ -422,6 +430,9 @@ public class BatchParquetFinalizationService {
         Map<UUID, BuildOutcome> outcomes = new LinkedHashMap<>();
         Map<String, Claim> claimsByTable = new LinkedHashMap<>();
         Map<String, Path> tempFiles = new LinkedHashMap<>();
+        // One lease per scratch file, released with the file in the finally below — a build keeps
+        // every file until the last upload, so the directory carries them all at once.
+        Map<String, ScratchLease> leases = new LinkedHashMap<>();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         try {
             Files.createDirectories(tempDirectory);
@@ -436,9 +447,12 @@ public class BatchParquetFinalizationService {
                 }
                 Path output = Files.createTempFile(tempDirectory,
                         ParquetScratch.BATCH_PARQUET_PREFIX + claim.artifactId() + "-", ".parquet");
+                ScratchLease lease = scratchBudget.open(ParquetScratchBudget.BATCH_ARTIFACT);
                 claimsByTable.put(claim.tableName(), claim);
                 tempFiles.put(claim.tableName(), output);
-                requests.put(claim.tableName(), new DeltaParquetWriter.TableWriteRequest(output, schema));
+                leases.put(claim.tableName(), lease);
+                requests.put(claim.tableName(),
+                        new DeltaParquetWriter.TableWriteRequest(output, schema, lease));
             }
             PhaseClock clock = new PhaseClock();
             DeltaParquetWriter.BatchWriteResult written;
@@ -506,6 +520,17 @@ public class BatchParquetFinalizationService {
                     log.warn("Could not delete unified Parquet temp file {}", tempFile, e);
                 }
             }
+            // After the deletes: the bytes are on the volume until the file is gone, and a lease
+            // released early would tell the next writer there is room that does not exist yet.
+            //
+            // Released even when a delete FAILED, deliberately (raised in review). Holding the
+            // lease would be the worse of the two errors and it would be permanent: the directory
+            // would shrink for the life of the pod, until every writer is refused and the nightly
+            // checkpoint ends on the first table. An undeleted scratch file is instead exactly the
+            // residue class the budget already excludes — like scratch a dead process left behind,
+            // it has no live owner — so it is covered by the gigabyte kept free below the volume
+            // and reclaimed by ParquetScratchOrphanSweeper, and the failed delete is logged above.
+            leases.values().forEach(ScratchLease::close);
         }
     }
 

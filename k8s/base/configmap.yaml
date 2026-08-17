@@ -42,24 +42,18 @@ data:
   # it are declared here, beside the temp dirs that put the writers on it — the application has
   # no way to know how large the directory it was handed is.
   #
-  # The three values are the sizing note's own worst case solved for 6Gi with a gigabyte kept
-  # free, and ParquetScratchCeilingBudgetTest recomputes it from these manifests:
-  #     2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch <= sizeLimit - 1Gi
-  #     2 x max(1Gi, 1.5Gi)                         + 2              x 1Gi   =  5Gi   <= 5Gi
-  # The reserved gigabyte is for scratch a dead container left behind (it survives on the
-  # pod-private volume until the next sweep tick, #141) and for the fact that kubelet acts on
-  # usage EXCEEDING the limit, not on reaching it. Solving to exact equality with sizeLimit would
-  # mean the modelled peak is itself an eviction.
-  # The 2x is the two checkpoint build paths (the 02:00 sweep and a forced rebuild on
-  # deltaRebuildExecutor are not mutually excluded), each holding one file at a time. The batch
-  # term assumes ONE claimed table per build — a real build opens one file per claimed table, so
-  # this is the single-table worst case, not the whole budget; bounding a *count* needs the
-  # directory-wide reservation of issue #150. Orphan residue after a container restart (#141) sits
-  # outside it too.
+  # What bounds the DIRECTORY is the key below, not these three (issue #150). Until it existed the
+  # budget had to be a multiplier estimate — 2 x max(table, frame) + max-concurrent x batch — whose
+  # batch term assumed ONE claimed table per build, while a real build opens one file per claimed
+  # table. That was a floor on the guarantee rather than a budget: no per-file ceiling can bound a
+  # count. DELTA_PARQUET_MAX_SCRATCH_BYTES bounds the sum directly, so these three keep only their
+  # per-artifact job — refusing one deterministically oversized file with the semantics that suit
+  # it — and no longer have to be multiplied out.
   #
-  # The frame is deliberately the widest ceiling, because its failure is the expensive one, and
-  # raising it costs 2 GiB of volume per GiB — grow sizeLimit and ephemeral-storage in the same
-  # commit.
+  # The frame is deliberately the widest ceiling, because its failure is the expensive one. Since
+  # #150 raising it no longer costs 2 GiB of volume per GiB — the directory budget below is what
+  # has to fit — but it must stay at or under that budget, or the directory refuses first and the
+  # frame's own graceful accounting never speaks.
   #
   # For scale, the largest artifact on record is in the low hundreds of MiB, so these are 3-5x
   # headroom. NONE of the three refusals repairs itself if the artifact is deterministically too
@@ -81,5 +75,16 @@ data:
   DELTA_CHECKPOINT_MAX_TEMP_BYTES: "1073741824"
   DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES: "1610612736"
   DELTA_BATCH_PARQUET_MAX_TEMP_BYTES: "1073741824"
+  # The one key that bounds the whole directory (issue #150), and the only reason the ceilings
+  # above no longer need a multiplier. 5Gi = the 6Gi sizeLimit less a gigabyte kept free: for
+  # scratch a dead container left behind (it survives on the pod-private volume until the next
+  # sweep tick, #141, and its owner is gone so no lease covers it) and for the fact that kubelet
+  # acts on usage EXCEEDING the limit rather than reaching it. Solving to exact equality with
+  # sizeLimit would make the budget itself an eviction.
+  # It is per JVM, which is a true bound here only because DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD
+  # above says the directory belongs to this pod; on a shared volume it would be a per-replica
+  # share. ParquetScratchCeilingBudgetTest recomputes it from these manifests, so raising it or
+  # shrinking sizeLimit on its own fails the build.
+  DELTA_PARQUET_MAX_SCRATCH_BYTES: "5368709120"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"

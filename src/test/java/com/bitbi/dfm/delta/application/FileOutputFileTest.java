@@ -25,7 +25,7 @@ class FileOutputFileTest {
     @Test
     void writesThroughToTheFileWhileWithinTheCeiling() throws IOException {
         Path file = tempDir.resolve("within.parquet");
-        try (PositionOutputStream stream = new FileOutputFile(file, 16).create(0L)) {
+        try (PositionOutputStream stream = new FileOutputFile(file, 16, TestScratchLeases.unbounded()).create(0L)) {
             stream.write(new byte[]{1, 2, 3}, 0, 3);
             stream.write(4);
             assertEquals(4L, stream.getPos());
@@ -36,7 +36,7 @@ class FileOutputFileTest {
     @Test
     void closesTheFileWhenTheCeilingIsCrossed() throws IOException {
         Path file = tempDir.resolve("over.parquet");
-        PositionOutputStream stream = new FileOutputFile(file, 4).create(0L);
+        PositionOutputStream stream = new FileOutputFile(file, 4, TestScratchLeases.unbounded()).create(0L);
 
         assertThrows(ArtifactSizeLimitExceededException.class,
                 () -> stream.write(new byte[]{1, 2, 3, 4, 5}, 0, 5));

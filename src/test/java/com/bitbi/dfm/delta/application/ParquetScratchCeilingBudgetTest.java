@@ -10,7 +10,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -28,20 +27,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code k8s/base/configmap.yaml} next to the {@code *_TEMP_DIR} keys that put the writers on it —
  * the same split #141 used for {@code DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD}.</p>
  *
- * <p>What is asserted about the deployed values is the worst case the "Sizing note" of
- * {@code docs/delta-client-v2-guide.md} already writes down, recomputed from the manifests:</p>
+ * <p>What is asserted about the deployed values is the "Sizing note" of
+ * {@code docs/delta-client-v2-guide.md}, recomputed from the manifests. Since issue #150 that is one
+ * subtraction rather than a multiplier estimate:</p>
  *
  * <pre>
- * 2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact &lt;= sizeLimit
+ * delta.parquet.max-scratch-bytes + restart residue &lt;= sizeLimit
  * </pre>
  *
- * <p><b>Read the batch term as "one claimed table per batch build".</b> A real batch build opens one
- * scratch file per claimed table (#038), so a two-table batch already doubles that term and a 6Gi
- * volume can still be overrun — no per-file ceiling can bound a count, only the directory-wide
- * reservation of issue #150 can, and orphan residue (#127, #141) sits outside the inequality as
- * well. So this is a <b>floor on the guarantee, not the budget</b>: it fixes the single-table worst
- * case, and what it really buys is that the three ceilings, the concurrency they assume and the
- * volume behind them can no longer drift apart silently.</p>
+ * <p><b>What the multiplier could not do</b> is why. It read
+ * {@code 2 x max(table, frame) + max-concurrent x batch}, whose last term assumed <em>one claimed
+ * table per batch build</em> — a real build opens one scratch file per claimed table (#038), so a
+ * two-table batch already doubled it and a 6Gi volume could be overrun however low the per-file
+ * ceilings were set. A count is not something a per-file ceiling can bound. The directory budget
+ * bounds the sum directly, so the per-file ceilings drop out of the inequality and keep only their
+ * per-artifact job; what remains outside it is scratch a dead process left behind (#127, #141),
+ * which no lease covers, and that is what the reserve below is for.</p>
  */
 class ParquetScratchCeilingBudgetTest {
 
@@ -53,23 +54,20 @@ class ParquetScratchCeilingBudgetTest {
 
     private static final String SCRATCH_MOUNT_PATH = "/scratch/parquet";
 
-    /** Both checkpoint build paths can hold one scratch file each at the same time. */
-    private static final int CONCURRENT_CHECKPOINT_BUILDS = 2;
-
     /**
-     * Kept free at the modelled peak. Two things live outside the inequality and would otherwise
-     * turn "fits exactly" into an eviction: scratch a dead container left behind, which survives on
-     * the pod-private volume until the next sweep tick (#141), and the fact that kubelet acts on
-     * usage <em>exceeding</em> the limit rather than reaching it. It is an allowance, not a proof —
-     * a dead build leaves one file per claimed table, which is #150's territory like everything
-     * else about that multiplier.
+     * Kept free above the budget. Two things live outside it and would otherwise turn "fits
+     * exactly" into an eviction: scratch a dead container left behind, which survives on the
+     * pod-private volume until the next sweep tick (#141) and whose owner is gone, so no lease
+     * covers it; and the fact that kubelet acts on usage <em>exceeding</em> the limit rather than
+     * reaching it. It is still an allowance rather than a proof — a dead build leaves one file per
+     * claimed table, and nothing bounds that count once the process that held the leases is gone.
      */
     private static final long RESIDUE_RESERVE_BYTES = 1024L * 1024 * 1024;
 
     private static final String SNAPSHOT_CEILING_KEY = "DELTA_CHECKPOINT_MAX_TEMP_BYTES";
     private static final String FRAME_CEILING_KEY = "DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES";
     private static final String BATCH_CEILING_KEY = "DELTA_BATCH_PARQUET_MAX_TEMP_BYTES";
-    private static final String BATCH_CONCURRENCY_KEY = "DELTA_BATCH_PARQUET_MAX_CONCURRENT";
+    private static final String DIRECTORY_BUDGET_KEY = "DELTA_PARQUET_MAX_SCRATCH_BYTES";
 
     @Test
     void theFrameCeilingIsItsOwnKeyAndUpgradesToTheHistoricValue() throws IOException {
@@ -112,9 +110,7 @@ class ParquetScratchCeilingBudgetTest {
         long snapshotCeiling = deployedBytes(data, SNAPSHOT_CEILING_KEY);
         long frameCeiling = deployedBytes(data, FRAME_CEILING_KEY);
         long batchCeiling = deployedBytes(data, BATCH_CEILING_KEY);
-        long batchConcurrency = data.containsKey(BATCH_CONCURRENCY_KEY)
-                ? Long.parseLong(String.valueOf(data.get(BATCH_CONCURRENCY_KEY)).trim())
-                : applicationDefault(BATCH_CONCURRENCY_KEY);
+        long directoryBudget = deployedBytes(data, DIRECTORY_BUDGET_KEY);
 
         assertTrue(frameCeiling >= snapshotCeiling,
                 "the frame ceiling must be the wider of the two: crossing it aborts the build and "
@@ -122,19 +118,36 @@ class ParquetScratchCeilingBudgetTest {
                         + "a later build — " + FRAME_CEILING_KEY + "=" + frameCeiling + " B is below "
                         + SNAPSHOT_CEILING_KEY + "=" + snapshotCeiling + " B");
 
+        // A per-file ceiling above the directory budget can never be reached: the directory refuses
+        // first, and it refuses with different semantics — transient rather than a verdict on the
+        // artifact — so the per-file key would be dead configuration that reads as if it were live.
+        for (String ceilingKey : List.of(SNAPSHOT_CEILING_KEY, FRAME_CEILING_KEY, BATCH_CEILING_KEY)) {
+            long ceiling = deployedBytes(data, ceilingKey);
+            assertTrue(ceiling <= directoryBudget,
+                    ceilingKey + "=" + ceiling + " B is above " + DIRECTORY_BUDGET_KEY + "="
+                            + directoryBudget + " B, so the directory refuses before that ceiling "
+                            + "can ever speak and its documented failure mode never happens");
+        }
+
         long sizeLimit = scratchVolumeSizeLimitBytes();
-        long peak = CONCURRENT_CHECKPOINT_BUILDS * Math.max(snapshotCeiling, frameCeiling)
-                + batchConcurrency * batchCeiling;
         long budget = sizeLimit - RESIDUE_RESERVE_BYTES;
-        assertTrue(peak <= budget,
-                "the single-claimed-table worst case allowed by these ceilings is " + peak
-                        + " B against a budget of " + budget + " B (" + sizeLimit + " B volume less "
-                        + RESIDUE_RESERVE_BYTES + " B kept free for restart residue), so kubelet can "
-                        + "still evict the pod before the application refuses: "
-                        + CONCURRENT_CHECKPOINT_BUILDS + " x max(" + snapshotCeiling + ", "
-                        + frameCeiling + ") + " + batchConcurrency + " x " + batchCeiling
-                        + ". Move the ceilings and the volume together — see the sizing note in "
-                        + "docs/delta-client-v2-guide.md");
+        assertTrue(directoryBudget <= budget,
+                "the whole scratch directory may hold " + directoryBudget + " B against a budget of "
+                        + budget + " B (" + sizeLimit + " B volume less " + RESIDUE_RESERVE_BYTES
+                        + " B kept free for restart residue), so kubelet can still evict the pod "
+                        + "before the application refuses. Move " + DIRECTORY_BUDGET_KEY + " and the "
+                        + "volume together — see the sizing note in docs/delta-client-v2-guide.md");
+    }
+
+    @Test
+    void theDirectoryBudgetIsUnboundedUntilADeploymentDeclaresOne() throws IOException {
+        // The application cannot see how large the directory it was handed is, so the shipped
+        // default must change nothing on an upgrade — the same split #138 used for the per-file
+        // ceilings and #141 for the pod-private flag. The gauge is what makes that safe rather than
+        // merely quiet: it measures either way, so the key can be sized before it is turned on.
+        assertTrue(applicationYaml().contains(
+                        "max-scratch-bytes: ${" + DIRECTORY_BUDGET_KEY + ":0}"),
+                "delta.parquet.max-scratch-bytes must default to 0 (unbounded)");
     }
 
     @Test
@@ -145,7 +158,7 @@ class ParquetScratchCeilingBudgetTest {
         // a `- KEY=value` configMapGenerator literal.
         Pattern ceilingOverride = Pattern.compile(
                 "(^|\\s|-\\s)(" + SNAPSHOT_CEILING_KEY + "|" + FRAME_CEILING_KEY + "|"
-                        + BATCH_CEILING_KEY + "|" + BATCH_CONCURRENCY_KEY + ")\\s*[:=]",
+                        + BATCH_CEILING_KEY + "|" + DIRECTORY_BUDGET_KEY + ")\\s*[:=]",
                 Pattern.MULTILINE);
         // A sizeLimit belonging to some other volume (dev's Redis, say) is none of this test's
         // business; one in a file that also names the scratch volume or its mount is.
@@ -159,7 +172,7 @@ class ParquetScratchCeilingBudgetTest {
                         || body.contains(SCRATCH_MOUNT_PATH);
                 assertFalse(ceilingOverride.matcher(body).find()
                                 || (touchesScratch && sizeLimitOverride.matcher(body).find()),
-                        file + " redefines a scratch ceiling, the batch concurrency it assumes, or "
+                        file + " redefines a scratch ceiling, the directory budget, or "
                                 + "the volume sizeLimit; theDeployedCeilingsRefuseBeforeTheScratchVolumeFills "
                                 + "no longer covers the rendered configuration and must be widened to it");
             }
@@ -220,15 +233,6 @@ class ParquetScratchCeilingBudgetTest {
         long bytes = Long.parseLong(raw);
         assertTrue(bytes > 0, key + " must be positive, was " + bytes);
         return bytes;
-    }
-
-    /** The default in {@code application.yml}, for a key the deployment does not override. */
-    private static long applicationDefault(String environmentVariable) throws IOException {
-        Matcher matcher = Pattern.compile(Pattern.quote("${" + environmentVariable + ":") + "(\\d+)}")
-                .matcher(applicationYaml());
-        assertTrue(matcher.find(),
-                "application.yml must declare a numeric default for " + environmentVariable);
-        return Long.parseLong(matcher.group(1));
     }
 
     /**

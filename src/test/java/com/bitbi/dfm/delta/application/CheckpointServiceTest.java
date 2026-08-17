@@ -146,12 +146,20 @@ class CheckpointServiceTest {
     /** As above, plus the ceiling on the fold's own heap (issue #152). */
     private CheckpointService newService(String scratchDirectory, long maxTempBytes,
                                          long maxFrameTempBytes, long maxFoldBytes) {
+        return newService(scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes,
+                TestScratchLeases.unboundedBudget());
+    }
+
+    /** As above, with a scratch directory shared with other writers (issue #150). */
+    private CheckpointService newService(String scratchDirectory, long maxTempBytes,
+                                         long maxFrameTempBytes, long maxFoldBytes,
+                                         ParquetScratchBudget scratchBudget) {
         return new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, foldBudget,
-                scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes);
+                scratchBudget, scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes);
     }
 
     /**
@@ -532,7 +540,8 @@ class CheckpointServiceTest {
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
-                waitingBudget, tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE);
+                waitingBudget, TestScratchLeases.unboundedBudget(), tempDirectory.toString(),
+                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE);
 
         java.util.concurrent.CountDownLatch heldBySomeoneElse = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch letGo = new java.util.concurrent.CountDownLatch(1);
@@ -1063,6 +1072,144 @@ class CheckpointServiceTest {
         assertEquals(1, uploadedFrames.size(), "the frame is bounded by its own, wider ceiling");
         verify(syncStateService).recordCheckpoint(SITE, 2L);
         assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
+    }
+
+    @Test
+    void endsTheBuildWhenTheDirectoryHasNoRoomForATableSnapshot() throws IOException {
+        // Issue #150, review round 2. A full directory is a SYSTEMIC scratch failure — every
+        // remaining table would meet it too — so it ends the build, exactly as an unusable scratch
+        // directory has since #112 and for the reason stated there. Skipping the one table looks
+        // gentler and is not: see the two tests below for what it would have left behind.
+        // Modelled as it happens: a completed-batch worker claims the directory in the moment
+        // between the frame going to S3 and the first snapshot opening its file.
+        ParquetScratchBudget shared = TestScratchLeases.budgetOf(4L * 1024 * 1024);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, shared);
+        ScratchLease neighbour = shared.open(ParquetScratchBudget.BATCH_ARTIFACT);
+        when(siteSchemaService.getTableSchemas(SITE)).thenAnswer(invocation -> {
+            neighbour.charge(4L * 1024 * 1024);
+            return Map.of("customers", customersSchema());
+        });
+        recordFrameUploads();
+
+        try {
+            assertThrows(ScratchBudgetExceededException.class, () -> service.buildCheckpoint(SITE));
+        } finally {
+            neighbour.close();
+        }
+
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        // Not a verdict on the table: no unmaterialized count, no row written, no attempt spent.
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(checkpointRepository, never()).save(any());
+        // Nor a permanent abort: delta.checkpoint.builds.aborted means refusals that never repair
+        // themselves (#153), and this one clears when the neighbouring writer finishes.
+        verify(metrics, never()).checkpointBuildAborted(any());
+        assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
+    }
+
+    @Test
+    void leavesThePointerWhereItWasWhenTheDirectoryRefusesATableSnapshot() throws IOException {
+        // The reason ending the build beats skipping the table (issue #150, review round 2).
+        // Skipping would advance last_checkpoint_seq with the table's row still at the old seq and
+        // nothing marking it as owing a rewrite — the nightly rematerialize keys on a NULL
+        // s3_key_parquet — so a site that then went quiet would serve a snapshot silently missing
+        // every change in between, indefinitely, with retention having already pruned the segments
+        // below the new pointer.
+        Checkpoint existing = Checkpoint.create(SITE, "customers", 1L, 1L);
+        existing.attachParquet("checkpoints/last-good.parquet");
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "customers"))
+                .thenReturn(Optional.of(existing));
+        ParquetScratchBudget shared = TestScratchLeases.budgetOf(4L * 1024 * 1024);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, shared);
+        ScratchLease neighbour = shared.open(ParquetScratchBudget.BATCH_ARTIFACT);
+        when(siteSchemaService.getTableSchemas(SITE)).thenAnswer(invocation -> {
+            neighbour.charge(4L * 1024 * 1024);
+            return Map.of("customers", customersSchema());
+        });
+        recordFrameUploads();
+
+        try {
+            assertThrows(ScratchBudgetExceededException.class, () -> service.buildCheckpoint(SITE));
+        } finally {
+            neighbour.close();
+        }
+
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        assertEquals("checkpoints/last-good.parquet", existing.getS3KeyParquet(),
+                "a neighbour's disk use must not detach this table's snapshot");
+        assertEquals(0, existing.materializeAttempts(),
+                "nor spend an attempt against delta.checkpoint.max-materialize-attempts");
+    }
+
+    @Test
+    void leavesNoCheckpointRowsBehindWhenASiteFirstBuildIsRefusedTheDirectory() throws IOException {
+        // The sharper half of the same argument. findOrCreate's row for a table with no row yet is
+        // not saved until a snapshot succeeds, so skipping every refused table on a site's FIRST
+        // build would leave `checkpoints` empty with the pointer advanced — and
+        // CheckpointFileQueryService reads "no checkpoint rows" as "not a Delta site yet" and hands
+        // a Bit BI client the historical uploaded CSVs as if they were its current baseline.
+        ParquetScratchBudget shared = TestScratchLeases.budgetOf(4L * 1024 * 1024);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, shared);
+        ScratchLease neighbour = shared.open(ParquetScratchBudget.BATCH_ARTIFACT);
+        when(siteSchemaService.getTableSchemas(SITE)).thenAnswer(invocation -> {
+            neighbour.charge(4L * 1024 * 1024);
+            return Map.of("customers", customersSchema());
+        });
+        recordFrameUploads();
+
+        try {
+            assertThrows(ScratchBudgetExceededException.class, () -> service.buildCheckpoint(SITE));
+        } finally {
+            neighbour.close();
+        }
+
+        // The pointer not moving is what makes an empty `checkpoints` harmless here: the site is
+        // exactly where it was, and the next tick redoes the whole seq.
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointRepository, never()).save(any());
+    }
+
+    @Test
+    void releasesTheDirectoryItReservedWhenEachFileIsDone() {
+        // A lease held past its file would shrink the directory for every later writer until the
+        // pod restarted — the one way this budget could become the outage it prevents. The frame
+        // and each snapshot are written one at a time, so a directory of exactly one reservation
+        // chunk is enough for any number of builds; it is not enough for two if either leaks.
+        ParquetScratchBudget narrow =
+                TestScratchLeases.budgetOf(ParquetScratchBudget.CHUNK_BYTES);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, narrow);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
+
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    @Test
+    void endsTheBuildWithoutAnAbortCounterWhenTheFrameHasNoRoomInTheDirectory() throws IOException {
+        // Issue #150. The frame's existing failure mode is that the build ends — it is the next
+        // incremental seed and there is nothing to fall back on. What it must NOT do is join
+        // delta.checkpoint.builds.aborted: every value there is permanent by contract (#153), and
+        // an alert written on that meter must not fire for a collision that clears by itself.
+        ParquetScratchBudget full = TestScratchLeases.budgetOf(4L);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, full);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        assertThrows(ScratchBudgetExceededException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics, never()).checkpointBuildAborted(any());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        assertEquals(List.of(), snapshotsOnDisk(), "the half-written frame must not be left behind");
     }
 
     @Test
