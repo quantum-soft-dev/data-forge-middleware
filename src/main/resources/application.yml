@@ -257,7 +257,8 @@ plugin:
     max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}
     # Timeout in seconds waiting for a semaphore permit before aborting
     semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
-    # JVM heap usage percentage threshold; generation aborts if exceeded
+    # JVM heap usage percentage threshold; generation aborts when usage is strictly above it.
+    # 100 disables the check outright (heap usage can never exceed 100%) — issue #174.
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
     # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size and fallback sweep interval
     delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}

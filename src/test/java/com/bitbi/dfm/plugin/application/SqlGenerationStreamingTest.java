@@ -118,6 +118,52 @@ class SqlGenerationStreamingTest {
         );
     }
 
+    /**
+     * Arranges a non-baseline DBF batch with a single CSV file whose S3 read yields no diff,
+     * so a generation that is <em>not</em> aborted reaches {@link S3Client#getObject}.
+     *
+     * @return the batch id to hand to {@code generateSqlForBatch}
+     */
+    private UUID arrangeSingleFileDbfBatch(Long accountPluginId) {
+        UUID batchId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+
+        AccountPlugin accountPlugin = mock(AccountPlugin.class);
+        when(accountPlugin.isBaselineBatch(batchId)).thenReturn(false);
+        when(accountPlugin.hasBaselineBatch()).thenReturn(true);
+        when(accountPluginRepository.findById(accountPluginId)).thenReturn(Optional.of(accountPlugin));
+
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(batchId);
+        when(batch.getSiteId()).thenReturn(siteId);
+        when(batch.getAccountId()).thenReturn(accountId);
+
+        UploadedFile file = mock(UploadedFile.class);
+        when(file.getOriginalFileName()).thenReturn("data.csv");
+        when(file.getS3Key()).thenReturn("account/site/data.csv");
+
+        when(batch.getUploadedFiles()).thenReturn(List.of(file));
+        when(batchRepository.findByIdWithFiles(batchId)).thenReturn(Optional.of(batch));
+        when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(false);
+
+        Site site = mock(Site.class);
+        when(site.getId()).thenReturn(siteId);
+        when(site.getDomain()).thenReturn("test.com");
+        when(site.getSiteType()).thenReturn(SiteType.DBF);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+
+        when(batchRepository.findPreviousBatchForSiteWithFiles(siteId, batchId))
+                .thenReturn(Optional.empty());
+
+        when(s3Client.getObject(any(GetObjectRequest.class)))
+                .thenReturn(createS3Stream("id,name\n1,Alice"));
+        when(csvDiffService.compare(anyString(), anyString(), anyList()))
+                .thenReturn(List.of());
+
+        return batchId;
+    }
+
     @Nested
     @DisplayName("Init Guard")
     class InitGuard {
@@ -211,56 +257,76 @@ class SqlGenerationStreamingTest {
         @Test
         @DisplayName("should process files normally when memory pressure is low")
         void shouldProcessFilesNormallyWhenMemoryPressureLow() {
-            // Given - threshold set to 100% so memory is never "high"
-            SqlGenerationService service = createService(100);
-
-            UUID batchId = UUID.randomUUID();
-            UUID siteId = UUID.randomUUID();
-            UUID accountId = UUID.randomUUID();
+            // Given - a threshold the reported heap usage stays well below
+            SqlGenerationService service = spy(createService(80));
+            doReturn(10).when(service).getHeapUsagePercent();
             Long accountPluginId = 1L;
-
-            AccountPlugin accountPlugin = mock(AccountPlugin.class);
-            when(accountPlugin.isBaselineBatch(batchId)).thenReturn(false);
-            when(accountPlugin.hasBaselineBatch()).thenReturn(true);
-            when(accountPluginRepository.findById(accountPluginId)).thenReturn(Optional.of(accountPlugin));
-
-            Batch batch = mock(Batch.class);
-            when(batch.getId()).thenReturn(batchId);
-            when(batch.getSiteId()).thenReturn(siteId);
-            when(batch.getAccountId()).thenReturn(accountId);
-
-            UploadedFile file = mock(UploadedFile.class);
-            when(file.getOriginalFileName()).thenReturn("data.csv");
-            when(file.getS3Key()).thenReturn("account/site/data.csv");
-
-            when(batch.getUploadedFiles()).thenReturn(List.of(file));
-            when(batchRepository.findByIdWithFiles(batchId)).thenReturn(Optional.of(batch));
-            when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(false);
-
-            Site site = mock(Site.class);
-            when(site.getId()).thenReturn(siteId);
-            when(site.getDomain()).thenReturn("test.com");
-            when(site.getSiteType()).thenReturn(SiteType.DBF);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-
-            when(batchRepository.findPreviousBatchForSiteWithFiles(siteId, batchId))
-                    .thenReturn(Optional.empty());
-
-            String csv = "id,name\n1,Alice";
-            when(s3Client.getObject(any(GetObjectRequest.class)))
-                    .thenReturn(createS3Stream(csv));
-
-            when(csvDiffService.compare(anyString(), anyString(), anyList()))
-                    .thenReturn(List.of());
+            UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
 
             // When
-            Optional<PluginSqlGeneration> result = service.generateSqlForBatch(batchId, accountPluginId);
+            service.generateSqlForBatch(batchId, accountPluginId);
 
             // Then - file should have been processed (S3 was read)
             verify(s3Client).getObject(any(GetObjectRequest.class));
             // No memory pressure abort
             assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
                     .isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("should not abort at a threshold of 100 even when the heap reports full")
+        void shouldNotAbortAtThresholdOfOneHundredWhenHeapReportsFull() {
+            // Given - 100 is the documented "disabled" value, and the ceiling-rounded reading
+            // reaches 100 for any usage strictly above 99% (issue #174)
+            SqlGenerationService service = spy(createService(100));
+            doReturn(100).when(service).getHeapUsagePercent();
+            Long accountPluginId = 1L;
+            UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
+
+            // When
+            service.generateSqlForBatch(batchId, accountPluginId);
+
+            // Then - generation ran; the check is disabled, not merely unlikely to trip
+            verify(s3Client).getObject(any(GetObjectRequest.class));
+            assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
+                    .isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("should not abort when heap usage only equals the threshold")
+        void shouldNotAbortWhenHeapUsageEqualsTheThreshold() {
+            // Given - the threshold is an upper bound that must be exceeded, not reached
+            SqlGenerationService service = spy(createService(80));
+            doReturn(80).when(service).getHeapUsagePercent();
+            Long accountPluginId = 1L;
+            UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
+
+            // When
+            service.generateSqlForBatch(batchId, accountPluginId);
+
+            // Then
+            verify(s3Client).getObject(any(GetObjectRequest.class));
+            assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
+                    .isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("should abort when heap usage exceeds the threshold")
+        void shouldAbortWhenHeapUsageExceedsTheThreshold() {
+            // Given
+            SqlGenerationService service = spy(createService(80));
+            doReturn(81).when(service).getHeapUsagePercent();
+            Long accountPluginId = 1L;
+            UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
+
+            // When
+            Optional<PluginSqlGeneration> result = service.generateSqlForBatch(batchId, accountPluginId);
+
+            // Then
+            assertThat(result).isEmpty();
+            verify(s3Client, never()).getObject(any(GetObjectRequest.class));
+            assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
+                    .isEqualTo(1.0);
         }
     }
 }

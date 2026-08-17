@@ -453,6 +453,30 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- heap-threshold-disable: `plugin.sql-generation.heap-threshold-percent: 100` disables the
+  memory-pressure abort, which is what it was always taken to mean and never did (issue #174).
+  `SqlGenerationService.isMemoryPressureHigh()` compared `>=` against a reading that
+  `getHeapUsagePercent()` **ceiling**-rounds, so any usage strictly above 99% reported 100 and
+  tripped a threshold of 100 — `generateSqlContent` returned null, `generateSqlForBatch` an
+  `Optional.empty()` that reads as "no changes detected", and nothing retried. Both places that set
+  100 said in a comment that they were switching the check off: `application-test.yml` (so **every**
+  Spring integration test that generates SQL carried the latent abort, surfacing as a
+  `SqlGenerationServiceTest` assertion or an `awaitGenerationFor` timeout in whichever class was
+  running when the heap of the single `./gradlew test` JVM got close enough to `max`) and
+  `SqlGenerationServiceTest`. The comparison is now **strict**, which is the ticket's first option
+  and the only one of its three that fixes both halves at once: heap usage can never exceed 100%, so
+  100 is a true off switch, **and** for an integer threshold `T` the identity `ceil(x) > T ⟺ x > T`
+  removes the rounding artifact the ticket's third option was aimed at — the predicate is exactly
+  "usage is strictly above `T`%", where before it fired from `T-1` upwards. A documented sentinel
+  (option 2) was rejected as the only one of the three that leaves the arithmetic wrong for the
+  shipped default of 80. Production behaviour at 80 shifts by up to one percentage point in the
+  direction of aborting **less**, and the threshold now means what `application.yml` says beside it.
+  `init()` also logs the value and whether it disables the check — the abort's only other signal is
+  `sql.generation.aborted.memory_pressure` (name unchanged), since an aborted generation is
+  indistinguishable from an empty one at the caller. Four deterministic unit tests replace a
+  boundary that used to depend on the real heap: the reading is stubbed at 100/81/80/10 against
+  thresholds of 100 and 80. No REST, gRPC, DTO, migration, configuration-**key**, metric, S3-key or
+  frontend change. See `docs/020-sql-generation-optimization.md`.
 - hold-connection-across-s3: A HikariCP connection is no longer held across S3 (or a 120 s
   semaphore wait) at the three call sites the pool audit named (issue #164, folding **#176**).
   `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` drop

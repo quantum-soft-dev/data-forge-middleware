@@ -113,8 +113,10 @@ public class SqlGenerationService {
         this.sqlGenerationSemaphore = new Semaphore(maxConcurrent, true);
         meterRegistry.gauge("sql.generation.semaphore.queue.size", sqlGenerationSemaphore,
                 Semaphore::getQueueLength);
-        log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}",
-                maxConcurrent, semaphoreTimeoutSeconds);
+        log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}, "
+                        + "heapThresholdPercent={} ({})",
+                maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent,
+                heapThresholdPercent >= 100 ? "memory-pressure abort disabled" : "aborts above threshold");
     }
 
     /**
@@ -413,19 +415,28 @@ public class SqlGenerationService {
     }
 
     /**
-     * Checks if JVM heap usage exceeds the configured threshold.
+     * Checks whether JVM heap usage <em>exceeds</em> the configured threshold.
+     * <p>
+     * The comparison is strict on purpose. {@link #getHeapUsagePercent()} rounds up, and for an
+     * integer threshold {@code T} that makes {@code ceil(x) > T} equivalent to {@code x > T} —
+     * so the predicate is exactly "used/max is strictly above {@code T}%", with no rounding
+     * artifact in either direction. It also gives the key a way to say "disabled": heap usage
+     * can never exceed 100%, so {@code heap-threshold-percent: 100} switches the abort off.
+     * A non-strict comparison made 100 trip for any usage above 99% (issue #174), which is why
+     * both test call sites that set 100 "to disable the check" did not.
      *
-     * @return true if heap usage is at or above the threshold percentage
+     * @return true if heap usage is strictly above the threshold percentage
      */
     private boolean isMemoryPressureHigh() {
-        return getHeapUsagePercent() >= heapThresholdPercent;
+        return getHeapUsagePercent() > heapThresholdPercent;
     }
 
     /**
      * Returns current JVM heap usage as a percentage (0-100).
      * Uses {@link MemoryMXBean} instead of {@link Runtime} for a more accurate
      * post-GC view of heap usage (accounts for unreachable but uncollected objects).
-     * Uses ceiling division to avoid rounding down past the threshold.
+     * Uses ceiling division so that any non-zero usage above a whole percent is visible to the
+     * strict comparison in {@link #isMemoryPressureHigh()}.
      * Package-private for testing.
      */
     int getHeapUsagePercent() {

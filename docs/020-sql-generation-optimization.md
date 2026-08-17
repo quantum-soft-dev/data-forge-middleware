@@ -303,8 +303,26 @@ if (isMemoryPressureHigh()) {
 }
 ```
 
+**As shipped** (the sketch above is the original proposal and differs): the check is a single
+pre-flight in `generateSqlContent()` rather than a per-file loop with a `System.gc()` retry, the
+reading comes from `MemoryMXBean` rather than `Runtime`, it is **ceiling**-rounded, and the
+comparison is **strict**:
+
+```java
+private boolean isMemoryPressureHigh() {
+    return getHeapUsagePercent() > heapThresholdPercent;   // strictly above
+}
+```
+
+Strict is what makes the key able to say "disabled" — heap usage can never exceed 100%, so
+`heap-threshold-percent: 100` switches the abort off, which is what both test call sites always
+claimed 100 meant (issue #174). It also cancels the rounding: for an integer threshold `T`,
+`ceil(x) > T` is exactly `x > T`, so the predicate is "usage is strictly above `T`%" with no
+half-percent either way. The abort is silent by design — an `Optional.empty()` that reads as "no
+changes detected" — so `sql.generation.aborted.memory_pressure` is the only signal that it fired.
+
 **Tests**:
-- Unit test: mock Runtime to simulate high memory → verify processing stops
+- Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
 - Unit test: verify metric incremented
 
 ---
@@ -443,7 +461,8 @@ plugin:
   sql-generation:
     max-concurrent: 2           # Max concurrent SQL generations (semaphore permits)
     semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out
-    heap-threshold-percent: 80  # Abort file processing when heap usage exceeds this %
+    heap-threshold-percent: 80  # Abort generation when heap usage is strictly above this %;
+                                # 100 disables the check (usage can never exceed 100%)
 ```
 
 ---
