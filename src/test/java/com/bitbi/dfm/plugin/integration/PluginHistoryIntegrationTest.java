@@ -49,7 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>Feature 014: Plugin History Management</p>
  *
- * <p>The nested classes above are {@code @Disabled}; the two live tests are the pair that guards
+ * <p>Every nested class below is {@code @Disabled}; the two live tests are the pair that guards
  * what a <em>rollback</em> does to a deferred audit entry — one where the change was wholly
  * transactional and nothing may be recorded, one where S3 objects were destroyed before the commit
  * point and the divergence must be. They are the end-to-end half of
@@ -109,9 +109,14 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
     private AccountPlugin testAccountPlugin;
 
     /**
-     * Set by the methods that audit against an account of their own, so their rows can be removed
-     * even when the assertion in between them fails. {@code plugin_audit_logs} is partitioned and
-     * {@code test-data.sql} never touches it.
+     * Set by the methods that audit against an account of their own, so their rows are removed on
+     * the failing path too rather than by a statement at the end of the method that never runs.
+     * {@code plugin_audit_logs} is partitioned and {@code test-data.sql} never touches it.
+     *
+     * <p>Not a guarantee that the table is left as found: the write is queued on
+     * {@code pluginAuditExecutor}, so one landing between the last poll of a failing await and this
+     * DELETE survives it. The id is a fresh {@code UUID} nothing else counts by, so the residue is
+     * inert — which is why this is a tidy-up rather than a latch on the executor.</p>
      */
     private UUID ownAuditAccountId;
 
@@ -209,7 +214,13 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
                 "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
         UUID generationId = sqlGenerationService
                 .generateSqlForBatch(batch.getId(), testAccountPlugin.getId())
-                .orElseThrow(() -> new AssertionError("fixture did not produce a generation"))
+                // Not the assertion this test is about. clearHistory needs something to clear, so
+                // this fixture stays — but it is the line that failed on PRs #166 and #180 (the
+                // #174 memory-pressure abort answering Optional.empty()), so it names that rather
+                // than sending the next reader after a history-clear defect.
+                .orElseThrow(() -> new AssertionError(
+                        "fixture did not produce a generation to clear — the audit assertions below "
+                                + "never ran; suspect an aborted SQL generation (#174), not clearHistory"))
                 .getId();
 
         jdbcTemplate.update(
@@ -220,7 +231,11 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
             pluginHistoryService.clearHistory(PLUGIN_ID, TEST_ACCOUNT_ID);
             throw new IllegalStateException("caller fails after clearing");
-        })).isInstanceOf(IllegalStateException.class);
+            // The message, not only the type: clearHistory raises IllegalStateException for its own
+            // reasons, and accepting one of those as this sentinel is how the sibling test above
+            // came to assert nothing at all for two months (#172).
+        })).isInstanceOf(IllegalStateException.class)
+                .hasMessage("caller fails after clearing");
 
         await().atMost(ofSeconds(10)).untilAsserted(() -> {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
