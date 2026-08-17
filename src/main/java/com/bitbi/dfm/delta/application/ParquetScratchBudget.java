@@ -147,6 +147,7 @@ public class ParquetScratchBudget {
         private final Counter refused;
         private long granted;
         private long used;
+        private boolean refusalCounted;
 
         private BudgetedLease(String writer, Counter refused) {
             this.writer = writer;
@@ -158,10 +159,16 @@ public class ParquetScratchBudget {
             if (delta <= 0) {
                 return;
             }
-            used += delta;
-            while (used > granted) {
-                reserve(used - granted);
+            // Advanced only once the room exists. Counting bytes a refusal is about to unwind
+            // would leave this lease's idea of what is on disk permanently ahead of the file, and
+            // the writers do not all stop at the first refusal — a Parquet writer's close() still
+            // emits its footer — so a later charge would over-reserve against a gauge this budget
+            // asks operators to size the key from.
+            long wanted = used + delta;
+            while (wanted > granted) {
+                reserve(wanted - granted);
             }
+            used = wanted;
         }
 
         @Override
@@ -178,11 +185,19 @@ public class ParquetScratchBudget {
                 long current = liveBytes.get();
                 long take = budgetBytes == 0L ? want : Math.min(want, budgetBytes - current);
                 if (take < need) {
+                    // Once per lease, not once per refused write. FileOutputFile does not latch
+                    // the way CappedOutputStream does — Parquet unwinds a write failure through a
+                    // close() that writes a footer — so a per-write increment would report two or
+                    // more refusals for one refused artifact, and a different number for the frame.
+                    // One file that could not be written is one refusal.
+                    if (!refusalCounted) {
+                        refusalCounted = true;
+                        refused.increment();
+                    }
                     // Reserve nothing on a refusal. The writer is about to be unwound and its file
                     // deleted, so holding the bytes it did not get would shrink the directory for
                     // every other writer until the pod restarts.
-                    refused.increment();
-                    throw new ScratchBudgetExceededException(writer, budgetBytes, current);
+                    throw new ScratchBudgetExceededException(writer, need, budgetBytes, current);
                 }
                 if (liveBytes.compareAndSet(current, current + take)) {
                     granted += take;

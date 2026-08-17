@@ -492,10 +492,24 @@ pages/{feature}/            # Route pages
   `delta.checkpoint.builds.aborted` (#153's contract); a completed-batch artifact takes the ordinary
   backoff instead of the first-attempt `ABANDONED` its own ceiling earns it, which falls out of
   `DeltaParquetWriter.failure()` classifying only `ArtifactSizeLimitExceededException` as permanent.
-  The table skip **still spends a materialize attempt** (#149) rather than being exempted: a
-  directory full for five consecutive nights is a deployment that is too small, and
-  `delta.checkpoint.tables.given-up` is the standing signal for it, where an exemption would be the
-  unbounded retry #149 exists to remove. Two meters, both registered in the budget over the injected
+  **The table skip leaves its row untouched** — no detach, no spent `materialize_attempts`, nothing
+  saved — which is the one place this differs from every other unmaterialized outcome, and review
+  round 1 corrected it: the first draft fell through to `abandonStaleSnapshot`, so a healthy
+  last-good snapshot would have 404'd for Bit BI, Parquet Export and the Delta Sync download until
+  the next nightly rematerialize, and a healthy row would have walked towards
+  `delta.checkpoint.tables.given-up` — both because a completed-batch worker happened to be holding
+  the directory. The table keeps serving the previous seq's snapshot (stale, never wrong) and the
+  next build that folds the site rewrites it; it is exactly the argument
+  `BuildEndedByShutdownException` already makes for a cause that belongs to the process rather than
+  to the table (#162). Two more corrections from that round: the refusal message printed the
+  **whole** budget where it said "left to it" — with 4.9 GiB held by neighbours a writer refused for
+  1 MiB read like the "artifact too big" verdict this type exists to distinguish itself from, and
+  `DeltaParquetWriter.failure()` copies that text verbatim into `batch_parquet_artifacts.last_error`
+  where it is the operator's primary diagnostic — so it now names the bytes actually free; and the
+  refusal is counted **once per lease** rather than once per refused write, because `FileOutputFile`
+  does not latch the way `CappedOutputStream` does (Parquet unwinds a write failure through a
+  `close()` that still emits its footer), which would otherwise have reported two or more refusals
+  per refused artifact and a different number for the frame. Two meters, both registered in the budget over the injected
   `MeterRegistry` (the `CheckpointGivenUpMetrics`/`S3CheckpointStorage` shape, avoiding a cycle with
   `DeltaMetrics`, which documents them without owning them): **`delta.parquet.scratch.refused`**
   `{writer=checkpoint_frame|checkpoint_table|batch_artifact}`, every value registered at zero so an
@@ -515,7 +529,15 @@ pages/{feature}/            # Route pages
   ceiling must sit **at or under** the directory budget, since a ceiling above it can never be
   reached and would be dead configuration that reads as live. The per-file ceilings and
   `delta.batch-parquet.max-concurrent` are otherwise **unchanged** — they keep their per-artifact
-  job, and the `2 x` #178 left conservative simply disappears rather than being retuned. No REST,
+  job, and the `2 x` #178 left conservative simply disappears rather than being retuned. **One
+  asymmetry is documented rather than fixed** and was filed from the same review as **#193**: since
+  #153 the frame is written first and is the largest file a build produces, and
+  `CheckpointScheduler` walks sites serially, so a directory held full for the length of the 02:00
+  sweep aborts *every* site's build at its first write and freezes retention fleet-wide for that
+  night — where the batch side degrades one artifact at a time. Nothing is lost (the next night
+  repeats the fold) and the pre-#150 behaviour was a kubelet eviction of the pod, which is worse,
+  but the right split of the pool needs a number nobody has yet, which is what
+  `delta.parquet.scratch.bytes` is now there to supply. No REST,
   gRPC, proto, DTO, migration, existing configuration-key, existing metric-name, S3-key or frontend
   change. See `docs/delta-client-v2-guide.md` ("Sizing note", Metrics),
   `docs/cr-unified-batch-parquet.md`.

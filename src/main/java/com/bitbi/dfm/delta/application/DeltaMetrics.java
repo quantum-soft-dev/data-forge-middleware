@@ -202,11 +202,18 @@ public class DeltaMetrics {
      * differs — that one says "check the declared schema against the data, or
      * {@code delta.checkpoint.max-temp-bytes} against the table's size", and both would be a wild
      * goose chase here, where the lever is {@code delta.parquet.max-scratch-bytes}, the volume behind
-     * it, or {@code delta.batch-parquet.max-concurrent}. It still spends a materialize attempt like
-     * any other unmaterialized outcome (#149): a directory that stays full for
-     * {@code delta.checkpoint.max-materialize-attempts} nights is a deployment that is too small,
-     * and {@code delta.checkpoint.tables.given-up} is the standing signal for it — the alternative,
-     * an exemption, is the unbounded retry #149 exists to remove.</p>
+     * it, or {@code delta.batch-parquet.max-concurrent}.</p>
+     *
+     * <p><b>It is also the one value here that leaves the row untouched.</b> The other two end a
+     * build owing a snapshot, so the row is saved with its key detached on an advancing seq and one
+     * {@code materialize_attempts} spent (#149). This one does neither: the table keeps the snapshot
+     * it already had — stale by a seq, never wrong — because detaching it would 404 a healthy
+     * artifact for Bit BI, Parquet Export and the Delta Sync download, and spending an attempt would
+     * walk a healthy row towards {@code delta.checkpoint.tables.given-up}, both on account of a
+     * neighbouring writer's disk use. That is the reasoning {@code BuildEndedByShutdownException}
+     * already applies to a cause that belongs to the process rather than to the table (#162). So a
+     * count here means "this build did not rewrite that table", not "that table has nothing to
+     * serve".</p>
      *
      * @param reason {@code no_schema}, {@code parquet_failed} or {@code scratch_budget}
      */

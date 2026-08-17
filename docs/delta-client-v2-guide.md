@@ -580,8 +580,9 @@ You don't write these — they're how downstream tools read your data:
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
   the declared schema cannot render. A table stopped instead by the shared *directory* budget
-  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, issue #150) is skipped the same way but counted as
-  `{reason=scratch_budget}`, because that one says nothing about the table. A later scheduled build (or a forced rebuild) **rematerializes
+  (`DELTA_PARQUET_MAX_SCRATCH_BYTES`, issue #150) is skipped but counted as
+  `{reason=scratch_budget}` and leaves its row alone — no detach, no spent attempt — because that
+  one says nothing about the table. A later scheduled build (or a forced rebuild) **rematerializes
   a missing snapshot from the frame** without waiting for new segments (issue #128): the pointer,
   the frame and retention stay where they were, and only tables whose `s3_key_parquet` is still
   null are rewritten (a forced rebuild rewrites every table). After a full prune the frame is
@@ -1057,12 +1058,25 @@ volume was busy, so:
 - a **checkpoint table** is skipped as
   `delta.checkpoint.tables.unmaterialized{reason=scratch_budget}` — its own reason, because
   `parquet_failed` would send an operator to the table's schema and to
-  `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, and both would be a wild goose chase. It still spends one
-  `materialize_attempts` like any other unmaterialized outcome (#149): a directory that stays full
-  for five nights is a deployment that is too small, and `delta.checkpoint.tables.given-up` is the
-  standing signal for it;
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, and both would be a wild goose chase. Unlike every other
+  unmaterialized outcome it leaves the row **untouched**: no detach, no spent
+  `materialize_attempts`, nothing saved. The table keeps the snapshot it already had — stale by a
+  seq, never wrong — and the next build that folds the site writes it again. Detaching would 404 a
+  healthy artifact for Bit BI, Parquet Export and the Delta Sync download until the next nightly
+  rematerialize, and spending an attempt would walk a healthy row towards
+  `delta.checkpoint.tables.given-up`, both because a completed-batch worker happened to be holding
+  the directory. It is the argument the shutdown carve-out (#162) already makes for a cause that
+  belongs to the process rather than to the table;
 - the **frame** ends the build, as an oversized frame does, but is deliberately **absent** from
-  `delta.checkpoint.builds.aborted`, whose tag values are refusals that never repair themselves;
+  `delta.checkpoint.builds.aborted`, whose tag values are refusals that never repair themselves.
+  **Know what that costs before sizing the key.** Since #153 the frame is written first and is the
+  largest file a build produces, and `CheckpointScheduler` walks sites serially — so a directory
+  held full for the length of the 02:00 sweep aborts *every* site's build at its first write, and
+  retention is frozen fleet-wide for that night. The batch side degrades one artifact at a time;
+  this side degrades by whole sites. Nothing is lost (the next night repeats the fold), the pre-#150
+  behaviour on this deployment was a kubelet eviction of the pod, which is worse — but the asymmetry
+  is real, `delta.parquet.scratch.refused{writer=checkpoint_frame}` is the series to alert on, and
+  giving the checkpoint path a reserved share is **#193**;
 - a **completed-batch artifact** takes the ordinary backoff instead of the first-attempt
   `ABANDONED` its own ceiling earns it, so the download answers `409` rather than a permanent `404`.
 

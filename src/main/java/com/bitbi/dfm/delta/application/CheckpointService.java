@@ -995,31 +995,37 @@ public class CheckpointService {
                 if (shutdownSignal.isShuttingDown()) {
                     throw new BuildEndedByShutdownException(siteId, tableName, e);
                 }
-                // Report the cause first: the detach below goes through the epoch guard, which
-                // throws rather than returns when the site was wiped mid-build, and this table's
-                // actual failure (schema drift, an oversized table) would leave no trace at all.
-                //
-                // A directory-budget refusal (issue #150) stays a per-table skip — the table's
-                // existing failure mode — but under its own reason, because the operator's next
-                // move is a different one: nothing is wrong with this table, the scratch directory
-                // was full of other writers' files. It still spends a materialize attempt like any
-                // other unmaterialized outcome; a directory that stays full for
-                // delta.checkpoint.max-materialize-attempts nights is a deployment that is too
-                // small, and exempting it would be the unbounded retry #149 removed.
+                // A directory-budget refusal (issue #150) is a fact about the volume, not about
+                // this table — the same argument the shutdown carve-out above makes, and it lands
+                // in the same place. The row is left exactly as it was: no detach, no spent
+                // attempt, nothing saved. Detaching would 404 a perfectly good last-good snapshot
+                // for Bit BI, Parquet Export and the Delta Sync download until the next nightly
+                // rematerialize, and spending an attempt would walk a healthy row towards
+                // delta.checkpoint.tables.given-up — both because a completed-batch worker
+                // happened to be holding the directory. What the table loses is this build: it
+                // keeps serving the previous seq's snapshot (stale, never wrong) and the next
+                // build that folds the site writes it again. A row that had no key yet stays
+                // unmaterialized and is picked up by the nightly rematerialize as before.
+                // The retry is deliberately not bounded by #149's cap here, because the cause is
+                // not the table's and cannot be repaired by giving up on it;
+                // delta.parquet.scratch.refused{writer=checkpoint_table} is the standing signal.
                 if (e instanceof ScratchBudgetExceededException) {
                     metrics.checkpointTableUnmaterialized("scratch_budget");
                     log.warn("Checkpoint Parquet for table {} of site {} was stopped by the shared "
-                            + "Parquet scratch budget — the table has no artifact this build and "
-                            + "will be retried by the nightly rematerialize. Raise "
+                            + "Parquet scratch budget — the table keeps the snapshot it already had "
+                            + "and is written again by the next build. Raise "
                             + "delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
                             + "delta.batch-parquet.max-concurrent", tableName, siteId, e);
-                } else {
-                    metrics.checkpointTableUnmaterialized("parquet_failed");
-                    log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                            + "artifact this build (check the declared schema against the data, or "
-                            + "delta.checkpoint.max-temp-bytes against the table's size)",
-                            tableName, siteId, e);
+                    return;
                 }
+                // Report the cause first: the detach below goes through the epoch guard, which
+                // throws rather than returns when the site was wiped mid-build, and this table's
+                // actual failure (schema drift, an oversized table) would leave no trace at all.
+                metrics.checkpointTableUnmaterialized("parquet_failed");
+                log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
+                        + "artifact this build (check the declared schema against the data, or "
+                        + "delta.checkpoint.max-temp-bytes against the table's size)",
+                        tableName, siteId, e);
                 // When seq advanced, the previous key would sit beside a newer seq and be served
                 // as its snapshot — detach it. On a same-seq rematerialize the last-good object
                 // is still at that key; keep the row pointing at it.

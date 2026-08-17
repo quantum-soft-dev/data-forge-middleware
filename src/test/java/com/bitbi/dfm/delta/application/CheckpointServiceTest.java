@@ -1107,7 +1107,43 @@ class CheckpointServiceTest {
         verify(metrics, never()).checkpointBuildAborted(any());
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
+        // The row is left exactly as it was: nothing saved, so no detach and no spent attempt.
+        // Detaching would 404 a healthy last-good snapshot, and spending an attempt would walk the
+        // row towards delta.checkpoint.tables.given-up — both for a neighbour's disk use. This is
+        // the shutdown carve-out's argument (issue #162) applied to the same kind of cause.
+        verify(checkpointRepository, never()).save(any());
         assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
+    }
+
+    @Test
+    void keepsTheLastGoodSnapshotServableWhenTheDirectoryRefusesTheRewrite() throws IOException {
+        // The concrete consequence of the row being left alone: a table with a perfectly good
+        // snapshot at the previous seq keeps serving it (stale, never wrong) instead of answering
+        // 404 for Bit BI, Parquet Export and the Delta Sync download until the next rematerialize.
+        Checkpoint existing = Checkpoint.create(SITE, "customers", 1L, 1L);
+        existing.attachParquet("checkpoints/last-good.parquet");
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "customers"))
+                .thenReturn(Optional.of(existing));
+        ParquetScratchBudget shared = TestScratchLeases.budgetOf(4L * 1024 * 1024);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, shared);
+        ScratchLease neighbour = shared.open(ParquetScratchBudget.BATCH_ARTIFACT);
+        when(siteSchemaService.getTableSchemas(SITE)).thenAnswer(invocation -> {
+            neighbour.charge(4L * 1024 * 1024);
+            return Map.of("customers", customersSchema());
+        });
+        recordFrameUploads();
+
+        try {
+            service.buildCheckpoint(SITE);
+        } finally {
+            neighbour.close();
+        }
+
+        assertEquals("checkpoints/last-good.parquet", existing.getS3KeyParquet(),
+                "a neighbour's disk use must not detach this table's snapshot");
+        assertEquals(0, existing.materializeAttempts(),
+                "nor spend an attempt against delta.checkpoint.max-materialize-attempts");
     }
 
     @Test

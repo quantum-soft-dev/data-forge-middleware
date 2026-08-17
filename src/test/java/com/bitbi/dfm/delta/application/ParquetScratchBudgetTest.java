@@ -121,6 +121,39 @@ class ParquetScratchBudgetTest {
     }
 
     @Test
+    void countsOneRefusalPerFileHoweverManyWritesTheWriterUnwindsThrough() {
+        // FileOutputFile does not latch the way CappedOutputStream does — Parquet unwinds a write
+        // failure through a close() that still emits its footer — so a per-write increment would
+        // report two or more refusals for one refused artifact, and a different number for the
+        // frame. An alert on this counter has to mean files, not writes.
+        ParquetScratchBudget budget = budget(MIB);
+
+        try (ScratchLease lease = budget.open("batch_artifact")) {
+            assertThrows(ScratchBudgetExceededException.class, () -> lease.charge(2 * MIB));
+            assertThrows(ScratchBudgetExceededException.class, () -> lease.charge(2 * MIB));
+            assertThrows(ScratchBudgetExceededException.class, () -> lease.charge(2 * MIB));
+        }
+
+        assertEquals(1.0, refusals("batch_artifact"));
+    }
+
+    @Test
+    void doesNotCountRefusedBytesAsWritten() {
+        // The bytes a refusal is about to unwind never landed. Counting them would leave this
+        // lease's idea of the file permanently ahead of it, and — since the writer keeps writing
+        // after the first refusal — over-reserve against the gauge this budget asks operators to
+        // size the key from.
+        ParquetScratchBudget budget = budget(4 * MIB);
+
+        try (ScratchLease lease = budget.open("batch_artifact")) {
+            lease.charge(1024);
+            assertThrows(ScratchBudgetExceededException.class, () -> lease.charge(8 * MIB));
+            assertEquals(ParquetScratchBudget.CHUNK_BYTES, liveBytes(),
+                    "the refused charge must not push the lease into a second chunk");
+        }
+    }
+
+    @Test
     void countsARefusalPerWriterAndRegistersEveryWriterAtZero() {
         ParquetScratchBudget budget = budget(MIB);
 
@@ -155,6 +188,22 @@ class ParquetScratchBudgetTest {
                     "the operator's only lever must be named: " + refused.getMessage());
             assertTrue(refused.getMessage().contains(String.valueOf(4 * MIB)),
                     "the configured budget must be in the message: " + refused.getMessage());
+            // The free bytes, not the budget, are what tells "the directory is busy" apart from
+            // "this artifact is too big" — and DeltaParquetWriter copies this text verbatim into
+            // batch_parquet_artifacts.last_error, where it is the operator's primary diagnostic.
+            assertTrue(refused.getMessage().contains("only " + (4 * MIB) + " of"),
+                    "the free bytes must be in the message: " + refused.getMessage());
+        }
+
+        try (ScratchLease holder = budget.open("batch_artifact")) {
+            holder.charge(4 * MIB);
+            try (ScratchLease lease = budget.open("checkpoint_table")) {
+                ScratchBudgetExceededException refused = assertThrows(
+                        ScratchBudgetExceededException.class, () -> lease.charge(8 * MIB));
+                assertTrue(refused.getMessage().contains("only 0 of"),
+                        "a directory held by a neighbour must not read as a whole free budget: "
+                                + refused.getMessage());
+            }
         }
     }
 

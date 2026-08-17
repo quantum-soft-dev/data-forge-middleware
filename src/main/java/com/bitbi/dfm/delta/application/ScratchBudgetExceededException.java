@@ -20,11 +20,12 @@ package com.bitbi.dfm.delta.application;
  */
 public final class ScratchBudgetExceededException extends RuntimeException {
 
-    ScratchBudgetExceededException(String writer, long budgetBytes, long liveBytes) {
-        super("The Parquet scratch directory is full: writer " + writer + " asked for more than the "
-                + budgetBytes + " bytes of delta.parquet.max-scratch-bytes left to it ("
-                + liveBytes + " bytes are reserved by live writers). Nothing is wrong with this "
-                + "artifact — raise that key together with the volume behind it, or lower "
+    ScratchBudgetExceededException(String writer, long neededBytes, long budgetBytes, long liveBytes) {
+        super("The Parquet scratch directory is full: writer " + writer + " needed " + neededBytes
+                + " more bytes and only " + Math.max(0L, budgetBytes - liveBytes) + " of the "
+                + budgetBytes + " bytes of delta.parquet.max-scratch-bytes were free (live writers "
+                + "hold " + liveBytes + "). Nothing is wrong with this artifact — raise that key "
+                + "together with the volume behind it, or lower "
                 + "delta.batch-parquet.max-concurrent");
     }
 }
