@@ -303,8 +303,37 @@ if (isMemoryPressureHigh()) {
 }
 ```
 
+**As shipped** (the sketch above is the original proposal and differs): the check is a single
+pre-flight in `generateSqlContent()` rather than a per-file loop with a `System.gc()` retry, the
+reading comes from `MemoryMXBean` rather than `Runtime`, it is **ceiling**-rounded, and the
+comparison is **strict**:
+
+```java
+private boolean isMemoryPressureHigh() {
+    return getHeapUsagePercent() > heapThresholdPercent;   // strictly above
+}
+```
+
+Strict is what makes the key able to say "disabled" — the reading is clamped at 100, so
+`heap-threshold-percent: 100` switches the abort off, which is what all three call sites setting
+100 always claimed it meant (issue #174). It also cancels the rounding: for an integer threshold
+`T`, `ceil(x) > T` is exactly `x > T`, so the predicate is "usage is strictly above `T`%" with no
+half-percent either way.
+
+**The abort is silent, and on one path it is worse than silent.** `generateSqlContent` returns
+`null`, which the callers cannot tell from "this batch produced no changes":
+
+* `DeltaSqlQueueService.processNextPending` marks the segment processed, so the batch's SQL is
+  dropped and never retried;
+* `doRegenerateForBatch` substitutes a `-- No changes detected` artifact, persists it, and
+  `PluginHistoryService` then marks the **original** generation superseded — an abort during an
+  admin regeneration replaces a good generation with an empty one.
+
+`sql.generation.aborted.memory_pressure` is the only signal that it fired, and it does not name the
+batch. Issue #181 tracks making the outcome legible at both call sites.
+
 **Tests**:
-- Unit test: mock Runtime to simulate high memory → verify processing stops
+- Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
 - Unit test: verify metric incremented
 
 ---
@@ -443,7 +472,8 @@ plugin:
   sql-generation:
     max-concurrent: 2           # Max concurrent SQL generations (semaphore permits)
     semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out
-    heap-threshold-percent: 80  # Abort file processing when heap usage exceeds this %
+    heap-threshold-percent: 80  # Abort generation when heap usage is strictly above this %;
+                                # 100 disables the check (usage can never exceed 100%)
 ```
 
 ---

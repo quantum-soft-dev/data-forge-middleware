@@ -113,8 +113,15 @@ public class SqlGenerationService {
         this.sqlGenerationSemaphore = new Semaphore(maxConcurrent, true);
         meterRegistry.gauge("sql.generation.semaphore.queue.size", sqlGenerationSemaphore,
                 Semaphore::getQueueLength);
-        log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}",
-                maxConcurrent, semaphoreTimeoutSeconds);
+        // Registered at zero from startup, the DeltaMetrics treatment of
+        // delta.checkpoint.builds.aborted: this counter is the memory-pressure abort's only
+        // signal, so an alert written on it must be able to predate the first occurrence
+        // instead of appearing together with it.
+        meterRegistry.counter("sql.generation.aborted.memory_pressure");
+        log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}, "
+                        + "heapThresholdPercent={} ({})",
+                maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent,
+                heapThresholdPercent >= 100 ? "memory-pressure abort disabled" : "aborts above threshold");
     }
 
     /**
@@ -413,30 +420,58 @@ public class SqlGenerationService {
     }
 
     /**
-     * Checks if JVM heap usage exceeds the configured threshold.
+     * Checks whether JVM heap usage <em>exceeds</em> the configured threshold.
+     * <p>
+     * The comparison is strict on purpose. {@link #getHeapUsagePercent()} rounds up, and for an
+     * integer threshold {@code T} that makes {@code ceil(x) > T} equivalent to {@code x > T} —
+     * so the predicate is exactly "used/max is strictly above {@code T}%", with no rounding
+     * artifact in either direction. It also gives the key a way to say "disabled":
+     * {@link #getHeapUsagePercent()} never reports above 100, so {@code heap-threshold-percent: 100}
+     * switches the abort off. A non-strict comparison made 100 trip for any usage above 99%
+     * (issue #174), which is why the three call sites that set 100 "to disable the check" did not —
+     * {@code application-test.yml} above all, which put the abort into every Spring integration test
+     * that generates SQL.
      *
-     * @return true if heap usage is at or above the threshold percentage
+     * @return true if heap usage is strictly above the threshold percentage
      */
     private boolean isMemoryPressureHigh() {
-        return getHeapUsagePercent() >= heapThresholdPercent;
+        return getHeapUsagePercent() > heapThresholdPercent;
     }
 
     /**
      * Returns current JVM heap usage as a percentage (0-100).
      * Uses {@link MemoryMXBean} instead of {@link Runtime} for a more accurate
      * post-GC view of heap usage (accounts for unreachable but uncollected objects).
-     * Uses ceiling division to avoid rounding down past the threshold.
+     * Uses ceiling division so that any non-zero usage above a whole percent is visible to the
+     * strict comparison in {@link #isMemoryPressureHigh()}.
      * Package-private for testing.
      */
     int getHeapUsagePercent() {
         MemoryMXBean memBean = ManagementFactory.getMemoryMXBean();
         MemoryUsage heap = memBean.getHeapMemoryUsage();
-        long used = heap.getUsed();
-        long max = heap.getMax();
+        return heapUsagePercent(heap.getUsed(), heap.getMax());
+    }
+
+    /**
+     * Converts a heap reading into a whole percentage in {@code [0, 100]}.
+     * <p>
+     * Rounded up, so that for an integer threshold {@code T} the strict comparison in
+     * {@link #isMemoryPressureHigh()} trips exactly when {@code used/max} is above {@code T}%.
+     * Clamped at 100, so that "a threshold of 100 disables the check" is a property of this
+     * arithmetic and not an assumption about the collector: a reading above 100 would abort while
+     * startup had logged the check as disabled. A non-positive {@code max} means the JVM declares
+     * no heap maximum, and there is no percentage to report.
+     * Package-private for testing.
+     *
+     * @param used bytes of heap in use
+     * @param max  heap maximum in bytes, or a non-positive value when undefined
+     * @return heap usage as a whole percentage, 0 when the maximum is undefined
+     */
+    int heapUsagePercent(long used, long max) {
         if (max <= 0) {
             return 0;
         }
-        return (int) Math.ceil(used * 100.0 / max);
+        return (int) Math.min(100L, (long) Math.ceil(used * 100.0 / max));
     }
 
     /**
