@@ -930,9 +930,9 @@ uploaded.
 A build that finds the budget taken **waits**, up to `DELTA_CHECKPOINT_FOLD_WAIT_SECONDS`
 (`delta.checkpoint.fold-wait-seconds`, default **600**), and is otherwise **deferred**: nothing
 folded, nothing uploaded, no row saved, no materialize attempt spent, `delta.checkpoint.builds.deferred`
-incremented and a WARN naming the site. The nightly sweep moves to its next site (retention with it
-— the pointer did not move); a forced rebuild releases its `rebuild_requested` flag and says to ask
-again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
+incremented and a WARN naming the site. The nightly sweep skips that site's retention too — the
+pointer did not move, so there is nothing new to prune — and carries on to the next; a forced
+rebuild releases its `rebuild_requested` flag and says to ask again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
 value there is a refusal that never repairs itself, and this one clears the moment the neighbouring
 build finishes. Two consequences worth knowing before this lands: an *idle* visit takes the budget
 too, for as long as the one query that answers "nothing to rematerialize", so it can in principle be
