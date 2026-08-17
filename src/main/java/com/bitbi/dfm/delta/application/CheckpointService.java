@@ -815,7 +815,9 @@ public class CheckpointService {
         Path frame = createScratchFile(siteId, ".pb.gz");
         // Closed after the delete, not after the upload: the bytes are on the volume until the file
         // is gone, and releasing the lease earlier would let another writer be told there is room
-        // that does not exist yet.
+        // that does not exist yet. Released even when the delete failed — see the same finally in
+        // BatchParquetFinalizationService for why holding it would be the worse, and permanent,
+        // error.
         ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
         try {
             metrics.timeCheckpointPhase("upload", () -> {
@@ -1138,12 +1140,6 @@ public class CheckpointService {
     }
 
     /**
-     * Detach the snapshot key only when keeping it would lie (seq moved, or there was never a
-     * key). A same-seq rematerialize that fails must leave a still-valid last-good key in place.
-     *
-     * @return {@code true} when the row changed and must be saved
-     */
-    /**
      * End the build: the shared scratch directory had no room for this table's snapshot.
      *
      * <p>Returns the exception rather than throwing it, so the call site reads
@@ -1182,6 +1178,12 @@ public class CheckpointService {
         return false;
     }
 
+    /**
+     * Detach the snapshot key only when keeping it would lie (seq moved, or there was never a
+     * key). A same-seq rematerialize that fails must leave a still-valid last-good key in place.
+     *
+     * @return {@code true} when the row changed and must be saved
+     */
     private static boolean abandonStaleSnapshot(Checkpoint checkpoint, SnapshotPass pass) {
         if (pass == SnapshotPass.INCREMENTAL || checkpoint.getS3KeyParquet() == null) {
             checkpoint.detachParquet();

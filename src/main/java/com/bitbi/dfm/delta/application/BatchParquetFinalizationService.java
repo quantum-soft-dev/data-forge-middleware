@@ -522,6 +522,14 @@ public class BatchParquetFinalizationService {
             }
             // After the deletes: the bytes are on the volume until the file is gone, and a lease
             // released early would tell the next writer there is room that does not exist yet.
+            //
+            // Released even when a delete FAILED, deliberately (raised in review). Holding the
+            // lease would be the worse of the two errors and it would be permanent: the directory
+            // would shrink for the life of the pod, until every writer is refused and the nightly
+            // checkpoint ends on the first table. An undeleted scratch file is instead exactly the
+            // residue class the budget already excludes — like scratch a dead process left behind,
+            // it has no live owner — so it is covered by the gigabyte kept free below the volume
+            // and reclaimed by ParquetScratchOrphanSweeper, and the failed delete is logged above.
             leases.values().forEach(ScratchLease::close);
         }
     }

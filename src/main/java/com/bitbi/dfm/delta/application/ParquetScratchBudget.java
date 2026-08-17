@@ -148,6 +148,7 @@ public class ParquetScratchBudget {
         private long granted;
         private long used;
         private boolean refusalCounted;
+        private boolean closed;
 
         private BudgetedLease(String writer, Counter refused) {
             this.writer = writer;
@@ -164,6 +165,16 @@ public class ParquetScratchBudget {
             // the writers do not all stop at the first refusal — a Parquet writer's close() still
             // emits its footer — so a later charge would over-reserve against a gauge this budget
             // asks operators to size the key from.
+            if (closed) {
+                // Nothing is reachable through a closed lease, and re-reserving through one would
+                // be permanent: `granted` is zero again, so the whole file's bytes would be taken
+                // from the directory with nobody left to give them back, and the pod would run a
+                // smaller budget than it was configured with until it restarted. Every writer today
+                // is closed before its lease, so this is a guard on the contract rather than a live
+                // path — but the lease is a published interface documented as outliving the writer,
+                // and that is exactly the shape a future ordering slip takes (raised in review).
+                return;
+            }
             long wanted = used + delta;
             while (wanted > granted) {
                 reserve(wanted - granted);
@@ -173,6 +184,7 @@ public class ParquetScratchBudget {
 
         @Override
         public void close() {
+            closed = true;
             if (granted > 0) {
                 liveBytes.addAndGet(-granted);
                 granted = 0;

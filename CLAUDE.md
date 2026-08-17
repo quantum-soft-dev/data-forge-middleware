@@ -545,7 +545,18 @@ pages/{feature}/            # Route pages
   night — where the batch side degrades one artifact at a time. Nothing is lost (the next night
   repeats the fold) and the pre-#150 behaviour was a kubelet eviction of the pod, which is worse,
   but the right split of the pool needs a number nobody has yet, which is what
-  `delta.parquet.scratch.bytes` is now there to supply. No REST,
+  `delta.parquet.scratch.bytes` is now there to supply. Round 3 added three more, all small and all
+  about the contract rather than the arithmetic: a closed `ScratchLease` now ignores a later charge
+  (through a closed lease `granted` is zero again, so the whole file's bytes would be taken from the
+  directory with nobody left to release them — a permanent shrink for the life of the pod, and the
+  exact shape a future ordering slip would take); the "409, not 404" claim for a refused batch
+  artifact is qualified in both guides, since the type distinction buys back the **first attempt,
+  not the cap** — a directory full across the whole backoff window still exhausts
+  `max-attempts` and ends `ABANDONED`; and the leases are released even when the scratch file could
+  not be deleted, which is now stated with its reasoning rather than left contradicting the comment
+  above it (holding one would shrink the directory permanently and end every later build, while an
+  undeleted file is the same ownerless residue the reserved gigabyte and
+  `ParquetScratchOrphanSweeper` already cover). No REST,
   gRPC, proto, DTO, migration, existing configuration-key, existing metric-name, S3-key or frontend
   change. See `docs/delta-client-v2-guide.md` ("Sizing note", Metrics),
   `docs/cr-unified-batch-parquet.md`.

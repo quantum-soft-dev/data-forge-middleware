@@ -127,7 +127,9 @@ that is a kubelet eviction, not an `ABANDONED` artifact. The application's is
 writer and released when the file is deleted, so the pod refuses before the volume fills. A build
 stopped by *that* is retried with the ordinary backoff rather than abandoned: the artifact is
 ordinary and the directory was busy, which is the opposite of what crossing `max-temp-bytes`
-means. Since issue #138 the deployment sets this key (and the two checkpoint
+means. The distinction buys back the first attempt, not the cap — a directory held full across the
+whole backoff window still exhausts `max-attempts` and ends `ABANDONED`, which is how every
+transient failure has always ended here. Since issue #138 the deployment sets this key (and the two checkpoint
 ceilings) in `k8s/base/configmap.yaml` so that the sizing note's worst case fits inside that
 `sizeLimit` — 1Gi here — and a single runaway artifact is abandoned before the volume fills; the
 application default stays at 10 GiB. Note the consequence: an artifact above the ceiling is

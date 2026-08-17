@@ -74,6 +74,25 @@ class ParquetScratchBudgetTest {
     }
 
     @Test
+    void aClosedLeaseCannotTakeTheDirectoryBackFromTheProcess() {
+        // The failure this guards is permanent rather than transient: through a closed lease
+        // `granted` is zero again, so a charge would take the whole file's bytes from the
+        // directory with nobody left to release them, and the pod would run a smaller budget than
+        // it was configured with until it restarted.
+        ParquetScratchBudget budget = budget(8 * MIB);
+
+        ScratchLease lease = budget.open("batch_artifact");
+        lease.charge(MIB);
+        lease.close();
+        lease.charge(4 * MIB);
+
+        assertEquals(0.0, liveBytes(), "a closed lease holds nothing");
+        try (ScratchLease next = budget.open("batch_artifact")) {
+            next.charge(8 * MIB);
+        }
+    }
+
+    @Test
     void aChargeThatDoesNotFitLeavesTheDirectoryUntouched() {
         ParquetScratchBudget budget = budget(4 * MIB);
 

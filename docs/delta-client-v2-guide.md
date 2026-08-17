@@ -1075,13 +1075,21 @@ volume was busy, so:
   both end the build. Since #153 the frame is written first and is the largest file a build
   produces, and `CheckpointScheduler` walks sites serially — so a directory held full for the length
   of the 02:00 sweep aborts *every* site's build at its first write, and retention is frozen
-  fleet-wide for that night. The batch side degrades one artifact at a time;
+  fleet-wide for that night. Nothing reserves a share for the checkpoint path, so until #193 the
+  mitigation is entirely "size the key with room to spare" — read
+  `max_over_time(delta_parquet_scratch_bytes[7d])` before lowering it. The batch side degrades one artifact at a time;
   this side degrades by whole sites. Nothing is lost (the next night repeats the fold), the pre-#150
   behaviour on this deployment was a kubelet eviction of the pod, which is worse — but the asymmetry
   is real, `delta.parquet.scratch.refused{writer=checkpoint_frame}` is the series to alert on, and
   giving the checkpoint path a reserved share is **#193**;
 - a **completed-batch artifact** takes the ordinary backoff instead of the first-attempt
-  `ABANDONED` its own ceiling earns it, so the download answers `409` rather than a permanent `404`.
+  `ABANDONED` its own ceiling earns it, so the download answers `409` rather than a permanent `404`
+  — **while attempts remain**. The type distinction buys back the first attempt, not the cap: a
+  directory held full across the whole ~1 h backoff window still walks the artifact through its
+  `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` and ends in `ABANDONED`, needing the admin requeue like any
+  other exhausted row. That is the pre-existing treatment of any transient failure rather than
+  something this budget introduced, but it is the reason to size the key with headroom rather than
+  to the exact worst case.
 
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
