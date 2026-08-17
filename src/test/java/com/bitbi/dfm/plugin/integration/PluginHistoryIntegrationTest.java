@@ -48,6 +48,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  *
  * <p>Feature 014: Plugin History Management</p>
+ *
+ * <p>The nested classes above are {@code @Disabled}; the two live tests are the pair that guards
+ * what a <em>rollback</em> does to a deferred audit entry — one where the change was wholly
+ * transactional and nothing may be recorded, one where S3 objects were destroyed before the commit
+ * point and the divergence must be. They are the end-to-end half of
+ * {@code PluginAuditEventListenerTest}: that class invokes the listener directly, so only a wired
+ * application can show which of its two methods Spring actually calls for a given outcome.</p>
  */
 @DisplayName("Plugin History Integration Tests")
 class PluginHistoryIntegrationTest extends BaseIntegrationTest {
@@ -140,7 +147,12 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         //     caller's own failure. Zero rows then meant "nothing ran", not "the rollback took the
         //     audit with it". That regression is #190; when it is fixed the regeneration will run
         //     outside the caller's transaction, so no rollback will span it and this test could
-        //     never be routed back through it.
+        //     never be routed back through it. #190 carries the successor guard: regenerateSql()
+        //     still writes after the generation returns (markAsSuperseded + save), so a failure
+        //     there will roll back the supersede while the entry — published with no transaction
+        //     active, hence written at once by fallbackExecution — stands. That is this test's
+        //     invariant reached by a route that does not exist yet, and it belongs to the ticket
+        //     that creates the route.
         //  2. The old fixture is what actually went red in CI. Both recorded failures were
         //     AssertionError at the `orElseThrow` of generateSqlForBatch — the #174 memory-pressure
         //     abort returning Optional.empty(), not the audit assertion. Nothing about this
@@ -149,6 +161,13 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         // The account is this method's own, so the count names what this method produced rather
         // than every row the shared account has (the second candidate cause on #172), and no
         // DELETE-then-count window remains for a neighbour to land in.
+        //
+        // What only this test covers: PluginAuditEventListenerTest invokes the listener methods
+        // itself, and PluginAuditServiceDeferralTest verifies that the event is published rather
+        // than written — neither can show which listener method Spring calls when the publisher's
+        // transaction rolls back, because that is decided by the @TransactionalEventListener phase
+        // on the wired application. PluginAuditListenerSaturationIntegrationTest does run wired,
+        // but only over a committing publisher. This is the rollback half.
         ownAuditAccountId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
 
