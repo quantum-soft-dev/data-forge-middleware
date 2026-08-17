@@ -17,21 +17,29 @@ import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.conf.PlainParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetReader;
 import org.apache.parquet.io.LocalInputFile;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -40,11 +48,49 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * B3 (023) — building a checkpoint materializes the full typed Parquet snapshot per table,
  * typed from {@code site_schemas}, and attaches its S3 key to the checkpoint row. The round-trip read
  * proves the Parquet field types match the declared schema and the row count matches the folded state.
+ *
+ * <p>Issue #168 — the class writes its checkpoint scratch into a directory of its own rather than
+ * into the machine-wide {@code java.io.tmpdir}, so the leak assertion cannot be decided by another
+ * JVM on the same host. See {@link #CHECKPOINT_SCRATCH}.</p>
  */
 class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
 
     private static final UUID SITE = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654"); // store-01
     private static final UUID BATCH = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+
+    /**
+     * The scratch directory the checkpoint build writes into for this class alone (issue #168).
+     * <p>
+     * Unset, {@code delta.checkpoint.temp-dir} falls back to {@code java.io.tmpdir} — the
+     * machine-wide directory every other JVM on the host shares, including a sibling worktree
+     * running this same suite and its {@link com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeper},
+     * which deletes {@code checkpoint-*} by age. The leak assertion could therefore see a file
+     * <em>disappear</em> between its two listings and blame a build that leaked nothing. A
+     * directory nobody else can name makes the listing exact rather than differential: anything
+     * left in it is this class's own leak.
+     * </p>
+     */
+    private static final Path CHECKPOINT_SCRATCH = createScratchDirectory("checkpoint");
+
+    /**
+     * Scratch for the completed-batch writer, kept apart from {@link #CHECKPOINT_SCRATCH} so a
+     * queue worker draining in this context cannot put a file in the directory the leak assertion
+     * requires to be empty. Nothing here builds one; the override exists so this context's sweeper
+     * has no reason to touch {@code java.io.tmpdir} either.
+     */
+    private static final Path BATCH_PARQUET_SCRATCH = createScratchDirectory("batch-parquet");
+
+    @DynamicPropertySource
+    static void scratchDirectories(DynamicPropertyRegistry registry) {
+        registry.add("delta.checkpoint.temp-dir", CHECKPOINT_SCRATCH::toString);
+        registry.add("delta.batch-parquet.temp-dir", BATCH_PARQUET_SCRATCH::toString);
+    }
+
+    @AfterAll
+    static void removeScratchDirectories() throws IOException {
+        deleteRecursively(CHECKPOINT_SCRATCH);
+        deleteRecursively(BATCH_PARQUET_SCRATCH);
+    }
 
     @TempDir
     Path tempDir;
@@ -138,7 +184,6 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
                             "joined_on", strVal("2024-03-10"))));
         }
         changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, records);
-        List<Path> scratchBefore = scratchSnapshots();
 
         checkpointService.buildCheckpoint(SITE);
 
@@ -158,7 +203,7 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
             }
         }
         assertEquals(rowCount, read, "every folded row reached the uploaded snapshot");
-        assertEquals(scratchBefore, scratchSnapshots(), "the build must not leave scratch files behind");
+        assertEquals(List.of(), scratchFiles(), "the build must not leave scratch files behind");
     }
 
     @Test
@@ -198,11 +243,56 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
                 "rematerialize must not move the checkpoint pointer");
     }
 
-    /** The checkpoint scratch files of this site in the directory the service actually writes to. */
-    private List<Path> scratchSnapshots() throws Exception {
-        try (java.util.stream.Stream<Path> files = Files.list(Path.of(checkpointTempDirectory))) {
-            return files.filter(path -> path.getFileName().toString().startsWith("checkpoint-" + SITE))
-                    .sorted().toList();
+    @Test
+    void keepsItsCheckpointScratchOutOfTheMachineWideTempDirectory() throws Exception {
+        // Issue #168: the leak assertion below used to list java.io.tmpdir, which every other JVM
+        // on the host writes into — including a sibling worktree's suite and its
+        // ParquetScratchOrphanSweeper, which deletes checkpoint-* by age. A file present in the
+        // "before" listing could therefore be gone from the "after" one, failing a build that had
+        // leaked nothing.
+        Path shared = Path.of(System.getProperty("java.io.tmpdir")).toRealPath();
+        Path configured = Path.of(checkpointTempDirectory).toRealPath();
+        assertNotEquals(shared, configured,
+                "the checkpoint scratch directory must belong to this class alone");
+
+        Path foreign = Files.createTempFile(shared, "checkpoint-" + SITE + "-", ".parquet");
+        try {
+            assertEquals(List.of(), scratchFiles(),
+                    "another JVM's scratch must not be visible to this class");
+        } finally {
+            Files.deleteIfExists(foreign);
+        }
+    }
+
+    /**
+     * Everything in the directory the service actually writes its checkpoint scratch to. The
+     * directory belongs to this class (see {@link #CHECKPOINT_SCRATCH}), so the listing is exact:
+     * no prefix filter narrows it, and any entry at all is a file this class's build left behind.
+     */
+    private List<Path> scratchFiles() throws Exception {
+        try (Stream<Path> files = Files.list(Path.of(checkpointTempDirectory))) {
+            return files.sorted().toList();
+        }
+    }
+
+    private static Path createScratchDirectory(String purpose) {
+        try {
+            // Deliberately not a checkpoint-/batch-parquet- prefix: this directory itself lives in
+            // the shared tmpdir, and those prefixes are what every JVM's orphan sweeper hunts for.
+            return Files.createTempDirectory("dfm-it-scratch-" + purpose + "-");
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not create the " + purpose + " scratch directory", e);
+        }
+    }
+
+    private static void deleteRecursively(Path directory) throws IOException {
+        if (!Files.exists(directory)) {
+            return;
+        }
+        try (Stream<Path> entries = Files.walk(directory)) {
+            for (Path path : entries.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
         }
     }
 
