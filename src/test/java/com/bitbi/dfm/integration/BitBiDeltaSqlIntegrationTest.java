@@ -26,6 +26,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -52,8 +53,8 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
     private static final String API_KEY_HEADER = "X-Plugin-Api-Key";
     /** Published contract — the operator-visible signal that a segment was skipped, not lost. */
     private static final String SKIPPED_INACTIVE_COUNTER = "sql.generation.delta.segments.skipped.inactive";
-    /** Well above what any method here seeds; see {@link #drainQueue()}. */
-    private static final int MAX_DRAIN_ITERATIONS = 100;
+    /** How long a drain may make progress before it is called a runaway; see {@link #drainQueue()}. */
+    private static final Duration MAX_DRAIN_TIME = Duration.ofSeconds(60);
     private static final String VALID_API_KEY = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     /** store-01 — seeded site under ACCOUNT_ID; flipped to V2 in setup. */
@@ -139,45 +140,33 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         return batchId;
     }
 
-    private void drainQueue() {
-        drainQueueWatching(null);
-    }
-
     /**
-     * Drain deterministically — the same loop the sweep worker runs, but bounded, and reporting
-     * whether <em>this</em> context was the one that took the watched segment.
+     * Drain deterministically — the same loop the sweep worker runs, but bounded in time.
      *
      * <p>The bound is what a segment the queue claims and never marks processed looks like from
      * here: {@code findNextPendingPluginSql} hands the same row back on the next iteration and the
      * loop never ends. A hung suite says nothing about which property broke, so the drain fails
      * with the pending rows named instead (issue #175, whose branch exists precisely so that a
-     * segment with nothing to generate still leaves the queue). The queue this loop drains is
-     * global — {@code findNextPendingPluginSql} has no site predicate — so both the bound and the
-     * diagnostic are about every site, not this one.</p>
+     * segment with nothing to generate still leaves the queue).</p>
      *
-     * @param watched segment whose claim to attribute, or {@code null} to just drain
-     * @return {@code true} if one of this loop's own calls marked {@code watched} processed
+     * <p>The bound is a deadline rather than an iteration count, and the message names both
+     * possible causes, because the queue this loop drains is <em>global</em> —
+     * {@code findNextPendingPluginSql} has no site predicate and {@code test-data.sql} only clears
+     * {@code changelog_segments} of the {@code %.example.com} sites — so "more work than expected"
+     * and "a row that will not leave the queue" are not distinguishable from in here.</p>
      */
-    private boolean drainQueueWatching(UUID watched) {
-        boolean claimedHere = false;
-        for (int processed = 0; processed < MAX_DRAIN_ITERATIONS; processed++) {
-            boolean pendingBefore = watched != null && !claimedHere && !isProcessed(watched);
-            if (!queueService.processNextPending()) {
-                return claimedHere;
-            }
-            if (pendingBefore && isProcessed(watched)) {
-                claimedHere = true;
+    private void drainQueue() {
+        Instant deadline = Instant.now().plus(MAX_DRAIN_TIME);
+        while (queueService.processNextPending()) {
+            if (Instant.now().isAfter(deadline)) {
+                throw new IllegalStateException("The delta-SQL queue did not drain within "
+                        + MAX_DRAIN_TIME + " — either a claimed segment is not being marked "
+                        + "processed, or the shared queue holds more work than this class expects. "
+                        + "Still pending (any site): "
+                        + jdbc.queryForList("SELECT id, site_id FROM changelog_segments "
+                                + "WHERE plugin_sql_at IS NULL ORDER BY created_at LIMIT 20"));
             }
         }
-        // The loop above never asks whether the queue is now empty, so a drain of exactly
-        // MAX_DRAIN_ITERATIONS live segments would be reported as a runaway.
-        if (!queueService.processNextPending()) {
-            return claimedHere;
-        }
-        throw new IllegalStateException("The delta-SQL queue did not drain in " + MAX_DRAIN_ITERATIONS
-                + " iterations — a claimed segment is not being marked processed. Still pending: "
-                + jdbc.queryForList("SELECT id, site_id FROM changelog_segments "
-                        + "WHERE plugin_sql_at IS NULL ORDER BY created_at LIMIT 20"));
     }
 
     private boolean isProcessed(UUID segmentId) {
@@ -320,30 +309,36 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
      * {@code return}: a segment left pending is claimed again on every sweep, for ever, since
      * nothing about the account's activation is going to change on its own.</p>
      *
-     * <p>The counter is read as a delta around the drain rather than as an absolute: the registry
-     * belongs to the shared Spring context, so a sibling class draining a segment of some other
-     * account without an activation contributes to the same series. For the same reason it is
-     * asserted only when this context's own drain was what marked the segment: a
-     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} of <em>another</em> cached
-     * context can win the {@code FOR UPDATE SKIP LOCKED} claim (its once-per-context drain at
-     * refresh, or a `wake()` from a sibling class), and it would then increment its own registry
-     * while every database-observable property here still holds. The two assertions above are
-     * unconditional because they are read from the shared database; this one cannot be. A build in
-     * which the branch stopped counting still fails, because the drain that reaches the branch is
-     * then this one.</p>
+     * <p>The counter needs the claim to be attributable, because the registry belongs to <em>this</em>
+     * Spring context while the row is claimable by any of them: a
+     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} in another cached context that
+     * won the {@code FOR UPDATE SKIP LOCKED} race would increment its own registry and leave every
+     * database-observable property here still true. So the queue is emptied first and then claimed
+     * <em>once</em>: with the queue empty and one segment seeded, a claim that returns
+     * {@code true} took this method's segment — which the {@code plugin_sql_at} assertion then
+     * confirms — and the counter is read across that single call. Inferring the same thing from
+     * "pending before my call, processed after it" was the earlier shape and was strictly weaker:
+     * it could not tell a peer's claim landing during the call from its own.</p>
+     *
+     * <p>The counter is still read as a delta rather than as an absolute (the series is shared with
+     * every other site's skips) and asserted as an increase rather than an exact +1 (this context's
+     * own worker pool may claim in parallel) — but the window is now one queue call rather than a
+     * whole drain.</p>
      */
     private void assertSegmentIsSkippedButProcessed() {
-        double skippedBefore = skippedInactiveCount();
+        // Start from an empty queue so the single claim below can only take this method's segment.
+        drainQueue();
         ChangelogSegment segment = changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 1L, List.of(
                 rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
 
-        boolean claimedHere = drainQueueWatching(segment.getId());
+        double skippedBefore = skippedInactiveCount();
+        assertThat(queueService.processNextPending())
+                .as("the queue had this method's segment to claim")
+                .isTrue();
 
         awaitSegmentProcessed(segment.getId());
         assertNoGenerationsAppear();
-        if (claimedHere) {
-            assertThat(skippedInactiveCount()).isGreaterThanOrEqualTo(skippedBefore + 1);
-        }
+        assertThat(skippedInactiveCount()).isGreaterThanOrEqualTo(skippedBefore + 1);
     }
 
     /**
