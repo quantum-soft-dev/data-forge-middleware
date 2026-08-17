@@ -163,15 +163,23 @@ public class DeltaCheckpointRebuildService {
             // released, because nothing re-drives a held flag here — the tick calls
             // buildCheckpoint, never rebuildFromFrame, and requestRebuild short-circuits while the
             // flag is set, so holding it would leave the operator unable to ask again.
+            //
+            // The flag decision reads the signal and the *message* reads the exception, because
+            // they answer different questions (raised in review): "will a restart re-drive this?"
+            // is about the process, while "was this contention?" is about the wait. They differ
+            // only for a bare interrupt, which keeps neither the flag nor the contention wording.
             keepFlagForARetry = shutdownSignal.isShuttingDown();
-            if (!keepFlagForARetry) {
+            if (keepFlagForARetry) {
+                logShutdown(siteId);
+            } else if (e.waitWasSpent()) {
                 log.error("Forced checkpoint rebuild for site {} did not run: {}. The flag is "
                         + "released — request the rebuild again once the nightly build has "
                         + "finished, or raise delta.checkpoint.fold-wait-seconds if the two collide "
                         + "regularly (delta.checkpoint.fold.wait is how close it gets)",
                         siteId, e.getMessage());
             } else {
-                logShutdown(siteId);
+                log.error("Forced checkpoint rebuild for site {} did not run: {}. The flag is "
+                        + "released — request it again", siteId, e.getMessage());
             }
         } catch (Exception e) {
             keepFlagForARetry = shutdownSignal.isShuttingDown();

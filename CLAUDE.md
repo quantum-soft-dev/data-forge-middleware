@@ -499,7 +499,19 @@ pages/{feature}/            # Route pages
   a whole build stale — and since the neighbour advances the pointer and `ChangelogRetentionService`
   then deletes the below-checkpoint objects, the waiter woke up and folded keys that were gone. The
   window existed before this ticket but was a few S3 round trips wide; now everything is read inside
-  the exclusion, at the cost of an idle visit holding it for one query and one HEAD.
+  the exclusion, at the cost of an idle visit holding it for one query and one HEAD. Round 3 then
+  named the residual out loud instead of leaving it implied: the per-pass rule bounds the **tick's
+  duration, not the collision's reach** — a holder outlasting both waits defers every site and the
+  night builds nothing — and that is the deliberate trade against a stuck build parking a scheduler
+  thread and the build lock for `N x` the wait across the following nights; the deployment-level
+  answer is the key, which `delta.checkpoint.fold.wait` now measures. Round 3 also found that the
+  latch was dropped only on a clean return (so a read denial, which fires for **every** site of a
+  tick, left the rest of the pass probing although the collision was over); that
+  `delta.checkpoint.builds.deferred` counted the non-blocking probes as well, ~400 increments per
+  collision whose prescribed remedy — raise the wait — is wrong for 398 of them, so only a
+  **spent** wait is now counted and logged at WARN (`waitWasSpent()`); and that the permit was
+  acquired outside the `try` whose `finally` releases it, so a throwing meter would have leaked the
+  process's only permit for the life of the pod.
   It is **shutdown-aware** (sliced `tryAcquire` re-reading `ApplicationShutdownSignal`),
   because `deltaRebuildExecutor` has `waitForTasksToCompleteOnShutdown(true)` and non-daemon
   threads — Spring never interrupts a task parked there, so an unaware wait would hold context close

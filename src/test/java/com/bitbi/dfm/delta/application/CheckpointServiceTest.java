@@ -561,6 +561,34 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void doesNotCountANonWaitingProbeAsContention() throws Exception {
+        // Review round 3. Once the nightly sweep has spent its wait it visits every remaining site
+        // with a single non-blocking probe, so counting those would put hundreds of increments on
+        // delta.checkpoint.builds.deferred for one collision — and raising the wait, which is what
+        // that meter's documentation prescribes, would be the wrong answer for every one of them.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        java.util.concurrent.CountDownLatch heldBySomeoneElse = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch letGo = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(() -> foldBudget.runExclusively(UUID.randomUUID(), () -> {
+            heldBySomeoneElse.countDown();
+            awaitLatch(letGo);
+            return null;
+        }));
+        holder.start();
+        assertTrue(heldBySomeoneElse.await(5, java.util.concurrent.TimeUnit.SECONDS));
+
+        try {
+            assertThrows(CheckpointFoldBudget.BuildDeferredException.class,
+                    () -> service.buildCheckpoint(SITE, false));
+        } finally {
+            letGo.countDown();
+            holder.join(5_000L);
+        }
+
+        verify(metrics, never()).checkpointBuildDeferred();
+    }
+
+    @Test
     void holdsTheFoldBudgetForTheWholeBuildNotJustTheFoldLoop() throws Exception {
         // The folded state is what writeSnapshots iterates, so the heap is retained until the last
         // table has been uploaded. Releasing at the end of the fold loop would let a second build

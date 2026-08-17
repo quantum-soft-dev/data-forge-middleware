@@ -85,8 +85,21 @@ public class CheckpointScheduler {
      * tick into {@code 200 x delta.checkpoint.fold-wait-seconds}, over which this scheduler's own
      * lock skips the following nights and retention freezes for every site instead of the contended
      * one. After one spent wait the pass keeps visiting but takes the budget only when it is free —
-     * and the latch is dropped again as soon as a site does get it, so a collision that ends
-     * mid-pass restores the ordinary behaviour for everything after it.</p>
+     * and the latch is dropped again as soon as a site does get it, whether the build then succeeds
+     * or fails, so a collision that ends mid-pass restores the ordinary behaviour for everything
+     * after it.</p>
+     *
+     * <p><b>What this rule costs, stated rather than implied</b> (raised in review). It bounds the
+     * tick's duration, not the collision's blast radius: a holder that outlasts both this pass's
+     * wait and the retry pass's defers every site, so nothing is built or pruned that night. That
+     * is the deliberate trade. Waiting per site instead would build those sites — the tick would
+     * simply finish later — but only while the holder eventually releases; a genuinely stuck build
+     * would park this thread and hold {@code buildLock} for {@code N x} the wait, through the
+     * following nights, achieving nothing either way. So the loss is bounded, visible
+     * ({@code delta.checkpoint.builds.deferred}, and one WARN naming the count per pass) and gone
+     * by the next tick, and the deployment-level answer is the key: a site whose single build takes
+     * longer than {@code delta.checkpoint.fold-wait-seconds} needs that key raised, which
+     * {@code delta.checkpoint.fold.wait} now measures directly.</p>
      *
      * @param siteIds the sites to visit, in order
      * @return the sites deferred behind the fold budget, in the order they were visited
@@ -107,6 +120,20 @@ public class CheckpointScheduler {
                 checkpointService.buildCheckpoint(siteId, !foldBudgetIsContended);
                 foldBudgetIsContended = false;
                 retentionService.prune(siteId);
+            } catch (CheckpointFoldBudget.BuildDeferredException e) {
+                // Another build held the process's fold budget (issue #178) — a forced rebuild
+                // beside this sweep, in practice. The site was not visited, so retention is
+                // skipped with it (the pointer did not move), and the tick carries on without
+                // waiting again: the loud, bounded version of a sweep silently stalled behind
+                // one build. Only the spent wait is a WARN; the probes that follow it would
+                // otherwise be hundreds of lines about one collision.
+                foldBudgetIsContended = true;
+                deferred.add(siteId);
+                if (e.waitWasSpent()) {
+                    log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
+                } else {
+                    log.debug("Deferring site {} this tick: {}", siteId, e.getMessage());
+                }
             } catch (CheckpointService.FramePresenceUnknownException e) {
                 // Not a failure of this site: S3 would not say whether its seed frame is there,
                 // so the build declined to conclude anything (issue #157). Logged apart from
@@ -114,19 +141,22 @@ public class CheckpointScheduler {
                 // tick, and calling that "build/retention failed" would send an operator
                 // looking at the sites rather than at the bucket policy. Retention is skipped
                 // with it — the pointer did not move, so there is nothing new to prune.
+                //
+                // The latch is cleared here and in the catch below for the same reason it is
+                // cleared on success (raised in review): both of these are thrown from *inside* the
+                // build, so the site did take the budget — the collision is demonstrably over, and
+                // leaving the latch set would make the rest of the pass probe without waiting for
+                // no reason. During an S3 read outage this branch fires for every site.
+                foldBudgetIsContended = false;
                 log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
-            } catch (CheckpointFoldBudget.BuildDeferredException e) {
-                // Another build held the process's fold budget (issue #178) — a forced rebuild
-                // beside this sweep, in practice. The site was not visited, so retention is
-                // skipped with it (the pointer did not move), and the tick carries on without
-                // waiting again: the loud, bounded version of a sweep silently stalled behind
-                // one build.
-                foldBudgetIsContended = true;
-                deferred.add(siteId);
-                log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
             } catch (RuntimeException e) {
+                foldBudgetIsContended = false;
                 log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
             }
+        }
+        if (!deferred.isEmpty()) {
+            log.warn("{} of {} site(s) were deferred behind the checkpoint fold budget in this pass",
+                    deferred.size(), siteIds.size());
         }
         return deferred;
     }

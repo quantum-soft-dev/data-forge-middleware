@@ -153,6 +153,27 @@ class CheckpointSchedulerTest {
     }
 
     @Test
+    void resumesWaitingAfterASiteThatTookTheBudgetAndThenFailed() {
+        // Review round 3: the latch was dropped only on a clean return, so a site that did take the
+        // budget and then threw — a read denial fires for every site of a tick — left the rest of
+        // the pass probing without waiting although the collision was demonstrably over.
+        UUID deferred = UUID.randomUUID();
+        UUID denied = UUID.randomUUID();
+        UUID afterwards = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(deferred, denied, afterwards));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(deferred), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(deferred, 600_000L, false, true));
+        when(checkpointService.buildCheckpoint(eq(denied), anyBoolean()))
+                .thenThrow(new CheckpointService.FramePresenceUnknownException(denied, 9L));
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(afterwards, true);
+    }
+
+    @Test
     void retriesADeferredSiteOnceAfterTheRestOfTheTick() {
         // The other half of the same review finding: not waiting again must not mean losing the
         // site for the night. A collision that ends while the tick runs still gets that site its

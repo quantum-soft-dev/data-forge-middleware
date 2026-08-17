@@ -258,12 +258,18 @@ public class CheckpointService {
             // during every rollout that catches a build waiting — the same reason
             // BuildEndedByShutdownException records nothing (issue #162). Still re-thrown, so
             // DeltaCheckpointRebuildService can keep its durable flag for the next process.
-            if (e.endedEarly()) {
+            // And only a *spent* wait is contention worth counting. Once the nightly sweep has spent
+            // its wait it probes every remaining site without waiting, so counting those would add
+            // hundreds of increments to one collision — and the remedy this meter's own text
+            // prescribes, raising the wait, is wrong for every one of them (raised in review).
+            if (e.waitWasSpent()) {
+                log.warn("{}", e.getMessage());
+                metrics.checkpointBuildDeferred();
+            } else if (e.endedEarly()) {
                 log.info("Ending the checkpoint build for site {} before it started: {}",
                         siteId, e.getMessage());
             } else {
-                log.warn("{}", e.getMessage());
-                metrics.checkpointBuildDeferred();
+                log.debug("{}", e.getMessage());
             }
             throw e;
         }

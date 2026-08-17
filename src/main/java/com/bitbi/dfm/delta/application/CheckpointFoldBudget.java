@@ -159,24 +159,31 @@ public class CheckpointFoldBudget {
             Thread.currentThread().interrupt();
             endedEarly = true;
         }
-        long waitedNanos = System.nanoTime() - startedAt;
-        // Recorded whichever way it ended: the near miss — a build that waited nine minutes and
-        // then ran — is invisible on delta.checkpoint.duration, because the budget is taken outside
-        // phase=total, and it is exactly the signal that precedes the first deferral.
-        metrics.recordCheckpointFoldWait(waitedNanos);
-        if (!acquired) {
-            throw new BuildDeferredException(siteId, waitMillis, endedEarly, mayWait);
-        }
-        long waitedMillis = TimeUnit.NANOSECONDS.toMillis(waitedNanos);
-        if (waitedMillis >= LOG_WAIT_ABOVE_MILLIS) {
-            log.info("The checkpoint build for site {} waited {} ms for the process's fold budget "
-                    + "(delta.checkpoint.max-fold-bytes is reserved for one build at a time)",
-                    siteId, waitedMillis);
-        }
+        // The permit is released from a finally that starts here and not after the reporting below:
+        // anything thrown between the acquire and the try — the meter, the log — would otherwise
+        // leak the process's only permit for the life of the pod, after which every checkpoint
+        // build is deferred, no pointer advances and retention freezes for every site. That is
+        // wildly out of proportion to its trigger (raised in review).
         try {
+            long waitedNanos = System.nanoTime() - startedAt;
+            // Recorded whichever way it ended: the near miss — a build that waited nine minutes and
+            // then ran — is invisible on delta.checkpoint.duration, because the budget is taken
+            // outside phase=total, and it is the signal that precedes the first deferral.
+            metrics.recordCheckpointFoldWait(waitedNanos);
+            if (!acquired) {
+                throw new BuildDeferredException(siteId, waitMillis, endedEarly, mayWait);
+            }
+            long waitedMillis = TimeUnit.NANOSECONDS.toMillis(waitedNanos);
+            if (waitedMillis >= LOG_WAIT_ABOVE_MILLIS) {
+                log.info("The checkpoint build for site {} waited {} ms for the process's fold "
+                        + "budget (delta.checkpoint.max-fold-bytes is reserved for one build at a "
+                        + "time)", siteId, waitedMillis);
+            }
             return build.get();
         } finally {
-            budget.release();
+            if (acquired) {
+                budget.release();
+            }
         }
     }
 
@@ -202,6 +209,7 @@ public class CheckpointFoldBudget {
     public static final class BuildDeferredException extends RuntimeException {
 
         private final boolean endedEarly;
+        private final boolean mayWait;
 
         BuildDeferredException(UUID siteId, long waitMillis, boolean endedEarly, boolean mayWait) {
             super("The checkpoint build for site " + siteId + " was deferred: another build held the "
@@ -209,6 +217,23 @@ public class CheckpointFoldBudget {
                     + ". Nothing was folded and nothing was recorded — the pointer, the per-table "
                     + "keys and the frame stay where they were, and the next tick tries again");
             this.endedEarly = endedEarly;
+            this.mayWait = mayWait;
+        }
+
+        /**
+         * Did this build actually spend a wait, or was it only probing?
+         *
+         * <p>The distinction is what keeps {@code delta.checkpoint.builds.deferred} meaning what its
+         * documentation says (raised in review). Once the nightly sweep has spent its wait it visits
+         * every remaining site with a single non-blocking probe, so one collision would otherwise
+         * add hundreds of increments — and the remedy the meter's own text prescribes, raising
+         * {@code delta.checkpoint.fold-wait-seconds}, is the wrong answer for every one of them.
+         * Only a spent wait says "the budget was busy for as long as a build is allowed to wait".</p>
+         *
+         * @return {@code true} when the full configured wait was available and was used up
+         */
+        public boolean waitWasSpent() {
+            return mayWait && !endedEarly;
         }
 
         /**

@@ -153,6 +153,52 @@ class CheckpointFoldBudgetTest {
     }
 
     @Test
+    void doesNotLeakTheBudgetWhenReportingTheWaitFails() {
+        // The permit must be released from a finally that starts at the acquire, not after the
+        // meter and the log: leaking the process's only permit defers every checkpoint build for
+        // the life of the pod, freezing retention for every site — wildly out of proportion to a
+        // failing meter (raised in review).
+        AtomicBoolean explode = new AtomicBoolean(true);
+        DeltaMetrics exploding = new DeltaMetrics(new SimpleMeterRegistry()) {
+            @Override
+            public void recordCheckpointFoldWait(long nanos) {
+                if (explode.getAndSet(false)) {
+                    throw new IllegalStateException("the registry is unhappy");
+                }
+            }
+        };
+        CheckpointFoldBudget budget = new CheckpointFoldBudget(shutdownSignal, exploding, 0L);
+
+        assertThrows(IllegalStateException.class, () -> budget.runExclusively(SITE, () -> null));
+
+        AtomicInteger ran = new AtomicInteger();
+        budget.runExclusively(OTHER_SITE, ran::incrementAndGet);
+        assertEquals(1, ran.get(), "the budget was leaked by a failure between acquire and try");
+    }
+
+    @Test
+    void tellsASpentWaitFromANonBlockingProbe() throws Exception {
+        // Only a spent wait is contention worth counting: once the sweep has spent its wait it
+        // probes every remaining site without waiting, and counting those would add hundreds of
+        // increments to one collision — for which the meter's prescribed remedy, raising the wait,
+        // is the wrong answer (raised in review).
+        CheckpointFoldBudget budget = budgetWaiting(1L);
+
+        withTheBudgetHeld(budget, () -> {
+            CheckpointFoldBudget.BuildDeferredException probe = assertThrows(
+                    CheckpointFoldBudget.BuildDeferredException.class,
+                    () -> budget.runExclusively(OTHER_SITE, false, () -> null));
+            assertFalse(probe.waitWasSpent(), "a build not allowed to wait did not spend one");
+            assertFalse(probe.endedEarly(), "and it was not cut short either");
+
+            CheckpointFoldBudget.BuildDeferredException spent = assertThrows(
+                    CheckpointFoldBudget.BuildDeferredException.class,
+                    () -> budget.runExclusively(OTHER_SITE, true, () -> null));
+            assertTrue(spent.waitWasSpent(), "a build that waited its full second did spend one");
+        });
+    }
+
+    @Test
     void releasesTheBudgetWhenTheBuildThrows() {
         // A fold refused for its own size (#152) or a build discarded by the epoch guard must not
         // take the process's budget with it — the next site of the same tick would be deferred for

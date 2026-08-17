@@ -934,19 +934,27 @@ incremented and a WARN naming the site. The nightly sweep skips that site's rete
 pointer did not move, so there is nothing new to prune — and carries on to the next; a forced
 rebuild releases its `rebuild_requested` flag and says to ask again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
 value there is a refusal that never repairs itself, and this one clears the moment the neighbouring
-build finishes.
+build finishes. `delta.checkpoint.builds.deferred` counts only the deferrals that **spent a wait** —
+the sweep's non-blocking probes after the first one, and a wait cut short by a shutdown, are not
+contention and would otherwise put hundreds of increments on the meter for a single collision.
 
 Four properties of the wait, in the order they are likely to matter:
 
 - **The nightly tick pays it once per pass, and comes back once.** After one spent wait the sweep
   keeps visiting sites but takes the budget only when it is free, and the moment a site does get it
-  the ordinary behaviour resumes for everything after it; sites deferred along the way are retried
-  in **one** further pass at the end of the tick. Paid per site the wait would multiply — a build
-  that never finished would turn a 200-site tick into `200 x fold-wait-seconds`, over which the
-  scheduler's own lock skips the following nights and retention freezes for *every* site rather than
-  the contended one — while never waiting again would hand a 40-minute forced rebuild the whole
-  night. Between the two: a tick spends at most two waits, and a collision that passes costs only
-  the sites visited while it lasted.
+  — whether its build then succeeds or fails — the ordinary behaviour resumes for everything after
+  it; sites deferred along the way are retried in **one** further pass at the end of the tick. Paid
+  per site the wait would multiply: a build that never finished would turn a 200-site tick into
+  `200 x fold-wait-seconds`, over which the scheduler's own lock skips the following nights and
+  retention freezes for *every* site rather than the contended one.
+  **What the rule costs, and it is a real trade:** it bounds the tick's duration, not the
+  collision's reach. A holder that outlasts both waits defers every site, so nothing is built or
+  pruned that night. Waiting per site instead would build those sites — the tick would simply finish
+  later — but only while the holder eventually releases; a genuinely stuck build would park a
+  scheduler thread and hold the build lock for `N x` the wait, across the following nights,
+  achieving nothing either way. So the loss is bounded, visible and gone by the next tick, and the
+  deployment-level answer is the key: a site whose single build runs longer than
+  `fold-wait-seconds` needs that key raised, which the meter below measures directly.
 - **Contention is visible before the first deferral.** `delta.checkpoint.fold.wait` (a timer,
   recorded for every build that reached the fold, deferrals included) is the band below
   `fold-wait-seconds` — the budget is taken outside `phase=total`, so a build that waited nine
