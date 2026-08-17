@@ -152,6 +152,36 @@ class CheckpointFoldBudgetTest {
     }
 
     @Test
+    void doesNotTurnAnAbsurdlyLongWaitIntoNoWaitAtAll() throws Exception {
+        // Seconds to milliseconds overflows for a large enough key, and a negative timeout is read
+        // by tryAcquire as "do not wait" — the exact opposite of what was configured, and silently.
+        CheckpointFoldBudget budget = new CheckpointFoldBudget(Long.MAX_VALUE);
+        CountDownLatch firstIsInside = new CountDownLatch(1);
+        CountDownLatch letTheFirstFinish = new CountDownLatch(1);
+
+        Thread first = new Thread(() -> budget.runExclusively(SITE, () -> {
+            firstIsInside.countDown();
+            await(letTheFirstFinish);
+            return null;
+        }));
+        first.start();
+        assertTrue(firstIsInside.await(5, TimeUnit.SECONDS), "the first fold never started");
+
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread second = new Thread(() -> budget.runExclusively(OTHER_SITE, () -> null));
+        second.setUncaughtExceptionHandler((thread, thrown) -> failure.set(thrown));
+        second.start();
+        Thread.sleep(300L);
+
+        assertTrue(second.isAlive(), "a saturating wait must still be a wait");
+        assertNull(failure.get(), "nothing may be deferred while the wait is unspent");
+        letTheFirstFinish.countDown();
+        first.join(5_000L);
+        second.join(5_000L);
+        assertNull(failure.get());
+    }
+
+    @Test
     void namesTheWaitItSpentInTheDeferral() throws Exception {
         // The operator's first question is whether the wait is too short for this deployment's
         // builds, so the number has to be in the line that reports the deferral.

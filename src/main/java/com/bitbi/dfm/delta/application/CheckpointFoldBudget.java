@@ -63,7 +63,10 @@ public class CheckpointFoldBudget {
     private final long waitMillis;
 
     public CheckpointFoldBudget(@Value("${delta.checkpoint.fold-wait-seconds:600}") long waitSeconds) {
-        this.waitMillis = Math.max(0L, waitSeconds) * 1_000L;
+        // toMillis saturates rather than wrapping, so an absurd value stays an absurd wait instead
+        // of overflowing into a negative one — which tryAcquire would read as "do not wait at all",
+        // the opposite of what was asked for.
+        this.waitMillis = TimeUnit.SECONDS.toMillis(Math.max(0L, waitSeconds));
     }
 
     /**
@@ -72,7 +75,9 @@ public class CheckpointFoldBudget {
      *
      * <p>Bounded rather than indefinite: an indefinite wait behind a build that has stalled would
      * freeze the nightly sweep for every site, silently and until the pod is replaced. Spending the
-     * wait defers this one site, says so, and lets the tick carry on to the next.</p>
+     * wait defers this one site, says so, and lets the tick carry on to the next. It is also what
+     * keeps the permit from being able to deadlock anything: a future nested call would spend its
+     * wait and be deferred rather than hang, since nothing here is reentrant.</p>
      *
      * @param siteId the site whose build wants the budget, for the deferral's message
      * @param build  the build to run while the budget is held
