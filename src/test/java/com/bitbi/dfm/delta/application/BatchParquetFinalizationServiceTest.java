@@ -319,6 +319,44 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void aTwoTableBuildShareOneDirectoryAndTheSecondIsTheOneRefused() {
+        // Issue #150, and the reason a per-file ceiling was never enough: this build opens one
+        // scratch file per claimed table, so the pair can fill a directory that either alone fits
+        // inside. Both files are real here, written by the real writer through the real budget.
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact customers = BatchParquetArtifact.pending(batchId, siteId, "customers");
+        BatchParquetArtifact orders = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        claimableBatch(customers, orders);
+        ChangelogSegment segment = segment(siteId, batchId, "mixed", 1, 2, Map.of(
+                "customers", new TableChangeStats(1, 0, 0),
+                "orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
+                "customers", schema(), "orders", schema()));
+        stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT));
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("customers"), any(UUID.class), any(Path.class)))
+                .thenReturn("egress/customers.parquet");
+        // Room for one reservation chunk, which the first writer to touch its file takes whole.
+        ParquetScratchBudget oneFile =
+                TestScratchLeases.budgetOf(ParquetScratchBudget.CHUNK_BYTES);
+
+        assertTrue(newService(7, 1800, 10_000_000L, new SimpleMeterRegistry(), oneFile)
+                .finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, customers.getStatus(),
+                "the table that got the directory finishes normally");
+        // Its sibling is FAILED rather than ABANDONED: the refusal is about the directory, not
+        // about this artifact, so it is retried once the neighbour's file is gone.
+        assertEquals(BatchParquetArtifactStatus.FAILED, orders.getStatus());
+        assertTrue(orders.getLastError().contains("delta.parquet.max-scratch-bytes"),
+                "the operator's lever must reach the manifest row: " + orders.getLastError());
+        verify(storage, never()).uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class));
+    }
+
+    @Test
     void oneTableFailureDoesNotBlockItsBatchSibling() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
