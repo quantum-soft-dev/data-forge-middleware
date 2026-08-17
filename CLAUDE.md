@@ -537,6 +537,29 @@ pages/{feature}/            # Route pages
   intended reading of "no row ⇒ dead" — nothing ever re-attaches an old key, a repair writes a new
   object — and it is stated in the guide rather than special-cased, because no rule could tell that
   object from a superseded one.
+  **Review round 2 changed the shipped defaults and closed one race.** The sweep now **reports
+  instead of deleting** on a fresh deployment — `delta.s3-orphan.dry-run` ships **true**, logging
+  one INFO per prefix with a count and a sample of keys — because the set it would take on a
+  deployment running for months cannot be inspected after the fact and includes the last good
+  `snapshot.parquet` of every table whose key `abandonStaleSnapshot` has ever detached, which an
+  operator can still re-attach by hand today; the deployment that ships this happens before anyone
+  reads a guide, so the acknowledgement had to be the default rather than the documentation. The
+  race: a **checkpoint key is `seq`-addressed and therefore rewritable**, unlike a segment key with
+  its freshly minted id — a build uploads at a sequence above the pointer and adopts it a moment
+  later, so a frame that was weeks old and unreferenced at listing time could become the live seed
+  before the delete landed, and the guard table's claim that every guard fails towards keeping the
+  object was not true for that one. Anything at or above `last_checkpoint_seq` is now left alone;
+  a stranded frame waits until the pointer passes it, which a live site does nightly, and a site
+  with no sync-state row (the hard-deleted case) has no pointer and cannot be built either, so
+  nothing there needs protecting. Three smaller ones: the delete is chunked in this class as well
+  as inside `deleteObjects`, because that method catches `S3Exception` but not
+  `SdkClientException`, so a network failure part-way through would have reported already-deleted
+  objects as left behind; the ownership read joined the same catch as the row read, so a pool blip
+  on one site no longer ends the pass; and the test profile pins `enabled: false` structurally
+  instead of relying on a suite shorter than the 10-minute initial delay (#167's rule about
+  incidental safety). The ownership claim was also corrected: the `sites` row proves **site-id
+  knowledge, not bucket exclusivity** — a database restored from another environment's dump shares
+  the ids — so that precondition is stated as one an operator checks by hand.
 - delta-sql-inactive-branch-test: The delta-SQL queue's inactive-activation branch has a test
   (issue #175, the gap #159 named and deliberately left open). Since 026 `BitBiPlugin.execute` does
   nothing on `BATCH_COMPLETED` but wake the sweep worker, so the decision that an account without an

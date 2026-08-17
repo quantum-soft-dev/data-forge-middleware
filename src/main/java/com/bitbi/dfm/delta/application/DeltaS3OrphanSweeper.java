@@ -23,6 +23,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -67,14 +69,20 @@ import java.util.regex.Pattern;
  * would read the other's live prefixes as unreferenced and delete the changelog and the checkpoint
  * seed of every one of them.</p>
  *
- * <p>A site's own {@code sites} row is the ownership proof, and it is exact: if this database has
- * the row, the prefix is this deployment's. A prefix whose site this database has never heard of is
- * either a site hard-deleted here or a live site of another deployment, and <b>nothing in the bucket
- * distinguishes them</b> — so it is left alone and counted, unless
+ * <p>A site's own {@code sites} row is the closest available proof: a prefix whose site this
+ * database has never heard of is either a site hard-deleted here or a live site of another
+ * deployment, and <b>nothing in the bucket distinguishes them</b>, so it is left alone unless
  * {@code delta.s3-orphan.reclaim-unknown-sites} says the bucket is exclusive. Default off: the
  * populations that made this ticket (a failed commit's segment, every advancing build's superseded
  * generation) all belong to sites that still exist, so the default reclaims them and only the
  * hard-deleted-site case waits for the acknowledgement.</p>
+ *
+ * <p><b>It proves site-id knowledge, not bucket exclusivity</b> (raised in review), and the
+ * difference is a database restored from another environment's dump: the site ids then match, the
+ * guard passes, and the sweep deletes the other deployment's live objects. The precondition an
+ * operator has to check is "no other deployment writes this bucket", which no code here can verify
+ * — which is also why the first pass reports instead of deleting
+ * ({@code delta.s3-orphan.dry-run}, default true).</p>
  *
  * <h2>Every guard fails towards keeping the object</h2>
  *
@@ -122,6 +130,25 @@ public class DeltaS3OrphanSweeper {
      */
     public static final String DEFAULT_INITIAL_DELAY_MS = "600000";
 
+    /**
+     * Default answer to "may this sweep delete?" — <b>no</b>, it reports instead.
+     *
+     * <p>The population on a deployment that has been running for months is unknown and cannot be
+     * inspected after the fact: it includes the last good {@code snapshot.parquet} of every table
+     * whose key {@code abandonStaleSnapshot} has ever detached, which an operator can still
+     * re-attach by hand today and cannot once it is deleted. A first pass that names what it would
+     * take is the only way to see that set before it is gone, and the deployment that ships this
+     * happens before anyone reads a guide — so the acknowledgement has to be the default rather
+     * than the documentation. Clearing the flag is one ConfigMap line; the startup log says so.</p>
+     */
+    public static final String DEFAULT_DRY_RUN = "true";
+
+    /** How many keys a dry-run line names before it stops being readable. */
+    private static final int DRY_RUN_SAMPLE = 10;
+
+    /** Keys per {@code DeleteObjects} round trip, matching {@code S3FileStorageService}. */
+    private static final int DELETE_CHUNK = 1000;
+
     /** {@code {segmentId}.pb.gz} directly under {@code delta/{siteId}/segments/}. */
     private static final Pattern SEGMENT_OBJECT = Pattern.compile("^[^/]+\\.pb\\.gz$");
 
@@ -136,6 +163,9 @@ public class DeltaS3OrphanSweeper {
     private static final Pattern CHECKPOINT_SNAPSHOT =
             Pattern.compile("^[^/]+/seq=\\d+/snapshot\\.(parquet|csv\\.gz)$");
 
+    /** The {@code seq=} of a checkpoint key, which is what makes that key rewritable. */
+    private static final Pattern KEY_SEQUENCE = Pattern.compile("/seq=(\\d+)/");
+
     private final S3ChangelogSegmentStorage segmentStorage;
     private final S3CheckpointStorage checkpointStorage;
     private final S3FileStorageService objectDeleter;
@@ -145,6 +175,7 @@ public class DeltaS3OrphanSweeper {
     private final SiteRepository siteRepository;
     private final DeltaMetrics metrics;
     private final boolean enabled;
+    private final boolean dryRun;
     private final boolean reclaimUnknownSites;
     private final long minAgeSeconds;
 
@@ -158,6 +189,7 @@ public class DeltaS3OrphanSweeper {
             SiteRepository siteRepository,
             DeltaMetrics metrics,
             @Value("${delta.s3-orphan.enabled:true}") boolean enabled,
+            @Value("${delta.s3-orphan.dry-run:" + DEFAULT_DRY_RUN + "}") boolean dryRun,
             @Value("${delta.s3-orphan.reclaim-unknown-sites:false}") boolean reclaimUnknownSites,
             @Value("${delta.s3-orphan.min-age-seconds:" + DEFAULT_MIN_AGE_SECONDS + "}")
             long minAgeSeconds) {
@@ -177,10 +209,15 @@ public class DeltaS3OrphanSweeper {
         this.siteRepository = siteRepository;
         this.metrics = metrics;
         this.enabled = enabled;
+        this.dryRun = dryRun;
         this.reclaimUnknownSites = reclaimUnknownSites;
         this.minAgeSeconds = minAgeSeconds;
-        log.info("Delta S3 orphan sweep is {}{}", enabled ? "on" : "off",
-                enabled ? ", reclaiming unreferenced objects older than " + minAgeSeconds + "s"
+        log.info("Delta S3 orphan sweep is {}{}", enabled ? (dryRun ? "on, in DRY RUN" : "on") : "off",
+                enabled ? (dryRun
+                                ? ": it will report what it would reclaim and delete nothing. Read a "
+                                        + "pass, then set delta.s3-orphan.dry-run=false. Unreferenced "
+                                        + "objects older than " + minAgeSeconds + "s are the candidates"
+                                : ", reclaiming unreferenced objects older than " + minAgeSeconds + "s")
                         + (reclaimUnknownSites
                                 ? ", including prefixes of sites this database has never heard of "
                                         + "(delta.s3-orphan.reclaim-unknown-sites=true: this bucket "
@@ -255,29 +292,29 @@ public class DeltaS3OrphanSweeper {
             return;
         }
 
-        // A site this database has never heard of may be a hard-deleted one of ours or a live one
-        // of another deployment sharing the bucket, and nothing in S3 tells the two apart. Its own
-        // `sites` row is the only proof of ownership there is.
-        if (!reclaimUnknownSites && !siteRepository.findById(siteId).isPresent()) {
-            log.info("Leaving {} alone: no site row, so this prefix cannot be proved to belong to "
-                    + "this database. Set delta.s3-orphan.reclaim-unknown-sites=true if this bucket "
-                    + "is exclusive to this deployment and the site was hard-deleted", prefix);
-            return;
-        }
-
         // Rows are read after the listing on purpose: a row committed in between is then part of
         // the answer, and its object is spared. The other order could see a key before its row and
-        // a row set from before that row existed.
-        Set<String> referenced;
+        // a row set from before that row existed. Every read is inside the catch — including the
+        // ownership one (raised in review), whose failure would otherwise end the whole pass.
+        Predicate<String> protectedKeys;
         try {
-            referenced = scope.referencedKeys(siteId);
+            // A site this database has never heard of may be a hard-deleted one of ours or a live
+            // one of another deployment sharing the bucket, and nothing in S3 tells the two apart.
+            // Its own `sites` row is the closest thing to a proof of ownership there is.
+            if (!reclaimUnknownSites && siteRepository.findById(siteId).isEmpty()) {
+                log.info("Leaving {} alone: no site row, so this prefix cannot be tied to this "
+                        + "database. Set delta.s3-orphan.reclaim-unknown-sites=true if this bucket "
+                        + "is exclusive to this deployment and the site was hard-deleted", prefix);
+                return;
+            }
+            protectedKeys = scope.protectedKeys(siteId);
         } catch (RuntimeException e) {
-            log.warn("Could not read the rows referencing {}; nothing is deleted for this site "
-                    + "until they can be read", prefix, e);
+            log.warn("Could not read the rows for {}; nothing is deleted for this site until they "
+                    + "can be read", prefix, e);
             return;
         }
 
-        List<String> orphans = candidates.stream().filter(key -> !referenced.contains(key)).toList();
+        List<String> orphans = candidates.stream().filter(key -> !protectedKeys.test(key)).toList();
         if (orphans.isEmpty()) {
             return;
         }
@@ -285,28 +322,43 @@ public class DeltaS3OrphanSweeper {
     }
 
     private void delete(ReclaimScope scope, String prefix, List<String> orphans) {
+        if (dryRun) {
+            log.info("Dry run (delta.s3-orphan.dry-run): {} unreferenced object(s) under {} would "
+                            + "be reclaimed, e.g. {}. Clear the flag to delete them",
+                    orphans.size(), prefix, orphans.stream().limit(DRY_RUN_SAMPLE).toList());
+            return;
+        }
+        // Chunked here as well as inside deleteObjects (raised in review): that method catches
+        // S3Exception but not SdkClientException, so a network failure part-way through would
+        // otherwise throw out after some chunks had already been deleted and report every key as
+        // left behind. One chunk per try keeps both counters true.
+        for (int from = 0; from < orphans.size(); from += DELETE_CHUNK) {
+            deleteChunk(scope, prefix, orphans.subList(from, Math.min(from + DELETE_CHUNK, orphans.size())));
+        }
+    }
+
+    private void deleteChunk(ReclaimScope scope, String prefix, List<String> chunk) {
+        int deleted = 0;
+        List<String> errors = List.of();
         try {
-            S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(orphans);
-            metrics.s3OrphansReclaimed(scope.label(), result.deletedCount());
-            // Objects, not error entries (raised in review): deleteObjects records one entry per
-            // failed 1000-key chunk, so counting entries would report a bucket-wide denial as a
-            // trickle. The subtraction is truthful in both branches and makes the two counters sum
-            // to the candidate set.
-            long leftBehind = orphans.size() - result.deletedCount();
-            if (leftBehind > 0) {
-                metrics.s3OrphanDeletesFailed(scope.label(), leftBehind);
-                log.warn("{} unreferenced object(s) under {} could not be deleted ({}); they are "
-                                + "still unreferenced and the next sweep tries again",
-                        leftBehind, prefix, result.errors());
-            }
-            if (result.deletedCount() > 0) {
-                log.info("Reclaimed {} unreferenced object(s) under {}", result.deletedCount(), prefix);
-            }
+            S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(chunk);
+            deleted = result.deletedCount();
+            errors = result.errors();
         } catch (RuntimeException e) {
-            // Nothing about how far the phase got is known, so every key counts as left behind —
-            // which is true either way, since the next sweep will list them again.
-            metrics.s3OrphanDeletesFailed(scope.label(), orphans.size());
-            log.warn("Could not delete {} unreferenced object(s) under {}", orphans.size(), prefix, e);
+            log.warn("Could not delete {} unreferenced object(s) under {}", chunk.size(), prefix, e);
+        }
+        metrics.s3OrphansReclaimed(scope.label(), deleted);
+        // Objects, not error entries (raised in review): deleteObjects records one entry per failed
+        // 1000-key chunk, so counting entries would report a bucket-wide denial as a trickle. The
+        // subtraction is truthful in every branch and makes the two counters sum to the candidates.
+        long leftBehind = chunk.size() - deleted;
+        if (leftBehind > 0) {
+            metrics.s3OrphanDeletesFailed(scope.label(), leftBehind);
+            log.warn("{} unreferenced object(s) under {} could not be deleted ({}); they are still "
+                    + "unreferenced and the next sweep tries again", leftBehind, prefix, errors);
+        }
+        if (deleted > 0) {
+            log.info("Reclaimed {} unreferenced object(s) under {}", deleted, prefix);
         }
     }
 
@@ -352,8 +404,11 @@ public class DeltaS3OrphanSweeper {
         /** Whether this key has a shape one of this application's writers produces. */
         boolean isReclaimable(String sitePrefix, String key);
 
-        /** Every key of this site that a row still names. */
-        Set<String> referencedKeys(UUID siteId);
+        /**
+         * The keys of this site that must not be deleted, whatever their age — the rows' answer to
+         * "is this object live?", plus anything a build could still adopt.
+         */
+        Predicate<String> protectedKeys(UUID siteId);
     }
 
     /** {@code delta/{siteId}/segments/} — one object per changelog segment row. */
@@ -385,10 +440,13 @@ public class DeltaS3OrphanSweeper {
         }
 
         @Override
-        public Set<String> referencedKeys(UUID siteId) {
+        public Predicate<String> protectedKeys(UUID siteId) {
             // Provisional segments included: their rows exist for the whole of a segmented
             // re-baseline (033), so the objects are live even though nothing reads them yet.
-            return new HashSet<>(segmentRepository.findAllS3KeysBySiteId(siteId));
+            // A segment key carries a freshly minted segment id and can never be written twice, so
+            // the rows are the whole answer here.
+            Set<String> referenced = new HashSet<>(segmentRepository.findAllS3KeysBySiteId(siteId));
+            return referenced::contains;
         }
     }
 
@@ -422,7 +480,7 @@ public class DeltaS3OrphanSweeper {
         }
 
         @Override
-        public Set<String> referencedKeys(UUID siteId) {
+        public Predicate<String> protectedKeys(UUID siteId) {
             Set<String> referenced = new HashSet<>();
             for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
                 if (checkpoint.getS3KeyParquet() != null) {
@@ -434,10 +492,35 @@ public class DeltaS3OrphanSweeper {
             }
             // The one artifact no row names: the next incremental build seeds from the frame at
             // last_checkpoint_seq, so that key is live even though nothing stores it.
-            syncStateRepository.findBySiteId(siteId)
+            Long pointer = syncStateRepository.findBySiteId(siteId)
                     .map(SiteSyncState::getLastCheckpointSeq)
-                    .ifPresent(seq -> referenced.add(S3CheckpointStorage.frameKey(siteId, seq)));
-            return referenced;
+                    .orElse(null);
+            if (pointer != null) {
+                referenced.add(S3CheckpointStorage.frameKey(siteId, pointer));
+            }
+            return key -> referenced.contains(key) || couldStillBeAdopted(key, pointer);
+        }
+
+        /**
+         * Checkpoint keys are addressed by {@code seq}, so unlike a segment they can be
+         * <em>rewritten</em>: a build always uploads at a sequence above the pointer and adopts it
+         * a moment later. Between this sweep's listing and its delete, a key that was weeks old and
+         * unreferenced can therefore become the live seed — the one place where the listing's
+         * {@code lastModified} is not the whole story (raised in review). Anything at or above the
+         * pointer is left alone for that reason; it becomes reclaimable as soon as the pointer
+         * passes it, which a live site does nightly.
+         *
+         * <p>A site with no sync-state row has no pointer and cannot be built either — the build
+         * reads that row first — so nothing there needs protecting, which is what keeps a
+         * hard-deleted site reclaimable.</p>
+         */
+        private boolean couldStillBeAdopted(String key, Long pointer) {
+            if (pointer == null) {
+                return false;
+            }
+            Matcher seq = KEY_SEQUENCE.matcher(key);
+            // Unparseable cannot happen after the shape filter; if it ever does, keep the object.
+            return !seq.find() || Long.parseLong(seq.group(1)) >= pointer;
         }
     }
 

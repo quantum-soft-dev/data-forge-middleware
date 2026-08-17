@@ -1797,7 +1797,8 @@ rule for either prefix. Three populations accumulated:
 - the **superseded generation** of every advancing checkpoint build — the `checkpoints` row is one
   per `(site, table)` and carries a single key, so the previous `seq`'s `snapshot.parquet` is
   unreferenced the moment the next build writes its own — plus any `_frame/seq={n}/frame.pb.gz`
-  the pointer never adopted, which **no row ever names**;
+  the pointer never adopted, which **no row ever names** (that one is reclaimed once the pointer has
+  passed its sequence, see the guard table);
 - **everything** belonging to a site deleted with `DELETE /api/v1/sites/{siteId}`, which hard-deletes
   the row and does not touch either prefix.
 
@@ -1817,9 +1818,11 @@ Every deleter before this one worked forward from a row, so a stranger's objects
 this one reads "no rows for this site" as "dead". Two deployments sharing a bucket keep separate
 databases and therefore separate site ids, so each would read the other's live prefixes as
 unreferenced and delete their changelog and checkpoint seed. A site's own `sites` row is the
-ownership proof and it is exact — so a prefix whose site this database has never heard of is **left
-alone and logged**, unless `delta.s3-orphan.reclaim-unknown-sites` says the bucket is exclusive to
-this deployment. Default off. Everything this ticket was opened for belongs to sites that still
+closest available proof — so a prefix whose site this database has never heard of is **left alone
+and logged**, unless `delta.s3-orphan.reclaim-unknown-sites` says the bucket is exclusive to this
+deployment. Default off. It proves *site-id knowledge*, not exclusivity: a database restored from
+another environment's dump shares the ids, and then the guard passes on prefixes it should not, so
+the precondition an operator has to check by hand is "no other deployment writes this bucket". Everything this ticket was opened for belongs to sites that still
 exist, so the default reclaims it; only the hard-deleted-site case waits for that acknowledgement,
 and turning it on where the bucket is shared is the one way this sweep can destroy live data.
 
@@ -1833,16 +1836,23 @@ Every guard fails towards keeping the object:
 | **A row set that cannot be read skips the site** | Reading "the query failed" as "no references" | One interval of delay |
 | **A truncated listing sweeps only what it read** | Nothing invented | One interval of delay |
 | **A prefix whose site has no `sites` row is left alone** unless `reclaim-unknown-sites` is set | Deleting another deployment's live objects out of a shared bucket | A hard-deleted site's objects stay until the bucket is declared exclusive |
+| **A checkpoint key at or above `last_checkpoint_seq` is left alone** | The one race the age window does not cover: `seq`-addressed keys are *rewritable*, so a key that was weeks old at listing time can be uploaded and adopted before the delete lands | A frame a build never adopted waits until the pointer passes it, which a live site does nightly |
+| **Dry run** (`delta.s3-orphan.dry-run`, default **true**) | Deleting anything at all before an operator has seen what one pass would take | Nothing is reclaimed until the flag is cleared |
 
 **The age window is the key to get right.** Lower it below the longest possible checkpoint build and
 a live frame can be deleted, at which point the site reads as `history_gone` and gives its
 checkpoint rows up after `delta.checkpoint.max-materialize-attempts` nights (#149). Raise it if a
 build on the largest site can take longer than a day; the only cost of raising it is storage.
 
-`delta.s3-orphan.enabled=false` turns the sweep off. It is on by default because an orphan is
-resolved by nothing else — switching it off is how the litter accumulates, not how it is made safe.
-A non-positive age window is refused at startup, but only while the sweep is enabled: a rollback
-that still crash-loops the pod on the value it is rolling back would not be one.
+**The first pass reports; it does not delete.** `delta.s3-orphan.dry-run` ships **true**, so an
+upgrade logs one INFO per prefix — how many objects would be reclaimed and a sample of their keys —
+and takes nothing. That is deliberate and it is the rollout step: the set this sweep would take on a
+deployment that has been running for months cannot be inspected after the fact, and it includes the
+last good `snapshot.parquet` of every table whose key has ever been detached. Read a pass, then set
+`delta.s3-orphan.dry-run=false`. `delta.s3-orphan.enabled=false` turns the sweep off entirely; it is
+on by default because an orphan is resolved by nothing else. A non-positive age window is refused at
+startup, but only while the sweep is enabled: a rollback that still crash-loops the pod on the value
+it is rolling back would not be one.
 
 **Detaching a key is now a destructive act with a one-day fuse.** When a table cannot be
 materialized on an advancing seq, `abandonStaleSnapshot` nulls `s3_key_parquet`, and the last good

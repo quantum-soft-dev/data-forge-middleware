@@ -106,7 +106,14 @@ class DeltaS3OrphanSweeperTest {
     private DeltaS3OrphanSweeper sweeper(boolean enabled, boolean reclaimUnknownSites) {
         return new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage, objectDeleter,
                 segmentRepository, checkpointRepository, syncStateRepository, siteRepository,
-                metrics, enabled, reclaimUnknownSites, AGE_SECONDS);
+                metrics, enabled, false, reclaimUnknownSites, AGE_SECONDS);
+    }
+
+    /** The shipped default: reports and deletes nothing. */
+    private DeltaS3OrphanSweeper dryRunSweeper() {
+        return new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage, objectDeleter,
+                segmentRepository, checkpointRepository, syncStateRepository, siteRepository,
+                metrics, true, true, false, AGE_SECONDS);
     }
 
     private void segmentSite(S3ListedObject... objects) {
@@ -221,12 +228,14 @@ class DeltaS3OrphanSweeperTest {
     }
 
     @Test
-    @DisplayName("a frame above the pointer is reclaimed once it is older than the age window")
-    void reclaimsAFrameLeftByABuildThatNeverAdoptedIt() {
+    @DisplayName("a frame a build never adopted is reclaimed once the pointer has passed it")
+    void reclaimsAStrandedFrameOnceThePointerHasPassedIt() {
         String stranded = CHECKPOINT_PREFIX + "_frame/seq=9/frame.pb.gz";
         checkpointSite(object(stranded, OLD));
         SiteSyncState state = SiteSyncState.initial(SITE);
-        state.recordCheckpoint(7L);
+        // Still ahead of the pointer while the site is at 7: a later build can end at 9 and adopt
+        // that very key, so it waits. A live site passes it on the next nightly build.
+        state.recordCheckpoint(12L);
         when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(state));
 
         sweeper().sweep(NOW);
@@ -277,6 +286,36 @@ class DeltaS3OrphanSweeperTest {
     // ---------------------------------------------------------------- the guards
 
     @Test
+    @DisplayName("a checkpoint key at or above the pointer is kept: a build could still adopt it")
+    void keepsACheckpointKeyThePointerHasNotPassed() {
+        String atPointer = CHECKPOINT_PREFIX + "orders/seq=7/snapshot.parquet";
+        String above = CHECKPOINT_PREFIX + "orders/seq=8/snapshot.parquet";
+        String below = CHECKPOINT_PREFIX + "orders/seq=6/snapshot.parquet";
+        checkpointSite(object(atPointer, OLD), object(above, OLD), object(below, OLD));
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordCheckpoint(7L);
+        when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        sweeper().sweep(NOW);
+
+        // seq= is rewritable, unlike a segment id: between this listing and the delete a build can
+        // upload at that sequence and adopt it, so only what the pointer has passed may go.
+        assertThat(deletedKeys()).containsExactly(below);
+    }
+
+    @Test
+    @DisplayName("the shipped default reports what it would take and deletes nothing")
+    void dryRunDeletesNothing() {
+        segmentSite(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
+
+        dryRunSweeper().sweep(NOW);
+
+        verify(objectDeleter, never()).deleteObjects(anyList());
+        assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isZero();
+    }
+
+    @Test
     @DisplayName("a site whose rows could not be read is skipped rather than swept")
     void skipsASiteWhoseRowsCouldNotBeRead() {
         segmentSite(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
@@ -286,6 +325,22 @@ class DeltaS3OrphanSweeperTest {
         sweeper().sweep(NOW);
 
         verify(objectDeleter, never()).deleteObjects(anyList());
+    }
+
+    @Test
+    @DisplayName("a failed ownership read costs that site, not the rest of the pass")
+    void survivesAFailedOwnershipRead() {
+        String orphan = CHECKPOINT_PREFIX + "_frame/seq=1/frame.pb.gz";
+        segmentSite(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
+        checkpointSite(object(orphan, OLD));
+        when(siteRepository.findById(SITE))
+                .thenThrow(new IllegalStateException("pool exhausted"))
+                .thenReturn(Optional.of(mock(Site.class)));
+
+        sweeper().sweep(NOW);
+
+        // The segment scope lost its site to the throw; the checkpoint scope still ran.
+        assertThat(deletedKeys()).containsExactly(orphan);
     }
 
     @Test
@@ -402,7 +457,7 @@ class DeltaS3OrphanSweeperTest {
     void acceptsABadAgeWindowWhileDisabled() {
         DeltaS3OrphanSweeper disabled = new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage,
                 objectDeleter, segmentRepository, checkpointRepository, syncStateRepository,
-                siteRepository, metrics, false, false, 0L);
+                siteRepository, metrics, false, false, false, 0L);
 
         disabled.sweep(NOW);
 
@@ -423,7 +478,7 @@ class DeltaS3OrphanSweeperTest {
     void refusesANonPositiveAgeWindow() {
         assertThatThrownBy(() -> new DeltaS3OrphanSweeper(segmentStorage, checkpointStorage,
                 objectDeleter, segmentRepository, checkpointRepository, syncStateRepository,
-                siteRepository, metrics, true, false, 0L))
+                siteRepository, metrics, true, false, false, 0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("delta.s3-orphan.min-age-seconds");
     }

@@ -144,7 +144,10 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
         // leave behind. The last one is why the sites come from the bucket and not the database.
         String orphanSegment = S3ChangelogSegmentStorage.segmentPrefix(SITE)
                 + UUID.randomUUID() + ".pb.gz";
-        String orphanFrame = S3CheckpointStorage.frameKey(SITE, checkpointSeq + 5);
+        // Below the pointer: a build can only ever upload at a sequence above it, so this key can
+        // never be adopted again. One above the pointer is the opposite case, asserted as kept.
+        String orphanFrame = S3CheckpointStorage.frameKey(SITE, checkpointSeq - 1);
+        String frameAheadOfThePointer = S3CheckpointStorage.frameKey(SITE, checkpointSeq + 5);
         String orphanSnapshot = S3CheckpointStorage.checkpointPrefix(SITE)
                 + "customers/seq=0/snapshot.parquet";
         String unknownShape = S3CheckpointStorage.checkpointPrefix(SITE) + "manifest.json";
@@ -152,8 +155,8 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
         String deletedSiteSegment = S3ChangelogSegmentStorage.segmentPrefix(deletedSite)
                 + UUID.randomUUID() + ".pb.gz";
         String deletedSiteFrame = S3CheckpointStorage.frameKey(deletedSite, 1L);
-        for (String key : List.of(orphanSegment, orphanFrame, orphanSnapshot, unknownShape,
-                deletedSiteSegment, deletedSiteFrame)) {
+        for (String key : List.of(orphanSegment, orphanFrame, frameAheadOfThePointer, orphanSnapshot,
+                unknownShape, deletedSiteSegment, deletedSiteFrame)) {
             put(key);
         }
 
@@ -179,10 +182,13 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
                     "the snapshot the checkpoint row names must survive");
             assertTrue(checkpointStorage.exists(unknownShape),
                     "a key of a shape this application does not write is never a candidate");
+            assertTrue(checkpointStorage.exists(frameAheadOfThePointer),
+                    "a seq-addressed key the pointer has not passed can still be uploaded and "
+                            + "adopted between the listing and the delete, so it survives");
 
             assertFalse(segmentStorage.exists(orphanSegment), "an unreferenced segment is reclaimed");
             assertFalse(checkpointStorage.exists(orphanFrame),
-                    "a frame the pointer never adopted is reclaimed");
+                    "a frame below the pointer can never be adopted again and is reclaimed");
             assertFalse(checkpointStorage.exists(orphanSnapshot),
                     "a superseded snapshot is reclaimed");
             assertFalse(segmentStorage.exists(deletedSiteSegment),
@@ -219,11 +225,12 @@ class DeltaS3OrphanSweepIntegrationTest extends BaseIntegrationTest {
                 .map(S3CheckpointStorage::checkpointPrefix).toList()))
                 .when(checkpoints).listSitePrefixes();
 
-        // reclaim-unknown-sites=true: `deletedSite` has no `sites` row, which is the hard-deleted
-        // case, and reaching it is the whole point of that acknowledgement.
+        // dry-run=false: the shipped default reports instead of deleting, and what this class is
+        // about is the delete. reclaim-unknown-sites=true: `deletedSite` has no `sites` row, which
+        // is the hard-deleted case, and reaching it is the point of that acknowledgement.
         return new DeltaS3OrphanSweeper(segments, checkpoints, objectDeleter, segmentRepository,
-                checkpointRepository, syncStateRepository, siteRepository, metrics, true, true,
-                86_400L);
+                checkpointRepository, syncStateRepository, siteRepository, metrics, true, false,
+                true, 86_400L);
     }
 
     private void put(String key) {
