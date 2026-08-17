@@ -453,6 +453,41 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- drop-comparison-executor: `AsyncConfiguration#comparisonExecutor` is gone — a `@Bean` declaring
+  core 2 / max 5 / queue 10 and calling `initialize()`, with no `@Async("comparisonExecutor")` site,
+  no `@Qualifier` and no injection anywhere in `src/main` or `src/test` (issue #165, found by #161's
+  audit). **The first checkbox was a fork — delete it, or add the caller if an async comparison path
+  was intended and lost — and the history settles it as deletion**: the executor and the method it
+  was written for (`ComparisonService.createComparisonAsync`, quoted in the bean's own Javadoc)
+  arrived together in `570a0ec9`, and `fd29ff4d` deleted the method two days later as "unused
+  `@Async` infrastructure … synchronous processing is used for MVP" — both commits on the
+  `009-markdown-user-story` branch, so the pool was orphaned **before** feature 009 ever merged and
+  no caller has existed on `develop` for a day. The comparison feature is synchronous by decision,
+  not by accident, and a future async path would want a pool sized for what it then does rather than
+  this one. **What it cost while it sat there** is what the ticket is really about: it reads as five
+  more threads until someone checks, which is expensive in exactly the place #161 had to enumerate
+  every background pool that can take a database connection — the audit recorded it as `Hold.NONE`
+  with a pointer to this issue rather than discounting it silently. Nothing about the connection
+  derivation moves: `Hold.NONE` never entered a sum, so `AUDITED_BACKGROUND_THREADS` stays **34**,
+  the floor stays `4 long ticks + 2 request reserve = 6 <= 10`, and the guide's list of pools never
+  named it. **One operator-visible consequence**: Boot's `TaskExecutorMetricsAutoConfiguration` binds
+  every `ThreadPoolTaskExecutor`, so `/actuator/prometheus` **loses** the
+  `executor_*{name="comparisonExecutor"}` family — a series that only ever reported an idle pool
+  (`executor_active_threads` 0 for the life of every pod), but a dashboard panel or a recording rule
+  naming it will go empty rather than to zero. Nothing is renamed; the #146/#171 precedent is that a
+  changed `executor_*` series is called out. `@EnableAsync` stays on the class — it is what makes
+  every `@Async("pluginExecutor")` site work, and dropping it would not fail the build, it would
+  silently run those methods on the caller's thread — and the class Javadoc, which described only the
+  deleted pool down to a usage example of the method that no longer exists, is rewritten around that
+  and around `deltaRebuildExecutor` (the one pool left, reached by `@Qualifier` and a direct submit,
+  not by `@Async`). The test-first half is the inventory itself: removing the entry from
+  `BackgroundConnectionDemandTest` while the bean still existed failed
+  `shouldFindExactlyTheAuditedExecutorBeans` and `shouldFindExactlyTheAuditedPoolConstructions`
+  (`AsyncConfiguration.java` 2 → 1), and that same discovery is what now fails the build if a pool
+  with no caller is declared again — so no new test was added. `specs/009-markdown-user-story/`
+  is deliberately untouched: its `tasks.md` T061 and `quickstart.md` snippet record what that feature
+  planned in 2025, and the plan was already contradicted by its own PR-review commit. No REST, gRPC,
+  proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend change.
 - checkpoint-scratch-test-isolation: `CheckpointParquetIntegrationTest` writes and lists its
   checkpoint scratch in a directory of its own instead of the machine-wide `java.io.tmpdir`
   (issue #168). The test profile declares neither `delta.checkpoint.temp-dir` nor
