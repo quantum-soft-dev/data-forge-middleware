@@ -50,9 +50,11 @@ import java.util.function.Supplier;
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
  *       rather than concluded, so there is nothing to undo once the permission is back</li>
- *   <li>{@code delta.s3-orphan.reclaimed} / {@code delta.s3-orphan.delete-failed} — objects the
- *       orphan sweep found unreferenced and deleted, or could not delete, tagged
- *       {@code prefix=segments|checkpoints} (issue #158)</li>
+ *   <li>{@code delta.s3-orphan.candidates} / {@code delta.s3-orphan.reclaimed} /
+ *       {@code delta.s3-orphan.delete-failed} — objects the orphan sweep found unreferenced, then
+ *       deleted or could not delete, tagged {@code prefix=segments|checkpoints} (issue #158).
+ *       Alert on {@code candidates}: it is the only one of the three that moves while
+ *       {@code delta.s3-orphan.dry-run} is on, which is the shipped default</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -108,6 +110,8 @@ public class DeltaMetrics {
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
     private final Counter batchParquetReclaims;
+    private final Counter segmentOrphanCandidates;
+    private final Counter checkpointOrphanCandidates;
     private final Counter segmentOrphansReclaimed;
     private final Counter checkpointOrphansReclaimed;
     private final Counter segmentOrphanDeletesFailed;
@@ -161,6 +165,8 @@ public class DeltaMetrics {
         this.batchParquetReclaims = Counter.builder("delta.batch-parquet.reclaims")
                 .description("Completed-batch Parquet claims taken over after their lease expired")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.segmentOrphanCandidates = orphanCandidates(registry, ORPHAN_PREFIX_SEGMENTS);
+        this.checkpointOrphanCandidates = orphanCandidates(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.segmentOrphansReclaimed = orphansReclaimed(registry, ORPHAN_PREFIX_SEGMENTS);
         this.checkpointOrphansReclaimed = orphansReclaimed(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.segmentOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_SEGMENTS);
@@ -196,6 +202,13 @@ public class DeltaMetrics {
         return Counter.builder("delta.checkpoint.builds.aborted")
                 .description("Checkpoint builds abandoned whole, leaving the pointer where it was, by reason")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
+    private static Counter orphanCandidates(MeterRegistry registry, String prefix) {
+        return Counter.builder("delta.s3-orphan.candidates")
+                .description("S3 objects found unreferenced by the orphan sweep, by prefix, "
+                        + "whether or not it was allowed to delete them")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag(ORPHAN_PREFIX_TAG, prefix).register(registry);
     }
 
     private static Counter orphansReclaimed(MeterRegistry registry, String prefix) {
@@ -360,6 +373,24 @@ public class DeltaMetrics {
     /** An artifact used up its attempts: its download answers 404 until someone intervenes. */
     public void batchParquetAbandoned() {
         batchParquetAbandoned.increment();
+    }
+
+    /**
+     * Objects the orphan sweep found unreferenced, whatever it was then allowed to do with them
+     * (issue #158).
+     *
+     * <p>The series that works in both modes, and the reason it exists: with
+     * {@code delta.s3-orphan.dry-run} on — the shipped default — {@link #s3OrphansReclaimed} stays
+     * flat at zero for ever, so an alert written on a flat {@code reclaimed} would fire on a
+     * healthy deployment that simply has not been switched to deleting yet. This one is how the
+     * population is sized before that switch, and afterwards
+     * {@code candidates - reclaimed - delete-failed} is zero by construction.</p>
+     *
+     * @param prefix {@link #ORPHAN_PREFIX_SEGMENTS} or {@link #ORPHAN_PREFIX_CHECKPOINTS}
+     * @param count  how many unreferenced objects were found
+     */
+    public void s3OrphanCandidates(String prefix, long count) {
+        orphanCounter(prefix, segmentOrphanCandidates, checkpointOrphanCandidates).increment(count);
     }
 
     /**

@@ -560,6 +560,27 @@ pages/{feature}/            # Route pages
   incidental safety). The ownership claim was also corrected: the `sites` row proves **site-id
   knowledge, not bucket exclusivity** — a database restored from another environment's dump shares
   the ids — so that precondition is stated as one an operator checks by hand.
+  **Round 3** found that the seq guard round 2 added had a hole of its own and closed three
+  robustness gaps. The hole: `last_checkpoint_seq` is **zero** for a site that has never completed a
+  build and for every site after a wipe or a re-baseline, so `seq >= pointer` made the whole
+  `checkpoints/{siteId}/` prefix immune — a site wiped at five million would never have been swept,
+  since its restarted counters take months or for ever to climb back, which is precisely the
+  population the wipe's own truncated prefix walk (#122/#123) leaves behind. Zero is now read as
+  "no checkpoint", the same test `CheckpointService` itself applies before seeding from a frame.
+  Three more: an unparseable `seq` (the shape filter bounds the digits by nothing, so a key above
+  `Long.MAX_VALUE` reaches the parse) now keeps its object, as its own comment already promised
+  instead of throwing; `sweepSite` is wrapped per site, so anything escaping a path the inner
+  catches do not cover costs one site rather than the rest of the pass **and** the second prefix;
+  and the WARN says "see the failure logged above" instead of printing an empty error list on the
+  throw path. Plus a third meter, **`delta.s3-orphan.candidates`** — counted before the dry-run
+  branch, because with dry-run shipping true `reclaimed` stays flat at zero for ever and an alert
+  written on it would page on a deployment that simply has not been switched to deleting yet; once
+  the flag is off, `candidates - reclaimed - delete-failed` is zero by construction. One finding was
+  **deliberately deferred with a ticket**: `S3PrefixLister` materializes a whole prefix, and this
+  sweep's first deleting pass is by construction the largest listing this application ever takes —
+  bounded by one site's history rather than the bucket's, a few megabytes for a site with fifty
+  tables and two years of builds, and the same listing a wipe already takes, so it ships as is and
+  the page-by-page walk is **#199**.
 - delta-sql-inactive-branch-test: The delta-SQL queue's inactive-activation branch has a test
   (issue #175, the gap #159 named and deliberately left open). Since 026 `BitBiPlugin.execute` does
   nothing on `BATCH_COMPLETED` but wake the sweep worker, so the decision that an account without an

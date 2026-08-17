@@ -313,6 +313,57 @@ class DeltaS3OrphanSweeperTest {
 
         verify(objectDeleter, never()).deleteObjects(anyList());
         assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isZero();
+        // The population still has to be visible, or the shipped default is unobservable in
+        // Prometheus and an alert on a flat `reclaimed` pages on a healthy deployment.
+        assertThat(counter("delta.s3-orphan.candidates", "segments")).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("a pointer of zero protects nothing: a wiped site is swept, not made immune")
+    void aZeroPointerIsNotASequence() {
+        String frame = CHECKPOINT_PREFIX + "_frame/seq=5000000/frame.pb.gz";
+        checkpointSite(object(frame, OLD));
+        // What a wipe or a re-baseline leaves: the pointer back at zero while the objects of the
+        // old epoch sit at a sequence the restarted client will not reach for months, or ever.
+        when(syncStateRepository.findBySiteId(SITE))
+                .thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+
+        sweeper().sweep(NOW);
+
+        assertThat(deletedKeys()).containsExactly(frame);
+    }
+
+    @Test
+    @DisplayName("a sequence too large to be a number keeps its object instead of throwing")
+    void keepsAKeyWhoseSequenceCannotBeRead() {
+        String unreadable = CHECKPOINT_PREFIX + "orders/seq=99999999999999999999/snapshot.parquet";
+        String below = CHECKPOINT_PREFIX + "orders/seq=1/snapshot.parquet";
+        checkpointSite(object(unreadable, OLD), object(below, OLD));
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordCheckpoint(7L);
+        when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        sweeper().sweep(NOW);
+
+        assertThat(deletedKeys()).containsExactly(below);
+    }
+
+    @Test
+    @DisplayName("a site that throws outside a guarded read costs that site, not the pass")
+    void survivesASiteThatThrowsOutsideAGuardedRead() {
+        String orphan = CHECKPOINT_PREFIX + "_frame/seq=1/frame.pb.gz";
+        segmentSite(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
+        checkpointSite(object(orphan, OLD));
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordCheckpoint(7L);
+        when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        // Not one of the wrapped reads: the listing itself blows up for the segment scope.
+        when(segmentStorage.listPrefix(SEGMENT_PREFIX))
+                .thenThrow(new IllegalStateException("SDK exception the lister does not catch"));
+
+        sweeper().sweep(NOW);
+
+        assertThat(deletedKeys()).containsExactly(orphan);
     }
 
     @Test

@@ -271,7 +271,15 @@ public class DeltaS3OrphanSweeper {
                 log.warn("Skipping {}: not a site prefix this application writes", sitePrefix);
                 continue;
             }
-            sweepSite(scope, siteId, cutoff);
+            try {
+                sweepSite(scope, siteId, cutoff);
+            } catch (RuntimeException e) {
+                // Per-site isolation is the stated design, and the inner catches only cover the
+                // reads they wrap. Anything else — a malformed key, an SDK exception the lister
+                // does not catch — must cost this site and not the rest of the pass, nor the
+                // second prefix (raised in review).
+                log.warn("Sweep of {} failed; the remaining sites are unaffected", sitePrefix, e);
+            }
         }
     }
 
@@ -322,6 +330,10 @@ public class DeltaS3OrphanSweeper {
     }
 
     private void delete(ReclaimScope scope, String prefix, List<String> orphans) {
+        // Counted before the mode is consulted, so the population is visible in Prometheus on the
+        // shipped default too (raised in review): with dry-run on, `reclaimed` stays flat at zero
+        // for ever, and that is exactly the reading the guide calls surprising.
+        metrics.s3OrphanCandidates(scope.label(), orphans.size());
         if (dryRun) {
             log.info("Dry run (delta.s3-orphan.dry-run): {} unreferenced object(s) under {} would "
                             + "be reclaimed, e.g. {}. Clear the flag to delete them",
@@ -354,8 +366,11 @@ public class DeltaS3OrphanSweeper {
         long leftBehind = chunk.size() - deleted;
         if (leftBehind > 0) {
             metrics.s3OrphanDeletesFailed(scope.label(), leftBehind);
+            // The empty list of the throw path would read as "no reason given" where the reason was
+            // logged one line above, so say which it is (raised in review).
             log.warn("{} unreferenced object(s) under {} could not be deleted ({}); they are still "
-                    + "unreferenced and the next sweep tries again", leftBehind, prefix, errors);
+                            + "unreferenced and the next sweep tries again",
+                    leftBehind, prefix, errors.isEmpty() ? "see the failure logged above" : errors);
         }
         if (deleted > 0) {
             log.info("Reclaimed {} unreferenced object(s) under {}", deleted, prefix);
@@ -492,10 +507,15 @@ public class DeltaS3OrphanSweeper {
             }
             // The one artifact no row names: the next incremental build seeds from the frame at
             // last_checkpoint_seq, so that key is live even though nothing stores it.
-            Long pointer = syncStateRepository.findBySiteId(siteId)
+            // Zero is "no checkpoint yet", not a sequence: CheckpointService seeds from a frame
+            // only when last_checkpoint_seq > 0, and a wipe or a re-baseline resets the pointer to
+            // zero. Treating it as a sequence would make every key of such a site immune for as
+            // long as the client's restarted counters took to climb back — for a site wiped at
+            // five million, never (raised in review).
+            long pointer = syncStateRepository.findBySiteId(siteId)
                     .map(SiteSyncState::getLastCheckpointSeq)
-                    .orElse(null);
-            if (pointer != null) {
+                    .orElse(0L);
+            if (pointer > 0) {
                 referenced.add(S3CheckpointStorage.frameKey(siteId, pointer));
             }
             return key -> referenced.contains(key) || couldStillBeAdopted(key, pointer);
@@ -510,17 +530,27 @@ public class DeltaS3OrphanSweeper {
          * pointer is left alone for that reason; it becomes reclaimable as soon as the pointer
          * passes it, which a live site does nightly.
          *
-         * <p>A site with no sync-state row has no pointer and cannot be built either — the build
-         * reads that row first — so nothing there needs protecting, which is what keeps a
-         * hard-deleted site reclaimable.</p>
+         * <p>A site with no pointer — no sync-state row, or one still at zero after a wipe or a
+         * re-baseline — gets no protection from this rule, and needs none: a build seeds from a
+         * frame only above zero, and the age window still covers whatever a live build is writing.
+         * That is also what keeps a hard-deleted site reclaimable.</p>
          */
-        private boolean couldStillBeAdopted(String key, Long pointer) {
-            if (pointer == null) {
+        private boolean couldStillBeAdopted(String key, long pointer) {
+            if (pointer <= 0) {
                 return false;
             }
             Matcher seq = KEY_SEQUENCE.matcher(key);
-            // Unparseable cannot happen after the shape filter; if it ever does, keep the object.
-            return !seq.find() || Long.parseLong(seq.group(1)) >= pointer;
+            if (!seq.find()) {
+                return true;
+            }
+            try {
+                return Long.parseLong(seq.group(1)) >= pointer;
+            } catch (NumberFormatException e) {
+                // The shape filter bounds the digits by nothing, so a key above Long.MAX_VALUE
+                // reaches here. Keep it: an unreadable sequence is not a licence to delete.
+                log.warn("Keeping {}: its sequence cannot be read as a number", key);
+                return true;
+            }
         }
     }
 

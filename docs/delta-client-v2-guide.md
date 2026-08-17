@@ -1836,7 +1836,7 @@ Every guard fails towards keeping the object:
 | **A row set that cannot be read skips the site** | Reading "the query failed" as "no references" | One interval of delay |
 | **A truncated listing sweeps only what it read** | Nothing invented | One interval of delay |
 | **A prefix whose site has no `sites` row is left alone** unless `reclaim-unknown-sites` is set | Deleting another deployment's live objects out of a shared bucket | A hard-deleted site's objects stay until the bucket is declared exclusive |
-| **A checkpoint key at or above `last_checkpoint_seq` is left alone** | The one race the age window does not cover: `seq`-addressed keys are *rewritable*, so a key that was weeks old at listing time can be uploaded and adopted before the delete lands | A frame a build never adopted waits until the pointer passes it, which a live site does nightly |
+| **A checkpoint key at or above `last_checkpoint_seq` is left alone** (a pointer of **zero** is "no checkpoint", not a sequence, so it protects nothing — otherwise a wiped site would be immune for as long as its restarted counters took to climb back) | The one race the age window does not cover: `seq`-addressed keys are *rewritable*, so a key that was weeks old at listing time can be uploaded and adopted before the delete lands | A frame a build never adopted waits until the pointer passes it, which a live site does nightly |
 | **Dry run** (`delta.s3-orphan.dry-run`, default **true**) | Deleting anything at all before an operator has seen what one pass would take | Nothing is reclaimed until the flag is cleared |
 
 **The age window is the key to get right.** Lower it below the longest possible checkpoint build and
@@ -1864,6 +1864,14 @@ snapshot for good rather than merely making it unreachable. The same is true of 
 application ever re-attaches an old key, a repair writes a new object — but it is worth knowing
 before the first sweep on a fleet that has been detaching keys for months.
 
+**One site's listing is held in memory at a time**, and the first pass after this ships is the
+largest it will ever be — the premise of the ticket is that these prefixes have been accumulating
+for months. The peak is one site's object count (a key plus an instant each), not the bucket's: a
+site with fifty tables and two years of nightly builds is in the tens of thousands of entries, a few
+megabytes, and it is the same listing a site history wipe already materializes for one site. Reading
+the population before it is deleted is what `dry-run` and `delta.s3-orphan.candidates` are for.
+Streaming the walk page by page instead of materializing it is **#199**.
+
 **The sweep is not serialized across replicas, on purpose.** Both obvious locks are the wrong shape
 here: a transaction-scoped `pg_advisory_xact_lock` would hold a connection for the whole walk, and a
 session-level lock the same, which is exactly the hold #164 removed from the queue workers. Deletes
@@ -1873,10 +1881,14 @@ loser's `DeleteObjects` succeeds on an already-deleted key. **Read the counters 
 passes rarely overlap (each replica's first tick is 10 minutes after its own start), and where they
 do the second finds the objects already gone.
 
-Read the two meters accordingly: under `prefix=segments` a steady
-`delta.s3-orphan.reclaimed` rate means ingestion commits are failing after their upload, and is
-worth chasing; under `prefix=checkpoints` it is the ordinary superseded generation of every
-advancing build, so a **zero** rate on a busy fleet is the surprising reading.
+Read the three meters accordingly. **`delta.s3-orphan.candidates` is the one to alert on**: it
+counts what the sweep found unreferenced whether or not it was allowed to delete it, so it is the
+only one that moves while `dry-run` is on — which is the shipped default, and an alert written on a
+flat `reclaimed` would page on a deployment that is simply not deleting yet. Under `prefix=segments`
+a steady rate means ingestion commits are failing after their upload, and is worth chasing; under
+`prefix=checkpoints` it is the ordinary superseded generation of every advancing build, so a
+**zero** rate on a busy fleet is the surprising reading. Once `dry-run` is off,
+`candidates - reclaimed - delete-failed` is zero by construction.
 `delta.s3-orphan.delete-failed` counts unreferenced objects the bucket refused, as
 `candidates - deleted` rather than as the number of error entries the SDK returned (one entry covers
 a whole failed 1000-key chunk, which would report a bucket-wide denial as a trickle). Nothing is
@@ -2009,6 +2021,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.checkpoint.builds.deferred`, `delta.checkpoint.fold.wait`,
 `delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.parquet.scratch.bytes`, `delta.parquet.scratch.refused{writer=...}`,
+`delta.s3-orphan.candidates{prefix=segments|checkpoints}`,
 `delta.s3-orphan.reclaimed{prefix=segments|checkpoints}`,
 `delta.s3-orphan.delete-failed{prefix=segments|checkpoints}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
@@ -2060,6 +2073,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.checkpoint.builds.deferred` | `delta_checkpoint_builds_deferred_total` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
 | `delta.s3.read-denied` | `delta_s3_read_denied_total` |
+| `delta.s3-orphan.candidates{prefix=segments\|checkpoints}` | `delta_s3_orphan_candidates_total{prefix=...}` |
 | `delta.s3-orphan.reclaimed{prefix=segments\|checkpoints}` | `delta_s3_orphan_reclaimed_total{prefix=...}` |
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
