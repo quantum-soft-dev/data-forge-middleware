@@ -1,6 +1,7 @@
 package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
@@ -14,6 +15,8 @@ import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.google.protobuf.ByteString;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,12 +43,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * T8 (026-bitbi-delta-sql) — end-to-end: changelog segments of a V2 site are rendered into plugin
  * SQL by the queue, served in seq order via {@code /sql-changes}; reinit recaptures baselines and
- * regenerates; a FULL_SNAPSHOT suspends SQL until reinit.
+ * regenerates; a FULL_SNAPSHOT suspends SQL until reinit; a site whose account has no active
+ * bit-bi activation gets no SQL and still leaves the queue (issue #175).
  */
 @DisplayName("Bit BI delta SQL generation (026, T8)")
 class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
 
     private static final String API_KEY_HEADER = "X-Plugin-Api-Key";
+    /** Published contract — the operator-visible signal that a segment was skipped, not lost. */
+    private static final String SKIPPED_INACTIVE_COUNTER = "sql.generation.delta.segments.skipped.inactive";
+    /** Well above what any method here seeds; see {@link #drainQueue()}. */
+    private static final int MAX_DRAIN_ITERATIONS = 100;
     private static final String VALID_API_KEY = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     /** store-01 — seeded site under ACCOUNT_ID; flipped to V2 in setup. */
@@ -74,6 +82,9 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     private AccountPlugin activation;
 
@@ -128,10 +139,25 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         return batchId;
     }
 
+    /**
+     * Drain deterministically — the same loop the sweep worker runs, but bounded.
+     *
+     * <p>The bound is what a segment the queue claims and never marks processed looks like from
+     * here: {@code findNextPendingPluginSql} hands the same row back on the next iteration and the
+     * loop never ends. A hung suite says nothing about which property broke, so the drain fails
+     * with the segment named instead (issue #175, whose branch exists precisely so that a segment
+     * with nothing to generate still leaves the queue).</p>
+     */
     private void drainQueue() {
-        while (queueService.processNextPending()) {
-            // drain deterministically (same loop the sweep worker runs)
+        for (int processed = 0; processed < MAX_DRAIN_ITERATIONS; processed++) {
+            if (!queueService.processNextPending()) {
+                return;
+            }
         }
+        throw new IllegalStateException("The delta-SQL queue did not drain in " + MAX_DRAIN_ITERATIONS
+                + " iterations — a claimed segment is not being marked processed. Still pending: "
+                + jdbc.queryForList("SELECT id FROM changelog_segments "
+                        + "WHERE site_id = ? AND plugin_sql_at IS NULL", UUID.class, SITE_ID));
     }
 
     /**
@@ -239,6 +265,74 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
                 "SELECT count(*) FROM changelog_segments WHERE site_id = ? AND plugin_sql_at IS NULL",
                 Integer.class, SITE_ID);
         assertThat(pending).isZero();
+    }
+
+    @Test
+    @DisplayName("a deactivated bit-bi activation: no SQL, the segment still leaves the queue, the skip is counted")
+    void inactiveActivationSkipsGenerationAndMarksSegmentProcessed() {
+        activation.deactivate();
+        accountPluginRepository.save(activation);
+
+        assertSegmentIsSkippedButProcessed();
+    }
+
+    @Test
+    @DisplayName("no bit-bi activation at all: same outcome as a deactivated one")
+    void absentActivationSkipsGenerationAndMarksSegmentProcessed() {
+        // The queue reaches this through the empty Optional rather than through the isActive
+        // filter, so it is the second entry into the same branch and not a repeat of the first.
+        accountPluginRepository.delete(activation);
+
+        assertSegmentIsSkippedButProcessed();
+    }
+
+    /**
+     * The three properties of {@code DeltaSqlQueueService}'s inactive-activation branch, asserted
+     * on a segment this method seeded.
+     *
+     * <p>Marking the segment processed is the property that makes the branch more than a
+     * {@code return}: a segment left pending is claimed again on every sweep, for ever, since
+     * nothing about the account's activation is going to change on its own.</p>
+     *
+     * <p>The counter is read as a delta around the drain rather than as an absolute: the registry
+     * belongs to the shared Spring context, so a sibling class draining a segment of some other
+     * account without an activation contributes to the same series.</p>
+     */
+    private void assertSegmentIsSkippedButProcessed() {
+        double skippedBefore = skippedInactiveCount();
+        ChangelogSegment segment = changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
+
+        drainQueue();
+
+        awaitSegmentProcessed(segment.getId());
+        assertNoGenerationsAppear();
+        assertThat(skippedInactiveCount()).isGreaterThanOrEqualTo(skippedBefore + 1);
+    }
+
+    /**
+     * Wait until the segment has left the queue ({@code plugin_sql_at} set).
+     *
+     * <p>Waited for rather than sampled for the reason {@link #awaitGenerations(int)} gives: the
+     * manual {@link #drainQueue()} is not the only claimant of a pending segment.</p>
+     *
+     * @param segmentId the segment this method seeded
+     */
+    private void awaitSegmentProcessed(UUID segmentId) {
+        Awaitility.await("segment " + segmentId + " marked processed")
+                .atMost(Duration.ofSeconds(15))
+                .pollInterval(Duration.ofMillis(200))
+                .until(() -> Boolean.TRUE.equals(jdbc.queryForObject(
+                        "SELECT plugin_sql_at IS NOT NULL FROM changelog_segments WHERE id = ?",
+                        Boolean.class, segmentId)));
+    }
+
+    /**
+     * @return the current value of {@link #SKIPPED_INACTIVE_COUNTER}, 0 before its first increment
+     */
+    private double skippedInactiveCount() {
+        Counter counter = meterRegistry.find(SKIPPED_INACTIVE_COUNTER).counter();
+        return counter == null ? 0d : counter.count();
     }
 
     /**

@@ -453,6 +453,32 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- delta-sql-inactive-branch-test: The delta-SQL queue's inactive-activation branch has a test
+  (issue #175, the gap #159 named and deliberately left open). Since 026 `BitBiPlugin.execute` does
+  nothing on `BATCH_COMPLETED` but wake the sweep worker, so the decision that an account without an
+  **active** bit-bi activation gets no SQL lives in `DeltaSqlQueueService.processNextPending()` —
+  and no test reached it: `BitBiDeltaSqlIntegrationTest` only ever drained with an active
+  activation, while `SqlGenerationIntegrationTest`'s dispatcher test can only reach
+  `PluginEventDispatcher`'s early return (pinned there through `last_used_at`). Two methods, one per
+  **way into** the branch — a deactivated activation (the `isActive` filter) and no activation row
+  at all (the empty `Optional`) — share one helper asserting all three observables of a segment the
+  method seeded: no `plugin_sql_generations` row for that batch, `plugin_sql_at` **set**, and
+  `sql.generation.delta.segments.skipped.inactive` incremented. The second is the property the
+  ticket is really about — the branch is not a plain `return` precisely so those segments do not
+  accumulate for ever — and the counter is what tells an operator a segment was *skipped* rather
+  than lost; it is read as a **delta** around the drain, since the registry belongs to the shared
+  Spring context and a sibling class draining some other account's segment lands on the same series.
+  #159's discipline is kept: scoped to the batches the method seeded, waited for rather than
+  sampled. `drainQueue()` is now **bounded**, which is a real consequence of the same property: a
+  claimed-but-unmarked segment is handed straight back by `findNextPendingPluginSql`, so the loop
+  never ends — the exact failure mode being pinned used to **hang** the suite instead of failing it,
+  and the drain now throws after 100 iterations naming what is still pending. **The tests were
+  proven red by mutation**, since the branch already exists and no test can start red against it:
+  dropping `.filter(AccountPlugin::isActive)` fails the deactivated case (a generation appears),
+  returning early instead of marking fails both (the bounded drain fires), and dropping the counter
+  increment fails both. The metric name is a published contract and is unchanged. Test-only — no
+  production code, REST, gRPC, DTO, migration, configuration-key, metric-name, S3-key or frontend
+  change.
 - drop-comparison-executor: `AsyncConfiguration#comparisonExecutor` is gone — a `@Bean` declaring
   core 2 / max 5 / queue 10 and calling `initialize()`, with no `@Async("comparisonExecutor")` site,
   no `@Qualifier` and no injection anywhere in `src/main` or `src/test` (issue #165, found by #161's
