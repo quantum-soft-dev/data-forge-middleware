@@ -203,8 +203,11 @@ class SqlGenerationStreamingTest {
         @Test
         @DisplayName("should abort SQL generation when memory pressure is high")
         void shouldAbortWhenMemoryPressureHigh() {
-            // Given - threshold set to 0% so memory is always "high"
-            SqlGenerationService service = createService(0);
+            // Given - a threshold of 0 with any usage above it. The reading is stubbed rather
+            // than observed: getHeapUsagePercent() answers 0 when the JVM reports no heap
+            // maximum, and 0 does not exceed 0.
+            SqlGenerationService service = spy(createService(0));
+            doReturn(1).when(service).getHeapUsagePercent();
 
             UUID batchId = UUID.randomUUID();
             UUID siteId = UUID.randomUUID();

@@ -458,12 +458,14 @@ pages/{feature}/            # Route pages
   `SqlGenerationService.isMemoryPressureHigh()` compared `>=` against a reading that
   `getHeapUsagePercent()` **ceiling**-rounds, so any usage strictly above 99% reported 100 and
   tripped a threshold of 100 — `generateSqlContent` returned null, `generateSqlForBatch` an
-  `Optional.empty()` that reads as "no changes detected", and nothing retried. Both places that set
-  100 said in a comment that they were switching the check off: `application-test.yml` (so **every**
+  `Optional.empty()` that reads as "no changes detected", and nothing retried. **Three** places set
+  100 with a comment saying they were switching the check off: `application-test.yml` (so **every**
   Spring integration test that generates SQL carried the latent abort, surfacing as a
   `SqlGenerationServiceTest` assertion or an `awaitGenerationFor` timeout in whichever class was
-  running when the heap of the single `./gradlew test` JVM got close enough to `max`) and
-  `SqlGenerationServiceTest`. The comparison is now **strict**, which is the ticket's first option
+  running when the heap of the single `./gradlew test` JVM got close enough to `max`),
+  `SqlGenerationServiceTest`, and `SqlGenerationConcurrencyTest` — the third named by review, and
+  the one that matters most as evidence, since it is a class already tracked as intermittently red
+  on a clean tree. The comparison is now **strict**, which is the ticket's first option
   and the only one of its three that fixes both halves at once: heap usage can never exceed 100%, so
   100 is a true off switch, **and** for an integer threshold `T` the identity `ceil(x) > T ⟺ x > T`
   removes the rounding artifact the ticket's third option was aimed at — the predicate is exactly
