@@ -77,6 +77,14 @@ public class CheckpointScheduler {
                     // looking at the sites rather than at the bucket policy. Retention is skipped
                     // with it — the pointer did not move, so there is nothing new to prune.
                     log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
+                } catch (CheckpointFoldBudget.BuildDeferredException e) {
+                    // Another build held the process's fold budget for longer than the wait allows
+                    // (issue #178) — a forced rebuild beside this sweep, in practice. The site was
+                    // not visited, so retention is skipped with it (the pointer did not move), and
+                    // the tick carries on: a budget still held by the next site's turn defers that
+                    // one too, which is the loud, bounded version of a sweep silently stalled
+                    // behind one build.
+                    log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
                 } catch (RuntimeException e) {
                     log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
                 }

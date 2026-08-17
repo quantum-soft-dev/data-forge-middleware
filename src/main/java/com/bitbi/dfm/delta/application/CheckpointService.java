@@ -64,6 +64,8 @@ public class CheckpointService {
     private final CheckpointEpochGuard epochGuard;
     private final CheckpointRetryProperties retryProperties;
     private final ApplicationShutdownSignal shutdownSignal;
+    /** One fold at a time in this JVM, so {@link #maxFoldBytes} bounds the process (issue #178). */
+    private final CheckpointFoldBudget foldBudget;
     private final Path tempDirectory;
     /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
     private final long maxTempBytes;
@@ -87,6 +89,7 @@ public class CheckpointService {
                              CheckpointEpochGuard epochGuard,
                              CheckpointRetryProperties retryProperties,
                              ApplicationShutdownSignal shutdownSignal,
+                             CheckpointFoldBudget foldBudget,
                              // fully qualified: the delta wire Value is imported above
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
@@ -118,6 +121,7 @@ public class CheckpointService {
         this.epochGuard = epochGuard;
         this.retryProperties = retryProperties;
         this.shutdownSignal = shutdownSignal;
+        this.foldBudget = foldBudget;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.maxFrameTempBytes = maxFrameTempBytes;
@@ -276,6 +280,18 @@ public class CheckpointService {
                     siteId, e.estimatedBytes(), e.budgetBytes());
             metrics.checkpointBuildAborted("fold_too_large");
             throw e;
+        } catch (CheckpointFoldBudget.BuildDeferredException e) {
+            // The concurrency half of the same ceiling (issue #178), and the opposite verdict to the
+            // one above. Nothing was folded, so nothing about this site was learned: another build
+            // held the process's fold budget for longer than the wait allows. Counted on
+            // delta.checkpoint.builds.deferred rather than on delta.checkpoint.builds.aborted,
+            // whose values are the refusals that never repair themselves — this one is repaired by
+            // the neighbouring build finishing. Re-thrown so the two callers can settle it: the
+            // scheduler moves to the next site, and the forced rebuild releases its flag rather
+            // than reporting a rebuild that never ran.
+            log.warn("{}", e.getMessage());
+            metrics.checkpointBuildDeferred();
+            throw e;
         } catch (BuildEndedByShutdownException e) {
             // Not a failure of this build either, and above all not a fact about any table it was
             // writing (issue #162): the process is going away, so nothing it could still learn is
@@ -399,12 +415,38 @@ public class CheckpointService {
         }
     }
 
+    /**
+     * Run the build with the process's fold budget held (issue #178).
+     *
+     * <p>The budget is taken <b>outside</b> {@code phase=total}, so a build that spent its wait and
+     * was deferred contributes no duration sample at all: it did no work, and a ten-minute wait
+     * recorded as a build would be the one sample an operator reads the timer's maximum from. A
+     * build that waited and then ran does include the wait, which is honest — that cycle really did
+     * take that long.</p>
+     *
+     * <p>It is taken around the whole build rather than around the fold loop, because the folded
+     * state is what {@code writeSnapshots} iterates: the heap is held until the last table has been
+     * uploaded. The cost is that an <em>idle</em> visit — one query answering "nothing to
+     * rematerialize" — holds the budget for the length of that query, and can in principle be
+     * deferred by a build that outlasts the wait. The alternative was to move that probe outside
+     * {@code phase=total}, which issue #149 deliberately put inside it.</p>
+     */
     private Map<String, Map<String, FoldedRow>> build(UUID siteId,
                                                       SnapshotPass idlePass,
                                                       List<ChangelogSegment> segments,
                                                       long checkpointSeq,
                                                       SiteEpoch epoch,
                                                       boolean haveFrame) {
+        return foldBudget.runExclusively(siteId,
+                () -> buildWithBudgetHeld(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame));
+    }
+
+    private Map<String, Map<String, FoldedRow>> buildWithBudgetHeld(UUID siteId,
+                                                                    SnapshotPass idlePass,
+                                                                    List<ChangelogSegment> segments,
+                                                                    long checkpointSeq,
+                                                                    SiteEpoch epoch,
+                                                                    boolean haveFrame) {
         // Empty incremental work still belongs in phase=total: the probe below runs inside it.
         return metrics.timeCheckpoint(() -> {
             long foldFrom = haveFrame ? checkpointSeq : 0L;
@@ -594,13 +636,14 @@ public class CheckpointService {
      * compared against a budget expressed in the same units, so the two are wrong together or not
      * at all.</p>
      *
-     * <p><b>The ceiling is per build, not per process</b>, and that gap is the same one the scratch
-     * ceilings have on disk (issue #150): two folds at 45% of the budget each cross nothing and
-     * still exhaust the heap between them. It takes a forced rebuild running beside the nightly
-     * sweep — the only way two builds exist in one JVM, and the {@code 2 x} the scratch budget
-     * reserves for. Closing it needs a reservation shared across concurrent folds rather than a
-     * per-fold limit, which is the heap twin of #150 and is filed as issue #178; what is
-     * bounded here is the single-build case, which is the nightly one.</p>
+     * <p><b>The ceiling is per build and the process holds one build at a time</b>, so it bounds the
+     * process (issue #178). It did not before: two folds at 45% of the budget each crossed nothing
+     * and still exhausted the heap between them, which takes a forced rebuild running beside the
+     * nightly sweep — the {@code 2 x} the scratch budget still reserves for on disk. What closes it
+     * is {@link CheckpointFoldBudget}, an exclusion held for the whole build rather than a running
+     * total shared between folds; a build that cannot have it within
+     * {@code delta.checkpoint.fold-wait-seconds} is <em>deferred</em>, never refused, so no
+     * concurrency-caused outcome reaches the abort counter.</p>
      */
     private static final class BudgetedFold {
 

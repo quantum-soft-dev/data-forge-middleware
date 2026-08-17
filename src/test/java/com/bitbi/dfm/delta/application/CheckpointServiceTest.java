@@ -91,6 +91,12 @@ class CheckpointServiceTest {
         }
     };
 
+    /**
+     * The real budget (issue #178), with no wait: a test that holds it wants the deferral now, and
+     * every other test is the only build in the process and never contends for it.
+     */
+    private final CheckpointFoldBudget foldBudget = new CheckpointFoldBudget(0L);
+
     private CheckpointService service;
 
     /** Flipped by a test to model {@code ContextClosedEvent} arriving mid-build. */
@@ -143,7 +149,7 @@ class CheckpointServiceTest {
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
+                new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, foldBudget,
                 scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes);
     }
 
@@ -469,6 +475,88 @@ class CheckpointServiceTest {
 
         verify(syncStateService).recordCheckpoint(SITE, 2L);
         verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    @Test
+    void defersABuildWhoseFoldWouldRunBesideAnother() throws Exception {
+        // Issue #178: the ceiling above bounds one fold, and until now nothing bounded two of them
+        // in one JVM — the nightly sweep and a forced rebuild, at 45% of the budget each, crossed
+        // nothing and still exhausted the heap. The second build now waits, and when the wait is
+        // spent it is DEFERRED: nothing folded, nothing written, nothing concluded about the site.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        java.util.concurrent.CountDownLatch heldBySomeoneElse = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch letGo = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(() -> foldBudget.runExclusively(UUID.randomUUID(), () -> {
+            heldBySomeoneElse.countDown();
+            awaitLatch(letGo);
+            return null;
+        }));
+        holder.start();
+        assertTrue(heldBySomeoneElse.await(5, java.util.concurrent.TimeUnit.SECONDS));
+
+        try {
+            assertThrows(CheckpointFoldBudget.BuildDeferredException.class,
+                    () -> service.buildCheckpoint(SITE));
+        } finally {
+            letGo.countDown();
+            holder.join(5_000L);
+        }
+
+        // Its own meter, never the abort counter: #153's contract for that one is refusals that do
+        // not repair themselves, and this one is repaired by the neighbouring build finishing.
+        verify(metrics).checkpointBuildDeferred();
+        verify(metrics, never()).checkpointBuildAborted(any());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointRepository, never()).save(any());
+    }
+
+    @Test
+    void holdsTheFoldBudgetForTheWholeBuildNotJustTheFoldLoop() throws Exception {
+        // The folded state is what writeSnapshots iterates, so the heap is retained until the last
+        // table has been uploaded. Releasing at the end of the fold loop would let a second build
+        // start against a heap the first one is still holding — the very overlap this closes.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        java.util.List<Boolean> budgetFreeDuringUpload = new ArrayList<>();
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    budgetFreeDuringUpload.add(budgetIsFree());
+                    return "checkpoints/parquet-key";
+                });
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(List.of(false), budgetFreeDuringUpload,
+                "the fold budget must still be held while the snapshots are uploaded");
+    }
+
+    /** Can another build take the fold budget right now? Asked from a thread that does not hold it. */
+    private boolean budgetIsFree() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean free = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread probe = new Thread(() -> {
+            try {
+                foldBudget.runExclusively(UUID.randomUUID(), () -> {
+                    free.set(true);
+                    return null;
+                });
+            } catch (CheckpointFoldBudget.BuildDeferredException expected) {
+                free.set(false);
+            }
+        });
+        probe.start();
+        probe.join(5_000L);
+        return free.get();
+    }
+
+    private static void awaitLatch(java.util.concurrent.CountDownLatch latch) {
+        try {
+            if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("latch never opened");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

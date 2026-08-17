@@ -88,6 +88,26 @@ class CheckpointSchedulerTest {
     }
 
     @Test
+    void aDeferredSiteDoesNotStopTheSweepAndIsNotPruned() {
+        // Issue #178: a forced rebuild held the process's fold budget for longer than the wait
+        // allows. Nothing was folded for this site, so the pointer did not move and there is
+        // nothing new to prune — but the tick must carry on, the way it does for a read denial.
+        UUID deferred = UUID.randomUUID();
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(deferred, ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(deferred))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(deferred, 600_000L, false));
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(ok);
+        verify(retentionService).prune(ok);
+        verify(retentionService, never()).prune(deferred);
+    }
+
+    @Test
     void visitsASiteWhoseSegmentsArePrunedButHasAnUnmaterializedCheckpoint() {
         // Issue #137: audit-window-segments=0 (or a table detached long enough to age out of the
         // window) leaves the site with no segment row at all, yet buildCheckpoint can still

@@ -106,6 +106,23 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
+    void clearsTheFlagWhenTheRebuildWasDeferredBehindTheFoldBudget() {
+        // Issue #178. The nightly sweep held the process's fold budget for longer than
+        // delta.checkpoint.fold-wait-seconds, so this rebuild never folded anything. Settled like
+        // the read denial above and not like the shutdown: nothing re-drives a held flag here —
+        // the tick calls buildCheckpoint, never rebuildFromFrame — and requestRebuild
+        // short-circuits while it is set, so keeping it would leave the operator unable to ask
+        // again once the sweep finished.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(SITE, 600_000L, false));
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(syncStateService).clearRebuildRequested(SITE);
+    }
+
+    @Test
     void duplicateRequestShortCircuitsWithoutASecondBuild() {
         // Flag already set: a second click must not queue a second full rebuild whose
         // sibling's finally-clear would flip the UI to "idle" mid-run.

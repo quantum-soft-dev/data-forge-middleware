@@ -10,6 +10,12 @@ delta:
     sweep-ms: 3600000
   batch-parquet:
     sweep-ms: 3600000
+  checkpoint:
+    # 600 s in production (issue #178). Two checkpoint builds never overlap in a suite that
+    # drives them one call at a time, so this only decides how a bug shows up: at the shipped
+    # value a test that did contend would hang the run for ten minutes before failing, where
+    # this fails it as a deferral while there is still something to read.
+    fold-wait-seconds: 30
   parquet:
     # Production is already 1 h; declare it here so a later cut of the production
     # default cannot silently restore a fast tick under test (issue #167).

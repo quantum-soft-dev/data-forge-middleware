@@ -19,7 +19,9 @@ import java.util.concurrent.RejectedExecutionException;
  * <p>Admin-triggered alternative to the nightly {@link CheckpointScheduler}: sets the persistent
  * {@code rebuild_requested} flag (surfaced in the UI as "Rebuild queued"), runs
  * {@link CheckpointService#rebuildFromFrame} on a dedicated single-thread executor so
- * forced rebuilds serialize, and always clears the flag when the attempt finishes. An idle
+ * forced rebuilds serialize — with each other by that executor, and with the nightly sweep by
+ * {@link CheckpointFoldBudget}, since one JVM's heap cannot hold two folds (issue #178) — and
+ * always clears the flag when the attempt finishes. An idle
  * site is rematerialized from the existing frame even when there are no new segments
  * (issue #128). The checkpoint pointer is monotonic
  * ({@link DeltaSyncStateService#recordCheckpoint}), so a collision with a concurrent scheduled
@@ -120,6 +122,13 @@ public class DeltaCheckpointRebuildService {
      * {@link #requestRebuild} short-circuits while the flag is set, so the operator could not even
      * ask again once the permission returned — on the very action the {@code history_gone} message
      * names as the recovery.</p>
+     *
+     * <p>A rebuild deferred behind the process's fold budget (issue #178) is settled the same way,
+     * and for the same reason: the nightly sweep held the budget for longer than
+     * {@code delta.checkpoint.fold-wait-seconds}, nothing ran, and nothing will re-drive a held
+     * flag. It is not a failure of the site — {@code CheckpointService} keeps it off
+     * {@code delta.checkpoint.builds.aborted} — so the line says what to do rather than what
+     * broke.</p>
      */
     private void runRebuild(UUID siteId) {
         boolean keepFlagForARetry = false;
@@ -143,6 +152,16 @@ public class DeltaCheckpointRebuildService {
             log.error("Forced checkpoint rebuild for site {} did not run: {}. Nothing was recorded "
                     + "and the flag is released — request the rebuild again once S3 reads are "
                     + "allowed (see delta.s3.read-denied)", siteId, e.getMessage());
+        } catch (CheckpointFoldBudget.BuildDeferredException e) {
+            // Settled exactly like the read denial above (issue #178): not completed, because
+            // nothing ran, and not held, because nothing re-drives it. The nightly sweep held the
+            // process's fold budget for longer than the wait allows, and holding the flag would
+            // leave the operator unable to ask again once the sweep finished — requestRebuild
+            // short-circuits while it is set.
+            log.error("Forced checkpoint rebuild for site {} did not run: {}. The flag is released "
+                    + "— request the rebuild again once the nightly build has finished, or raise "
+                    + "delta.checkpoint.fold-wait-seconds if the two collide regularly", siteId,
+                    e.getMessage());
         } catch (Exception e) {
             keepFlagForARetry = shutdownSignal.isShuttingDown();
             if (!keepFlagForARetry) {
