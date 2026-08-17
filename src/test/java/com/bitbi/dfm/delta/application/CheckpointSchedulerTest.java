@@ -110,16 +110,15 @@ class CheckpointSchedulerTest {
     }
 
     @Test
-    void paysTheFoldBudgetWaitOncePerTickRatherThanOncePerSite() {
+    void paysTheFoldBudgetWaitOncePerPassRatherThanOncePerSite() {
         // Raised in review of #178. Waiting per site multiplies: a holder that never finishes turns
         // a 200-site tick into 200 x delta.checkpoint.fold-wait-seconds, and while it runs the
         // scheduler's own tryLock skips the following nights — retention would freeze for every
-        // site instead of for the contended one. After one spent wait the tick keeps visiting but
+        // site instead of for the contended one. After one spent wait the pass keeps visiting but
         // takes the budget only when it is free.
         UUID deferred = UUID.randomUUID();
         UUID second = UUID.randomUUID();
-        UUID third = UUID.randomUUID();
-        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(deferred, second, third));
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(deferred, second));
         when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
                 .thenReturn(List.of());
         when(checkpointService.buildCheckpoint(eq(deferred), anyBoolean()))
@@ -127,9 +126,68 @@ class CheckpointSchedulerTest {
 
         scheduler.buildCheckpoints();
 
-        verify(checkpointService).buildCheckpoint(deferred, true);
+        // Twice for the deferred site: once in the pass, once in the single retry pass below.
+        verify(checkpointService, times(2)).buildCheckpoint(deferred, true);
         verify(checkpointService).buildCheckpoint(second, false);
-        verify(checkpointService).buildCheckpoint(third, false);
+    }
+
+    @Test
+    void resumesWaitingOnceASiteGetsTheFoldBudgetAgain() {
+        // Review round 2: latching "do not wait" for the rest of the tick would hand one long
+        // rebuild the whole night. A site that does get the budget proves the collision is over, so
+        // the sites after it are visited on the ordinary terms.
+        UUID deferred = UUID.randomUUID();
+        UUID recovered = UUID.randomUUID();
+        UUID afterwards = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds())
+                .thenReturn(List.of(deferred, recovered, afterwards));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(deferred), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(deferred, 600_000L, false, true));
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(recovered, false);
+        verify(checkpointService).buildCheckpoint(afterwards, true);
+    }
+
+    @Test
+    void retriesADeferredSiteOnceAfterTheRestOfTheTick() {
+        // The other half of the same review finding: not waiting again must not mean losing the
+        // site for the night. A collision that ends while the tick runs still gets that site its
+        // build, and the retry pass is bounded at one so a holder that is still there costs one
+        // more wait rather than another whole tick.
+        UUID deferred = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(deferred, other));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(deferred), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(deferred, 600_000L, false, true))
+                .thenReturn(java.util.Map.of());
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService, times(2)).buildCheckpoint(eq(deferred), anyBoolean());
+        verify(retentionService).prune(deferred);
+    }
+
+    @Test
+    void doesNotRetryASiteThatWasDeferredTwice() {
+        // One retry, not a loop: a holder that outlasts the whole tick must cost one more wait, not
+        // an unbounded chain of passes.
+        UUID deferred = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(deferred));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(deferred), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(deferred, 600_000L, false, true));
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService, times(2)).buildCheckpoint(eq(deferred), anyBoolean());
+        verify(retentionService, never()).prune(deferred);
     }
 
     @Test

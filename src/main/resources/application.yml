@@ -397,9 +397,11 @@ delta:
     # The wait is bounded rather than indefinite because a build that has stalled would otherwise
     # freeze the whole nightly sweep silently and until the pod is replaced. The semaphore is fair
     # and is taken per site, so a rebuild queues behind ONE site's build, not behind the sweep:
-    # 600 s is generous for that. The nightly sweep pays this wait ONCE per tick, not once per
-    # site — after one spent wait it keeps visiting sites but takes the budget only when it is free
-    # — and the wait ends early when the application starts shutting down.
+    # 600 s is generous for that. The nightly sweep pays this wait ONCE per pass, not once per
+    # site — after one spent wait it keeps visiting sites but takes the budget only when it is free,
+    # and sites deferred along the way get one retry pass at the end of the tick, so a tick spends
+    # at most two waits. The wait also ends early when the application starts shutting down (that
+    # ending is NOT counted as a deferral), and is clamped at a day however large this is set.
     # Size it from delta.checkpoint.fold.wait (a timer over every build that reached the fold),
     # not from delta.checkpoint.duration: the budget is taken outside phase=total, so a build that
     # waited nine minutes and then ran is invisible there and never touches builds.deferred either.

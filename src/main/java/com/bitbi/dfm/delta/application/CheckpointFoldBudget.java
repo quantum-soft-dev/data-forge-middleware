@@ -69,6 +69,9 @@ public class CheckpointFoldBudget {
     /** How long one {@code tryAcquire} may park before the shutdown flag is re-read. */
     private static final long WAIT_SLICE_MILLIS = 500L;
 
+    /** Ceiling on the configured wait, so the nanosecond deadline below cannot overflow. */
+    private static final long MAX_WAIT_MILLIS = TimeUnit.DAYS.toMillis(1);
+
     private final Semaphore budget = new Semaphore(1, true);
     private final ApplicationShutdownSignal shutdownSignal;
     private final DeltaMetrics metrics;
@@ -79,10 +82,14 @@ public class CheckpointFoldBudget {
                                 @Value("${delta.checkpoint.fold-wait-seconds:600}") long waitSeconds) {
         this.shutdownSignal = shutdownSignal;
         this.metrics = metrics;
-        // toMillis saturates rather than wrapping, so an absurd value stays an absurd wait instead
-        // of overflowing into a negative one — which tryAcquire would read as "do not wait at all",
-        // the opposite of what was asked for.
-        this.waitMillis = TimeUnit.SECONDS.toMillis(Math.max(0L, waitSeconds));
+        // Clamped, not merely saturated. toMillis saturates rather than wrapping, but the deadline
+        // below is nanoseconds — System.nanoTime() + toNanos(Long.MAX_VALUE) overflows to a large
+        // negative, the loop guard is false at once, and an operator who typed a very large number
+        // to mean "wait indefinitely" would get one 500 ms slice: exactly the "absurd value becomes
+        // no wait at all" this guard exists to prevent, moved one line down (raised in review).
+        // A day is past every sensible wait and leaves the nanosecond arithmetic far from its edge.
+        this.waitMillis = Math.min(TimeUnit.SECONDS.toMillis(Math.max(0L, waitSeconds)),
+                MAX_WAIT_MILLIS);
     }
 
     /**
@@ -194,11 +201,30 @@ public class CheckpointFoldBudget {
      */
     public static final class BuildDeferredException extends RuntimeException {
 
+        private final boolean endedEarly;
+
         BuildDeferredException(UUID siteId, long waitMillis, boolean endedEarly, boolean mayWait) {
             super("The checkpoint build for site " + siteId + " was deferred: another build held the "
                     + "process's fold budget" + why(waitMillis, endedEarly, mayWait)
                     + ". Nothing was folded and nothing was recorded — the pointer, the per-table "
                     + "keys and the frame stay where they were, and the next tick tries again");
+            this.endedEarly = endedEarly;
+        }
+
+        /**
+         * Was the wait cut short rather than spent?
+         *
+         * <p>{@code true} when the application began shutting down while this build was waiting, or
+         * the thread was interrupted. Neither is contention, so neither belongs on
+         * {@code delta.checkpoint.builds.deferred}: a rollout that catches a build waiting would
+         * otherwise move an alerting series for a reason that has nothing to do with the fold
+         * budget being busy — the same rule that keeps {@code BuildEndedByShutdownException} off
+         * every meter (issue #162).</p>
+         *
+         * @return {@code true} when the wait ended on a shutdown or an interrupt
+         */
+        public boolean endedEarly() {
+            return endedEarly;
         }
 
         private static String why(long waitMillis, boolean endedEarly, boolean mayWait) {

@@ -225,25 +225,73 @@ public class CheckpointService {
         return run(siteId, SnapshotPass.FORCE, true);
     }
 
+    /**
+     * Take the process's fold budget, then do everything else (issue #178).
+     *
+     * <p>The order is the point, and it was the other way round in the first cut of this ticket:
+     * the site's sync state, its segment list and the frame's presence are all read <b>after</b> the
+     * budget is held. Read before it, they would be as stale as the wait is long — up to
+     * {@code delta.checkpoint.fold-wait-seconds} plus the whole of the neighbouring build — and a
+     * forced rebuild parked on the semaphore while the nightly sweep built the same site would then
+     * fold a segment list that {@code ChangelogRetentionService.prune} had already deleted from S3
+     * behind the advanced pointer. That fails the build on a missing key, which is a fact about
+     * nothing. Before this ticket the same gap existed but was a few S3 round trips wide.</p>
+     *
+     * <p>The cost is that a site with nothing to do holds the budget for one query and one S3
+     * presence check rather than for nothing at all. That is the same trade the idle probe makes
+     * (see {@link #build}), and it buys a build that folds what the site looks like now.</p>
+     */
     private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass,
                                                     boolean mayWaitForFoldBudget) {
-        // The epoch is read *before* the segments, and the order is load-bearing. Read the other way
-        // round, a re-baseline (or a wipe) committing between the two would hand the build the
-        // pre-reset segment list together with the new epoch: every guarded write would then compare
-        // equal and be approved, and the build would fold the discarded baseline, upload a frame at
-        // its last seq and move the pointer there — the resurrection the guard exists to stop,
-        // arrived at through the guard. This way the epoch can only be older-or-equal to the data it
-        // guards, which is the direction the guard refuses.
-        DeltaSyncStateService.SyncStateView syncState = syncStateService.getSyncState(siteId);
-        List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
-        long checkpointSeq = syncState.lastCheckpointSeq();
-        // The epoch this build belongs to. Every row it writes is checked against it under the
-        // site_sync_state row lock, so a history wipe (issue #136) or a re-baseline (issue #142)
-        // that commits mid-build discards the build instead of having its deletes undone by it.
-        SiteEpoch epoch = syncState.epoch();
-        ObjectPresence framePresence = checkpointSeq > 0
-                ? checkpointStorage.framePresence(siteId, checkpointSeq)
-                : ObjectPresence.ABSENT;
+        try {
+            return foldBudget.runExclusively(siteId, mayWaitForFoldBudget,
+                    () -> runWithBudgetHeld(siteId, idlePass));
+        } catch (CheckpointFoldBudget.BuildDeferredException e) {
+            // The concurrency half of the same ceiling (issue #178), and the opposite verdict to the
+            // fold ceiling's. Nothing was folded, so nothing about this site was learned: another
+            // build held the process's fold budget. Counted on delta.checkpoint.builds.deferred
+            // rather than on delta.checkpoint.builds.aborted, whose values are the refusals that
+            // never repair themselves — this one is repaired by the neighbouring build finishing.
+            //
+            // Unless the wait was cut short, which is not contention at all: the wait ends itself
+            // when the context starts closing, and counting that would move an alerting series
+            // during every rollout that catches a build waiting — the same reason
+            // BuildEndedByShutdownException records nothing (issue #162). Still re-thrown, so
+            // DeltaCheckpointRebuildService can keep its durable flag for the next process.
+            if (e.endedEarly()) {
+                log.info("Ending the checkpoint build for site {} before it started: {}",
+                        siteId, e.getMessage());
+            } else {
+                log.warn("{}", e.getMessage());
+                metrics.checkpointBuildDeferred();
+            }
+            throw e;
+        }
+    }
+
+    private Map<String, Map<String, FoldedRow>> runWithBudgetHeld(UUID siteId, SnapshotPass idlePass) {
+        try {
+            // A build can have spent minutes waiting, so the process may be going away by the time
+            // it inherits the budget. Without this it would read, download and fold a whole site
+            // during the termination grace period, for a verdict issue #162 says it must not record.
+            stopIfShuttingDown(siteId);
+            // The epoch is read *before* the segments, and the order is load-bearing. Read the other
+            // way round, a re-baseline (or a wipe) committing between the two would hand the build
+            // the pre-reset segment list together with the new epoch: every guarded write would then
+            // compare equal and be approved, and the build would fold the discarded baseline, upload
+            // a frame at its last seq and move the pointer there — the resurrection the guard exists
+            // to stop, arrived at through the guard. This way the epoch can only be older-or-equal
+            // to the data it guards, which is the direction the guard refuses.
+            DeltaSyncStateService.SyncStateView syncState = syncStateService.getSyncState(siteId);
+            List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
+            long checkpointSeq = syncState.lastCheckpointSeq();
+            // The epoch this build belongs to. Every row it writes is checked against it under the
+            // site_sync_state row lock, so a history wipe (issue #136) or a re-baseline (issue #142)
+            // that commits mid-build discards the build instead of having its deletes undone by it.
+            SiteEpoch epoch = syncState.epoch();
+            ObjectPresence framePresence = checkpointSeq > 0
+                    ? checkpointStorage.framePresence(siteId, checkpointSeq)
+                    : ObjectPresence.ABSENT;
         // S3 refused to say whether the seed frame is there (issue #157). Every conclusion below
         // rests on absence being a fact, and this is not one: a blanket read denial on keys that do
         // exist answers exactly like a key that is gone. Acting on it would raise this subsystem's
@@ -259,13 +307,12 @@ public class CheckpointService {
         // case distinguishable: DeltaCheckpointRebuildService cannot tell an empty fold from a
         // finished build, so it would log "rebuild completed" and spend the durable
         // rebuild_requested flag on a build that never ran.
-        if (framePresence == ObjectPresence.UNKNOWN) {
-            throw new FramePresenceUnknownException(siteId, checkpointSeq);
-        }
-        boolean haveFrame = framePresence == ObjectPresence.PRESENT;
-        boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
+            if (framePresence == ObjectPresence.UNKNOWN) {
+                throw new FramePresenceUnknownException(siteId, checkpointSeq);
+            }
+            boolean haveFrame = framePresence == ObjectPresence.PRESENT;
+            boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
-        try {
             // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
             // recordCheckpoint). If it is genuinely gone — deleted; not merely unreadable, which
             // the tri-state above has already taken out of this path — a refold is lossless only
@@ -278,8 +325,7 @@ public class CheckpointService {
             if (segments.isEmpty() && !haveFrame) {
                 return Map.of();
             }
-            return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame,
-                    mayWaitForFoldBudget);
+            return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
         } catch (FoldTooLargeException e) {
             // The heap twin of the frame ceiling (issue #152), and it belongs on the same meter for
             // the same reason (#153): the fold is deterministic for the same history and a site only
@@ -299,18 +345,6 @@ public class CheckpointService {
                     + "re-baseline so its fold starts from what the source still holds",
                     siteId, e.estimatedBytes(), e.budgetBytes());
             metrics.checkpointBuildAborted("fold_too_large");
-            throw e;
-        } catch (CheckpointFoldBudget.BuildDeferredException e) {
-            // The concurrency half of the same ceiling (issue #178), and the opposite verdict to the
-            // one above. Nothing was folded, so nothing about this site was learned: another build
-            // held the process's fold budget for longer than the wait allows. Counted on
-            // delta.checkpoint.builds.deferred rather than on delta.checkpoint.builds.aborted,
-            // whose values are the refusals that never repair themselves — this one is repaired by
-            // the neighbouring build finishing. Re-thrown so the two callers can settle it: the
-            // scheduler moves to the next site, and the forced rebuild releases its flag rather
-            // than reporting a rebuild that never ran.
-            log.warn("{}", e.getMessage());
-            metrics.checkpointBuildDeferred();
             throw e;
         } catch (BuildEndedByShutdownException e) {
             // Not a failure of this build either, and above all not a fact about any table it was
@@ -436,7 +470,8 @@ public class CheckpointService {
     }
 
     /**
-     * Run the build with the process's fold budget held (issue #178).
+     * The fold and everything it feeds, with the process's fold budget already held by
+     * {@link #run} (issue #178).
      *
      * <p>The budget is taken <b>outside</b> {@code phase=total}, so no wait reaches
      * {@code delta.checkpoint.duration} — neither a deferred build, which did no work and would
@@ -446,36 +481,19 @@ public class CheckpointService {
      * visible, since {@code delta.checkpoint.builds.deferred} stays at zero for a build that
      * eventually got the budget.</p>
      *
-     * <p>It is taken around the whole build rather than around the fold loop, because the folded
-     * state is what {@code writeSnapshots} iterates: the heap is held until the last table has been
-     * uploaded. The cost is that an <em>idle</em> visit — one query answering "nothing to
+     * <p>The budget covers the whole build rather than the fold loop, because the folded state is
+     * what {@code writeSnapshots} iterates: the heap is held until the last table has been
+     * uploaded. The cost is that an <em>idle</em> visit — the query below answering "nothing to
      * rematerialize" — holds the budget for the length of that query, and can in principle be
-     * deferred by a build that outlasts the wait. The alternative was to move that probe outside
-     * {@code phase=total}, which issue #149 deliberately put inside it.</p>
+     * deferred. Answering it before taking the budget would mean reading the site's state outside
+     * the exclusion, which is the staleness this ticket's second review round removed.</p>
      */
     private Map<String, Map<String, FoldedRow>> build(UUID siteId,
                                                       SnapshotPass idlePass,
                                                       List<ChangelogSegment> segments,
                                                       long checkpointSeq,
                                                       SiteEpoch epoch,
-                                                      boolean haveFrame,
-                                                      boolean mayWaitForFoldBudget) {
-        return foldBudget.runExclusively(siteId, mayWaitForFoldBudget, () -> {
-            // Checked here and not only inside the loops below: a build can have spent minutes
-            // waiting for the budget, so the process may be going away by the time it inherits it.
-            // Without this the waiter would download the frame and fold the whole site during the
-            // termination grace period, for a verdict issue #162 says it must not record.
-            stopIfShuttingDown(siteId);
-            return buildWithBudgetHeld(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
-        });
-    }
-
-    private Map<String, Map<String, FoldedRow>> buildWithBudgetHeld(UUID siteId,
-                                                                    SnapshotPass idlePass,
-                                                                    List<ChangelogSegment> segments,
-                                                                    long checkpointSeq,
-                                                                    SiteEpoch epoch,
-                                                                    boolean haveFrame) {
+                                                      boolean haveFrame) {
         // Empty incremental work still belongs in phase=total: the probe below runs inside it.
         return metrics.timeCheckpoint(() -> {
             long foldFrom = haveFrame ? checkpointSeq : 0L;

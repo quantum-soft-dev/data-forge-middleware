@@ -510,6 +510,54 @@ class CheckpointServiceTest {
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointRepository, never()).save(any());
+        // Review round 2: the site's state is read *inside* the exclusion, so a deferred build has
+        // not read it at all. Read before the budget, it would be as stale as the wait is long —
+        // and a rebuild parked behind the nightly sweep would fold a segment list that retention
+        // had already deleted from S3 behind the advanced pointer.
+        verify(syncStateService, never()).getSyncState(any());
+        verify(segmentRepository, never()).findBySiteIdOrderByFirstSeq(any());
+    }
+
+    @Test
+    void doesNotCountAWaitTheShutdownCutShortAsContention() throws Exception {
+        // Review round 2. The wait ends itself when the context starts closing, and that arrives as
+        // the same exception a spent wait does — but it is not contention, and counting it would
+        // move the alerting series on every rollout that catches a build waiting. Same rule that
+        // keeps the shutdown ending off every meter (issue #162).
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        CheckpointFoldBudget waitingBudget =
+                new CheckpointFoldBudget(shutdownSignal, metrics, 3_600L);
+        service = new CheckpointService(
+                segmentRepository, changelogSegmentService, checkpointRepository,
+                syncStateService, checkpointStorage, siteSchemaService, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
+                new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
+                waitingBudget, tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE);
+
+        java.util.concurrent.CountDownLatch heldBySomeoneElse = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch letGo = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(() -> waitingBudget.runExclusively(UUID.randomUUID(), () -> {
+            heldBySomeoneElse.countDown();
+            awaitLatch(letGo);
+            return null;
+        }));
+        holder.start();
+        assertTrue(heldBySomeoneElse.await(5, java.util.concurrent.TimeUnit.SECONDS));
+
+        java.util.concurrent.atomic.AtomicReference<Throwable> thrown =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread waiter = new Thread(() -> service.buildCheckpoint(SITE));
+        waiter.setUncaughtExceptionHandler((thread, failure) -> thrown.set(failure));
+        waiter.start();
+        Thread.sleep(200L);
+        shuttingDown = true;
+        waiter.join(10_000L);
+        letGo.countDown();
+        holder.join(5_000L);
+
+        assertEquals(CheckpointFoldBudget.BuildDeferredException.class, thrown.get().getClass());
+        verify(metrics, never()).checkpointBuildDeferred();
+        verify(metrics, never()).checkpointBuildAborted(any());
     }
 
     @Test

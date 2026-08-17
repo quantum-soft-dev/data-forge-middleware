@@ -8,7 +8,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
@@ -57,49 +60,75 @@ public class CheckpointScheduler {
             return;
         }
         try {
-            // The wait for the process's fold budget (issue #178) belongs to the tick, not to each
-            // site. Paid per site it would multiply: a build that never finishes would turn a
-            // 200-site tick into 200 x delta.checkpoint.fold-wait-seconds, over which the lock
-            // above skips the following nights' ticks and retention freezes for every site instead
-            // of the contended one. After one spent wait the tick keeps visiting sites but takes
-            // the budget only when it is free, so it resumes normally the moment the neighbouring
-            // build releases it.
-            boolean foldBudgetWasContended = false;
-            for (UUID siteId : sitesToVisit()) {
-                // The sweep is the outer half of the same decision CheckpointService makes between
-                // tables (issue #162): once the context is closing, the remaining sites would each
-                // open a transaction and an S3 client that are about to be destroyed. Stop here
-                // rather than fail site by site to the end of the list.
-                if (shutdownSignal.isShuttingDown()) {
-                    log.info("Ending the checkpoint tick: the application is shutting down");
-                    return;
-                }
-                try {
-                    checkpointService.buildCheckpoint(siteId, !foldBudgetWasContended);
-                    retentionService.prune(siteId);
-                } catch (CheckpointService.FramePresenceUnknownException e) {
-                    // Not a failure of this site: S3 would not say whether its seed frame is there,
-                    // so the build declined to conclude anything (issue #157). Logged apart from
-                    // the catch below because during a read outage this fires for every site in the
-                    // tick, and calling that "build/retention failed" would send an operator
-                    // looking at the sites rather than at the bucket policy. Retention is skipped
-                    // with it — the pointer did not move, so there is nothing new to prune.
-                    log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
-                } catch (CheckpointFoldBudget.BuildDeferredException e) {
-                    // Another build held the process's fold budget (issue #178) — a forced rebuild
-                    // beside this sweep, in practice. The site was not visited, so retention is
-                    // skipped with it (the pointer did not move), and the tick carries on without
-                    // waiting again: the loud, bounded version of a sweep silently stalled behind
-                    // one build.
-                    foldBudgetWasContended = true;
-                    log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
-                } catch (RuntimeException e) {
-                    log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
-                }
+            List<UUID> deferred = visit(sitesToVisit());
+            // One retry pass, and only one (issue #178, review round 2). The first pass pays at most
+            // one full wait and then stops waiting, which alone would hand a 40-minute forced
+            // rebuild the whole night: every remaining site would miss its non-blocking acquire and
+            // go unbuilt. Coming back once, after the rest of the tick has run, gives the sites
+            // deferred during a passing collision their build in the same night — and the retry is
+            // itself bounded by the same one-wait rule, so a holder that is still there costs one
+            // more wait rather than one per site.
+            if (!deferred.isEmpty()) {
+                log.info("Retrying {} site(s) deferred behind the checkpoint fold budget",
+                        deferred.size());
+                visit(deferred);
             }
         } finally {
             buildLock.unlock();
         }
+    }
+
+    /**
+     * Build and prune each site, paying the fold-budget wait <b>once for the whole pass</b>.
+     *
+     * <p>Paid per site the wait would multiply: a build that never finishes would turn a 200-site
+     * tick into {@code 200 x delta.checkpoint.fold-wait-seconds}, over which this scheduler's own
+     * lock skips the following nights and retention freezes for every site instead of the contended
+     * one. After one spent wait the pass keeps visiting but takes the budget only when it is free —
+     * and the latch is dropped again as soon as a site does get it, so a collision that ends
+     * mid-pass restores the ordinary behaviour for everything after it.</p>
+     *
+     * @param siteIds the sites to visit, in order
+     * @return the sites deferred behind the fold budget, in the order they were visited
+     */
+    private List<UUID> visit(Collection<UUID> siteIds) {
+        List<UUID> deferred = new ArrayList<>();
+        boolean foldBudgetIsContended = false;
+        for (UUID siteId : siteIds) {
+            // The sweep is the outer half of the same decision CheckpointService makes between
+            // tables (issue #162): once the context is closing, the remaining sites would each
+            // open a transaction and an S3 client that are about to be destroyed. Stop here
+            // rather than fail site by site to the end of the list.
+            if (shutdownSignal.isShuttingDown()) {
+                log.info("Ending the checkpoint tick: the application is shutting down");
+                return List.of();
+            }
+            try {
+                checkpointService.buildCheckpoint(siteId, !foldBudgetIsContended);
+                foldBudgetIsContended = false;
+                retentionService.prune(siteId);
+            } catch (CheckpointService.FramePresenceUnknownException e) {
+                // Not a failure of this site: S3 would not say whether its seed frame is there,
+                // so the build declined to conclude anything (issue #157). Logged apart from
+                // the catch below because during a read outage this fires for every site in the
+                // tick, and calling that "build/retention failed" would send an operator
+                // looking at the sites rather than at the bucket policy. Retention is skipped
+                // with it — the pointer did not move, so there is nothing new to prune.
+                log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
+            } catch (CheckpointFoldBudget.BuildDeferredException e) {
+                // Another build held the process's fold budget (issue #178) — a forced rebuild
+                // beside this sweep, in practice. The site was not visited, so retention is
+                // skipped with it (the pointer did not move), and the tick carries on without
+                // waiting again: the loud, bounded version of a sweep silently stalled behind
+                // one build.
+                foldBudgetIsContended = true;
+                deferred.add(siteId);
+                log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
+            } catch (RuntimeException e) {
+                log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
+            }
+        }
+        return deferred;
     }
 
     /**

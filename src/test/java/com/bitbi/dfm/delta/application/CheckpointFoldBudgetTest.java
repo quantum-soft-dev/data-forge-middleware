@@ -190,8 +190,11 @@ class CheckpointFoldBudgetTest {
 
     @Test
     void doesNotTurnAnAbsurdlyLongWaitIntoNoWaitAtAll() throws Exception {
-        // Seconds to milliseconds overflows for a large enough key, and a negative timeout is read
-        // by tryAcquire as "do not wait" — the exact opposite of what was configured, and silently.
+        // Two arithmetic traps, one after the other. Seconds to milliseconds overflows for a large
+        // enough key, and a negative timeout is read by tryAcquire as "do not wait"; saturating
+        // that then moved the overflow into the nanosecond deadline, where the loop guard is false
+        // at once and the wait collapses to a single slice. Both end the same way: an operator who
+        // typed a very large number to mean "wait indefinitely" silently gets no wait.
         CheckpointFoldBudget budget = budgetWaiting(Long.MAX_VALUE);
 
         withTheBudgetHeld(budget, () -> {
@@ -199,12 +202,42 @@ class CheckpointFoldBudgetTest {
             Thread second = new Thread(() -> budget.runExclusively(OTHER_SITE, () -> null));
             second.setUncaughtExceptionHandler((thread, thrown) -> failure.set(thrown));
             second.start();
-            Thread.sleep(300L);
+            // Comfortably past one WAIT_SLICE_MILLIS: at 300 ms this passed even with the deadline
+            // overflow in place, which is what made the first version of it vacuous.
+            Thread.sleep(2_000L);
 
             assertTrue(second.isAlive(), "a saturating wait must still be a wait");
             assertNull(failure.get(), "nothing may be deferred while the wait is unspent");
             shuttingDown = true;
             second.join(10_000L);
+        });
+    }
+
+    @Test
+    void tellsAWaitThatWasCutShortFromOneThatWasSpent() throws Exception {
+        // The two must not be counted alike: a shutdown that lands on a waiting build is not
+        // contention, and putting it on delta.checkpoint.builds.deferred would move an alerting
+        // series on every rollout (issue #162's rule, raised in review).
+        CheckpointFoldBudget spent = budgetWaiting(0L);
+        withTheBudgetHeld(spent, () -> {
+            CheckpointFoldBudget.BuildDeferredException deferred = assertThrows(
+                    CheckpointFoldBudget.BuildDeferredException.class,
+                    () -> spent.runExclusively(OTHER_SITE, () -> null));
+            assertFalse(deferred.endedEarly(), "a spent wait is contention and must be counted");
+        });
+
+        CheckpointFoldBudget cutShort = budgetWaiting(3_600L);
+        withTheBudgetHeld(cutShort, () -> {
+            AtomicReference<Throwable> thrown = new AtomicReference<>();
+            Thread waiter = new Thread(() -> cutShort.runExclusively(OTHER_SITE, () -> null));
+            waiter.setUncaughtExceptionHandler((thread, failure) -> thrown.set(failure));
+            waiter.start();
+            Thread.sleep(200L);
+            shuttingDown = true;
+            waiter.join(10_000L);
+
+            assertTrue(((CheckpointFoldBudget.BuildDeferredException) thrown.get()).endedEarly(),
+                    "a wait ended by the shutdown is not contention");
         });
     }
 

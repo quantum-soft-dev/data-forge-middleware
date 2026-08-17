@@ -938,11 +938,15 @@ build finishes.
 
 Four properties of the wait, in the order they are likely to matter:
 
-- **It is paid once per tick, not once per site.** After one spent wait the nightly sweep keeps
-  visiting sites but takes the budget only when it is free. Paid per site, a build that never
-  finished would turn a 200-site tick into `200 x fold-wait-seconds`, over which the scheduler's own
-  lock skips the following nights and retention freezes for *every* site rather than the contended
-  one. As soon as the neighbour releases, the rest of the tick proceeds normally.
+- **The nightly tick pays it once per pass, and comes back once.** After one spent wait the sweep
+  keeps visiting sites but takes the budget only when it is free, and the moment a site does get it
+  the ordinary behaviour resumes for everything after it; sites deferred along the way are retried
+  in **one** further pass at the end of the tick. Paid per site the wait would multiply — a build
+  that never finished would turn a 200-site tick into `200 x fold-wait-seconds`, over which the
+  scheduler's own lock skips the following nights and retention freezes for *every* site rather than
+  the contended one — while never waiting again would hand a 40-minute forced rebuild the whole
+  night. Between the two: a tick spends at most two waits, and a collision that passes costs only
+  the sites visited while it lasted.
 - **Contention is visible before the first deferral.** `delta.checkpoint.fold.wait` (a timer,
   recorded for every build that reached the fold, deferrals included) is the band below
   `fold-wait-seconds` — the budget is taken outside `phase=total`, so a build that waited nine
@@ -951,17 +955,21 @@ Four properties of the wait, in the order they are likely to matter:
   `max(delta_checkpoint_fold_wait_seconds_max)` against the configured wait is the query.
 - **It ends when the context starts closing.** `deltaRebuildExecutor` waits for its tasks on
   shutdown and never interrupts them, so an unaware wait would hold a rollout for the executor's
-  whole termination period and then time out. A shutdown ends the wait as a deferral, and the forced
-  rebuild keeps its `rebuild_requested` flag for that one (issue #162's case) instead of releasing
-  it.
-- **It is bounded on purpose.** Waiting for ever behind a build that has stalled would freeze the
-  sweep silently until the pod is replaced.
+  whole termination period and then time out. A shutdown ends the wait as a deferral — but *that*
+  one is not contention: it is not counted on `delta.checkpoint.builds.deferred` (a rollout must not
+  move an alerting series), and the forced rebuild keeps its `rebuild_requested` flag for it (issue
+  #162's case) instead of releasing it.
+- **It is bounded on purpose**, and clamped at a day however large the key is set. Waiting for ever
+  behind a build that has stalled would freeze the sweep silently until the pod is replaced.
 
-One consequence worth stating rather than hiding: an *idle* visit takes the budget too, for as long
-as the one query that answers "nothing to rematerialize", so it can in principle be deferred as
-well. The semaphore is fair and taken per site, so a rebuild queues behind **one** site's build
-rather than behind the sweep — if `delta.checkpoint.builds.deferred` moves at all on this
-deployment, single-site builds are running longer than the wait and that key is what to raise.
+One consequence worth stating rather than hiding: the budget is taken **before** the site's state is
+read, so even a visit that turns out to have nothing to do holds it for one query and one S3
+presence check, and can in principle be deferred. The order is deliberate — reading first would make
+the fold as stale as the wait is long, and a rebuild parked behind the nightly sweep would fold a
+segment list that retention had already deleted from S3 behind the advanced pointer. The semaphore
+is fair and taken per site, so a rebuild queues behind **one** site's build rather than behind the
+sweep — if `delta.checkpoint.builds.deferred` moves at all on this deployment, single-site builds
+are running longer than the wait and that key is what to raise.
 
 The exclusion is per JVM, which is the right scope for heap: a deployment running the sweep on
 several replicas has that many independent budgets, exactly as it has that many heaps.
