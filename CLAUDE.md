@@ -453,6 +453,39 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-scratch-test-isolation: `CheckpointParquetIntegrationTest` writes and lists its
+  checkpoint scratch in a directory of its own instead of the machine-wide `java.io.tmpdir`
+  (issue #168). The test profile declares neither `delta.checkpoint.temp-dir` nor
+  `delta.batch-parquet.temp-dir`, so both fell back to the host's temp directory, and the leak
+  assertion was a **difference** between two listings of it —
+  `assertEquals(scratchBefore, scratchSnapshots(), …)`. **The direction of the failure is the
+  interesting part**: the class never left a file, it *lost* a pre-existing one — `scratchBefore`
+  held a `checkpoint-*` file the second listing no longer had, because another JVM's
+  `ParquetScratchOrphanSweeper` had deleted it by age (#127, and unconditionally past that JVM's
+  start where #141's flag is set). Any host process writing that prefix does it; two worktrees
+  running `./gradlew integrationTest` at once (`/github-issue-runner`) do it routinely, which is how
+  it was seen while working #149. Not a product bug and not a regression — possible from the day the
+  assertion was written, and invisible on a rerun. `@DynamicPropertySource` now points both keys at
+  directories this class creates, so the listing is **exact** rather than differential: it drops the
+  `checkpoint-<site>` prefix filter and requires the directory to be empty, which also catches a
+  future writer that picks another name. `@DynamicPropertySource` rather than `@TestPropertySource`
+  because a literal path is the same string in every worktree and on every host — only
+  `Files.createTempDirectory` is unique per JVM, which is the whole property being bought. It costs
+  one more cached Spring context (the customizer is part of the context cache key), the same price
+  the three classes already carrying `@TestPropertySource` pay; `application-test.yml`'s
+  `minimum-idle: 0` is what makes an idle cached context cheap enough for that to be acceptable.
+  The **checkpoint and batch-parquet directories are separate**, so a completed-batch queue drain in
+  this context cannot put a file in the directory the checkpoint assertion requires to be empty —
+  and overriding the batch key at all is what keeps this context's own sweeper off the host's
+  `/tmp`. Audit of the ticket's second checkbox: every other listing assertion over a scratch
+  directory (`CheckpointServiceTest`, `BatchParquetFinalizationServiceTest`,
+  `ParquetScratchOrphanSweeperTest`) already lists a JUnit `@TempDir`, so this class was the only
+  one on the shared directory. **Deliberately not fixed here**: every *other* integration context
+  still boots a sweeper aimed at `java.io.tmpdir` and deletes any host file named `checkpoint-*` /
+  `batch-parquet-*` older than four hours — the suite is the perpetrator as well as the victim —
+  which is a whole-profile decision (`application-test.yml` plus a Gradle-supplied path) rather than
+  an assertion, filed as **#187**. Test-only — no production code, REST, gRPC, DTO, migration,
+  configuration-key, metric, S3-key or frontend change.
 - audit-listener-own-lane: The deferred plugin audit write can no longer be handed back to the
   thread that published it (issue #171, the last of the two exceptions #161 documented rather than
   asserted away). `PluginAuditEventListener.onAuditEntryReady` carried `@Async("pluginExecutor")`
