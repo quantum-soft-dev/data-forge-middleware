@@ -453,6 +453,53 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- shared-fold-heap-budget: The checkpoint fold's heap ceiling is a reservation for the **process**,
+  not a fresh allowance every build gets a copy of (issue #178, raised reviewing #177).
+  `delta.checkpoint.max-fold-bytes` (#152) is enforced by one `BudgetedFold` per build, and one JVM
+  holds two: `CheckpointScheduler`'s `ReentrantLock` serializes the cron thread alone, while
+  `DeltaCheckpointRebuildService` runs `rebuildFromFrame` on the separate single-thread
+  `deltaRebuildExecutor` (and `resumePendingRebuilds()` fires one at startup). Two folds at 45% of
+  the budget each therefore crossed nothing, were refused nothing, left
+  `delta.checkpoint.builds.aborted` at zero — and `OOMKilled` the pod with in-flight ingest, which
+  is the exact failure #152 exists to replace. **Exclusion rather than a shared running total**, the
+  ticket's second option instead of its `AtomicLong` sketch, and the reason is what the sketch could
+  not answer: when the sum crosses, the record that crosses it belongs to whichever build happens to
+  be applying one, so the nightly build of a small site could be refused because an operator clicked
+  "rebuild" on a large one — a regression against the path #152 actually protected — and that
+  refusal would have to be reported somewhere, which for a condition clearing the moment the
+  neighbour finishes cannot be `builds.aborted` without breaking that meter's "never repairs itself"
+  contract (#153). New `CheckpointFoldBudget` (a **fair** `Semaphore(1)`) lets one build fold at a
+  time, which is what makes the existing number a bound on the process at all; a collision's victim
+  is deterministically the build that arrived second, and its outcome is a **deferral**. The
+  reservation covers the **whole build**, not the fold loop — the folded state is what
+  `writeSnapshots` iterates, so the heap is held until the last table is uploaded. A build that
+  cannot have it within new `delta.checkpoint.fold-wait-seconds`
+  (`DELTA_CHECKPOINT_FOLD_WAIT_SECONDS`, default **600**; 0 = do not wait, negative treated as 0)
+  throws `CheckpointFoldBudget.BuildDeferredException` — thrown rather than returned as an empty
+  fold for the #157/#162 reason, since `DeltaCheckpointRebuildService` cannot tell an empty fold
+  from a finished build — and is counted on new **`delta.checkpoint.builds.deferred`** (untagged,
+  registered at zero so an alert predates the first occurrence). `CheckpointScheduler` logs it,
+  skips retention for that site (the pointer did not move) and carries on to the next;
+  the forced rebuild **releases** `rebuild_requested` and says to ask again, settled like the #157
+  read denial and not like the #162 shutdown, because nothing re-drives a held flag here — the
+  nightly tick calls `buildCheckpoint`, never `rebuildFromFrame`, and `requestRebuild`
+  short-circuits while the flag is set. Two consequences stated rather than hidden: an **idle visit
+  takes the budget too**, for the length of the one query answering "nothing to rematerialize", and
+  can in principle be deferred — the alternative was to move that probe outside `phase=total`, which
+  #149 deliberately put inside it; and the **wait is bounded**, because waiting indefinitely behind
+  a stalled build would freeze the whole sweep silently until the pod is replaced. The budget is
+  taken *outside* `phase=total`, so a deferred build contributes **no** duration sample (a
+  ten-minute wait would otherwise be the maximum an operator reads that timer from) while a build
+  that waited and then ran does include the wait, which is what its cycle genuinely cost. Per JVM
+  deliberately — heap is per pod, so N replicas have N budgets exactly as they have N heaps; no
+  distributed lock is implied and `CheckpointScheduler`'s "run the sweep on one instance" note is
+  unchanged. Fairness plus taking it **per site** is what bounds the wait: a rebuild queues behind
+  one site's build rather than behind the whole sweep. **The `2 x` in the disk formula is now
+  conservative** rather than tight, since two checkpoint builds can no longer overlap at all — but
+  it is deliberately left where it is, because the deployed ceilings and the directory-wide
+  reservation are **#150**, for which this exclusion is a candidate shape. No REST, gRPC, proto,
+  DTO, migration, S3-key, existing configuration-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("The first bound is heap", Metrics).
 - hold-connection-across-s3: A HikariCP connection is no longer held across S3 (or a 120 s
   semaphore wait) at the three call sites the pool audit named (issue #164, folding **#176**).
   `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` drop

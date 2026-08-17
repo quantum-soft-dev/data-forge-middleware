@@ -918,12 +918,32 @@ budget is the query). A build that aborted is deliberately absent from that seri
 over-budget sample belongs to the counter, not to the number read as "how much room is left" — and
 so is an idle visit, which answers before folding at all.
 
-**One gap remains, and it is the same one the scratch ceilings have.** The budget is enforced *per
-build*, so two concurrent folds of 45% each cross nothing and still exhaust the heap between them.
-That takes a forced rebuild running beside the nightly sweep — the only way one JVM holds two builds,
-and the `2 x` this note's disk formula already reserves for. Closing it needs a reservation shared
-across concurrent folds rather than a per-fold ceiling, which is the heap twin of #150 and is
-tracked as **#178**; what is bounded today is the single-build case, which is the nightly one.
+**The budget belongs to the process, not to a build (issue #178).** Enforced per build it was not
+actually a bound at all: two concurrent folds of 45% each crossed nothing and still exhausted the
+heap between them, which one JVM produces whenever a forced rebuild runs beside the nightly sweep —
+the `2 x` this note's disk formula still reserves for. What closes it is an **exclusion**: one
+checkpoint build folds at a time in a JVM, so the configured ceiling is the whole of what the
+checkpoint path may hold. The reservation covers the build, not just the fold loop, because the
+folded state is what the snapshot writer iterates — the heap is held until the last table is
+uploaded.
+
+A build that finds the budget taken **waits**, up to `DELTA_CHECKPOINT_FOLD_WAIT_SECONDS`
+(`delta.checkpoint.fold-wait-seconds`, default **600**), and is otherwise **deferred**: nothing
+folded, nothing uploaded, no row saved, no materialize attempt spent, `delta.checkpoint.builds.deferred`
+incremented and a WARN naming the site. The nightly sweep moves to its next site (retention with it
+— the pointer did not move); a forced rebuild releases its `rebuild_requested` flag and says to ask
+again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
+value there is a refusal that never repairs itself, and this one clears the moment the neighbouring
+build finishes. Two consequences worth knowing before this lands: an *idle* visit takes the budget
+too, for as long as the one query that answers "nothing to rematerialize", so it can in principle be
+deferred as well; and the wait is bounded on purpose, because waiting for ever behind a build that
+has stalled would freeze the whole sweep silently until the pod is replaced. The semaphore is fair
+and taken per site, so a rebuild queues behind **one** site's build rather than behind the sweep —
+if `delta.checkpoint.builds.deferred` moves at all on this deployment, single-site builds are
+running longer than the wait and that key is what to raise.
+
+The exclusion is per JVM, which is the right scope for heap: a deployment running the sweep on
+several replicas has that many independent budgets, exactly as it has that many heaps.
 
 **And the fold is still a fold.** Nothing here makes a site of any size buildable — off-heap or
 spillable folding, named as a later ticket since #112 and #126, remains the open question. This
@@ -1039,7 +1059,13 @@ checkpoint_peak = 2 x max(largest per-table snapshot, whole-site reload frame)
                     # only the cron thread, while a forced rebuild runs rebuildFromFrame on the
                     # separate single-thread `deltaRebuildExecutor`. An admin pressing "Rebuild"
                     # during the 02:00 sweep, or resumePendingRebuilds() firing at startup,
-                    # gives two concurrent checkpoint scratch files in one JVM.
+                    # used to give two concurrent checkpoint scratch files in one JVM.
+                    # Issue #178 made those two paths mutually exclusive for the length of a
+                    # build (CheckpointFoldBudget, taken for heap reasons), so this term is
+                    # now CONSERVATIVE rather than tight: one file is reachable, two are
+                    # budgeted. Deliberately left at 2 x here — the deployed ceilings are not
+                    # this ticket's to move, and the directory-wide reservation that decides
+                    # what the term should be is #150.
 batch_peak      = delta.batch-parquet.max-concurrent (2)
                     x tables claimed per batch          # one scratch file per claimed table,
                                                         # all opened before the shared replay
@@ -1052,9 +1078,13 @@ orphan_residue  = whatever a container restart left behind, until the next sweep
 ```
 
 That budget is disk only. The heap peak of the same build is a separate sum — the fold
-(`DELTA_CHECKPOINT_MAX_FOLD_BYTES` per build, up to two builds) plus one Parquet row-group buffer
-per open writer (`DELTA_PARQUET_ROW_GROUP_BYTES`, 16 MiB) — and it is the one that fails as an
-eviction-like `OOMKilled` rather than as a skip. See "The first bound is heap" above.
+(`DELTA_CHECKPOINT_MAX_FOLD_BYTES`, and since issue #178 that is **one** fold per process, not one
+per build) plus one Parquet row-group buffer per open writer (`DELTA_PARQUET_ROW_GROUP_BYTES`,
+16 MiB) — and it is the one that fails as an eviction-like `OOMKilled` rather than as a skip. The
+exclusion #178 added also makes the disk term above conservative, since two checkpoint builds can
+no longer overlap at all; the number is deliberately left where it is, because the deployed
+ceilings and the directory-wide reservation are #150's decision, not this one's. See "The first
+bound is heap" above.
 
 There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
 its own. `delta.batch-parquet.max-concurrent` and the table count per site are the two multipliers
@@ -1752,6 +1782,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
 `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone|fold_too_large}`,
+`delta.checkpoint.builds.deferred`,
 `delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
@@ -1798,6 +1829,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
 | `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
+| `delta.checkpoint.builds.deferred` | `delta_checkpoint_builds_deferred_total` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
 | `delta.s3.read-denied` | `delta_s3_read_denied_total` |
 
