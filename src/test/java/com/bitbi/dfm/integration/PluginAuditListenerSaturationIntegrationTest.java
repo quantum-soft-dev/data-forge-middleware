@@ -39,13 +39,18 @@ import static org.awaitility.Awaitility.await;
  * from the listener's own {@code @Async} annotation rather than by name, so this class keeps testing
  * the real path if that name ever changes.</p>
  *
+ * <p>It extends {@link BaseIntegrationTest} rather than {@link AbstractIntegrationTest} so that it
+ * joins the context every other integration class already shares: a context of its own would be one
+ * more cached context, and each one drains the queue workers once when it refreshes (the residual
+ * noted in #167), which is exactly the kind of interference the suite has been paying down.</p>
+ *
  * <p><b>What is observed is the row, not a mocked call.</b> An inline write has a signature nothing
  * else has: the entry is already committed by the time {@code TransactionTemplate.execute} returns,
  * because it was written by that very thread before it left {@code afterCommit}. A hand-off cannot
  * produce that — the publishing thread returns without having written anything.</p>
  */
 @DisplayName("Deferred plugin audit under a saturated executor (#171)")
-class PluginAuditListenerSaturationIntegrationTest extends AbstractIntegrationTest {
+class PluginAuditListenerSaturationIntegrationTest extends BaseIntegrationTest {
 
     private static final String PLUGIN_ID = "bit-bi";
 
