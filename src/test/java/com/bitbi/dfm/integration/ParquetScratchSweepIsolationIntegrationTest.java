@@ -45,6 +45,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  * <p>{@code BaseIntegrationTest} rather than a context of its own: nothing here needs a property
  * override, and an extra cached context costs another connection pool and another round of
  * refresh-time sweeps (#167).</p>
+ *
+ * <p>One residual, named rather than left implied: the configured directory is now shared by every
+ * cached context, so a <em>peer</em> context's sweeper could in principle delete the probe of
+ * {@link #shouldStillSweepTheConfiguredDirectory} and satisfy that assertion while this context's
+ * bean was misconfigured. It needs a peer tick inside the method — contexts refresh between
+ * classes, this suite runs single-threaded, and the recurring tick is hourly under the test
+ * profile (#167) — so it is accepted rather than designed around; the assertion that would
+ * actually catch a misconfiguration is the first one, which reads this context's own values.</p>
  */
 @DisplayName("Parquet scratch sweep isolation (#187)")
 class ParquetScratchSweepIsolationIntegrationTest extends BaseIntegrationTest {

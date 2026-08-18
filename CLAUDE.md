@@ -453,9 +453,12 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
-- test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so a
-  suite run neither writes nor deletes in the machine-wide temp directory (issue #187, the half
-  #168 named and deliberately left open). Undeclared, `delta.checkpoint.temp-dir` and
+- test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so no
+  context taking the profile's defaults writes or deletes in the machine-wide temp directory
+  (issue #187, the half #168 named and deliberately left open). The exception is deliberate and is
+  #168's own: `CheckpointParquetIntegrationTest` overrides both keys to per-class directories it
+  creates under `java.io.tmpdir` — named `dfm-it-scratch-*` precisely so no sweeper's prefix
+  matches them — and its decoy file, planted there for one assertion, is removed in a `finally`. Undeclared, `delta.checkpoint.temp-dir` and
   `delta.batch-parquet.temp-dir` fall back to `${java.io.tmpdir}`, and
   `ParquetScratchOrphanSweeper`'s `@Scheduled` carries `initialDelayString = "0"` — so **every**
   cached Spring context swept the host's temp directory once at refresh (#167 slowed the cadence to
@@ -495,9 +498,10 @@ pages/{feature}/            # Route pages
   proof, but any *other* process sweeping that directory — a locally running backend under `dev`,
   or a concurrent worktree on a branch predating this fix, which is the ordinary shape of
   `/github-issue-runner` — decides it, and it would fail accusing this suite of the very defect it
-  guards, so the wired configuration answers it deterministically instead and
-  `ParquetScratchOrphanSweeperTest` already pins that the sweeper visits its configured
-  directories and no others; and "the run's tree" is **not** an ancestor directory named `build`,
+  guards, so the wired configuration answers it deterministically instead — and the behaviour the
+  probe was there for is structural rather than assumed, since `sweep()` iterates exactly the
+  directories the bean was constructed with, over which `ParquetScratchOrphanSweeperTest` already
+  drives every rule (age, prefix, pod-private cutoff, a missing directory); and "the run's tree" is **not** an ancestor directory named `build`,
   since an IntelliJ run configured to build with the IDE compiles to `out/` and a guard that goes
   red on a developer's build layout rather than on a regression is worse than no guard — it is the
   Gradle-supplied root when present, the checkout (located by `settings.gradle.kts`) otherwise.
