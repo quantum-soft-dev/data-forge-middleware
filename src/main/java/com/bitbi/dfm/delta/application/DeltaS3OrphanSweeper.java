@@ -311,12 +311,18 @@ public class DeltaS3OrphanSweeper {
     private void sweepSite(ReclaimScope scope, UUID siteId, Instant cutoff) {
         String prefix = scope.prefixOf(siteId);
         SiteSweep sweep = new SiteSweep(scope, siteId, prefix, cutoff);
-        S3PrefixLister.S3PrefixWalk walk = scope.walkObjects(siteId, sweep::judge);
-        if (walk.truncated()) {
-            log.warn("Listing of {} stopped after {} object(s); this pass sweeps only those",
-                    prefix, walk.objectsRead());
+        try {
+            S3PrefixLister.S3PrefixWalk walk = scope.walkObjects(siteId, sweep::judge);
+            if (walk.truncated()) {
+                log.warn("Listing of {} stopped after {} object(s); this pass sweeps only those",
+                        prefix, walk.objectsRead());
+            }
+        } finally {
+            // What the pages already decided is worth saying however the walk ended: a dry run
+            // that reports nothing because the last page threw is a dry run an operator cannot act
+            // on, and the per-site catch above would otherwise swallow the summary with the throw.
+            sweep.report();
         }
-        sweep.report();
     }
 
     /**
@@ -369,7 +375,9 @@ public class DeltaS3OrphanSweeper {
         private void judge(List<S3ListedObject> page) {
             if (rowsUnreadable) {
                 // One failed read is the site's answer for this pass; the remaining pages must not
-                // ask again and must not be deleted from on a row set that could not be read.
+                // ask again and must not be deleted from on a row set that could not be read. The
+                // walk itself runs on — it cannot be cancelled from here, and before #199 the whole
+                // listing was taken before the rows were read anyway, so no S3 call is added.
                 return;
             }
             List<String> candidates = page.stream()
@@ -399,8 +407,10 @@ public class DeltaS3OrphanSweeper {
             }
             if (dryRun) {
                 wouldReclaim += orphans.size();
-                orphans.stream().limit(DRY_RUN_SAMPLE - wouldReclaimSample.size())
-                        .forEach(wouldReclaimSample::add);
+                if (wouldReclaimSample.size() < DRY_RUN_SAMPLE) {
+                    orphans.stream().limit(DRY_RUN_SAMPLE - wouldReclaimSample.size())
+                            .forEach(wouldReclaimSample::add);
+                }
                 return;
             }
             delete(orphans);

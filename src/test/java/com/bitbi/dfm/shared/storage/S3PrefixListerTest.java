@@ -183,6 +183,21 @@ class S3PrefixListerTest {
     }
 
     @Test
+    @DisplayName("a paginator that fails when the walk opens it is an empty truncated walk")
+    void forEachPageSurvivesAFailureOpeningTheWalk() {
+        List<List<S3ListedObject>> pages = new ArrayList<>();
+
+        S3PrefixLister.S3PrefixWalk walk = S3PrefixLister.forEachPage(
+                () -> {
+                    throw SdkClientException.create("failed to open the walk");
+                }, pages::add);
+
+        assertThat(walk.truncated()).isTrue();
+        assertThat(walk.objectsRead()).isZero();
+        assertThat(pages).isEmpty();
+    }
+
+    @Test
     @DisplayName("forEachPage over a client never throws: a failed paginator is an empty truncated walk")
     void forEachPageOverAClientReportsTruncationInsteadOfThrowing() {
         S3Client s3 = mock(S3Client.class);

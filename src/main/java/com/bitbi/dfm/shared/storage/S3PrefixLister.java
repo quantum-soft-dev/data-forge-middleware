@@ -176,7 +176,14 @@ public final class S3PrefixLister {
     static S3PrefixWalk forEachPage(Iterable<ListObjectsV2Response> pages,
                                     Consumer<List<S3ListedObject>> page) {
         long read = 0L;
-        Iterator<ListObjectsV2Response> iterator = pages.iterator();
+        Iterator<ListObjectsV2Response> iterator;
+        try {
+            // Opening the walk is a fetch too: the for-each this replaced called iterator() inside
+            // its own try, and a paginator is free to fail here rather than on the first next().
+            iterator = pages.iterator();
+        } catch (S3Exception | SdkClientException e) {
+            return truncatedAt(read, e);
+        }
         while (true) {
             ListObjectsV2Response response;
             try {
@@ -185,9 +192,7 @@ public final class S3PrefixLister {
                 }
                 response = iterator.next();
             } catch (S3Exception | SdkClientException e) {
-                log.warn("Prefix listing stopped after {} object(s); returning a truncated result",
-                        read, e);
-                return new S3PrefixWalk(read, true);
+                return truncatedAt(read, e);
             }
             List<S3ListedObject> objects = response.contents().stream()
                     .map(object -> new S3ListedObject(object.key(), object.lastModified()))
@@ -195,6 +200,18 @@ public final class S3PrefixLister {
             read += objects.size();
             page.accept(objects);
         }
+    }
+
+    /**
+     * A walk that stopped early keeps what it read; the caller decides what that is worth.
+     *
+     * @param read how many objects had been handed over
+     * @param e    the failure that ended the walk
+     * @return a truncated walk
+     */
+    private static S3PrefixWalk truncatedAt(long read, RuntimeException e) {
+        log.warn("Prefix listing stopped after {} object(s); returning a truncated result", read, e);
+        return new S3PrefixWalk(read, true);
     }
 
     /**
