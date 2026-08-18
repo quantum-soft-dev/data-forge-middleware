@@ -46,7 +46,27 @@ public class DeltaCheckpointRebuildService {
      * It repairs itself the moment the queue drains, so the advice is to ask again.
      */
     private static final String QUEUE_FULL_MESSAGE =
-            "the rebuild queue was full, so the rebuild was never started — request it again";
+            "The rebuild queue was full, so the rebuild was never started. Request it again.";
+
+    /**
+     * Verdict text for the two endings whose exception is worded for the <em>scheduler</em>.
+     *
+     * <p>Both messages end by promising that the next tick tries again, which is true where they
+     * were written — {@code CheckpointScheduler} revisits the site — and false here:
+     * the nightly tick calls {@code buildCheckpoint}, never {@code rebuildFromFrame}, so a forced
+     * rebuild is retried only when somebody asks again. Storing the exception's own text verbatim
+     * would therefore tell the operator to wait for a retry that is never coming, so the verdict
+     * keeps the diagnosis and replaces the advice.</p>
+     */
+    private static final String FRAME_UNAVAILABLE_MESSAGE =
+            "S3 would not say whether this site's checkpoint frame exists (read denied), so nothing "
+            + "was folded, uploaded or recorded. Request the rebuild again once S3 reads are "
+            + "allowed — see the delta.s3.read-denied counter.";
+
+    private static final String DEFERRED_MESSAGE =
+            "Another checkpoint build held the process's fold budget, so nothing was folded and "
+            + "nothing was recorded. Request the rebuild again once that build has finished, or "
+            + "raise delta.checkpoint.fold-wait-seconds if the two collide regularly.";
 
     private final DeltaSyncStateService syncStateService;
     private final CheckpointService checkpointService;
@@ -172,7 +192,7 @@ public class DeltaCheckpointRebuildService {
             // permission was restored, on the action history_gone names as the recovery. Release it
             // and say plainly what to do, exactly as a failed attempt does.
             outcome = CheckpointRebuildOutcome.FRAME_UNAVAILABLE;
-            message = e.getMessage();
+            message = FRAME_UNAVAILABLE_MESSAGE;
             log.error("Forced checkpoint rebuild for site {} did not run: {}. Nothing was recorded "
                     + "and the flag is released — request the rebuild again once S3 reads are "
                     + "allowed (see delta.s3.read-denied)", siteId, e.getMessage());
@@ -192,7 +212,7 @@ public class DeltaCheckpointRebuildService {
             // only for a bare interrupt, which keeps neither the flag nor the contention wording.
             keepFlagForARetry = shutdownSignal.isShuttingDown();
             outcome = CheckpointRebuildOutcome.DEFERRED;
-            message = e.getMessage();
+            message = DEFERRED_MESSAGE;
             if (keepFlagForARetry) {
                 logShutdown(siteId);
             } else if (e.waitWasSpent()) {

@@ -483,9 +483,13 @@ pages/{feature}/            # Route pages
   "queued, and it failed" for a rebuild that has not run yet. And **the verdict travels with the
   flag**: `resetForWipe` drops both (the row goes back to what a brand-new site has, and a verdict
   about checkpoints the wipe just deleted describes nothing), `resetForRebaseline` keeps both,
-  because it keeps the flag. The message is the failure's **own** text — for `FAILED` prefixed with
+  because it keeps the flag. The message for `FAILED` is the failure's **own** text prefixed with
   the exception's simple name, since an S3 client error, a JDBC error or an interrupt frequently
-  carries no message at all and "the rebuild failed" alone says nothing — truncated to
+  carries no message at all and "the rebuild failed" alone says nothing; for `FRAME_UNAVAILABLE`
+  and `DEFERRED` it keeps the exception's diagnosis and **replaces its advice**, because both of
+  those messages are worded for `CheckpointScheduler` — which really does revisit the site — and
+  end by promising that the next tick tries again, which on this path is false and would tell the
+  operator to wait for a retry that is never coming. Truncated to
   `MAX_REBUILD_MESSAGE_LENGTH` (1000) **in the entity**, because a value wider than the column throws
   at flush and would lose the verdict entirely, which is where this ticket started. `runRebuild`
   pre-sets `FAILED` before the `try`, so a `Throwable` that is not an `Exception` still settles as a

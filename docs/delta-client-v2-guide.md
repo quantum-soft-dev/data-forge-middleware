@@ -1785,9 +1785,15 @@ Four properties are worth keeping in mind when reading the pair:
   brand-new site has, and a verdict about checkpoints the wipe just deleted describes nothing); an
   ordinary re-baseline keeps both, because it keeps the flag.
 
-The message is the failure's own text, bounded at 1,000 characters by the writer — a value wider
-than the column would throw at flush and lose the verdict entirely, which is where this ticket
-started. It is shown clamped in the card, with the full string on hover.
+The message is bounded at 1,000 characters by the writer — a value wider than the column would
+throw at flush and lose the verdict entirely, which is where this ticket started. It is shown
+clamped in the card, with the full string on hover. For `FAILED` it is the exception's own type and
+text (the type included, because an S3 client error, a JDBC error or an interrupt frequently
+carries no message at all). For `FRAME_UNAVAILABLE` and `DEFERRED` it keeps the exception's
+diagnosis but **replaces its advice**: both of those messages are worded for
+`CheckpointScheduler`, which really does revisit the site, and end by promising that the next tick
+tries again — which on this path is false, since the nightly tick calls `buildCheckpoint` and never
+`rebuildFromFrame`, so a forced rebuild is retried only when somebody asks again.
 
 ### No S3 inside a queue worker (issue #164)
 

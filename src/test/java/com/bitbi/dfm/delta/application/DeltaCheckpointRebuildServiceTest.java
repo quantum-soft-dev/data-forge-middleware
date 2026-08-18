@@ -128,8 +128,13 @@ class DeltaCheckpointRebuildServiceTest {
 
         assertTrue(service.requestRebuild(SITE));
 
+        // The verdict keeps the exception's diagnosis and replaces its advice: the exception is
+        // worded for CheckpointScheduler, which does revisit the site, whereas nothing re-drives a
+        // forced rebuild but another click.
         assertThat(recordedMessage(CheckpointRebuildOutcome.FRAME_UNAVAILABLE))
-                .contains("read denied");
+                .contains("read denied")
+                .contains("Request the rebuild again")
+                .doesNotContain("the next tick tries again");
     }
 
     @Test
@@ -146,8 +151,10 @@ class DeltaCheckpointRebuildServiceTest {
 
         assertTrue(service.requestRebuild(SITE));
 
-        verify(syncStateService)
-                .recordRebuildOutcome(eq(SITE), eq(CheckpointRebuildOutcome.DEFERRED), any());
+        assertThat(recordedMessage(CheckpointRebuildOutcome.DEFERRED))
+                .contains("fold budget")
+                .contains("Request the rebuild again")
+                .doesNotContain("the next tick tries again");
     }
 
     @Test
