@@ -453,6 +453,59 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
+  uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
+  reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a
+  `List<S3ListedObject>` before any caller could filter it, and `DeltaS3OrphanSweeper` then copied
+  subsets of that into `candidates` and `orphans` — one site's whole listing plus two derivations,
+  on a scheduler thread, fleet-wide, beside the checkpoint fold budget (#152/#178) and the Parquet
+  scratch budget (#150), neither of which knows about it. The peak is one site's object count rather
+  than the bucket's, which is why #158 shipped as it was; what makes it worth a ticket is that the
+  sweep's **first deleting pass is by construction the largest listing this application ever takes**
+  — its own premise is that superseded generations accumulated nightly for months with nothing
+  reclaiming them. New `S3PrefixLister.forEachPage(client, bucket, prefix, Consumer<List<…>>)`
+  returns `S3PrefixWalk(objectsRead, truncated)`; `listAll` is now that walk with a collecting
+  consumer, so there is one implementation and the truncation contract of #122 is literally the same
+  object in both — pages already handed over stand, the flag says the walk stopped early. **The
+  complete-listing callers keep their semantics unchanged**: the wipe compares every key against one
+  instant and `requireCompleteKeys` (batch deletion, retention) needs the whole set or none, so both
+  still call `listAll`. One behaviour the split *added*: the consumer runs **outside** the catch that
+  classifies truncation, because this walk's consumer deletes objects and can therefore raise the
+  very exception types the walk reads as "the listing stopped early" — a caller's failure reported
+  as a short listing would be hidden behind a flag meaning the opposite. **What is bounded and what
+  deliberately is not.** The listing is bounded by nothing; the row set is bounded by what still
+  exists (retention prunes segments, `checkpoints` is one row per table). So the listing is consumed
+  a page at a time and the row set stays **one read per site**, taken lazily on the first page that
+  produces a candidate — the same single query #158 made, so no S3 call and no database call is
+  added or removed and this is a heap change and nothing else. The cost is stated rather than hidden:
+  for a site whose prefix fits one page — the overwhelming majority — "rows read after the listing"
+  is unchanged, and beyond the first page that ordering guard is weaker, with the **age window**
+  carrying it (a row can only appear for an object whose write is still in flight, and the window is
+  a day past the longest such gap). The checkpoint pointer read with those rows is *older* than the
+  pages that follow, and an older pointer protects strictly more keys, so `couldStillBeAdopted` errs
+  only towards keeping the object. A failed row read now ends the **site**, every remaining page of
+  it included, rather than the page that asked; the held-back and dry-run lines are accumulated and
+  logged **once per site** with a ten-key sample, so an operator reads the same one line per prefix
+  as before rather than one per page. `S3ChangelogSegmentStorage.walkPrefix` and
+  `S3CheckpointStorage.walkPrefix` join their `listPrefix` twins — except on the segment side, where
+  the materializing form had no caller left and is **removed** rather than kept as an invitation to
+  restore the peak. **The delete is buffered rather than paged**, which review had to point out: a
+  page and a `DeleteObjects` chunk are both 1000 keys, so deleting per page would have turned the
+  sparse steady state — a few superseded objects every thousand keys — into one round trip per page
+  on a tick that walks every site prefix in the bucket: a site of two thousand pages holding four
+  thousand thinly spread orphans would have taken up to **two thousand** round trips where the
+  whole-listing version took four.
+  Orphans are judged per page and queued, every full chunk goes out during the walk and the
+  remainder in the `finally`, so the peak is under two chunks of keys — the same order as the page
+  the walk hands over — and the bound this ticket is about is untouched. Pinned by tests on both sides: the
+  walk hands pages over separately, keeps the pages already handed over on a mid-walk failure, and
+  does **not** swallow a consumer's `S3Exception`; the sweep sends orphans thinly spread over two
+  pages in **one** round trip and flushes a full chunk mid-walk (a 1500-key page leaves as 1000 then
+  500, so batching cannot become accumulating), reads the row set once for three pages, and — the
+  assertion that actually pins the design — records "rows" *before* "walk-finished", which a
+  materializing implementation cannot do. No REST, gRPC, proto, DTO, migration, configuration-key, metric-name,
+  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Objects no row references are
+  reclaimed").
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
   references are reclaimed, by one mechanism for both prefixes (issue #158, which folded **#160** —
   the same defect in the second prefix, and the hard part, proving an object is dead without a row
