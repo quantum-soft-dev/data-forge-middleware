@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
+import org.springframework.core.annotation.MergedAnnotation;
 import org.springframework.core.annotation.MergedAnnotations;
 import org.springframework.core.type.filter.AssignableTypeFilter;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.util.ReflectionUtils;
 
@@ -64,9 +66,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * component-scannable to be seen. {@link #scanAnnotations()} loads the production classes and reads
  * the resolved annotation, which is the only way to see a value that is not a string literal, and
  * the only way to see an {@code @Async} that arrives through a meta-annotation. Every site either
- * scan finds goes through both assertions, and
- * {@link #theTwoScansSeeTheSameFiles()} fails when they stop agreeing on which files carry one —
- * a scan that has gone blind is otherwise indistinguishable from a clean application.</p>
+ * scan finds goes through both assertions, and {@link #theTwoScansSeeTheSameSites()} fails when
+ * they stop agreeing — a scan that has gone blind is otherwise indistinguishable from a clean
+ * application.</p>
  *
  * @see BackgroundConnectionDemandTest
  * @see ScheduledTaskInventoryTest
@@ -81,13 +83,14 @@ class AsyncExecutorQualifierTest {
     /**
      * One {@code @Async} in production code.
      *
-     * @param location     where it is written, in whatever terms the scan that found it can offer
+     * @param file         the source file it is written in, relative to {@code src/main/java}
+     * @param location     where it is, in whatever terms the scan that found it can offer
      * @param executorName the executor bean it names, or {@code null} when it names none
      * @param resolved     whether {@code executorName} is the actual bean name; {@code false} for a
      *                     source-scanned site whose argument is an expression rather than a string
      *                     literal, which the text scan can see is <em>named</em> but cannot evaluate
      */
-    private record AsyncSite(String location, String executorName, boolean resolved) {
+    private record AsyncSite(String file, String location, String executorName, boolean resolved) {
 
         boolean namesAnExecutor() {
             return executorName != null && !executorName.isBlank();
@@ -108,6 +111,7 @@ class AsyncExecutorQualifierTest {
         List<String> unnamed = sites.stream()
                 .filter(site -> !site.namesAnExecutor())
                 .map(AsyncSite::location)
+                .distinct()
                 .toList();
 
         assertTrue(unnamed.isEmpty(),
@@ -118,25 +122,28 @@ class AsyncExecutorQualifierTest {
                         + "application declares. That is unbounded background demand on a connection "
                         + "pool sized against a counted inventory (issue #161), and it is invisible to "
                         + "every route BackgroundConnectionDemandTest discovers pools by. Name one of "
-                        + "the declared executors: " + declaredExecutorBeanNames());
+                        + "the executors an @Async may use: " + nameableExecutorBeans().keySet());
     }
 
     @Test
     @DisplayName("every @Async names an executor bean this application actually declares")
     void everyAsyncQualifierNamesADeclaredExecutorBean() {
-        Set<String> declared = declaredExecutorBeanNames();
+        Map<String, String> nameable = nameableExecutorBeans();
         List<String> unknown = allSites().stream()
                 .filter(AsyncSite::namesAnExecutor)
                 .filter(AsyncSite::resolved)
-                .filter(site -> !declared.contains(site.executorName()))
+                .filter(site -> !nameable.containsKey(site.executorName()))
                 .map(site -> site.location() + " -> \"" + site.executorName() + "\"")
+                .distinct()
                 .toList();
 
         assertTrue(unknown.isEmpty(),
-                "these @Async sites name an executor bean that is not declared: " + unknown
+                "these @Async sites name an executor bean an @Async may not use: " + unknown
                         + ". A qualifier naming no bean is not a startup failure: it is resolved on the "
                         + "first invocation of the method and throws there, on a path a test may never "
-                        + "take. The declared executors are " + declared + " — if the newcomer is a "
+                        + "take. The executors available to an @Async are " + nameable.keySet()
+                        + " — every @Bean returning an Executor except the TaskScheduler ones, which are "
+                        + "excluded deliberately: " + SCHEDULER_EXCLUSION + ". If the newcomer is a "
                         + "legitimate executor declared some other way than a @Bean method returning an "
                         + "Executor, it is also invisible to BackgroundConnectionDemandTest, so make it "
                         + "visible to both rather than teaching this scan alone");
@@ -147,40 +154,67 @@ class AsyncExecutorQualifierTest {
     // ---------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("the source scan and the annotation scan see the same files")
-    void theTwoScansSeeTheSameFiles() {
-        Set<String> inSource = new TreeSet<>(scanSource().keySet());
-        Set<String> inAnnotations = new TreeSet<>(scanAnnotations().keySet());
+    @DisplayName("the source scan and the annotation scan see the same sites")
+    void theTwoScansSeeTheSameSites() {
+        Map<String, Integer> inSource = countByFile(scanSource());
+        Map<String, Integer> inAnnotations = countByFile(scanAnnotations());
 
         assertFalse(inSource.isEmpty(), "the source scan found no @Async — it is broken");
         assertFalse(inAnnotations.isEmpty(), "the annotation scan found no @Async — it is broken");
         assertEquals(inSource, inAnnotations,
-                "the two scans disagree about which files carry an @Async. A file only the source "
-                        + "scan sees is one whose class the classpath scan cannot reach (an interface, "
-                        + "an abstract class, a class it will not load) — the site is real and needs "
-                        + "checking by hand. A file only the annotation scan sees carries an @Async that "
-                        + "is not written as one, i.e. through a meta-annotation — which the text scan "
-                        + "will keep missing for every future site too. Either way, decide before "
-                        + "silencing this");
+                "the two scans disagree about the @Async sites per file (source scan on the left). "
+                        + "A file, or a site within one, that only the source scan sees belongs to a "
+                        + "class the classpath scan cannot reach (an interface, an abstract class, a "
+                        + "class it will not load) — the site is real and needs checking by hand. One "
+                        + "only the annotation scan sees is an @Async that is not written as one, i.e. "
+                        + "through a meta-annotation — which the text scan will keep missing for every "
+                        + "future site too. The count is compared and not just the file, because this "
+                        + "application keeps 15 of its 18 sites in a single file: a stripper accident "
+                        + "there could hide fourteen of them while every other assertion stayed green. "
+                        + "Either way, decide before silencing this");
     }
 
     @Test
     @DisplayName("the executor beans this test resolves names from are the ones the connection audit counts")
     void theExecutorBeanScanAgreesWithTheConnectionAudit() {
-        Map<String, String> byName = declaredExecutorBeans();
+        List<ExecutorBean> declared = declaredExecutorBeans();
 
-        assertFalse(byName.isEmpty(),
+        assertFalse(declared.isEmpty(),
                 "no @Bean returning an Executor was found. Beyond breaking this scan, that would "
                         + "change the premise above: with no Executor bean declared, Boot's "
                         + "applicationTaskExecutor no longer backs off and an unqualified @Async lands "
                         + "on a bounded pool rather than on an unbounded SimpleAsyncTaskExecutor");
-        assertEquals(BackgroundConnectionDemandTest.scanExecutorBeans(),
-                new TreeSet<>(byName.values()),
+        Set<String> factories = new TreeSet<>();
+        declared.forEach(bean -> factories.add(bean.declaredAt()));
+
+        assertEquals(BackgroundConnectionDemandTest.scanExecutorBeans(), factories,
                 "this class and BackgroundConnectionDemandTest (#161) disagree about which @Bean "
                         + "methods declare an executor. They are two readings of the same set — one for "
                         + "the names an @Async may use, one for the threads the connection pool is sized "
                         + "against — and a pool visible to one but not the other is exactly the gap both "
                         + "were written to close");
+    }
+
+    @Test
+    @DisplayName("no executor bean name is declared twice")
+    void everyExecutorBeanNameIsUnique() {
+        Map<String, String> byName = new LinkedHashMap<>();
+        List<String> clashes = new ArrayList<>();
+        for (ExecutorBean bean : declaredExecutorBeans()) {
+            for (String name : bean.names()) {
+                String previous = byName.put(name, bean.declaredAt());
+                if (previous != null) {
+                    clashes.add(name + " declared by " + previous + " and " + bean.declaredAt());
+                }
+            }
+        }
+
+        assertTrue(clashes.isEmpty(),
+                "two @Bean methods declare the same executor bean name: " + clashes + ". Spring would "
+                        + "have one override the other, and the name-keyed lookups above would silently "
+                        + "lose an entry — so an @Async naming it would be resolved against a pool "
+                        + "nobody chose, and the drift check against BackgroundConnectionDemandTest "
+                        + "would fail naming a cause that has nothing to do with either scan");
     }
 
     // ---------------------------------------------------------------------------------------
@@ -274,34 +308,99 @@ class AsyncExecutorQualifierTest {
                 "the argument list belongs to the method, not to the annotation");
     }
 
+    @Test
+    @DisplayName("a string literal containing /* does not swallow the code after it")
+    void shouldNotTreatAnAntPatternAsACommentOpener() {
+        List<AsyncSite> sites = parse("Some.java", """
+                class Some {
+                    private static final String PATH = "/api/v1/device/**";
+
+                    @Async("pluginExecutor")
+                    void run() {
+                    }
+
+                    /** Trailing Javadoc, whose closing marker would end the phantom comment. */
+                    void other() {
+                    }
+                }
+                """);
+
+        assertEquals(1, sites.size(),
+                "a comment stripper that does not know about string literals reads \"/api/v1/**\" as "
+                        + "the start of a block comment and deletes everything up to the next */, which "
+                        + "is the whole point of the two scans agreeing site by site");
+        assertEquals("pluginExecutor", sites.get(0).executorName());
+    }
+
+    @Test
+    @DisplayName("an escaped quote and a text block do not desynchronize the stripper")
+    void shouldHandleEscapesAndTextBlocks() {
+        // Written by concatenation rather than as a text block: the fixture has to contain a text
+        // block of its own, and nesting one inside another is unreadable at best.
+        String source = "class Some {\n"
+                + "    private static final String QUOTED = \"he said \\\"/* \\\" and stopped\";\n"
+                + "    private static final String BLOCK = \"\"\"\n"
+                + "            a text block with /* and \" inside\n"
+                + "            \"\"\";\n"
+                + "\n"
+                + "    @Async(\"pluginExecutor\")\n"
+                + "    void run() {\n"
+                + "    }\n"
+                + "}\n";
+
+        List<AsyncSite> sites = parse("Some.java", source);
+
+        assertEquals(1, sites.size());
+        assertEquals("pluginExecutor", sites.get(0).executorName());
+    }
+
+    @Test
+    @DisplayName("a character literal holding a quote does not desynchronize the stripper")
+    void shouldHandleCharacterLiterals() {
+        List<AsyncSite> sites = parse("Some.java", """
+                class Some {
+                    private static final char QUOTE = '"';
+
+                    @Async("pluginExecutor")
+                    void run() {
+                    }
+                }
+                """);
+
+        assertEquals(1, sites.size());
+        assertEquals("pluginExecutor", sites.get(0).executorName());
+    }
+
     // ---------------------------------------------------------------------------------------
     // Scans
     // ---------------------------------------------------------------------------------------
 
     private static List<AsyncSite> allSites() {
-        List<AsyncSite> sites = new ArrayList<>();
-        scanSource().values().forEach(sites::addAll);
-        scanAnnotations().values().forEach(sites::addAll);
+        List<AsyncSite> sites = new ArrayList<>(scanSource());
+        sites.addAll(scanAnnotations());
         return sites;
     }
 
+    private static Map<String, Integer> countByFile(List<AsyncSite> sites) {
+        Map<String, Integer> counts = new TreeMap<>();
+        sites.forEach(site -> counts.merge(site.file(), 1, Integer::sum));
+        return counts;
+    }
+
     /**
-     * {@code @Async} as written, keyed by source file relative to {@code src/main/java}.
+     * {@code @Async} as written in {@code src/main/java}.
      *
      * <p>Text rather than reflection so that nothing has to be loadable, concrete or
      * component-scannable to be seen — the classpath scan behind {@link #scanAnnotations()} skips
      * interfaces and abstract classes, and an {@code @Async} on either is still honoured by Spring
      * on the concrete class that inherits it.</p>
      */
-    private static Map<String, List<AsyncSite>> scanSource() {
-        Map<String, List<AsyncSite>> found = new TreeMap<>();
+    private static List<AsyncSite> scanSource() {
+        List<AsyncSite> found = new ArrayList<>();
         try (Stream<Path> sources = Files.walk(PRODUCTION_SOURCE_ROOT)) {
             for (Path file : sources.filter(path -> path.toString().endsWith(".java")).toList()) {
                 String relative = PRODUCTION_SOURCE_ROOT.relativize(file).toString().replace('\\', '/');
-                List<AsyncSite> sites = parse(relative, Files.readString(file));
-                if (!sites.isEmpty()) {
-                    found.put(relative, sites);
-                }
+                found.addAll(parse(relative, Files.readString(file)));
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -310,65 +409,117 @@ class AsyncExecutorQualifierTest {
     }
 
     /**
-     * {@code @Async} as Spring resolves it, keyed by the source file of the class that carries it.
+     * {@code @Async} as Spring resolves it, attributed to the file it is <em>written</em> in.
      *
-     * <p>Keyed by file rather than by class so it can be compared with the text scan, and a nested
-     * class maps to the file of its outer one for the same reason. Both the method annotation and
-     * the type-level one are read: a type-level {@code @Async} makes every method of the class
-     * asynchronous, so an unqualified one there is the same defect at a larger radius.</p>
+     * <p>Attribution is by the annotation's own source and not by the class the scan happened to
+     * reach it through, because {@code getAllDeclaredMethods} walks the hierarchy: an {@code @Async}
+     * on a superclass would otherwise be reported once per concrete subclass, in files that do not
+     * contain it, and the site-by-site comparison would fail on correct code. For the same reason
+     * the sites are de-duplicated by method signature.</p>
+     *
+     * <p>Both the method annotation and the type-level one are read: a type-level {@code @Async}
+     * makes every method of the class asynchronous, so an unqualified one there is the same defect
+     * at a larger radius.</p>
      */
-    private static Map<String, List<AsyncSite>> scanAnnotations() {
-        Map<String, List<AsyncSite>> found = new TreeMap<>();
+    private static List<AsyncSite> scanAnnotations() {
+        Map<String, AsyncSite> bySignature = new TreeMap<>();
         for (Class<?> type : productionClasses()) {
-            List<AsyncSite> sites = new ArrayList<>();
-            qualifierOf(MergedAnnotations.from(type, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY))
-                    .ifPresent(value -> sites.add(site(type.getName(), value)));
-            for (Method method : ReflectionUtils.getAllDeclaredMethods(type)) {
-                qualifierOf(MergedAnnotations.from(method, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY))
-                        .ifPresent(value ->
-                                sites.add(site(type.getName() + "#" + method.getName(), value)));
+            MergedAnnotation<Async> onType = MergedAnnotations
+                    .from(type, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY).get(Async.class);
+            if (onType.isPresent()) {
+                Class<?> owner = sourceType(onType.getSource(), type);
+                bySignature.put(owner.getName(), site(owner, owner.getName(), onType.getString("value")));
             }
-            if (!sites.isEmpty()) {
-                found.computeIfAbsent(sourceFileOf(type), file -> new ArrayList<>()).addAll(sites);
+            for (Method method : ReflectionUtils.getAllDeclaredMethods(type)) {
+                if (method.isBridge() || method.isSynthetic()) {
+                    continue;
+                }
+                MergedAnnotation<Async> onMethod = MergedAnnotations
+                        .from(method, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY).get(Async.class);
+                if (!onMethod.isPresent()) {
+                    continue;
+                }
+                Method owner = onMethod.getSource() instanceof Method declared ? declared : method;
+                bySignature.put(signatureOf(owner),
+                        site(owner.getDeclaringClass(),
+                                owner.getDeclaringClass().getName() + "#" + owner.getName(),
+                                onMethod.getString("value")));
             }
         }
-        return found;
+        return new ArrayList<>(bySignature.values());
     }
 
-    private static java.util.Optional<String> qualifierOf(MergedAnnotations annotations) {
-        return annotations.isPresent(Async.class)
-                ? java.util.Optional.of(annotations.get(Async.class).getString("value"))
-                : java.util.Optional.empty();
+    private static Class<?> sourceType(Object source, Class<?> fallback) {
+        if (source instanceof Class<?> type) {
+            return type;
+        }
+        return source instanceof Method method ? method.getDeclaringClass() : fallback;
     }
 
-    private static AsyncSite site(String location, String value) {
-        return new AsyncSite(location, value.isBlank() ? null : value, true);
+    private static String signatureOf(Method method) {
+        StringBuilder signature = new StringBuilder(method.getDeclaringClass().getName())
+                .append('#').append(method.getName()).append('(');
+        for (Class<?> parameter : method.getParameterTypes()) {
+            signature.append(parameter.getName()).append(',');
+        }
+        return signature.append(')').toString();
     }
 
-    /** Names under which this application declares an {@link Executor}, and where each is declared. */
-    private static Map<String, String> declaredExecutorBeans() {
-        Map<String, String> byName = new LinkedHashMap<>();
+    private static AsyncSite site(Class<?> owner, String location, String value) {
+        return new AsyncSite(sourceFileOf(owner), location, value.isBlank() ? null : value, true);
+    }
+
+    /**
+     * One {@code @Bean} method whose product is an {@link Executor}.
+     *
+     * @param declaredAt  the {@code Class#method} that declares it, the form
+     *                    {@code BackgroundConnectionDemandTest} keys its inventory by
+     * @param names       every name the bean is registered under
+     * @param isScheduler whether its product is a {@link TaskScheduler}
+     */
+    private record ExecutorBean(String declaredAt, List<String> names, boolean isScheduler) {
+    }
+
+    /**
+     * Why a {@link TaskScheduler} is not a name an {@code @Async} may use. Quoted in the failure
+     * message so the exclusion is read where it would bite.
+     */
+    private static final String SCHEDULER_EXCLUSION =
+            "spring.task.scheduling.pool.size is derived (issues #146, #161) over the @Scheduled "
+                    + "inventory alone, so async work parked there would postpone the fixed-delay "
+                    + "sweeps the pool was sized for, silently and without appearing in any inventory";
+
+    /** Every {@code @Bean} method in production code whose product is an {@link Executor}. */
+    private static List<ExecutorBean> declaredExecutorBeans() {
+        List<ExecutorBean> beans = new ArrayList<>();
         for (Class<?> type : productionClasses()) {
             for (Method method : ReflectionUtils.getAllDeclaredMethods(type)) {
                 if (!method.isAnnotationPresent(Bean.class)
                         || !Executor.class.isAssignableFrom(method.getReturnType())) {
                     continue;
                 }
-                String[] names = MergedAnnotations.from(method).get(Bean.class).getStringArray("name");
-                String declaredAt = type.getName() + "#" + method.getName();
-                if (names.length == 0) {
-                    byName.put(method.getName(), declaredAt);
-                }
-                for (String name : names) {
-                    byName.put(name, declaredAt);
-                }
+                String[] declaredNames =
+                        MergedAnnotations.from(method).get(Bean.class).getStringArray("name");
+                List<String> names = declaredNames.length == 0
+                        ? List.of(method.getName())
+                        : List.of(declaredNames);
+                beans.add(new ExecutorBean(type.getName() + "#" + method.getName(), names,
+                        TaskScheduler.class.isAssignableFrom(method.getReturnType())));
             }
         }
-        return byName;
+        return beans;
     }
 
-    private static Set<String> declaredExecutorBeanNames() {
-        return new TreeSet<>(declaredExecutorBeans().keySet());
+    /** The executor bean names an {@code @Async} may name, and where each is declared. */
+    private static Map<String, String> nameableExecutorBeans() {
+        Map<String, String> byName = new TreeMap<>();
+        for (ExecutorBean bean : declaredExecutorBeans()) {
+            if (bean.isScheduler()) {
+                continue;
+            }
+            bean.names().forEach(name -> byName.put(name, bean.declaredAt()));
+        }
+        return byName;
     }
 
     /**
@@ -379,27 +530,119 @@ class AsyncExecutorQualifierTest {
      * scan above from passing vacuously: a guard that only reads an already-clean application
      * cannot tell "nothing to find" from "found nothing".</p>
      */
-    private static List<AsyncSite> parse(String location, String source) {
-        String code = JAVA_COMMENT.matcher(source).replaceAll("");
+    private static List<AsyncSite> parse(String file, String source) {
+        String code = stripComments(source);
         List<AsyncSite> sites = new ArrayList<>();
         Matcher matcher = ASYNC_ANNOTATION.matcher(code);
         while (matcher.find()) {
             String argument = matcher.group(1);
             if (argument == null) {
-                sites.add(new AsyncSite(location, null, true));
+                sites.add(new AsyncSite(file, file, null, true));
                 continue;
             }
             String value = argument.trim().replaceFirst("^value\\s*=\\s*", "").trim();
             Matcher literal = STRING_LITERAL.matcher(value);
             if (literal.matches()) {
                 String name = literal.group(1);
-                sites.add(new AsyncSite(location, name.isBlank() ? null : name, true));
+                sites.add(new AsyncSite(file, file, name.isBlank() ? null : name, true));
             } else {
                 // Named, but not by anything this scan can evaluate. scanAnnotations() resolves it.
-                sites.add(new AsyncSite(location, value, false));
+                sites.add(new AsyncSite(file, file, value, false));
             }
         }
         return sites;
+    }
+
+    /**
+     * Java source with its comments removed and everything else — string, text-block and character
+     * literals included — copied through verbatim.
+     *
+     * <p>Character by character rather than by regular expression, and that is the whole reason it
+     * exists: a slash-star pair appears inside ordinary string literals (this application's security
+     * matchers use ant patterns such as {@code "/api/v1/device/**"}), and a pattern that deletes
+     * from a slash-star to the next star-slash swallows every line in between — over two thousand
+     * characters of real code in one file here. A stripper that hides code is worse than none,
+     * because this scan's whole claim is that it is total over the source.</p>
+     *
+     * <p>The literals are kept rather than blanked because the qualifier this class reads
+     * <em>is</em> a string literal.</p>
+     */
+    static String stripComments(String source) {
+        StringBuilder code = new StringBuilder(source.length());
+        int index = 0;
+        int length = source.length();
+        while (index < length) {
+            char current = source.charAt(index);
+            char next = index + 1 < length ? source.charAt(index + 1) : '\0';
+            if (current == '/' && next == '/') {
+                while (index < length && source.charAt(index) != '\n') {
+                    index++;
+                }
+            } else if (current == '/' && next == '*') {
+                index += 2;
+                while (index + 1 < length
+                        && !(source.charAt(index) == '*' && source.charAt(index + 1) == '/')) {
+                    // Newlines are kept so a stripped comment cannot join two lines of code.
+                    if (source.charAt(index) == '\n') {
+                        code.append('\n');
+                    }
+                    index++;
+                }
+                index = Math.min(index + 2, length);
+            } else if (current == '"' && next == '"' && index + 2 < length
+                    && source.charAt(index + 2) == '"') {
+                index = copyTextBlock(source, index, code);
+            } else if (current == '"' || current == '\'') {
+                index = copyLiteral(source, index, current, code);
+            } else {
+                code.append(current);
+                index++;
+            }
+        }
+        return code.toString();
+    }
+
+    /** Copies a string or character literal verbatim, honouring escapes; returns the index after it. */
+    private static int copyLiteral(String source, int start, char quote, StringBuilder code) {
+        int length = source.length();
+        code.append(quote);
+        int index = start + 1;
+        while (index < length) {
+            char current = source.charAt(index);
+            code.append(current);
+            index++;
+            if (current == '\\' && index < length) {
+                code.append(source.charAt(index));
+                index++;
+            } else if (current == quote || current == '\n') {
+                // An unterminated literal cannot outlive its line, so a newline ends it too rather
+                // than letting one typo desynchronize the rest of the file.
+                break;
+            }
+        }
+        return index;
+    }
+
+    /** Copies a text block verbatim; returns the index after its closing delimiter. */
+    private static int copyTextBlock(String source, int start, StringBuilder code) {
+        int length = source.length();
+        code.append("\"\"\"");
+        int index = start + 3;
+        while (index < length) {
+            if (source.charAt(index) == '\\' && index + 1 < length) {
+                code.append(source, index, index + 2);
+                index += 2;
+                continue;
+            }
+            if (source.charAt(index) == '"' && index + 2 < length
+                    && source.charAt(index + 1) == '"' && source.charAt(index + 2) == '"') {
+                code.append("\"\"\"");
+                return index + 3;
+            }
+            code.append(source.charAt(index));
+            index++;
+        }
+        return index;
     }
 
     /**
@@ -410,10 +653,6 @@ class AsyncExecutorQualifierTest {
             "@(?:org\\.springframework\\.scheduling\\.annotation\\.)?Async\\b\\s*(?:\\(([^)]*)\\))?");
 
     private static final Pattern STRING_LITERAL = Pattern.compile("\"([^\"]*)\"");
-
-    /** Line and block comments, so prose about {@code @Async} is not counted as a site. */
-    private static final Pattern JAVA_COMMENT =
-            Pattern.compile("/\\*.*?\\*/|//[^\\n]*", Pattern.DOTALL);
 
     /** The file a class is written in, with a nested class mapped to its outer class's file. */
     private static String sourceFileOf(Class<?> type) {

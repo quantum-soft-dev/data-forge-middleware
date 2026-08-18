@@ -724,17 +724,19 @@ class BackgroundConnectionDemandTest {
                     + "new ForkJoinPool\\(|ForkJoinPool\\.commonPool\\(|new SimpleAsyncTaskExecutor\\(|"
                     + "CompletableFuture\\.supplyAsync\\(|CompletableFuture\\.runAsync\\(");
 
-    /** Line and block comments, so prose about a thread pool is not counted as one. */
-    private static final Pattern JAVA_COMMENT =
-            Pattern.compile("/\\*.*?\\*/|//[^\\n]*", Pattern.DOTALL);
-
     private static Map<String, Integer> scanPoolConstructions() throws IOException {
         Path root = Path.of("src/main/java");
         Map<String, Integer> found = new TreeMap<>();
         try (Stream<Path> sources = Files.walk(root)) {
             List<Path> files = sources.filter(path -> path.toString().endsWith(".java")).toList();
             for (Path file : files) {
-                String code = JAVA_COMMENT.matcher(Files.readString(file)).replaceAll("");
+                // Comments removed by AsyncExecutorQualifierTest's stripper (#195) rather than
+                // by a regular expression: a pattern deleting from a slash-star to the next
+                // star-slash also fires inside string literals — this application's ant
+                // patterns contain one — and swallows the code up to the next comment, which
+                // for a scan whose job is to find what nobody declared is the worst failure
+                // available: silent, and towards passing.
+                String code = AsyncExecutorQualifierTest.stripComments(Files.readString(file));
                 int count = 0;
                 Matcher matcher = POOL_CONSTRUCTION.matcher(code);
                 while (matcher.find()) {
