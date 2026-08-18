@@ -453,6 +453,93 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- async-executor-guard: Every `@Async` in `src/main/java` names the executor it runs on, and a
+  newcomer that does not fails the build (issue #195, raised reviewing #194/#165).
+  `AsyncConfiguration`'s Javadoc had stated the fact — every `@Async` site is an
+  `@Async("pluginExecutor")` method in the plugin package — and **nothing kept it true**. The two
+  ways it can stop being true are both invisible until production: an unqualified `@Async` falls
+  through to `AsyncExecutionAspectSupport`'s default resolution, and since
+  `TaskExecutionAutoConfiguration#applicationTaskExecutor` is
+  `@ConditionalOnMissingBean(Executor.class)` and this application declares several, Boot's bounded
+  pool **backs off** — so the live fallback is a `SimpleAsyncTaskExecutor` with a **new thread per
+  invocation and no ceiling**; and a qualifier naming no bean is resolved lazily and throws on the
+  **first invocation** of the method, not at startup. The first is exactly the shape
+  `BackgroundConnectionDemandTest` (#161) exists to keep out and is invisible to **all three** of
+  its discovery routes — not a `@Bean`, not a `max-concurrent` key, not a
+  `new ThreadPoolTaskExecutor(...)` — which is why the guard belongs on the annotation rather than
+  in that inventory. `AsyncExecutorQualifierTest` scans **two ways, because neither reaches
+  everything**: `src/main/java` as text with comments stripped (total over the code this repository
+  owns — nothing has to be concrete, independent or component-scannable, and the configuration
+  classes carry a good deal of prose about this very rule, hence the stripping), and the loaded
+  production classes through `MergedAnnotations` (the only way to resolve a value that is not a
+  string literal, and the only way to see an `@Async` arriving through a meta-annotation; type-level
+  as well as per-method, since a type-level one is the same defect at a larger radius). Every site
+  either finds goes through both assertions, and a third test fails when the two stop agreeing on
+  **which files** carry an `@Async` — a scan that has gone blind is otherwise indistinguishable from
+  a clean application. The names are resolved against `BackgroundConnectionDemandTest.scanExecutorBeans()`
+  itself (made package-private for it, the `ScheduledTaskInventoryTest.scanScheduledMethods()`
+  precedent), so the set an `@Async` may name and the set the connection pool is sized against
+  cannot drift apart: an executor visible to one and not the other is the gap both classes exist to
+  close. That equality also asserts the **premise** rather than leaving it as prose — with no
+  `Executor` bean declared, Boot's pool would no longer back off and the unbounded fallback would
+  not be the live branch. **No test can start red against a property that already holds**, so it was
+  proven by mutation, one per assertion: a bare `@Async` on `PluginEventDispatcher` (the unnamed
+  check), `@Async("comparisonExecutor")` — the bean #165 deleted — (the declared-bean check), and an
+  `@Async` on the `Plugin` **interface**, which `ClassPathScanningCandidateComponentProvider` will
+  not reach (the drift check). The parser is asserted directly as well, over synthetic sources:
+  bare, `@Async("")`, `@Async(value = "…")`, the fully qualified form, an expression argument (named
+  but not evaluable from text — the annotation scan resolves it, which is why a site is read twice),
+  `{@code @Async}` in Javadoc, and a method whose own parameter list must not be read as the
+  qualifier. Test-only — no production code beyond the `AsyncConfiguration` Javadoc, and no REST,
+  gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("The connection pool is smaller than the threads that can ask it
+  for a connection").
+  **Review found five blind spots in the guard itself, and two of them mattered.** The scans were
+  keyed by the class the reflection scan *reached* a site through, but `getAllDeclaredMethods` walks
+  the hierarchy, so an `@Async` on a superclass was attributed to every concrete subclass's file —
+  correct, properly-qualified code failing the drift check, with a message blaming a meta-annotation;
+  a site is now attributed to the annotation's own source (`MergedAnnotation.getSource()`),
+  de-duplicated by method signature, with bridge and synthetic methods skipped. And the comment
+  stripper was the copied regex (`/\*.*?\*/|//[^\n]*`), which fires **inside string literals**:
+  `"/api/v1/device/**"` opens a phantom block comment that runs to the next `*/`, deleting **2088
+  characters — 40 lines — of real code** in `SecurityConfiguration` alone, so the text scan's claim
+  to be total over the source was false. It is now a character scanner that copies string, character
+  and text-block literals verbatim (the literals are kept rather than blanked, because the qualifier
+  being read *is* a string literal), and **`BackgroundConnectionDemandTest` shares it** rather than
+  keeping the broken twin — where the same hole would hide a pool construction from a scan whose
+  whole job is to find what nobody declared. The Javadoc explaining that fix had to be rewritten
+  too: written with `\u002a` escapes it closed its own comment, since Java resolves unicode escapes
+  before it lexes. Three smaller ones: the two scans are compared **site by site per file** rather
+  than by file key, because one file holds 15 of the application's 18 sites and a stripper accident
+  there could have hidden fourteen with every assertion green; `TaskScheduler`-typed beans are
+  excluded from the names an `@Async` may use (`@Async("taskScheduler")` passed both assertions and
+  would park blocking async work on the pool whose size is derived over the `@Scheduled` inventory
+  alone, postponing the fixed-delay sweeps #146 sized it for); and a duplicate executor bean name is
+  its own failure rather than a silently dropped map entry reported as scan drift. The mutation set
+  moved with the design: the interface probe now **passes**, because a default method is reached
+  through its implementors and attributed to the interface's own file — the honest blind spot is a
+  carrier the classpath scan cannot reach at all (an abstract class with no concrete subclass), which
+  is what the drift check is now pinned against.
+  **Round 2** was five more findings, all about the guard firing on *correct* code rather than
+  missing anything, and one about what it costs. The stripper keeps literals verbatim (it must — the
+  qualifier is one), so an `@Async` named in a log line or an exception message counted as a site;
+  the kept literals are now **masked**, and a match beginning inside one is skipped. A `@Qualifier`
+  on an executor `@Bean` is now a name an `@Async` may use, because that is what
+  `BeanFactoryAnnotationUtils` resolves against. Executor beans are de-duplicated by method
+  signature before the name-clash check, so a `@Bean` inherited from a base `@Configuration` — which
+  `getAllDeclaredMethods` reports once per subclass — is not read as two beans clashing over one
+  name, while the set compared with the connection audit keeps one entry per scanned type because
+  that is what the audit itself produces. The assertion messages are suppliers and the classpath scan
+  is memoized: the green path ran five ASM scans plus a `Class.forName` over every production class,
+  on a gate that fires on every commit. And the case the class's own Javadoc names as the reason the
+  annotation scan exists would have **failed** it: a meta-annotated `@Async` has its qualifier
+  written in the annotation's own file, which the classpath scan skips because an annotation type is
+  an interface, while the methods carrying the meta-annotation have no qualifier written on them at
+  all — two files, one count each, so the site-by-site comparison could not have matched. Those sites
+  are now excluded from the *comparison* and still required to name a declared executor by both
+  assertions, verified with a probe annotation in each direction. The exclusion is stated in the
+  failure message, so the two shapes only one scan can see by construction are visible where someone
+  would otherwise be tempted to silence the check.
 - rebuild-outcome: A forced checkpoint rebuild says what it did, where before it said only that it
   had stopped (issue #186, raised reviewing #183/#178 and older than both). `rebuild_requested` was
   the whole record of an operator's click — raised by `POST .../delta/checkpoints/rebuild`, released
