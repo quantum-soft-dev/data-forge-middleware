@@ -9,7 +9,7 @@ import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
@@ -18,21 +18,25 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.InOrder;
+import org.mockito.invocation.InvocationOnMock;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentCaptor.forClass;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.inOrder;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -117,19 +121,42 @@ class DeltaS3OrphanSweeperTest {
     }
 
     private void segmentSite(S3ListedObject... objects) {
+        segmentSitePages(false, List.of(objects));
+    }
+
+    /**
+     * A segment prefix whose walk hands over {@code pages} in order — the shape the sweeper sees
+     * from a real prefix bigger than one {@code ListObjectsV2} page (#199).
+     */
+    @SafeVarargs
+    private void segmentSitePages(boolean truncated, List<S3ListedObject>... pages) {
         when(segmentStorage.listSitePrefixes())
                 .thenReturn(S3ChildPrefixListing.complete(List.of("delta/" + SITE + "/")));
-        when(segmentStorage.listPrefix(SEGMENT_PREFIX))
-                .thenReturn(S3PrefixListing.complete(List.of(objects)));
+        when(segmentStorage.walkPrefix(eq(SEGMENT_PREFIX), any()))
+                .thenAnswer(call -> deliver(call, truncated, pages));
     }
 
     private void checkpointSite(S3ListedObject... objects) {
         when(checkpointStorage.listSitePrefixes())
                 .thenReturn(S3ChildPrefixListing.complete(List.of(CHECKPOINT_PREFIX)));
-        when(checkpointStorage.listPrefix(CHECKPOINT_PREFIX))
-                .thenReturn(S3PrefixListing.complete(List.of(objects)));
+        when(checkpointStorage.walkPrefix(eq(CHECKPOINT_PREFIX), any()))
+                .thenAnswer(call -> deliver(call, false, List.of(objects)));
         when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.empty());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
+    }
+
+    /** Hand each page to the sweeper's consumer, then report what the walk did. */
+    @SafeVarargs
+    private static S3PrefixLister.S3PrefixWalk deliver(
+            InvocationOnMock call, boolean truncated, List<S3ListedObject>... pages) {
+        @SuppressWarnings("unchecked")
+        Consumer<List<S3ListedObject>> consumer = call.getArgument(1, Consumer.class);
+        long read = 0L;
+        for (List<S3ListedObject> page : pages) {
+            read += page.size();
+            consumer.accept(page);
+        }
+        return new S3PrefixLister.S3PrefixWalk(read, truncated);
     }
 
     private static S3ListedObject object(String key, Instant lastModified) {
@@ -358,7 +385,7 @@ class DeltaS3OrphanSweeperTest {
         state.recordCheckpoint(7L);
         when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(state));
         // Not one of the wrapped reads: the listing itself blows up for the segment scope.
-        when(segmentStorage.listPrefix(SEGMENT_PREFIX))
+        when(segmentStorage.walkPrefix(eq(SEGMENT_PREFIX), any()))
                 .thenThrow(new IllegalStateException("SDK exception the lister does not catch"));
 
         sweeper().sweep(NOW);
@@ -395,27 +422,89 @@ class DeltaS3OrphanSweeperTest {
     }
 
     @Test
-    @DisplayName("the rows are read after the listing, so a row written in between still protects")
-    void readsTheRowsAfterTheListing() {
+    @DisplayName("the rows are read after the page they judge, and while the walk is still running")
+    void readsTheRowsAfterThePageAndDuringTheWalk() {
         String key = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
-        segmentSite(object(key, OLD));
-        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of(key));
+        List<String> events = new ArrayList<>();
+        when(segmentStorage.listSitePrefixes())
+                .thenReturn(S3ChildPrefixListing.complete(List.of("delta/" + SITE + "/")));
+        when(segmentStorage.walkPrefix(eq(SEGMENT_PREFIX), any())).thenAnswer(call -> {
+            @SuppressWarnings("unchecked")
+            Consumer<List<S3ListedObject>> consumer = call.getArgument(1, Consumer.class);
+            events.add("page");
+            consumer.accept(List.of(object(key, OLD)));
+            events.add("walk-finished");
+            return new S3PrefixLister.S3PrefixWalk(1L, false);
+        });
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenAnswer(call -> {
+            events.add("rows");
+            return List.of(key);
+        });
 
         sweeper().sweep(NOW);
 
-        InOrder order = inOrder(segmentStorage, segmentRepository);
-        order.verify(segmentStorage).listPrefix(SEGMENT_PREFIX);
-        order.verify(segmentRepository).findAllS3KeysBySiteId(SITE);
+        // "rows" before "walk-finished" is the whole point of #199: the site's history is judged
+        // while the walk runs, so nothing accumulates. "page" before "rows" keeps #158's guard —
+        // a row written during the walk is in the answer and its object is spared.
+        assertThat(events).containsExactly("page", "rows", "walk-finished");
+    }
+
+    @Test
+    @DisplayName("a multi-page prefix is judged and deleted page by page, never as one listing")
+    void judgesEachPageAsItArrives() {
+        String first = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
+        String second = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
+        segmentSitePages(false, List.of(object(first, OLD)), List.of(object(second, OLD)));
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
+
+        sweeper().sweep(NOW);
+
+        var chunks = forClass(List.class);
+        verify(objectDeleter, times(2)).deleteObjects(chunks.capture());
+        assertThat(chunks.getAllValues()).containsExactly(List.of(first), List.of(second));
+        assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isEqualTo(2.0);
+        assertThat(counter("delta.s3-orphan.candidates", "segments")).isEqualTo(2.0);
+    }
+
+    @Test
+    @DisplayName("the row set is read once per site, however many pages the prefix takes")
+    void readsTheRowSetOncePerSite() {
+        segmentSitePages(false,
+                List.of(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD)),
+                List.of(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD)),
+                List.of(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD)));
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
+
+        sweeper().sweep(NOW);
+
+        // Once, not once per page: the row set is bounded by what retention left, so re-reading it
+        // per page would trade the heap this ticket bounds for database work proportional to
+        // pages x rows.
+        verify(segmentRepository, times(1)).findAllS3KeysBySiteId(SITE);
+        verify(siteRepository, times(1)).findById(SITE);
+    }
+
+    @Test
+    @DisplayName("rows that could not be read stop the whole site, not just the page that asked")
+    void unreadableRowsStopTheRemainingPages() {
+        segmentSitePages(false,
+                List.of(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD)),
+                List.of(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD)));
+        when(segmentRepository.findAllS3KeysBySiteId(SITE))
+                .thenThrow(new IllegalStateException("connection timed out"));
+
+        sweeper().sweep(NOW);
+
+        verify(objectDeleter, never()).deleteObjects(anyList());
+        // The second page must not ask again: one failed read is the site's answer for this pass.
+        verify(segmentRepository, times(1)).findAllS3KeysBySiteId(SITE);
     }
 
     @Test
     @DisplayName("a truncated listing sweeps what it did read and never more")
     void sweepsWhatATruncatedListingReturned() {
         String orphan = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
-        when(segmentStorage.listSitePrefixes())
-                .thenReturn(S3ChildPrefixListing.complete(List.of("delta/" + SITE + "/")));
-        when(segmentStorage.listPrefix(SEGMENT_PREFIX))
-                .thenReturn(S3PrefixListing.truncated(List.of(object(orphan, OLD))));
+        segmentSitePages(true, List.of(object(orphan, OLD)));
         when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
 
         sweeper().sweep(NOW);
@@ -431,7 +520,7 @@ class DeltaS3OrphanSweeperTest {
 
         sweeper().sweep(NOW);
 
-        verify(checkpointStorage, never()).listPrefix(anyString());
+        verify(checkpointStorage, never()).walkPrefix(anyString(), any());
         verify(objectDeleter, never()).deleteObjects(anyList());
     }
 

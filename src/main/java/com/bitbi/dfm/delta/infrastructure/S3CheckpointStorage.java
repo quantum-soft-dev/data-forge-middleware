@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.infrastructure;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
+import com.bitbi.dfm.shared.storage.S3ListedObject;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -34,6 +35,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Stores materialized checkpoint snapshot files (Delta Client v2 — 022).
@@ -291,6 +293,18 @@ public class S3CheckpointStorage {
      */
     public S3PrefixListing listPrefix(String prefix) {
         return S3PrefixLister.listAll(s3Client, bucketName, prefix);
+    }
+
+    /**
+     * The same walk, one page at a time (issue #199) — for a caller that only filters the prefix
+     * and must not hold a site's whole checkpoint history in heap.
+     *
+     * @param prefix the prefix to enumerate
+     * @param page   receives each page as it arrives
+     * @return how many objects were handed over, and whether the walk stopped early
+     */
+    public S3PrefixLister.S3PrefixWalk walkPrefix(String prefix, Consumer<List<S3ListedObject>> page) {
+        return S3PrefixLister.forEachPage(s3Client, bucketName, prefix, page);
     }
 
     /**

@@ -9,7 +9,7 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
@@ -19,10 +19,12 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -54,6 +56,17 @@ import java.util.regex.Pattern;
  * name, delete the remainder. The prefixes differ only in which rows answer the last question —
  * {@code changelog_segments.s3_key} for one, the {@code checkpoints} keys plus the frame implied by
  * {@code site_sync_state.last_checkpoint_seq} for the other.</p>
+ *
+ * <h2>A page at a time, not a site's history at a time</h2>
+ *
+ * <p>Those four things happen per <b>page</b> of the listing (issue #199), because this sweep takes
+ * the largest listing this application ever takes: its own premise is that months of superseded
+ * generations accumulated with nothing reclaiming them, and it runs on a scheduler thread beside
+ * the checkpoint fold budget (#152, #178) and the Parquet scratch budget (#150), neither of which
+ * knows about it. {@code S3PrefixLister.forEachPage} hands one page over at a time and nothing
+ * here accumulates but counters and a ten-key sample for the dry-run line, so the peak is a page
+ * rather than a site. The row set is the one per-site read that stays whole, and
+ * {@link SiteSweep} says why that is the right asymmetry.</p>
  *
  * <p>The sites come from the <b>bucket</b>, not from the database, and that is not an optimization:
  * {@code SiteService.deleteSite} hard-deletes the site row and never touches these prefixes, so a
@@ -94,11 +107,13 @@ import java.util.regex.Pattern;
  *   <li><b>Shape.</b> Only keys matching what the writers produce are candidates, so an artifact
  *       kind added later accumulates — as it does today — instead of being deleted by a sweeper
  *       that has never heard of it.</li>
- *   <li><b>Rows.</b> The rows are read <em>after</em> the listing, so a row written in between is
- *       seen and protects its object; and a row set that could not be read skips the site entirely
- *       rather than reading "no rows" as "no references".</li>
- *   <li><b>Truncation.</b> A listing that failed mid-walk returns fewer objects, never more, so the
- *       worst it costs is one interval.</li>
+ *   <li><b>Rows.</b> The rows are read <em>after</em> the page they judge, so a row written in
+ *       between is seen and protects its object; and a row set that could not be read skips the
+ *       site entirely — every remaining page of it included — rather than reading "no rows" as "no
+ *       references".</li>
+ *   <li><b>Truncation.</b> A walk that failed mid-way hands over fewer pages, never more, so the
+ *       worst it costs is one interval. What earlier pages already reclaimed stands: they were
+ *       judged against the rows, not against the walk finishing.</li>
  *   <li><b>Ownership.</b> A prefix whose site has no {@code sites} row is left alone unless the
  *       bucket has been declared exclusive, because "no rows" and "not ours" look identical.</li>
  * </ul>
@@ -295,71 +310,157 @@ public class DeltaS3OrphanSweeper {
 
     private void sweepSite(ReclaimScope scope, UUID siteId, Instant cutoff) {
         String prefix = scope.prefixOf(siteId);
-        S3PrefixListing listing = scope.listObjects(siteId);
-        if (listing.truncated()) {
+        SiteSweep sweep = new SiteSweep(scope, siteId, prefix, cutoff);
+        S3PrefixLister.S3PrefixWalk walk = scope.walkObjects(siteId, sweep::judge);
+        if (walk.truncated()) {
             log.warn("Listing of {} stopped after {} object(s); this pass sweeps only those",
-                    prefix, listing.objects().size());
+                    prefix, walk.objectsRead());
         }
-
-        List<String> candidates = listing.objects().stream()
-                .filter(object -> olderThan(object, cutoff))
-                .map(S3ListedObject::key)
-                .filter(key -> scope.isReclaimable(prefix, key))
-                .toList();
-        if (candidates.isEmpty()) {
-            return;
-        }
-
-        // Rows are read after the listing on purpose: a row committed in between is then part of
-        // the answer, and its object is spared. The other order could see a key before its row and
-        // a row set from before that row existed. Every read is inside the catch — including the
-        // ownership one (raised in review), whose failure would otherwise end the whole pass.
-        Predicate<String> protectedKeys;
-        boolean known;
-        try {
-            // A site this database has never heard of may be a hard-deleted one of ours or a live
-            // one of another deployment sharing the bucket, and nothing in S3 tells the two apart.
-            // Its own `sites` row is the closest thing to a proof of ownership there is.
-            known = siteRepository.findById(siteId).isPresent();
-            protectedKeys = scope.protectedKeys(siteId);
-        } catch (RuntimeException e) {
-            log.warn("Could not read the rows for {}; nothing is deleted for this site until they "
-                    + "can be read", prefix, e);
-            return;
-        }
-
-        List<String> orphans = candidates.stream().filter(key -> !protectedKeys.test(key)).toList();
-        if (orphans.isEmpty()) {
-            return;
-        }
-        // Counted before either gate, so a dry run sizes the whole population — including the one
-        // reclaim-unknown-sites governs, which is otherwise invisible until the flag asserting its
-        // precondition is already set (raised in review).
-        metrics.s3OrphanCandidates(scope.label(), orphans.size());
-        if (!known && !reclaimUnknownSites) {
-            log.info("Holding back {} unreferenced object(s) under {}: no site row, so this prefix "
-                            + "cannot be tied to this database. Set "
-                            + "delta.s3-orphan.reclaim-unknown-sites=true if this bucket is "
-                            + "exclusive to this deployment and the site was hard-deleted",
-                    orphans.size(), prefix);
-            return;
-        }
-        delete(scope, prefix, orphans);
+        sweep.report();
     }
 
-    private void delete(ReclaimScope scope, String prefix, List<String> orphans) {
-        if (dryRun) {
-            log.info("Dry run (delta.s3-orphan.dry-run): {} unreferenced object(s) under {} would "
-                            + "be reclaimed, e.g. {}. Clear the flag to delete them",
-                    orphans.size(), prefix, orphans.stream().limit(DRY_RUN_SAMPLE).toList());
-            return;
+    /**
+     * One site's half of one prefix, judged <b>page by page</b> as the walk hands the pages over
+     * (issue #199).
+     *
+     * <p>What is bounded and what is not: the listing is bounded by nothing — its whole premise is
+     * that unreferenced objects accumulated for months — while the row set is bounded by what still
+     * exists, which retention prunes for segments and which is one row per table for checkpoints.
+     * So the listing is consumed a page at a time and the row set is read whole, once.</p>
+     *
+     * <p>Reading it <em>once</em> is what keeps this a heap change and nothing else: it is the same
+     * single query per site #158 made, so no S3 call and no database call is added or removed. It
+     * is read lazily, on the first page that produces a candidate, which for the overwhelming
+     * majority of sites — one page — is exactly #158's "rows after the listing". Beyond the first
+     * page the ordering guard is weaker and the age window is what carries it: a row can only
+     * appear for an object whose write is still in flight, and the window is a day past the longest
+     * such gap. The checkpoint pointer read with those rows is <b>older</b> than the pages that
+     * follow, and an older pointer protects strictly more keys, so that half only ever errs towards
+     * keeping the object.</p>
+     */
+    private final class SiteSweep {
+
+        private final ReclaimScope scope;
+        private final UUID siteId;
+        private final String prefix;
+        private final Instant cutoff;
+
+        /** Null until the first page produces a candidate; never re-read after that. */
+        private Predicate<String> protectedKeys;
+        private boolean known;
+        private boolean rowsUnreadable;
+        private long heldBack;
+        private long wouldReclaim;
+        private final List<String> wouldReclaimSample = new ArrayList<>();
+
+        private SiteSweep(ReclaimScope scope, UUID siteId, String prefix, Instant cutoff) {
+            this.scope = scope;
+            this.siteId = siteId;
+            this.prefix = prefix;
+            this.cutoff = cutoff;
         }
-        // Chunked here as well as inside deleteObjects (raised in review): that method catches
-        // S3Exception but not SdkClientException, so a network failure part-way through would
-        // otherwise throw out after some chunks had already been deleted and report every key as
-        // left behind. One chunk per try keeps both counters true.
-        for (int from = 0; from < orphans.size(); from += DELETE_CHUNK) {
-            deleteChunk(scope, prefix, orphans.subList(from, Math.min(from + DELETE_CHUNK, orphans.size())));
+
+        /**
+         * Judge one page and act on it. Nothing survives the call but counters and a bounded
+         * sample, which is what makes the peak a page rather than a site's history.
+         *
+         * @param page one {@code ListObjectsV2} page of this site's prefix
+         */
+        private void judge(List<S3ListedObject> page) {
+            if (rowsUnreadable) {
+                // One failed read is the site's answer for this pass; the remaining pages must not
+                // ask again and must not be deleted from on a row set that could not be read.
+                return;
+            }
+            List<String> candidates = page.stream()
+                    .filter(object -> olderThan(object, cutoff))
+                    .map(S3ListedObject::key)
+                    .filter(key -> scope.isReclaimable(prefix, key))
+                    .toList();
+            if (candidates.isEmpty()) {
+                return;
+            }
+            if (!loadRows()) {
+                return;
+            }
+            List<String> orphans = candidates.stream()
+                    .filter(key -> !protectedKeys.test(key))
+                    .toList();
+            if (orphans.isEmpty()) {
+                return;
+            }
+            // Counted before either gate, so a dry run sizes the whole population — including the
+            // one reclaim-unknown-sites governs, which is otherwise invisible until the flag
+            // asserting its precondition is already set (raised in review).
+            metrics.s3OrphanCandidates(scope.label(), orphans.size());
+            if (!known && !reclaimUnknownSites) {
+                heldBack += orphans.size();
+                return;
+            }
+            if (dryRun) {
+                wouldReclaim += orphans.size();
+                orphans.stream().limit(DRY_RUN_SAMPLE - wouldReclaimSample.size())
+                        .forEach(wouldReclaimSample::add);
+                return;
+            }
+            delete(orphans);
+        }
+
+        /**
+         * The rows this site's objects are judged against, read on the first page that needs them.
+         *
+         * @return {@code false} when they could not be read, which ends the site
+         */
+        private boolean loadRows() {
+            if (protectedKeys != null) {
+                return true;
+            }
+            try {
+                // A site this database has never heard of may be a hard-deleted one of ours or a
+                // live one of another deployment sharing the bucket, and nothing in S3 tells the
+                // two apart. Its own `sites` row is the closest thing to a proof of ownership
+                // there is. Both reads are inside the catch — including the ownership one (raised
+                // in review), whose failure would otherwise end the whole pass.
+                known = siteRepository.findById(siteId).isPresent();
+                protectedKeys = scope.protectedKeys(siteId);
+                return true;
+            } catch (RuntimeException e) {
+                log.warn("Could not read the rows for {}; nothing is deleted for this site until "
+                        + "they can be read", prefix, e);
+                rowsUnreadable = true;
+                return false;
+            }
+        }
+
+        private void delete(List<String> orphans) {
+            // Chunked as well as inside deleteObjects (raised in review): that method catches
+            // S3Exception but not SdkClientException, so a network failure part-way through would
+            // otherwise throw out after some chunks had already been deleted and report every key
+            // as left behind. One chunk per try keeps both counters true. A page is already at
+            // most one chunk; the loop stays for the day a page is not.
+            for (int from = 0; from < orphans.size(); from += DELETE_CHUNK) {
+                deleteChunk(scope, prefix,
+                        orphans.subList(from, Math.min(from + DELETE_CHUNK, orphans.size())));
+            }
+        }
+
+        /**
+         * One line per site, not per page: the pages are an implementation detail of the walk, and
+         * an operator reading a dry run wants the site's total and a sample of its keys.
+         */
+        private void report() {
+            if (heldBack > 0) {
+                log.info("Holding back {} unreferenced object(s) under {}: no site row, so this "
+                                + "prefix cannot be tied to this database. Set "
+                                + "delta.s3-orphan.reclaim-unknown-sites=true if this bucket is "
+                                + "exclusive to this deployment and the site was hard-deleted",
+                        heldBack, prefix);
+            }
+            if (wouldReclaim > 0) {
+                log.info("Dry run (delta.s3-orphan.dry-run): {} unreferenced object(s) under {} "
+                                + "would be reclaimed, e.g. {}. Clear the flag to delete them",
+                        wouldReclaim, prefix, wouldReclaimSample);
+            }
         }
     }
 
@@ -427,8 +528,14 @@ public class DeltaS3OrphanSweeper {
         /** The prefix holding one site's objects. */
         String prefixOf(UUID siteId);
 
-        /** Everything under one site's prefix. */
-        S3PrefixListing listObjects(UUID siteId);
+        /**
+         * Everything under one site's prefix, handed over a page at a time (issue #199).
+         *
+         * @param siteId the site
+         * @param page   receives each page as it arrives
+         * @return how many objects the walk handed over, and whether it stopped early
+         */
+        S3PrefixLister.S3PrefixWalk walkObjects(UUID siteId, Consumer<List<S3ListedObject>> page);
 
         /** Whether this key has a shape one of this application's writers produces. */
         boolean isReclaimable(String sitePrefix, String key);
@@ -459,8 +566,8 @@ public class DeltaS3OrphanSweeper {
         }
 
         @Override
-        public S3PrefixListing listObjects(UUID siteId) {
-            return segmentStorage.listPrefix(prefixOf(siteId));
+        public S3PrefixLister.S3PrefixWalk walkObjects(UUID siteId, Consumer<List<S3ListedObject>> page) {
+            return segmentStorage.walkPrefix(prefixOf(siteId), page);
         }
 
         @Override
@@ -498,8 +605,8 @@ public class DeltaS3OrphanSweeper {
         }
 
         @Override
-        public S3PrefixListing listObjects(UUID siteId) {
-            return checkpointStorage.listPrefix(prefixOf(siteId));
+        public S3PrefixLister.S3PrefixWalk walkObjects(UUID siteId, Consumer<List<S3ListedObject>> page) {
+            return checkpointStorage.walkPrefix(prefixOf(siteId), page);
         }
 
         @Override
