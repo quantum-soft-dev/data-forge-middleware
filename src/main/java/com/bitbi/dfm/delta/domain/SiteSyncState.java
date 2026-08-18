@@ -33,6 +33,14 @@ import java.util.UUID;
 @NoArgsConstructor
 public class SiteSyncState {
 
+    /**
+     * Width of {@code site_sync_state.last_rebuild_message} (V54). A failure's own text is
+     * unbounded — a JDBC or S3 exception can say a great deal — and a value wider than the column
+     * throws at flush, which would lose the whole verdict and put the operator back where issue
+     * #186 found them, so {@link #recordRebuildOutcome} truncates instead.
+     */
+    public static final int MAX_REBUILD_MESSAGE_LENGTH = 1000;
+
     @Id
     @Column(name = "site_id", updatable = false, nullable = false)
     private UUID siteId;
@@ -57,6 +65,26 @@ public class SiteSyncState {
 
     @Column(name = "rebuild_requested", nullable = false)
     private boolean rebuildRequested = false;
+
+    /**
+     * How the most recent <em>finished</em> forced rebuild ended (issue #186). Null until the site
+     * has had one. Read together with {@link #rebuildRequested}: while that flag is up, this
+     * describes the previous attempt rather than the queued one.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "last_rebuild_outcome", length = 32)
+    private CheckpointRebuildOutcome lastRebuildOutcome;
+
+    /** When {@link #lastRebuildOutcome} was recorded. */
+    @Column(name = "last_rebuild_outcome_at")
+    private LocalDateTime lastRebuildOutcomeAt;
+
+    /**
+     * Operator-facing explanation of {@link #lastRebuildOutcome} — the failure's own text, bounded
+     * by {@link #MAX_REBUILD_MESSAGE_LENGTH}. Null for {@code COMPLETED}, which has nothing to say.
+     */
+    @Column(name = "last_rebuild_message", length = MAX_REBUILD_MESSAGE_LENGTH)
+    private String lastRebuildMessage;
 
     /**
      * When {@code GetSyncState} first answered NEED_REBASELINE for the pending request (issue #84).
@@ -182,6 +210,12 @@ public class SiteSyncState {
         // Re-armed from scratch: this request is new, whatever an earlier one had been told.
         this.rebaselineNotifiedAt = null;
         this.rebuildRequested = false;
+        // The verdict travels with the flag (issue #186): a wipe puts the row back to what a
+        // brand-new site has, and a verdict about checkpoints it has just deleted describes
+        // nothing. A re-baseline leaves both alone, for the same reason in reverse.
+        this.lastRebuildOutcome = null;
+        this.lastRebuildOutcomeAt = null;
+        this.lastRebuildMessage = null;
         this.generation++;
         this.baselineEpoch++;
         this.wipePending = true;
@@ -257,9 +291,30 @@ public class SiteSyncState {
         this.rebuildRequested = true;
     }
 
-    /** Clear the forced-rebuild flag after the rebuild attempt completes. */
-    public void clearRebuildRequested() {
+    /**
+     * Settle a finished forced rebuild: release the request flag and record what the attempt did
+     * (issue #186). One write, deliberately — releasing the flag without saying why is exactly the
+     * state this ticket removed, so the two cannot come apart.
+     *
+     * <p>An ending that keeps the flag (the process shutting down, #162) must <em>not</em> call
+     * this: it has not finished, and the next process re-drives it.</p>
+     *
+     * @param outcome how the attempt ended
+     * @param message operator-facing explanation, truncated to {@link #MAX_REBUILD_MESSAGE_LENGTH};
+     *                null for an outcome that needs none
+     */
+    public void recordRebuildOutcome(CheckpointRebuildOutcome outcome, String message) {
         this.rebuildRequested = false;
+        this.lastRebuildOutcome = outcome;
+        this.lastRebuildOutcomeAt = LocalDateTime.now(ZoneOffset.UTC);
+        this.lastRebuildMessage = truncateRebuildMessage(message);
+    }
+
+    private static String truncateRebuildMessage(String message) {
+        if (message == null || message.length() <= MAX_REBUILD_MESSAGE_LENGTH) {
+            return message;
+        }
+        return message.substring(0, MAX_REBUILD_MESSAGE_LENGTH - 1) + "…";
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.CheckpointRebuildOutcome;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +41,13 @@ public class DeltaCheckpointRebuildService {
 
     private static final Logger log = LoggerFactory.getLogger(DeltaCheckpointRebuildService.class);
 
+    /**
+     * Verdict text for a rebuild the single-thread {@code deltaRebuildExecutor} would not accept.
+     * It repairs itself the moment the queue drains, so the advice is to ask again.
+     */
+    private static final String QUEUE_FULL_MESSAGE =
+            "the rebuild queue was full, so the rebuild was never started — request it again";
+
     private final DeltaSyncStateService syncStateService;
     private final CheckpointService checkpointService;
     private final ApplicationShutdownSignal shutdownSignal;
@@ -72,8 +80,11 @@ public class DeltaCheckpointRebuildService {
         try {
             rebuildExecutor.execute(() -> runRebuild(siteId));
         } catch (RejectedExecutionException e) {
-            // The flag committed before the submit; without this it would stick forever.
-            syncStateService.clearRebuildRequested(siteId);
+            // The flag committed before the submit; without this it would stick forever. The
+            // caller also gets the exception, but the verdict is what the site itself carries a
+            // minute later, and it is the same surface the startup-recovery rejection writes to.
+            syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
+                    QUEUE_FULL_MESSAGE);
             throw e;
         }
         log.info("Checkpoint rebuild queued: siteId={}", siteId);
@@ -91,8 +102,9 @@ public class DeltaCheckpointRebuildService {
             try {
                 rebuildExecutor.execute(() -> runRebuild(siteId));
             } catch (RejectedExecutionException e) {
-                log.warn("Rebuild queue full during startup recovery — clearing flag: siteId={}", siteId, e);
-                syncStateService.clearRebuildRequested(siteId);
+                log.warn("Rebuild queue full during startup recovery — releasing flag: siteId={}", siteId, e);
+                syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
+                        QUEUE_FULL_MESSAGE);
             }
         }
     }
@@ -134,9 +146,17 @@ public class DeltaCheckpointRebuildService {
      */
     private void runRebuild(UUID siteId) {
         boolean keepFlagForARetry = false;
+        // Pre-set so a Throwable that is not an Exception — nothing here catches those — still
+        // settles as a verdict rather than as a bare flag release, which is the state issue #186
+        // exists to remove. Every branch below overwrites both.
+        CheckpointRebuildOutcome outcome = CheckpointRebuildOutcome.FAILED;
+        String message = "the rebuild ended with an error the service could not classify; "
+                + "see the pod log";
         try {
             checkpointService.rebuildFromFrame(siteId);
             keepFlagForARetry = shutdownSignal.isShuttingDown();
+            outcome = CheckpointRebuildOutcome.COMPLETED;
+            message = null;
             if (!keepFlagForARetry) {
                 log.info("Forced checkpoint rebuild completed: siteId={}", siteId);
             } else {
@@ -151,6 +171,8 @@ public class DeltaCheckpointRebuildService {
             // flag is set, so holding it would leave the operator unable to ask again once the
             // permission was restored, on the action history_gone names as the recovery. Release it
             // and say plainly what to do, exactly as a failed attempt does.
+            outcome = CheckpointRebuildOutcome.FRAME_UNAVAILABLE;
+            message = e.getMessage();
             log.error("Forced checkpoint rebuild for site {} did not run: {}. Nothing was recorded "
                     + "and the flag is released — request the rebuild again once S3 reads are "
                     + "allowed (see delta.s3.read-denied)", siteId, e.getMessage());
@@ -169,6 +191,8 @@ public class DeltaCheckpointRebuildService {
             // is about the process, while "was this contention?" is about the wait. They differ
             // only for a bare interrupt, which keeps neither the flag nor the contention wording.
             keepFlagForARetry = shutdownSignal.isShuttingDown();
+            outcome = CheckpointRebuildOutcome.DEFERRED;
+            message = e.getMessage();
             if (keepFlagForARetry) {
                 logShutdown(siteId);
             } else if (e.waitWasSpent()) {
@@ -183,6 +207,8 @@ public class DeltaCheckpointRebuildService {
             }
         } catch (Exception e) {
             keepFlagForARetry = shutdownSignal.isShuttingDown();
+            outcome = CheckpointRebuildOutcome.FAILED;
+            message = describe(e);
             if (!keepFlagForARetry) {
                 log.error("Forced checkpoint rebuild failed: siteId={}", siteId, e);
             } else {
@@ -190,9 +216,25 @@ public class DeltaCheckpointRebuildService {
             }
         } finally {
             if (!keepFlagForARetry) {
-                syncStateService.clearRebuildRequested(siteId);
+                syncStateService.recordRebuildOutcome(siteId, outcome, message);
             }
         }
+    }
+
+    /**
+     * What the operator is shown for a rebuild that threw: the exception's own type and text, which
+     * is what the pod log carries and — before issue #186 — the only place it existed. The type is
+     * included because a great many failures here (an S3 client error, a JDBC error, an interrupted
+     * build) carry no message at all, and "the rebuild failed" alone says nothing.
+     *
+     * @param e the failure
+     * @return one line naming the failure; never null
+     */
+    private static String describe(Throwable e) {
+        String detail = e.getMessage();
+        return detail == null || detail.isBlank()
+                ? e.getClass().getSimpleName()
+                : e.getClass().getSimpleName() + ": " + detail;
     }
 
     private static void logShutdown(UUID siteId) {

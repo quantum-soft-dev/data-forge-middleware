@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.CheckpointRebuildOutcome;
 import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
@@ -162,7 +163,7 @@ public class DeltaSyncStateService {
 
     /**
      * Flag a site for a forced out-of-schedule checkpoint rebuild (creating the sync state row
-     * if absent); cleared via {@link #clearRebuildRequested} once the rebuild completes.
+     * if absent); settled via {@link #recordRebuildOutcome} once the rebuild finishes.
      * Idempotent: an already-flagged site is left untouched.
      *
      * @param siteId site identifier
@@ -191,15 +192,22 @@ public class DeltaSyncStateService {
     }
 
     /**
-     * Clear the forced-rebuild flag after the rebuild attempt completes. No-op when the site has
-     * no sync state row.
+     * Settle a finished forced rebuild: release the request flag and record how the attempt ended
+     * (issue #186). No-op when the site has no sync state row.
      *
-     * @param siteId site identifier
+     * <p>Releasing the flag and recording the verdict are one write on purpose — before this,
+     * releasing it was the whole of the report, and three of the four settling endings had run
+     * nothing at all.</p>
+     *
+     * @param siteId  site identifier
+     * @param outcome how the attempt ended
+     * @param message operator-facing explanation (truncated by the entity), or null when the
+     *                outcome needs none
      */
     @Transactional
-    public void clearRebuildRequested(UUID siteId) {
+    public void recordRebuildOutcome(UUID siteId, CheckpointRebuildOutcome outcome, String message) {
         repository.findBySiteId(siteId).ifPresent(state -> {
-            state.clearRebuildRequested();
+            state.recordRebuildOutcome(outcome, message);
             repository.save(state);
         });
     }
