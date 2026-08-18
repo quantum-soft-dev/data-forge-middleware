@@ -488,8 +488,21 @@ pages/{feature}/            # Route pages
   the statement cancelled before the failure is reported), so a regression fails the guard instead
   of hanging the run the guard is about. Two comments that stated the opposite are corrected
   rather than left standing (`AbstractIntegrationTest.clearPluginSqlGenerations`,
-  `BitBiDeltaSqlIntegrationTest.drainQueue`). Test-only — no production code, REST, gRPC, DTO,
-  migration, production configuration-key, metric, S3-key or frontend change.
+  `BitBiDeltaSqlIntegrationTest.drainQueue`). **Review round 1 corrected the guards, not the
+  bound**, and two of the five are worth remembering. The parser read the *first* `lock_timeout`
+  in the init statement while PostgreSQL applies the last one of a multi-statement string, so `SET
+  lock_timeout = '10s'; RESET lock_timeout` passed the fast gate while every pooled connection
+  waited for ever — the exact false green the guard exists to prevent, now red under mutation
+  (`LockWaitBoundTest`), with `RESET` and `TO DEFAULT` read as the zero they restore and an
+  unrecognised unit failing by name instead of silently meaning milliseconds (`'30000us'` is 30 ms
+  and used to read as 30 s). And the probe's bounded wait started at submit time rather than when
+  the blocked statement existed: the holder pins one of the profile's four connections and Hikari
+  waits 30 s for one, longer than the budget for the abort, so a momentarily busy pool would have
+  been reported as “the profile does not bound a lock wait”. Two smaller ones: the English message
+  assertion was dropped for the locale-independent 55P03 it duplicated, and a holder that failed
+  before taking the lock no longer has its exception swallowed by the `Future`. Test-only — no
+  production code, REST, gRPC, DTO, migration, production configuration-key, metric, S3-key or
+  frontend change.
 - test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so no
   context taking the profile's defaults writes or deletes in the machine-wide temp directory
   (issue #187, the half #168 named and deliberately left open). The exception is deliberate and is

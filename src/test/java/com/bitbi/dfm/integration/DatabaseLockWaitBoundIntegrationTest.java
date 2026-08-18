@@ -60,7 +60,11 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
      */
     private static final long PROBE_LOCK_KEY = 197_197_197L;
 
-    /** Head-room over the bound before the probe gives up and reports the run as unbounded. */
+    /**
+     * Head-room over the bound before the probe gives up and reports the run as unbounded. It is
+     * counted from the moment the blocked statement exists — see {@code shouldAbort...} — so it
+     * covers the abort and nothing else: a connection this test had to wait for is not part of it.
+     */
     private static final Duration MARGIN = Duration.ofSeconds(15);
 
     @Autowired
@@ -81,6 +85,7 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
         Duration bound = configuredBound();
         TransactionTemplate holderTransaction = new TransactionTemplate(transactionManager);
         CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch statementIsOpen = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService threads = Executors.newFixedThreadPool(2);
         AtomicReference<Statement> blockedStatement = new AtomicReference<>();
@@ -92,16 +97,23 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
                 awaitRelease(release, bound);
                 return null;
             }));
-            assertThat(held.await(30, TimeUnit.SECONDS))
-                    .as("the probe never acquired its own lock, so nothing was blocked")
-                    .isTrue();
+            requireHeld(held, holder);
 
             Future<Throwable> blocked = threads.submit(() -> catchThrowable(() ->
                     jdbc.execute((StatementCallback<Void>) statement -> {
                         blockedStatement.set(statement);
+                        // The callback runs once the connection is in hand, which is where the
+                        // bounded wait below must start from: the holder pins one of the four
+                        // connections this profile allows, and Hikari waits 30 s for one — longer
+                        // than the budget for the abort itself, so a busy pool would otherwise be
+                        // reported as an unbounded lock wait.
+                        statementIsOpen.countDown();
                         statement.execute("SELECT pg_advisory_xact_lock(" + PROBE_LOCK_KEY + ")");
                         return null;
                     })));
+            assertThat(statementIsOpen.await(2, TimeUnit.MINUTES))
+                    .as("the probe never got a pooled connection to block on")
+                    .isTrue();
 
             Throwable failure = awaitOutcome(blocked, bound, blockedStatement);
             SQLException reported = lockTimeout(failure);
@@ -111,9 +123,11 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
                             + "failed for another reason: " + failure)
                     .isEqualTo("55P03");
             assertThat(reported.getMessage())
-                    .as("the failure has to name the cause, otherwise the next reader is back to "
-                            + "guessing why a test died (#197)")
-                    .contains("lock timeout");
+                    .as("the abort has to arrive as a described failure — the wording is the "
+                            + "server's and follows its lc_messages ('canceling statement due to "
+                            + "lock timeout' in English), which is why the contract asserted above "
+                            + "is the SQLSTATE rather than the text (#197)")
+                    .isNotBlank();
             assertThat(holder.isDone())
                     .as("the holder must still be holding: a probe that failed after the lock was "
                             + "released would prove nothing")
@@ -122,6 +136,22 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
             release.countDown();
             threads.shutdownNow();
         }
+    }
+
+    /**
+     * Fails with the holder's own cause when it never took the lock. Without this the only thing
+     * reported would be "nothing was blocked", sending the reader to the advisory lock rather than
+     * to the pool timeout or rolled-back transaction that actually happened.
+     */
+    private static void requireHeld(CountDownLatch held, Future<?> holder) throws Exception {
+        if (held.await(60, TimeUnit.SECONDS)) {
+            return;
+        }
+        if (holder.isDone()) {
+            holder.get(10, TimeUnit.SECONDS);
+        }
+        fail("the probe never acquired its own lock, so nothing was blocked and this test proves "
+                + "nothing about the bound (#197)");
     }
 
     /**
@@ -159,9 +189,15 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
         return fail("the blocked statement did not fail with a SQLException at all: " + failure);
     }
 
+    /**
+     * Holds the lock until the probe is done with it. The latch is counted down in the test's
+     * {@code finally}, so this ceiling is only reached when something went wrong — it has to
+     * outlast every wait the probe can legitimately spend, the pool wait included, or the holder
+     * would release early and the assertions would be judging a lock nobody held.
+     */
     private static void awaitRelease(CountDownLatch release, Duration bound) {
         try {
-            release.await(bound.plus(MARGIN).plusSeconds(30).toMillis(), TimeUnit.MILLISECONDS);
+            release.await(bound.plus(MARGIN).plusMinutes(5).toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

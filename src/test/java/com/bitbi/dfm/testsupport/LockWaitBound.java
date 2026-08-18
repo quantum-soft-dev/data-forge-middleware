@@ -2,6 +2,7 @@ package com.bitbi.dfm.testsupport;
 
 import java.time.Duration;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,37 +47,72 @@ public final class LockWaitBound {
     public static final Duration MAX = Duration.ofSeconds(60);
 
     /**
-     * {@code SET lock_timeout = '10s'} and its spelling variants. PostgreSQL accepts a bare number
-     * (milliseconds) or a number with a unit, quoted or not.
+     * Every way an init statement can name {@code lock_timeout}: an assignment to a number
+     * (PostgreSQL accepts a bare one as milliseconds, or one with a unit, quoted or not), an
+     * assignment to {@code DEFAULT}, or a {@code RESET}. The last two mean "back to the server
+     * default", which for this GUC is the 0 this guard exists to replace — they are matched rather
+     * than ignored so a trailing one cannot pass as the assignment before it.
      */
-    private static final Pattern SET_LOCK_TIMEOUT = Pattern.compile(
-            "(?i)\\block_timeout\\b\\s*(?:=|\\bto\\b)\\s*'?\\s*(\\d+)\\s*(ms|s|min|h)?\\s*'?");
+    private static final Pattern LOCK_TIMEOUT = Pattern.compile(
+            "(?i)(?:(?<reset>\\breset\\s+lock_timeout\\b)"
+                    + "|\\block_timeout\\b\\s*(?:=|\\bto\\b)\\s*'?\\s*"
+                    + "(?:(?<default>default)|(?<amount>\\d+)\\s*(?<unit>[a-z]*))\\s*'?)");
+
+    /** Time units PostgreSQL accepts for a GUC; an empty unit means milliseconds. */
+    private static final Map<String, Duration> UNITS = Map.of(
+            "", Duration.ofMillis(1),
+            "us", Duration.ofNanos(1_000),
+            "ms", Duration.ofMillis(1),
+            "s", Duration.ofSeconds(1),
+            "min", Duration.ofMinutes(1),
+            "h", Duration.ofHours(1),
+            "d", Duration.ofDays(1));
 
     private LockWaitBound() {
     }
 
     /**
-     * Reads the {@code lock_timeout} a connection-init statement sets.
+     * Reads the {@code lock_timeout} a connection-init statement leaves a session with.
+     *
+     * <p>The <em>last</em> mention wins, not the first: pgjdbc sends the init SQL over the simple
+     * query protocol, which accepts several statements in one string, and PostgreSQL then applies
+     * them in order. Reading the first match would green-light
+     * {@code SET lock_timeout = '10s'; RESET lock_timeout}, which is exactly the false green this
+     * guard exists to prevent.</p>
      *
      * @param connectionInitSql the declared {@code spring.datasource.hikari.connection-init-sql}
-     * @return the bound it sets, {@link Duration#ZERO} meaning "wait for ever" as PostgreSQL reads it
-     * @throws AssertionError when the statement sets no {@code lock_timeout} at all
+     * @return the bound it leaves behind, {@link Duration#ZERO} meaning "wait for ever" as
+     *         PostgreSQL reads it — which is also how {@code RESET} and {@code DEFAULT} are read,
+     *         since 0 is this GUC's server default
+     * @throws AssertionError when the statement never mentions {@code lock_timeout}, or names a
+     *         unit PostgreSQL does not use
      */
     public static Duration parseDeclared(String connectionInitSql) {
         assertNotNull(connectionInitSql, "no connection-init-sql to read a lock_timeout from (#197)");
-        Matcher matcher = SET_LOCK_TIMEOUT.matcher(connectionInitSql);
-        assertTrue(matcher.find(),
+        Matcher matcher = LOCK_TIMEOUT.matcher(connectionInitSql);
+        Duration bound = null;
+        while (matcher.find()) {
+            bound = matchedBound(matcher, connectionInitSql);
+        }
+        assertNotNull(bound,
                 "connection-init-sql sets no lock_timeout, so a statement blocked on a lock held by "
                         + "another cached context waits for ever and the run stops instead of "
                         + "failing (#197): " + connectionInitSql);
-        long amount = Long.parseLong(matcher.group(1));
-        String unit = matcher.group(2) == null ? "ms" : matcher.group(2).toLowerCase(Locale.ROOT);
-        return switch (unit) {
-            case "ms" -> Duration.ofMillis(amount);
-            case "s" -> Duration.ofSeconds(amount);
-            case "min" -> Duration.ofMinutes(amount);
-            default -> Duration.ofHours(amount);
-        };
+        return bound;
+    }
+
+    private static Duration matchedBound(Matcher matcher, String connectionInitSql) {
+        if (matcher.group("reset") != null || matcher.group("default") != null) {
+            return Duration.ZERO;
+        }
+        String unit = matcher.group("unit").toLowerCase(Locale.ROOT);
+        Duration scale = UNITS.get(unit);
+        assertNotNull(scale,
+                "connection-init-sql gives lock_timeout the unit '" + unit + "', which PostgreSQL "
+                        + "does not use — the bound it really sets is not the one this reads, and "
+                        + "the range check below would pass on a number that means something else "
+                        + "(#197): " + connectionInitSql);
+        return scale.multipliedBy(Long.parseLong(matcher.group("amount")));
     }
 
     /**
