@@ -391,9 +391,11 @@ class SqlGenerationStreamingTest {
                     .hasMessageContaining(batchId.toString())
                     // The message reaches a tenant (the owner endpoint's 500 body and the
                     // account-visible audit entry), so the heap reading and the configuration key
-                    // stay in the log line instead.
+                    // stay in the log line instead. Asserted as "no percentage and no key name"
+                    // rather than "does not contain 81": the batch's own UUID can contain any
+                    // digits, which is how this assertion first failed.
                     .hasMessageNotContaining("heap-threshold-percent")
-                    .hasMessageNotContaining("81%");
+                    .hasMessageNotContaining("%");
 
             verify(s3Client, never()).getObject(any(GetObjectRequest.class));
             assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
@@ -424,7 +426,9 @@ class SqlGenerationStreamingTest {
                     eq("bit-bi"), any(), eq(batchId), any(), contains("memory pressure"), anyLong());
             verify(pluginAuditService, never()).logSqlRegenerationStarted(any(), any(), any(), any());
             // The refusal has a counter of its own and repairs itself, so it stays off the series
-            // that means "generation is broken"
+            // that means "generation is broken". Absent rather than zero: init() registers only
+            // sql.generation.aborted.memory_pressure, so this series exists at all only once
+            // something increments it.
             assertThat(meterRegistry.find("sql.regeneration.errors").counter()).isNull();
         }
     }

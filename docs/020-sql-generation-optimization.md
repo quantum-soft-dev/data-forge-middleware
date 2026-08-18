@@ -338,7 +338,7 @@ It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass 
 |---|---|---|
 | `DeltaSqlQueueService.processNextPending` | segment marked processed, SQL lost | throws before the mark, so the segment stays pending and the next drain offers it again |
 | `SqlGenerationService.doRegenerateForBatch` | empty artifact stored, original superseded | nothing stored, `markAsSuperseded` never reached |
-| `POST .../plugins/{pluginId}/generate-sql` (owner and admin) | `200` "SQL generation skipped" | `500 INTERNAL_ERROR` quoting the refusal |
+| `POST /api/v1/account/plugins/{pluginId}/generate-sql` (owner) and `POST /api/v1/plugins/{pluginId}/accounts/{accountId}/generate-sql` (admin) | `200` "SQL generation skipped" | `500 INTERNAL_ERROR` quoting the refusal |
 
 (`generateSqlForBatchAsync` is not in the table: it has no callers — see #210.)
 
@@ -352,10 +352,14 @@ ticket.
 is now named durably: the existing `catch (RuntimeException)` writes a `SQL_GENERATION_FAILED`
 entry (`SQL_REGENERATION_FAILED` on the regeneration path), visible to the account on
 `GET /api/v1/account/plugins/{pluginId}/logs`. The refusal is **kept off** `sql.generation.errors`
-/ `sql.regeneration.errors`: those mean "generation is broken", and this condition repairs itself
-when the heap does — the rule #162 applied to `delta.checkpoint.builds.aborted`. It is also
-refused *before* the `SQL_GENERATION_STARTED` entry, so an attempt costs one audit row rather than
-a pair announcing a generation that never started.
+/ `sql.regeneration.errors` and logged as a single **WARN** at the point it is raised (carrying the
+reading and the threshold), not as an ERROR: those series and an ERROR-rate alert both mean
+"generation is broken", and this condition repairs itself when the heap does — the rule #162
+applied to `delta.checkpoint.builds.aborted`. It is also refused *before* the
+`SQL_GENERATION_STARTED` entry, so an attempt costs one audit row rather than a pair announcing a
+generation that never started. Two neighbouring series do move without meaning anything is wrong:
+`sql.generation.semaphore.acquired` counts the refused attempt (the permit is taken first), while
+`sql.generation.duration` gets no sample from it.
 
 `sql.generation.aborted.memory_pressure` keeps its name and now means something slightly
 different: it counts **refusals, not batches lost**. Before, a refused batch was refused once,
@@ -374,7 +378,7 @@ attempt counters (#149) or settled as `ABANDONED` (036) instead.
 `DeltaSqlSweepWorker` drain, so there is exactly one refused attempt per wake — but the pool is
 woken by `BitBiPlugin.execute` on **every** `BATCH_COMPLETED` and by a plugin reinit, not only by
 the `plugin.sql-generation.delta-sweep-ms` tick (60 s). On a busy fleet a pressure episode
-therefore produces one refused attempt, one ERROR line and one audit row per completed batch,
+therefore produces one refused attempt, one WARN line and one audit row per completed batch,
 which is the intended visibility but is repetitive; the floor is the sweep tick, not the ceiling.
 
 **One caveat on "unbounded retry is safe": it assumes the threshold is configured sanely.**
@@ -382,7 +386,15 @@ which is the intended visibility but is repetitive; the floor is the sweep tick,
 mistyped `8` makes the check true for every generation for ever. Before this change that
 misconfiguration silently dropped every batch's SQL; now it stalls the delta-SQL queue instead —
 segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet — which is louder and
-recoverable, but it is a stall with no bound of its own. Validating the key is #185's job.
+leaves the work recoverable, but it is a stall with no bound of its own. Validating the key is
+#185's job.
+
+**And "recoverable" has a horizon**: `ChangelogRetentionService.prune` deletes below-checkpoint
+segments past `delta.retention.audit-window-segments` (20) without regard for `plugin_sql_at IS
+NULL`, so a segment left pending long enough is eventually deleted with its S3 object and the
+batch's SQL is lost after all — silently, and without the audit row that marks a refusal. That is
+not introduced here (it applies to any generation that keeps failing, which is what "stays pending
+for the sweep" has always meant) but it bounds the retry window, and it is **#212**.
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary

@@ -178,7 +178,9 @@ class DeltaSqlQueueMemoryPressureTest {
         // generation would double the rows the account has to read
         verify(pluginAuditService, never()).logSqlGenerationStarted(any(), any(), any(), any());
         // The refusal is counted on its own meter and is self-repairing, so the series that means
-        // "generation is broken" does not move
+        // "generation is broken" does not move. Absent rather than zero: init() registers only
+        // sql.generation.aborted.memory_pressure, so this series exists at all only once
+        // something increments it.
         assertThat(meterRegistry.find("sql.generation.errors").counter()).isNull();
     }
 

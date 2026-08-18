@@ -315,15 +315,13 @@ public class SqlGenerationService {
 
             throw new SqlGenerationException("Failed to read files for SQL generation", e);
         } catch (RuntimeException e) {
-            if (e instanceof MemoryPressureAbortedException) {
-                // Already logged with the reading, and counted on
-                // sql.generation.aborted.memory_pressure. Deliberately kept off
+            if (!(e instanceof MemoryPressureAbortedException)) {
+                // A refusal is already logged with its reading at the raise site and counted on
+                // sql.generation.aborted.memory_pressure. It is deliberately kept off
                 // sql.generation.errors, which is for generations that are broken: this one
                 // repairs itself when the heap does, and an alert on that series must not be
                 // spent on a condition that clears (the rule #162 applied to
-                // delta.checkpoint.builds.aborted).
-                log.warn("SQL generation refused for batch: batchId={}: {}", batchId, e.getMessage());
-            } else {
+                // delta.checkpoint.builds.aborted). It still audits, below.
                 log.error("SQL generation failed for batch: batchId={}", batchId, e);
                 meterRegistry.counter("sql.generation.errors").increment();
             }
@@ -402,7 +400,11 @@ public class SqlGenerationService {
     private void refuseUnderMemoryPressure(UUID batchId) {
         int heapUsagePercent = getHeapUsagePercent();
         if (isMemoryPressureHigh(heapUsagePercent)) {
-            log.error("High memory pressure ({}% of heap, threshold {}%), refusing SQL generation "
+            // WARN and not ERROR, and logged only here: a refusal that clears when the heap does
+            // must not read like a broken generation on an ERROR-rate alert, which is the same
+            // reason it is kept off sql.generation.errors. The catch below deliberately adds no
+            // second line for this type.
+            log.warn("High memory pressure ({}% of heap, threshold {}%), refusing SQL generation "
                             + "for batch: {}", heapUsagePercent, heapThresholdPercent, batchId);
             meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
             throw new MemoryPressureAbortedException(batchId);
@@ -488,7 +490,7 @@ public class SqlGenerationService {
      * Uses {@link MemoryMXBean} instead of {@link Runtime} for a more accurate
      * post-GC view of heap usage (accounts for unreachable but uncollected objects).
      * Uses ceiling division so that any non-zero usage above a whole percent is visible to the
-     * strict comparison in {@link #isMemoryPressureHigh()}.
+     * strict comparison in {@link #isMemoryPressureHigh(int)}.
      * Package-private for testing.
      */
     int getHeapUsagePercent() {
@@ -501,7 +503,7 @@ public class SqlGenerationService {
      * Converts a heap reading into a whole percentage in {@code [0, 100]}.
      * <p>
      * Rounded up, so that for an integer threshold {@code T} the strict comparison in
-     * {@link #isMemoryPressureHigh()} trips exactly when {@code used/max} is above {@code T}%.
+     * {@link #isMemoryPressureHigh(int)} trips exactly when {@code used/max} is above {@code T}%.
      * Clamped at 100, so that "a threshold of 100 disables the check" is a property of this
      * arithmetic and not an assumption about the collector: a reading above 100 would abort while
      * startup had logged the check as disabled. A non-positive {@code max} means the JVM declares
@@ -641,10 +643,9 @@ public class SqlGenerationService {
 
             throw new SqlGenerationException("Failed to regenerate SQL for batch", e);
         } catch (RuntimeException e) {
-            if (e instanceof MemoryPressureAbortedException) {
-                // See the generation path: self-repairing, already counted on its own meter.
-                log.warn("SQL regeneration refused for batch: batchId={}: {}", batchId, e.getMessage());
-            } else {
+            if (!(e instanceof MemoryPressureAbortedException)) {
+                // See the generation path: self-repairing, already logged and counted on its own
+                // meter. It still audits, below.
                 log.error("SQL regeneration failed for batch: batchId={}", batchId, e);
                 meterRegistry.counter("sql.regeneration.errors").increment();
             }
@@ -760,10 +761,17 @@ public class SqlGenerationService {
      * refusal is raised.</p>
      */
     public static class MemoryPressureAbortedException extends SqlGenerationException {
+
+        /**
+         * @param batchId the batch that was refused; it is the only detail the message carries,
+         *                since the message reaches a tenant on two surfaces
+         */
         public MemoryPressureAbortedException(UUID batchId) {
-            super("SQL generation for batch " + batchId + " was refused because the server is under "
-                    + "memory pressure. No SQL was produced for this batch; its records are intact "
-                    + "and the generation is retried automatically.");
+            // No promise of a retry: it is true for a segment claimed by the delta-SQL queue and
+            // false for a manual generation or regeneration, and this type cannot tell which
+            // caller raised it.
+            super("Generating SQL for batch " + batchId + " was refused because the server is under "
+                    + "memory pressure. No SQL was produced for this batch and its records are intact.");
         }
     }
 }
