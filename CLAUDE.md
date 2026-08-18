@@ -494,6 +494,32 @@ pages/{feature}/            # Route pages
   gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change. See
   `docs/delta-client-v2-guide.md` ("The connection pool is smaller than the threads that can ask it
   for a connection").
+  **Review found five blind spots in the guard itself, and two of them mattered.** The scans were
+  keyed by the class the reflection scan *reached* a site through, but `getAllDeclaredMethods` walks
+  the hierarchy, so an `@Async` on a superclass was attributed to every concrete subclass's file —
+  correct, properly-qualified code failing the drift check, with a message blaming a meta-annotation;
+  a site is now attributed to the annotation's own source (`MergedAnnotation.getSource()`),
+  de-duplicated by method signature, with bridge and synthetic methods skipped. And the comment
+  stripper was the copied regex (`/\*.*?\*/|//[^\n]*`), which fires **inside string literals**:
+  `"/api/v1/device/**"` opens a phantom block comment that runs to the next `*/`, deleting **2088
+  characters — 40 lines — of real code** in `SecurityConfiguration` alone, so the text scan's claim
+  to be total over the source was false. It is now a character scanner that copies string, character
+  and text-block literals verbatim (the literals are kept rather than blanked, because the qualifier
+  being read *is* a string literal), and **`BackgroundConnectionDemandTest` shares it** rather than
+  keeping the broken twin — where the same hole would hide a pool construction from a scan whose
+  whole job is to find what nobody declared. The Javadoc explaining that fix had to be rewritten
+  too: written with `\u002a` escapes it closed its own comment, since Java resolves unicode escapes
+  before it lexes. Three smaller ones: the two scans are compared **site by site per file** rather
+  than by file key, because one file holds 15 of the application's 18 sites and a stripper accident
+  there could have hidden fourteen with every assertion green; `TaskScheduler`-typed beans are
+  excluded from the names an `@Async` may use (`@Async("taskScheduler")` passed both assertions and
+  would park blocking async work on the pool whose size is derived over the `@Scheduled` inventory
+  alone, postponing the fixed-delay sweeps #146 sized it for); and a duplicate executor bean name is
+  its own failure rather than a silently dropped map entry reported as scan drift. The mutation set
+  moved with the design: the interface probe now **passes**, because a default method is reached
+  through its implementors and attributed to the interface's own file — the honest blind spot is a
+  carrier the classpath scan cannot reach at all (an abstract class with no concrete subclass), which
+  is what the drift check is now pinned against.
 - prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
   uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
   reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a

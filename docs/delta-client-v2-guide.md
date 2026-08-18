@@ -1376,7 +1376,10 @@ off in the presence of the `Executor` beans this application declares, so the fa
 `SimpleAsyncTaskExecutor` that starts a **new thread per invocation with no ceiling**. Neither that
 nor a qualifier naming a bean nothing declares (resolved on first invocation, thrown there) fails
 the build or the startup on its own, so both are asserted: every `@Async` in `src/main/java` names
-an executor, and that name is one of the beans above.
+an executor, and that name is one of the beans above — **except a `TaskScheduler`**, which is
+excluded deliberately: `spring.task.scheduling.pool.size` is derived over the `@Scheduled` inventory
+alone (#146), so a blocking async method parked there would postpone the fixed-delay sweeps that
+pool was sized for, without appearing in any inventory.
 
 ### The deferred plugin audit write has a lane of its own
 
