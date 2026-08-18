@@ -314,6 +314,10 @@ class SqlGenerationStreamingTest {
             verify(pluginAuditService).logSqlGenerationFailed(
                     eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId),
                     contains("memory pressure"), anyLong());
+            // ... without a SQL_GENERATION_STARTED entry for a generation that never started:
+            // the refusal is re-entered once per queue wake, so a pair of rows per attempt would
+            // bury the account's log in the entries this fix added to be read
+            verify(pluginAuditService, never()).logSqlGenerationStarted(any(), any(), any(), any());
         }
 
         @Test
@@ -384,8 +388,12 @@ class SqlGenerationStreamingTest {
             // When / Then
             assertThatThrownBy(() -> service.generateSqlForBatch(batchId, accountPluginId))
                     .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
-                    .hasMessageContaining("81")
-                    .hasMessageContaining("80");
+                    .hasMessageContaining(batchId.toString())
+                    // The message reaches a tenant (the owner endpoint's 500 body and the
+                    // account-visible audit entry), so the heap reading and the configuration key
+                    // stay in the log line instead.
+                    .hasMessageNotContaining("heap-threshold-percent")
+                    .hasMessageNotContaining("81%");
 
             verify(s3Client, never()).getObject(any(GetObjectRequest.class));
             assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
@@ -414,6 +422,10 @@ class SqlGenerationStreamingTest {
             verify(sqlGenerationRepository, never()).save(any());
             verify(pluginAuditService).logSqlRegenerationFailed(
                     eq("bit-bi"), any(), eq(batchId), any(), contains("memory pressure"), anyLong());
+            verify(pluginAuditService, never()).logSqlRegenerationStarted(any(), any(), any(), any());
+            // The refusal has a counter of its own and repairs itself, so it stays off the series
+            // that means "generation is broken"
+            assertThat(meterRegistry.find("sql.regeneration.errors").counter()).isNull();
         }
     }
 }

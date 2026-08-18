@@ -470,21 +470,44 @@ pages/{feature}/            # Route pages
   **The ticket's first shape, taken as written**: `MemoryPressureAbortedException` (a subclass of
   `SqlGenerationException`) is thrown where the `null` was, and every consequence then falls out of
   paths that already exist rather than out of new branches — the queue's mark is skipped, the
-  regeneration never reaches `markAsSuperseded`, both `catch (RuntimeException)` blocks write the
-  `SQL_GENERATION_FAILED` audit entry **naming the batch** (`GET /api/v1/account/plugins/{pluginId}/logs`,
-  so the account sees it, not only an operator with a metrics console) and increment
-  `sql.generation.errors` / `sql.regeneration.errors`, and the two manual-generation endpoints
-  answer **500 quoting the refusal** through the `catch (Exception)` they already had, where they
-  used to answer 200 "SQL generation skipped". The DoD's second half is therefore satisfied twice
-  over — the batch is both retried and named — and `null` keeps its one remaining meaning.
+  regeneration never reaches `markAsSuperseded`, both `catch (RuntimeException)` blocks write a
+  `SQL_GENERATION_FAILED` (regeneration: `SQL_REGENERATION_FAILED`) audit entry **naming the
+  batch** (`GET /api/v1/account/plugins/{pluginId}/logs`, so the account sees it, not only an
+  operator with a metrics console), and the two manual-generation endpoints answer **500 quoting
+  the refusal** through the `catch (Exception)` they already had, where they used to answer 200
+  "SQL generation skipped". The DoD's second half is therefore satisfied twice over — the batch is
+  both retried and named — and `null` keeps its one remaining meaning. The regeneration half is a
+  fix for a path **#190 currently blocks** (`regenerateSql` is `@Transactional`, so
+  `refuseIfTransactionActive()` throws first): it is fixed here because the hazard returns the
+  moment #190 lands.
+  **Three reporting decisions came out of review, all in the same direction — the refusal must not
+  be mistaken for a broken generation.** It is kept **off** `sql.generation.errors` /
+  `sql.regeneration.errors` (those mean "generation is broken"; this repairs itself when the heap
+  does — #162's rule applied to `delta.checkpoint.builds.aborted`) and logged at WARN rather than
+  as a stack trace. It is refused **before** the `SQL_GENERATION_STARTED` entry, so an attempt
+  costs one audit row instead of a pair announcing a generation that never started. And the
+  exception **message** names neither the heap reading nor the configuration key — it reaches the
+  owner endpoint's 500 body and the account-visible `errorMessage`, where a tenant can act on
+  neither, so both numbers stay in the ERROR logged at the refusal (the #186 round-1 precedent for
+  `lastRebuildMessage`). `sql.generation.aborted.memory_pressure` keeps its name and shifts
+  meaning: it counted batches lost (each was refused once, then consumed) and now counts
+  **refusals**, so one batch under a long episode increments it repeatedly — a rate, with the audit
+  entries saying which batches.
   **The ticket asked for the retry to be argued rather than assumed, and the argument is that this
   abort is not a property of the batch**: it is a pre-flight reading of the *pod's* heap taken
   before any work, so the same batch generates normally on a later sweep — the opposite of the
   deterministic Parquet size ceilings, whose refusal repeats identically for ever and which are
   therefore bounded by attempt counters (#149) or settled as `ABANDONED` (036). It cannot spin
-  either: the throw ends the whole `DeltaSqlSweepWorker` drain, so under sustained pressure the
-  cost is one attempt per `plugin.sql-generation.delta-sweep-ms` tick (60 s in production), and
-  the per-site head-of-line claim means the site's own order is preserved while it waits.
+  either: the throw ends the whole `DeltaSqlSweepWorker` drain, so there is exactly one refused
+  attempt per **wake** — and review corrected the rate here, because the wake is not only the
+  `plugin.sql-generation.delta-sweep-ms` tick (60 s): `BitBiPlugin.execute` wakes the pool on
+  every `BATCH_COMPLETED` and a plugin reinit does too, so on a busy fleet an episode produces one
+  refused attempt, one WARN and one audit row per completed batch. That is the intended visibility
+  and it is repetitive; the tick is the floor of the rate, not its ceiling. The per-site
+  head-of-line claim keeps the site's own order while it waits. The safety of an **unbounded**
+  retry does rest on the threshold being sane, which is still unvalidated (**#185**): a mistyped
+  `8` now stalls the queue for ever where it used to drop every batch's SQL silently — louder and
+  recoverable, but a stall with no bound of its own.
   **No controller, DTO or REST-contract change** — deliberately, since a dedicated 503 would touch
   both generate-SQL controllers, which #190 is parked on; a 500 whose body names memory pressure
   already satisfies "distinguishable at every caller", and the status code can move with #190.

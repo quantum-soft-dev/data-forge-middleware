@@ -304,14 +304,13 @@ if (isMemoryPressureHigh()) {
 ```
 
 **As shipped** (the sketch above is the original proposal and differs): the check is a single
-pre-flight in `generateSqlContent()` rather than a per-file loop with a `System.gc()` retry, the
-reading comes from `MemoryMXBean` rather than `Runtime`, it is **ceiling**-rounded, and the
-comparison is **strict**:
+pre-flight in `refuseUnderMemoryPressure()` — taken once per generation, before the attempt is
+announced — rather than a per-file loop with a `System.gc()` retry, the reading comes from
+`MemoryMXBean` rather than `Runtime`, it is **ceiling**-rounded, and the comparison is **strict**:
 
 ```java
-private boolean isMemoryPressureHigh() {
-    return getHeapUsagePercent() > heapThresholdPercent;   // strictly above
-}
+int heapUsagePercent = getHeapUsagePercent();          // read once: logged == what tripped it
+if (isMemoryPressureHigh(heapUsagePercent)) { ... }    // heapUsagePercent > heapThresholdPercent
 ```
 
 Strict is what makes the key able to say "disabled" — the reading is clamped at 100, so
@@ -337,27 +336,60 @@ It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass 
 
 | Caller | Before | Now |
 |---|---|---|
-| `DeltaSqlQueueService.processNextPending` | segment marked processed, SQL lost | throws before the mark, so the segment stays pending and the sweep offers it again |
+| `DeltaSqlQueueService.processNextPending` | segment marked processed, SQL lost | throws before the mark, so the segment stays pending and the next drain offers it again |
 | `SqlGenerationService.doRegenerateForBatch` | empty artifact stored, original superseded | nothing stored, `markAsSuperseded` never reached |
 | `POST .../plugins/{pluginId}/generate-sql` (owner and admin) | `200` "SQL generation skipped" | `500 INTERNAL_ERROR` quoting the refusal |
-| `generateSqlForBatchAsync` (reinit) | silent no-op | logged as a failed async generation |
+
+(`generateSqlForBatchAsync` is not in the table: it has no callers — see #210.)
+
+The regeneration row is a fix for a path that is **not reachable today**: the only production
+caller, `PluginHistoryService.regenerateSql`, is `@Transactional`, so `refuseIfTransactionActive()`
+throws before `doRegenerateForBatch` is entered (that is #190, still open). The hazard it removes
+becomes live again the moment #190 lands, which is why it is fixed here rather than left for that
+ticket.
 
 `null` keeps its one remaining meaning — the diff really was empty — and the batch that was refused
 is now named durably: the existing `catch (RuntimeException)` writes a `SQL_GENERATION_FAILED`
-audit entry (visible to the account on `GET /api/v1/account/plugins/{pluginId}/logs`) carrying the
-message, the heap reading and the threshold, and increments `sql.generation.errors` /
-`sql.regeneration.errors` beside the unchanged `sql.generation.aborted.memory_pressure` counter.
+entry (`SQL_REGENERATION_FAILED` on the regeneration path), visible to the account on
+`GET /api/v1/account/plugins/{pluginId}/logs`. The refusal is **kept off** `sql.generation.errors`
+/ `sql.regeneration.errors`: those mean "generation is broken", and this condition repairs itself
+when the heap does — the rule #162 applied to `delta.checkpoint.builds.aborted`. It is also
+refused *before* the `SQL_GENERATION_STARTED` entry, so an attempt costs one audit row rather than
+a pair announcing a generation that never started.
+
+`sql.generation.aborted.memory_pressure` keeps its name and now means something slightly
+different: it counts **refusals, not batches lost**. Before, a refused batch was refused once,
+because the segment was consumed; now the batch is retried, so one batch under a long pressure
+episode increments it repeatedly. Read it as a rate ("this pod is refusing work") and the audit
+entries for *which* batches — a dashboard reading it as a count of affected batches will
+overstate.
 
 **Retrying is safe here, and that is a property of this abort rather than a general rule.** The
 check is a pre-flight on the *pod's* heap, not on the batch, so the same batch generates normally
-on a later sweep; nothing about it is deterministically too large. The deterministic Parquet size
-ceilings are the opposite case and are deliberately not retried this way. Under sustained pressure
-the retry costs one attempt per `plugin.sql-generation.delta-sweep-ms` tick (60 s) rather than a
-spin: a throw ends the whole drain, and `DeltaSqlSweepWorker` re-wakes on the next sweep.
+on a later attempt; nothing about it is deterministically too large. The deterministic Parquet
+size ceilings are the opposite case — they repeat identically for ever — and are bounded by
+attempt counters (#149) or settled as `ABANDONED` (036) instead.
+
+**What sets the retry rate is the wake, not the sweep.** A throw ends the whole
+`DeltaSqlSweepWorker` drain, so there is exactly one refused attempt per wake — but the pool is
+woken by `BitBiPlugin.execute` on **every** `BATCH_COMPLETED` and by a plugin reinit, not only by
+the `plugin.sql-generation.delta-sweep-ms` tick (60 s). On a busy fleet a pressure episode
+therefore produces one refused attempt, one ERROR line and one audit row per completed batch,
+which is the intended visibility but is repetitive; the floor is the sweep tick, not the ceiling.
+
+**One caveat on "unbounded retry is safe": it assumes the threshold is configured sanely.**
+`plugin.sql-generation.heap-threshold-percent` is still accepted unvalidated (**#185**), so a
+mistyped `8` makes the check true for every generation for ever. Before this change that
+misconfiguration silently dropped every batch's SQL; now it stalls the delta-SQL queue instead —
+segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet — which is louder and
+recoverable, but it is a stall with no bound of its own. Validating the key is #185's job.
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
 - Unit test: verify metric incremented
+- `DeltaSqlQueueMemoryPressureTest` — the real service behind the delta-SQL queue: a refused
+  attempt leaves the segment pending, names the batch in the audit log, and does not move
+  `sql.generation.errors`; the same wiring below the threshold consumes the segment as usual
 
 ---
 

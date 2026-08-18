@@ -173,6 +173,13 @@ class DeltaSqlQueueMemoryPressureTest {
         verify(pluginAuditService).logSqlGenerationFailed(
                 eq("bit-bi"), eq(ACCOUNT_ID), eq(BATCH_ID), eq(SITE_ID),
                 contains("memory pressure"), anyLong());
+        // and only that entry: the attempt is re-entered once per queue wake — which is once per
+        // completed batch across the fleet, not once per sweep tick — so an announced-but-refused
+        // generation would double the rows the account has to read
+        verify(pluginAuditService, never()).logSqlGenerationStarted(any(), any(), any(), any());
+        // The refusal is counted on its own meter and is self-repairing, so the series that means
+        // "generation is broken" does not move
+        assertThat(meterRegistry.find("sql.generation.errors").counter()).isNull();
     }
 
     @Test
