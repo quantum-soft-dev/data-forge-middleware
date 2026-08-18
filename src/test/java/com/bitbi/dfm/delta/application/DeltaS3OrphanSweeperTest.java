@@ -459,9 +459,10 @@ class DeltaS3OrphanSweeperTest {
 
         sweeper().sweep(NOW);
 
-        var chunks = forClass(List.class);
-        verify(objectDeleter, times(2)).deleteObjects(chunks.capture());
-        assertThat(chunks.getAllValues()).containsExactly(List.of(first), List.of(second));
+        // Two round trips with one page's keys each: a materializing sweep would delete both in one.
+        verify(objectDeleter).deleteObjects(List.of(first));
+        verify(objectDeleter).deleteObjects(List.of(second));
+        verify(objectDeleter, times(2)).deleteObjects(anyList());
         assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isEqualTo(2.0);
         assertThat(counter("delta.s3-orphan.candidates", "segments")).isEqualTo(2.0);
     }

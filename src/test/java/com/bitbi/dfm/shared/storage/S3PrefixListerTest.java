@@ -43,9 +43,9 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("a complete walk returns every object, its lastModified, and truncated=false")
     void completeWalkReturnsEveryObject() {
-        S3PrefixListing listing = S3PrefixLister.collect(List.of(
+        S3PrefixListing listing = S3PrefixLister.listAll(clientOver(List.of(
                 page(object("a", T1), object("b", T2)),
-                page(object("c", T3))));
+                page(object("c", T3)))), "bucket", "checkpoints/site/");
 
         assertThat(listing.truncated()).isFalse();
         assertThat(listing.objects()).containsExactly(
@@ -58,9 +58,10 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("a throw while fetching a later page keeps the pages already read")
     void midPaginationFailureKeepsPagesAlreadyRead() {
-        S3PrefixListing listing = S3PrefixLister.collect(throwingAfter(
+        S3PrefixListing listing = S3PrefixLister.listAll(clientOver(throwingAfter(
                 List.of(page(object("a", T1), object("b", T2))),
-                S3Exception.builder().statusCode(503).message("SlowDown").build()));
+                S3Exception.builder().statusCode(503).message("SlowDown").build())),
+                "bucket", "checkpoints/site/");
 
         assertThat(listing.truncated()).isTrue();
         assertThat(listing.objects()).containsExactly(
@@ -71,9 +72,9 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("a throw on the first page is an empty truncated listing, not an exception")
     void firstPageFailureIsEmptyTruncated() {
-        S3PrefixListing listing = S3PrefixLister.collect(throwingAfter(
-                List.of(),
-                SdkClientException.create("connection reset")));
+        S3PrefixListing listing = S3PrefixLister.listAll(clientOver(throwingAfter(
+                List.of(), SdkClientException.create("connection reset"))),
+                "bucket", "checkpoints/site/");
 
         assertThat(listing.truncated()).isTrue();
         assertThat(listing.objects()).isEmpty();
@@ -82,12 +83,9 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("both storage callers share the same walk: listAll never throws on an S3 outage")
     void listAllReturnsTruncatedInsteadOfThrowing() {
-        S3Client s3 = mock(S3Client.class);
-        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
-        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
-        when(paginator.iterator()).thenReturn(throwingAfter(
+        S3Client s3 = clientOver(throwingAfter(
                 List.of(page(object("kept", T1))),
-                S3Exception.builder().statusCode(500).message("InternalError").build()).iterator());
+                S3Exception.builder().statusCode(500).message("InternalError").build()));
 
         S3PrefixListing listing = S3PrefixLister.listAll(s3, "bucket", "checkpoints/site/");
 
@@ -98,12 +96,9 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("requireCompleteKeys throws when the walk was truncated")
     void requireCompleteKeysThrowsWhenTruncated() {
-        S3Client s3 = mock(S3Client.class);
-        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
-        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
-        when(paginator.iterator()).thenReturn(throwingAfter(
+        S3Client s3 = clientOver(throwingAfter(
                 List.of(page(object("kept", T1))),
-                S3Exception.builder().statusCode(500).message("InternalError").build()).iterator());
+                S3Exception.builder().statusCode(500).message("InternalError").build()));
 
         assertThatThrownBy(() -> S3PrefixLister.requireCompleteKeys(s3, "bucket", "egress/site/"))
                 .isInstanceOf(S3PrefixLister.IncompletePrefixException.class);
@@ -112,10 +107,7 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("requireCompleteKeys returns every key of a finished walk")
     void requireCompleteKeysReturnsKeysWhenComplete() {
-        S3Client s3 = mock(S3Client.class);
-        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
-        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
-        when(paginator.iterator()).thenReturn(List.of(page(object("a", T1), object("b", T2))).iterator());
+        S3Client s3 = clientOver(List.of(page(object("a", T1), object("b", T2))));
 
         assertThat(S3PrefixLister.requireCompleteKeys(s3, "bucket", "egress/site/"))
                 .containsExactly("a", "b");
@@ -216,11 +208,7 @@ class S3PrefixListerTest {
     @Test
     @DisplayName("forEachPage over a client walks the prefix page by page")
     void forEachPageOverAClientWalksThePrefix() {
-        S3Client s3 = mock(S3Client.class);
-        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
-        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
-        when(paginator.iterator())
-                .thenReturn(List.of(page(object("a", T1)), page(object("b", T2))).iterator());
+        S3Client s3 = clientOver(List.of(page(object("a", T1)), page(object("b", T2))));
         List<List<S3ListedObject>> pages = new ArrayList<>();
 
         S3PrefixLister.S3PrefixWalk walk =
@@ -230,6 +218,15 @@ class S3PrefixListerTest {
         assertThat(walk.objectsRead()).isEqualTo(2);
         assertThat(pages).containsExactly(
                 List.of(new S3ListedObject("a", T1)), List.of(new S3ListedObject("b", T2)));
+    }
+
+    /** An {@code S3Client} whose paginator yields {@code pages} — the walk's only entry point. */
+    private static S3Client clientOver(Iterable<ListObjectsV2Response> pages) {
+        S3Client s3 = mock(S3Client.class);
+        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
+        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
+        when(paginator.iterator()).thenAnswer(call -> pages.iterator());
+        return s3;
     }
 
     private static ListObjectsV2Response page(S3Object... objects) {

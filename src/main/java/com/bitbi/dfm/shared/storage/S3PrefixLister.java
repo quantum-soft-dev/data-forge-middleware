@@ -151,18 +151,6 @@ public final class S3PrefixLister {
     }
 
     /**
-     * Drain an already-opened page iterable, keeping whatever arrived before a failure.
-     *
-     * @param pages S3 list pages
-     * @return complete or truncated listing
-     */
-    static S3PrefixListing collect(Iterable<ListObjectsV2Response> pages) {
-        List<S3ListedObject> objects = new ArrayList<>();
-        S3PrefixWalk walk = forEachPage(pages, objects::addAll);
-        return walk.truncated() ? S3PrefixListing.truncated(objects) : S3PrefixListing.complete(objects);
-    }
-
-    /**
      * Drain an already-opened page iterable, handing each page over as it arrives.
      *
      * <p>Only the fetch is inside the catch. The consumer runs outside it on purpose: this walk's
