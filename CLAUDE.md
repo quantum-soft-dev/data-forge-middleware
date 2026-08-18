@@ -564,6 +564,114 @@ pages/{feature}/            # Route pages
   it is — `lastCheckpointAt` moves only when a build advances the pointer, so an idle site whose
   nightly rematerialize repaired everything keeps its loud chip, and what clears a verdict is
   another rebuild, which is what the chip already asks for.
+- test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so no
+  context taking the profile's defaults writes or deletes in the machine-wide temp directory
+  (issue #187, the half #168 named and deliberately left open). The exception is deliberate and is
+  #168's own: `CheckpointParquetIntegrationTest` overrides both keys to per-class directories it
+  creates under `java.io.tmpdir` — named `dfm-it-scratch-*` precisely so no sweeper's prefix
+  matches them — and its decoy file, planted there for one assertion, is removed in a `finally`. Undeclared, `delta.checkpoint.temp-dir` and
+  `delta.batch-parquet.temp-dir` fall back to `${java.io.tmpdir}`, and
+  `ParquetScratchOrphanSweeper`'s `@Scheduled` carries `initialDelayString = "0"` — so **every**
+  cached Spring context swept the host's temp directory once at refresh (#167 slowed the cadence to
+  an hour; it does not remove the refresh pass) and deleted any regular file named `checkpoint-*` or
+  `batch-parquet-*` older than four hours, whoever wrote it. That is what #168 saw from the other
+  side: its leak assertion lost a file it did not own, deleted by another JVM. The suite was the
+  perpetrator as well as the victim, and the population is not hypothetical — two worktrees running
+  `./gradlew integrationTest` at once is the ordinary shape of `/github-issue-runner`.
+  **Option 1 of the ticket, not option 2**: making the sweep inert under `test`
+  (`scratch-orphan-age-seconds` far in the future) is one line and would stop the deletions, but it
+  leaves the suite writing production-shaped scratch into `/tmp` and removes the only place the
+  scheduled sweeper runs against a real directory at all — `ParquetScratchOrphanSweeperTest` drives
+  the object over `@TempDir`s, never the wired bean over the wired directories. Both keys now read
+  `${dfm.test.parquet-scratch-root:build/test-scratch/parquet}/{checkpoint,batch-parquet}`, and the
+  root is supplied **absolutely** by `tasks.withType<Test>` in `build.gradle.kts`
+  (`layout.buildDirectory`), so it is this build's directory whatever working directory the JVM is
+  given and `clean` removes what a run leaves; the relative default keeps an IDE run that sets no
+  system property inside the build tree rather than back in `/tmp`. Per worktree by construction,
+  which is the property the ticket is really buying. The two writers get **separate**
+  subdirectories, the split `CheckpointParquetIntegrationTest` already makes for its own context
+  (#168), so a completed-batch drain cannot put a file where a checkpoint assertion looks.
+  **Two guards, because neither surface sees what the other does**, sharing one definition of "a
+  directory this run owns" (`RunOwnedScratch`) rather than each carrying its own.
+  `ParquetScratchTestProfileTest` is static and on the fast gate: both keys declared, each resolved
+  value (placeholders expanded against system properties, the way the `Environment` would) inside
+  the run's tree, and the two directories **distinct** — a copy-paste pointing both at
+  `…/checkpoint` otherwise passes everything silently.
+  `ParquetScratchSweepIsolationIntegrationTest` holds the **wired** context on the shared
+  `BaseIntegrationTest`: the directories this context actually resolved are the run's own — the
+  only guard that can see an **OS environment override**, since `DELTA_CHECKPOINT_TEMP_DIR` binds
+  to this key and outranks every `application*.yml` — and an aged `checkpoint-*` inside the
+  configured directory is **still deleted**, which is what stops "fixed" from meaning "the sweeper
+  was switched off under test" and keeps the literal prefix the test shares with the
+  package-private production `ParquetScratch` from drifting unnoticed. Both were **proven red by
+  mutation** (the two keys removed). **Two shapes were tried and rejected in review**: planting an
+  aged `checkpoint-*` in `java.io.tmpdir` and asserting it survives reads as the more direct
+  proof, but any *other* process sweeping that directory — a locally running backend under `dev`,
+  or a concurrent worktree on a branch predating this fix, which is the ordinary shape of
+  `/github-issue-runner` — decides it, and it would fail accusing this suite of the very defect it
+  guards, so the wired configuration answers it deterministically instead — and the behaviour the
+  probe was there for is structural rather than assumed, since `sweep()` iterates exactly the
+  directories the bean was constructed with, over which `ParquetScratchOrphanSweeperTest` already
+  drives every rule (age, prefix, pod-private cutoff, a missing directory); and "the run's tree" is **not** an ancestor directory named `build`,
+  since an IntelliJ run configured to build with the IDE compiles to `out/` and a guard that goes
+  red on a developer's build layout rather than on a regression is worse than no guard — it is the
+  Gradle-supplied root when present, the checkout (located by `settings.gradle.kts`) otherwise.
+  Test-only — no production code, REST, gRPC, DTO, migration,
+  production configuration-key, metric, S3-key or frontend change; `k8s/` and the deployed
+  `*_TEMP_DIR` keys are untouched, so the sizing arithmetic of #131/#138/#150 is unaffected.
+- prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
+  uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
+  reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a
+  `List<S3ListedObject>` before any caller could filter it, and `DeltaS3OrphanSweeper` then copied
+  subsets of that into `candidates` and `orphans` — one site's whole listing plus two derivations,
+  on a scheduler thread, fleet-wide, beside the checkpoint fold budget (#152/#178) and the Parquet
+  scratch budget (#150), neither of which knows about it. The peak is one site's object count rather
+  than the bucket's, which is why #158 shipped as it was; what makes it worth a ticket is that the
+  sweep's **first deleting pass is by construction the largest listing this application ever takes**
+  — its own premise is that superseded generations accumulated nightly for months with nothing
+  reclaiming them. New `S3PrefixLister.forEachPage(client, bucket, prefix, Consumer<List<…>>)`
+  returns `S3PrefixWalk(objectsRead, truncated)`; `listAll` is now that walk with a collecting
+  consumer, so there is one implementation and the truncation contract of #122 is literally the same
+  object in both — pages already handed over stand, the flag says the walk stopped early. **The
+  complete-listing callers keep their semantics unchanged**: the wipe compares every key against one
+  instant and `requireCompleteKeys` (batch deletion, retention) needs the whole set or none, so both
+  still call `listAll`. One behaviour the split *added*: the consumer runs **outside** the catch that
+  classifies truncation, because this walk's consumer deletes objects and can therefore raise the
+  very exception types the walk reads as "the listing stopped early" — a caller's failure reported
+  as a short listing would be hidden behind a flag meaning the opposite. **What is bounded and what
+  deliberately is not.** The listing is bounded by nothing; the row set is bounded by what still
+  exists (retention prunes segments, `checkpoints` is one row per table). So the listing is consumed
+  a page at a time and the row set stays **one read per site**, taken lazily on the first page that
+  produces a candidate — the same single query #158 made, so no S3 call and no database call is
+  added or removed and this is a heap change and nothing else. The cost is stated rather than hidden:
+  for a site whose prefix fits one page — the overwhelming majority — "rows read after the listing"
+  is unchanged, and beyond the first page that ordering guard is weaker, with the **age window**
+  carrying it (a row can only appear for an object whose write is still in flight, and the window is
+  a day past the longest such gap). The checkpoint pointer read with those rows is *older* than the
+  pages that follow, and an older pointer protects strictly more keys, so `couldStillBeAdopted` errs
+  only towards keeping the object. A failed row read now ends the **site**, every remaining page of
+  it included, rather than the page that asked; the held-back and dry-run lines are accumulated and
+  logged **once per site** with a ten-key sample, so an operator reads the same one line per prefix
+  as before rather than one per page. `S3ChangelogSegmentStorage.walkPrefix` and
+  `S3CheckpointStorage.walkPrefix` join their `listPrefix` twins — except on the segment side, where
+  the materializing form had no caller left and is **removed** rather than kept as an invitation to
+  restore the peak. **The delete is buffered rather than paged**, which review had to point out: a
+  page and a `DeleteObjects` chunk are both 1000 keys, so deleting per page would have turned the
+  sparse steady state — a few superseded objects every thousand keys — into one round trip per page
+  on a tick that walks every site prefix in the bucket: a site of two thousand pages holding four
+  thousand thinly spread orphans would have taken up to **two thousand** round trips where the
+  whole-listing version took four.
+  Orphans are judged per page and queued, every full chunk goes out during the walk and the
+  remainder in the `finally`, so the peak is under two chunks of keys — the same order as the page
+  the walk hands over — and the bound this ticket is about is untouched. Pinned by tests on both sides: the
+  walk hands pages over separately, keeps the pages already handed over on a mid-walk failure, and
+  does **not** swallow a consumer's `S3Exception`; the sweep sends orphans thinly spread over two
+  pages in **one** round trip and flushes a full chunk mid-walk (a 1500-key page leaves as 1000 then
+  500, so batching cannot become accumulating), reads the row set once for three pages, and — the
+  assertion that actually pins the design — records "rows" *before* "walk-finished", which a
+  materializing implementation cannot do. No REST, gRPC, proto, DTO, migration, configuration-key, metric-name,
+  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Objects no row references are
+  reclaimed").
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
   references are reclaimed, by one mechanism for both prefixes (issue #158, which folded **#160** —
   the same defect in the second prefix, and the hard part, proving an object is dead without a row
