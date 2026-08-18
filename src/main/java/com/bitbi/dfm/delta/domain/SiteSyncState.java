@@ -180,6 +180,11 @@ public class SiteSyncState {
         this.lastCheckpointAt = null;
         this.rebaselineRequested = false;
         this.rebaselineNotifiedAt = null;
+        // The verdict is a statement about checkpoints, and a re-baseline deletes every one of
+        // them (#142), so afterwards it describes nothing — the same reason resetForWipe drops it.
+        // It is deliberately *not* tied to rebuildRequested, which this reset leaves alone: the
+        // flag says "a rebuild is owed", the verdict says "this is what the last one did".
+        clearRebuildOutcome();
         this.baselineEpoch++;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
@@ -210,12 +215,7 @@ public class SiteSyncState {
         // Re-armed from scratch: this request is new, whatever an earlier one had been told.
         this.rebaselineNotifiedAt = null;
         this.rebuildRequested = false;
-        // The verdict travels with the flag (issue #186): a wipe puts the row back to what a
-        // brand-new site has, and a verdict about checkpoints it has just deleted describes
-        // nothing. A re-baseline leaves both alone, for the same reason in reverse.
-        this.lastRebuildOutcome = null;
-        this.lastRebuildOutcomeAt = null;
-        this.lastRebuildMessage = null;
+        clearRebuildOutcome();
         this.generation++;
         this.baselineEpoch++;
         this.wipePending = true;
@@ -284,8 +284,10 @@ public class SiteSyncState {
     }
 
     /**
-     * Flag the site for a forced out-of-schedule checkpoint rebuild; cleared via
-     * {@link #clearRebuildRequested()} once the rebuild completes.
+     * Flag the site for a forced out-of-schedule checkpoint rebuild. The flag is settled by
+     * {@link #recordRebuildOutcome} when the attempt <em>finishes</em> — released together with a
+     * verdict saying how it ended (issue #186) — and is deliberately left standing by an attempt
+     * cut short because the process is shutting down, which the next process re-drives (#162).
      */
     public void requestRebuild() {
         this.rebuildRequested = true;
@@ -308,6 +310,17 @@ public class SiteSyncState {
         this.lastRebuildOutcome = outcome;
         this.lastRebuildOutcomeAt = LocalDateTime.now(ZoneOffset.UTC);
         this.lastRebuildMessage = truncateRebuildMessage(message);
+    }
+
+    /**
+     * Forget how the last forced rebuild ended (issue #186). Called by everything that discards the
+     * site's checkpoints — a wipe and an ordinary re-baseline alike — because the verdict is a
+     * statement about those checkpoints and describes nothing once they are gone.
+     */
+    private void clearRebuildOutcome() {
+        this.lastRebuildOutcome = null;
+        this.lastRebuildOutcomeAt = null;
+        this.lastRebuildMessage = null;
     }
 
     private static String truncateRebuildMessage(String message) {

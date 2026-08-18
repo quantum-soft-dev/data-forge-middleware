@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeRebuildOutcome } from './rebuildOutcome';
+import { describeRebuildOutcome, isRebuildOutcomeSuperseded } from './rebuildOutcome';
 
 describe('describeRebuildOutcome (#186)', () => {
   it('gives every known outcome a label and a severity', () => {
@@ -31,5 +31,36 @@ describe('describeRebuildOutcome (#186)', () => {
   it('has nothing to say when no rebuild has finished', () => {
     expect(describeRebuildOutcome(null)).toBeNull();
     expect(describeRebuildOutcome('')).toBeNull();
+  });
+});
+
+describe('isRebuildOutcomeSuperseded (#186)', () => {
+  it('is true when a checkpoint was built after the verdict', () => {
+    // Only a forced rebuild writes a verdict, so without this a FAILED one is a permanent critical
+    // chip that outlives every nightly build that has since succeeded.
+    expect(
+      isRebuildOutcomeSuperseded({
+        lastCheckpointAt: '2026-07-05T12:00:00Z',
+        lastRebuildOutcomeAt: '2026-07-05T11:00:00Z',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false while nothing has succeeded since', () => {
+    expect(
+      isRebuildOutcomeSuperseded({
+        lastCheckpointAt: '2026-07-05T10:00:00Z',
+        lastRebuildOutcomeAt: '2026-07-05T11:00:00Z',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false when either timestamp is missing', () => {
+    expect(
+      isRebuildOutcomeSuperseded({ lastCheckpointAt: null, lastRebuildOutcomeAt: '2026-07-05T11:00:00Z' }),
+    ).toBe(false);
+    expect(
+      isRebuildOutcomeSuperseded({ lastCheckpointAt: '2026-07-05T11:00:00Z', lastRebuildOutcomeAt: null }),
+    ).toBe(false);
   });
 });

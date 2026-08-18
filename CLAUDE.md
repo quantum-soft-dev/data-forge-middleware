@@ -506,6 +506,27 @@ pages/{feature}/            # Route pages
   heard of. The message is clamped to four lines with the full string on hover. No gRPC, proto,
   configuration-key, metric, S3-key or route change. See `docs/delta-client-v2-guide.md`
   ("A forced rebuild says what it did").
+  **Review round 1 changed four decisions and one field's audience.** The `FAILED` message is the
+  exception's own text, and `lastRebuildMessage` therefore now sits on the **admin projection
+  only**: a `PSQLException` naming a constraint or an S3 error naming the bucket and endpoint would
+  otherwise be readable by a tenant user on `GET /api/v1/account/sites/{siteId}/delta/sync-state`,
+  which is the one surface that exposes it — and the owner cannot request a rebuild at all, so the
+  outcome and its time are the whole of what that projection owes them (`forAdmin` / `forOwner`
+  replace `fromEntity`; the same rule keeps storage keys off the segment projection). `DEFERRED`
+  gained a **second text**, because `BuildDeferredException` also carries a non-blocking probe and a
+  bare interrupt, and telling those to raise `delta.checkpoint.fold-wait-seconds` prescribes a
+  remedy for contention that did not happen — the split is `waitWasSpent()`, exactly the one
+  `delta.checkpoint.builds.deferred` already makes. The queue-refusal text **quotes the refusal**
+  instead of asserting "the queue was full", #171's lesson verbatim: `ThreadPoolTaskExecutor` raises
+  `RejectedExecutionException` for "executor shutting down" too, and naming the wrong one sends an
+  operator after a capacity problem during a routine rollout. And the "travels with the flag" rule
+  was **wrong in one direction**: `resetForRebaseline` deletes every `checkpoints` row (#142), so a
+  verdict about them describes nothing afterwards for exactly the reason the wipe drops it — both
+  now clear it, while the flag stays a separate question that the re-baseline deliberately does not
+  answer. One more, on the UI: only a forced rebuild ever writes a verdict, so a `FAILED` one used
+  to paint a **permanent** critical chip that outlived every nightly build that had since succeeded
+  — `lastCheckpointAt` later than `lastRebuildOutcomeAt` is exact evidence that the condition
+  cleared, so the chip keeps its label, its time and its message and drops the colour.
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
   references are reclaimed, by one mechanism for both prefixes (issue #158, which folded **#160** —
   the same defect in the second prefix, and the hard part, proving an object is dead without a row

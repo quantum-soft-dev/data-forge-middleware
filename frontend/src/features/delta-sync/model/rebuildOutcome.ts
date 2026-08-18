@@ -38,3 +38,22 @@ export function describeRebuildOutcome(
   if (!outcome) return null;
   return KNOWN[outcome] ?? { label: `Rebuild: ${outcome}`, severity: 'elevated' };
 }
+
+/**
+ * Has a checkpoint been built since the verdict was recorded?
+ *
+ * Only a forced rebuild ever writes a verdict, so a FAILED one would otherwise paint a critical
+ * chip for ever — surviving every later nightly build that succeeded (raised in review). A
+ * checkpoint recorded *after* the verdict is exact evidence that whatever the rebuild ran into has
+ * since cleared, so the chip keeps its label and its time and stops shouting. Where nothing has
+ * succeeded since, the chip stays as loud as it was, which is honest.
+ *
+ * @param state the sync-state projection
+ */
+export function isRebuildOutcomeSuperseded(state: {
+  lastCheckpointAt: string | null;
+  lastRebuildOutcomeAt: string | null;
+}): boolean {
+  if (!state.lastCheckpointAt || !state.lastRebuildOutcomeAt) return false;
+  return new Date(state.lastCheckpointAt) > new Date(state.lastRebuildOutcomeAt);
+}

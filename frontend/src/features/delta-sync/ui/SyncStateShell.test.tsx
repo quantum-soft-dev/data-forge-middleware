@@ -129,6 +129,33 @@ describe('SyncStateShell (F5)', () => {
     expect(screen.queryByText('boom')).not.toBeInTheDocument()
   })
 
+  it('lets a verdict go quiet once a checkpoint has been built since', () => {
+    // Raised in review: only a forced rebuild writes a verdict, so a FAILED one would otherwise
+    // paint a critical chip for ever, outliving every nightly build that has since succeeded.
+    const failedAndSuperseded = {
+      ...baseState,
+      lastCheckpointAt: '2026-07-05T11:45:00Z',
+      lastRebuildOutcome: 'FAILED',
+      lastRebuildOutcomeAt: '2026-07-05T11:00:00Z',
+      lastRebuildMessage: 'boom',
+    }
+    const { rerender } = render(<SyncStateShell state={failedAndSuperseded} now={NOW} />)
+
+    // Still reported, with its message — only the tone changes.
+    expect(screen.getByText('Rebuild failed')).toBeInTheDocument()
+    expect(screen.getByTestId('rebuild-outcome-message')).toBeInTheDocument()
+    const quiet = screen.getByTestId('rebuild-outcome-chip').style.background
+
+    rerender(
+      <SyncStateShell
+        state={{ ...failedAndSuperseded, lastCheckpointAt: '2026-07-05T10:00:00Z' }}
+        now={NOW}
+      />,
+    )
+
+    expect(screen.getByTestId('rebuild-outcome-chip').style.background).not.toBe(quiet)
+  })
+
   it('renders schema version and checkpoint value', () => {
     render(<SyncStateShell state={baseState} now={NOW} />)
     expect(screen.getByText('v 12')).toBeInTheDocument()

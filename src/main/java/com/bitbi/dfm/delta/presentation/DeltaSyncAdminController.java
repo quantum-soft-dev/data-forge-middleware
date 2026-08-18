@@ -118,7 +118,7 @@ public class DeltaSyncAdminController {
         siteService.getSite(siteId); // 404 when the site does not exist
         boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state, snapshotInProgress)))
+                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.forAdmin(state, snapshotInProgress)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

@@ -14,9 +14,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * on the request and down when the attempt settled, whatever the attempt had done. Three of the
  * four endings ran nothing at all, and all four looked identical from outside the pod. The verdict
  * is what makes them distinguishable, so these tests pin the two properties it needs: it is written
- * <em>with</em> the flag release (never one without the other), and it travels with the flag —
- * anything that resets the flag resets the verdict, anything that leaves the flag alone leaves the
- * verdict alone.</p>
+ * <em>with</em> the flag release (never one without the other), and it lives exactly as long as the
+ * checkpoints it describes — everything that discards them, a wipe and an ordinary re-baseline
+ * alike, discards it too.</p>
  */
 @DisplayName("SiteSyncState — last forced-rebuild outcome")
 class SiteSyncStateRebuildOutcomeTest {
@@ -105,17 +105,21 @@ class SiteSyncStateRebuildOutcomeTest {
     }
 
     @Test
-    @DisplayName("a re-baseline keeps the verdict, as it keeps the request flag")
-    void shouldKeepTheVerdictOnRebaseline() {
-        // The verdict travels with the flag, and resetForRebaseline deliberately leaves the flag
-        // alone: a rebuild queued while the client re-uploads is still a rebuild the operator asked
-        // for. Clearing one and not the other would make the pair mean two different things.
+    @DisplayName("a re-baseline drops the verdict too, and keeps the request flag")
+    void shouldDropTheVerdictOnRebaseline() {
+        // Raised in review. A re-baseline deletes every checkpoint row of the site (#142), so the
+        // verdict describes nothing afterwards — the same reason the wipe drops it. The request
+        // flag is a different question ("a rebuild is owed") and this reset deliberately does not
+        // answer it, so the two are not cleared together.
         SiteSyncState state = requested();
         state.recordRebuildOutcome(CheckpointRebuildOutcome.FAILED, "boom");
+        state.requestRebuild();
 
         state.resetForRebaseline(500L);
 
-        assertThat(state.getLastRebuildOutcome()).isEqualTo(CheckpointRebuildOutcome.FAILED);
-        assertThat(state.getLastRebuildMessage()).isEqualTo("boom");
+        assertThat(state.getLastRebuildOutcome()).isNull();
+        assertThat(state.getLastRebuildOutcomeAt()).isNull();
+        assertThat(state.getLastRebuildMessage()).isNull();
+        assertThat(state.isRebuildRequested()).isTrue();
     }
 }

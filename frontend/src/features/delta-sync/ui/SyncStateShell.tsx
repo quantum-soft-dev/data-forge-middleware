@@ -18,7 +18,7 @@ import {
   isStalled,
   lagTrackPercent,
 } from '../model/severity';
-import { describeRebuildOutcome } from '../model/rebuildOutcome';
+import { describeRebuildOutcome, isRebuildOutcomeSuperseded } from '../model/rebuildOutcome';
 import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface SyncStateShellProps {
@@ -42,6 +42,17 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
   const rebuildOutcome = state.rebuildRequested
     ? null
     : describeRebuildOutcome(state.lastRebuildOutcome);
+  // Only a forced rebuild writes a verdict, so a failed one would otherwise stay critical for ever,
+  // outliving every nightly build that has since succeeded. A checkpoint recorded after it is exact
+  // evidence that the condition cleared, so the chip keeps its label and its time and goes quiet.
+  const outcomeSuperseded = isRebuildOutcomeSuperseded(state);
+  const outcomeChipStyle =
+    rebuildOutcome && !outcomeSuperseded
+      ? {
+          background: severityTokens[rebuildOutcome.severity].bg,
+          color: severityTokens[rebuildOutcome.severity].text,
+        }
+      : { background: t.subtleBg, color: t.textSecondary };
 
   return (
     <div
@@ -191,10 +202,7 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
             {rebuildOutcome && (
               <span
                 className="rounded-full px-2 py-0.5 text-xs font-medium"
-                style={{
-                  background: severityTokens[rebuildOutcome.severity].bg,
-                  color: severityTokens[rebuildOutcome.severity].text,
-                }}
+                style={outcomeChipStyle}
                 data-testid="rebuild-outcome-chip"
               >
                 {rebuildOutcome.label}

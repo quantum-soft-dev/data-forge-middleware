@@ -24,8 +24,9 @@ import java.time.ZoneOffset;
  *                            attempt, not the queued one — which is also why an ending that keeps
  *                            the flag (the process shutting down) writes nothing here
  * @param lastRebuildOutcomeAt when that outcome was recorded
- * @param lastRebuildMessage  operator-facing explanation of the outcome; null for a rebuild that
- *                            completed, which has nothing to explain
+ * @param lastRebuildMessage  explanation of the outcome, <b>admin projection only</b>; null for a
+ *                            rebuild that completed, which has nothing to explain, and null for the
+ *                            owner, who gets the outcome and its time but not the diagnosis
  */
 public record DeltaSyncStateResponseDto(
         long lastAppliedSeq,
@@ -42,7 +43,7 @@ public record DeltaSyncStateResponseDto(
 ) {
 
     /**
-     * Convert the SiteSyncState entity to its REST projection.
+     * Convert the SiteSyncState entity to the <b>admin</b> REST projection, diagnosis included.
      *
      * @param state              the sync state entity
      * @param snapshotInProgress whether the site's open session is a FULL_SNAPSHOT — it outlives the
@@ -50,7 +51,31 @@ public record DeltaSyncStateResponseDto(
      *                           needs it to keep showing that a full re-upload is under way
      * @return response DTO
      */
-    public static DeltaSyncStateResponseDto fromEntity(SiteSyncState state, boolean snapshotInProgress) {
+    public static DeltaSyncStateResponseDto forAdmin(SiteSyncState state, boolean snapshotInProgress) {
+        return build(state, snapshotInProgress, state.getLastRebuildMessage());
+    }
+
+    /**
+     * Convert the SiteSyncState entity to the <b>owner</b> REST projection.
+     *
+     * <p>Identical but for {@code lastRebuildMessage}, which is withheld. For a {@code FAILED}
+     * verdict that string is the exception's own text — a {@code PSQLException} naming a constraint
+     * or a column, an S3 error naming the bucket and endpoint — and this endpoint is the one place
+     * a tenant user could read it. The account owner cannot request a rebuild in the first place
+     * (the route is ROLE_ADMIN), so the outcome and its time are the whole of what the projection
+     * owes them; the same rule keeps storage keys and claim tokens off the segment and artifact
+     * projections.</p>
+     *
+     * @param state              the sync state entity
+     * @param snapshotInProgress whether the site's open session is a FULL_SNAPSHOT
+     * @return response DTO with the rebuild diagnosis withheld
+     */
+    public static DeltaSyncStateResponseDto forOwner(SiteSyncState state, boolean snapshotInProgress) {
+        return build(state, snapshotInProgress, null);
+    }
+
+    private static DeltaSyncStateResponseDto build(SiteSyncState state, boolean snapshotInProgress,
+                                                   String lastRebuildMessage) {
         return new DeltaSyncStateResponseDto(
                 state.getLastAppliedSeq(),
                 state.getLastCheckpointSeq(),
@@ -63,7 +88,7 @@ public record DeltaSyncStateResponseDto(
                 state.getLastRebuildOutcome(),
                 state.getLastRebuildOutcomeAt() == null
                         ? null : state.getLastRebuildOutcomeAt().toInstant(ZoneOffset.UTC),
-                state.getLastRebuildMessage()
+                lastRebuildMessage
         );
     }
 }

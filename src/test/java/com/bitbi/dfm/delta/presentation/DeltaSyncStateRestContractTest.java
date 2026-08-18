@@ -97,18 +97,22 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
         }
 
         @Test
-        @DisplayName("returns the last rebuild verdict, its time and its message")
-        void shouldReturnTheRebuildVerdict() throws Exception {
+        @DisplayName("returns the last rebuild verdict and its time, but withholds the diagnosis")
+        void shouldReturnTheRebuildVerdictWithoutItsMessage() throws Exception {
+            // Raised in review. For a FAILED verdict the message is the exception's own text — a
+            // PSQLException naming a constraint, an S3 error naming the bucket — and this endpoint
+            // is the one place a tenant user could read it. The owner cannot request a rebuild
+            // anyway (that route is ROLE_ADMIN), so the outcome and its time are the whole of what
+            // this projection owes them.
             seedSyncState(OWNED_SITE);
-            seedRebuildVerdict(OWNED_SITE, "DEFERRED", "another checkpoint build held the fold budget");
+            seedRebuildVerdict(OWNED_SITE, "FAILED", "PSQLException: duplicate key value violates ...");
 
             mockMvc.perform(get(USER_URL.formatted(OWNED_SITE))
                             .header("Authorization", "Bearer " + MOCK_USER_JWT))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.lastRebuildOutcome").value("DEFERRED"))
+                    .andExpect(jsonPath("$.lastRebuildOutcome").value("FAILED"))
                     .andExpect(jsonPath("$.lastRebuildOutcomeAt").isNotEmpty())
-                    .andExpect(jsonPath("$.lastRebuildMessage")
-                            .value("another checkpoint build held the fold budget"));
+                    .andExpect(jsonPath("$.lastRebuildMessage").value(nullValue()));
         }
 
         @Test
@@ -159,6 +163,21 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.lastAppliedSeq").value(4821))
                     .andExpect(jsonPath("$.rebuildRequested").value(true));
+        }
+
+        @Test
+        @DisplayName("returns the last rebuild verdict with its diagnosis")
+        void shouldReturnTheRebuildVerdictWithItsMessage() throws Exception {
+            seedSyncState(FOREIGN_SITE);
+            seedRebuildVerdict(FOREIGN_SITE, "DEFERRED", "another checkpoint build held the fold budget");
+
+            mockMvc.perform(get(ADMIN_URL.formatted(FOREIGN_SITE))
+                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lastRebuildOutcome").value("DEFERRED"))
+                    .andExpect(jsonPath("$.lastRebuildOutcomeAt").isNotEmpty())
+                    .andExpect(jsonPath("$.lastRebuildMessage")
+                            .value("another checkpoint build held the fold budget"));
         }
 
         @Test

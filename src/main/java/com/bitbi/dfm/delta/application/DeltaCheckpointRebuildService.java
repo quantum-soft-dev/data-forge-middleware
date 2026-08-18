@@ -42,13 +42,6 @@ public class DeltaCheckpointRebuildService {
     private static final Logger log = LoggerFactory.getLogger(DeltaCheckpointRebuildService.class);
 
     /**
-     * Verdict text for a rebuild the single-thread {@code deltaRebuildExecutor} would not accept.
-     * It repairs itself the moment the queue drains, so the advice is to ask again.
-     */
-    private static final String QUEUE_FULL_MESSAGE =
-            "The rebuild queue was full, so the rebuild was never started. Request it again.";
-
-    /**
      * Verdict text for the two endings whose exception is worded for the <em>scheduler</em>.
      *
      * <p>Both messages end by promising that the next tick tries again, which is true where they
@@ -63,10 +56,21 @@ public class DeltaCheckpointRebuildService {
             + "was folded, uploaded or recorded. Request the rebuild again once S3 reads are "
             + "allowed — see the delta.s3.read-denied counter.";
 
+    private static final String DEFERRED_CONTENDED_MESSAGE =
+            "Another checkpoint build held the process's fold budget for the whole wait, so nothing "
+            + "was folded and nothing was recorded. Request the rebuild again once that build has "
+            + "finished, or raise delta.checkpoint.fold-wait-seconds if the two collide regularly.";
+
+    /**
+     * Verdict text for a deferral that did <b>not</b> spend a wait — the budget was probed without
+     * waiting, or the wait was cut short by an interrupt. Naming contention there would prescribe
+     * raising {@code delta.checkpoint.fold-wait-seconds}, which is the wrong remedy for a wait that
+     * was never spent; it is the same split {@code delta.checkpoint.builds.deferred} makes, and the
+     * log line beside this has always made it.
+     */
     private static final String DEFERRED_MESSAGE =
-            "Another checkpoint build held the process's fold budget, so nothing was folded and "
-            + "nothing was recorded. Request the rebuild again once that build has finished, or "
-            + "raise delta.checkpoint.fold-wait-seconds if the two collide regularly.";
+            "The rebuild did not get the process's fold budget, so nothing was folded and nothing "
+            + "was recorded. Request it again.";
 
     private final DeltaSyncStateService syncStateService;
     private final CheckpointService checkpointService;
@@ -104,7 +108,7 @@ public class DeltaCheckpointRebuildService {
             // caller also gets the exception, but the verdict is what the site itself carries a
             // minute later, and it is the same surface the startup-recovery rejection writes to.
             syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
-                    QUEUE_FULL_MESSAGE);
+                    queueRefusedMessage(e));
             throw e;
         }
         log.info("Checkpoint rebuild queued: siteId={}", siteId);
@@ -124,7 +128,7 @@ public class DeltaCheckpointRebuildService {
             } catch (RejectedExecutionException e) {
                 log.warn("Rebuild queue full during startup recovery — releasing flag: siteId={}", siteId, e);
                 syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
-                        QUEUE_FULL_MESSAGE);
+                        queueRefusedMessage(e));
             }
         }
     }
@@ -212,7 +216,7 @@ public class DeltaCheckpointRebuildService {
             // only for a bare interrupt, which keeps neither the flag nor the contention wording.
             keepFlagForARetry = shutdownSignal.isShuttingDown();
             outcome = CheckpointRebuildOutcome.DEFERRED;
-            message = DEFERRED_MESSAGE;
+            message = e.waitWasSpent() ? DEFERRED_CONTENDED_MESSAGE : DEFERRED_MESSAGE;
             if (keepFlagForARetry) {
                 logShutdown(siteId);
             } else if (e.waitWasSpent()) {
@@ -239,6 +243,22 @@ public class DeltaCheckpointRebuildService {
                 syncStateService.recordRebuildOutcome(siteId, outcome, message);
             }
         }
+    }
+
+    /**
+     * Verdict text for a rebuild {@code deltaRebuildExecutor} would not accept.
+     *
+     * <p>It quotes the refusal rather than asserting a cause, for the reason #171 records:
+     * {@code ThreadPoolTaskExecutor} throws {@link RejectedExecutionException} both for a full
+     * queue and for "executor shutting down", and naming the wrong one sends the operator after a
+     * capacity problem during a routine rollout. Either way the request never started and the
+     * remedy is the same.</p>
+     *
+     * @param refusal the executor's own refusal
+     * @return the verdict text
+     */
+    private static String queueRefusedMessage(RejectedExecutionException refusal) {
+        return "The rebuild was never started: " + describe(refusal) + ". Request it again.";
     }
 
     /**

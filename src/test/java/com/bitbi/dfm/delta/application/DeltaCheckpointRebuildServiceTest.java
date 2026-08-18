@@ -152,8 +152,8 @@ class DeltaCheckpointRebuildServiceTest {
         assertTrue(service.requestRebuild(SITE));
 
         assertThat(recordedMessage(CheckpointRebuildOutcome.DEFERRED))
-                .contains("fold budget")
-                .contains("Request the rebuild again")
+                .contains("held the process's fold budget for the whole wait")
+                .contains("delta.checkpoint.fold-wait-seconds")
                 .doesNotContain("the next tick tries again");
     }
 
@@ -172,6 +172,23 @@ class DeltaCheckpointRebuildServiceTest {
         assertTrue(service.requestRebuild(SITE));
 
         verify(syncStateService, never()).recordRebuildOutcome(any(), any(), any());
+    }
+
+    @Test
+    void doesNotBlameContentionForADeferralThatNeverSpentItsWait() {
+        // Raised in review. `endedEarly` also covers a bare interrupt, and a probe that did not
+        // wait at all sets mayWait=false — neither is contention, so neither may prescribe raising
+        // delta.checkpoint.fold-wait-seconds. It is the same split waitWasSpent() makes for
+        // delta.checkpoint.builds.deferred, and the log line beside this has always made it.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(SITE, 0L, false, false));
+
+        assertTrue(service.requestRebuild(SITE));
+
+        assertThat(recordedMessage(CheckpointRebuildOutcome.DEFERRED))
+                .contains("did not get the process's fold budget")
+                .doesNotContain("fold-wait-seconds");
     }
 
     @Test
@@ -201,8 +218,12 @@ class DeltaCheckpointRebuildServiceTest {
 
         assertThrows(RejectedExecutionException.class, () -> rejectingService.requestRebuild(SITE));
 
+        // The refusal's own words, not an asserted cause: ThreadPoolTaskExecutor raises this both
+        // for a full queue and for "executor shutting down", and naming the wrong one sends the
+        // operator after a capacity problem during a routine rollout (#171's lesson).
         assertThat(recordedMessage(CheckpointRebuildOutcome.FAILED))
-                .contains("queue");
+                .contains("never started")
+                .contains("queue full");
     }
 
     @Test
@@ -237,6 +258,7 @@ class DeltaCheckpointRebuildServiceTest {
         assertDoesNotThrow(rejectingService::resumePendingRebuilds);
 
         assertThat(recordedMessage(CheckpointRebuildOutcome.FAILED))
-                .contains("queue");
+                .contains("never started")
+                .contains("queue full");
     }
 }

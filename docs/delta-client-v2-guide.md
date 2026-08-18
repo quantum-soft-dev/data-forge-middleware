@@ -1765,7 +1765,7 @@ both sync-state projections as `lastRebuildOutcome`, `lastRebuildOutcomeAt` and
 |---|---|---|---|
 | The rebuild ran | `COMPLETED` (no message) | released | nothing |
 | It threw | `FAILED` — the exception's type and text | released | fix what the message names, ask again |
-| The rebuild queue would not take it | `FAILED` — "the rebuild queue was full…" | released | ask again |
+| The rebuild queue would not take it | `FAILED` — the executor's own refusal, quoted | released | ask again |
 | S3 would not say whether the frame is there (#157) | `FRAME_UNAVAILABLE` | released | restore the bucket policy or IAM grant (`delta.s3.read-denied`), then ask again |
 | Another build held the fold budget (#178) | `DEFERRED` | released | ask again once the nightly build has finished, or raise `delta.checkpoint.fold-wait-seconds` |
 | The process is shutting down (#162) | **none written** | **kept** | nothing — the next process re-drives it at startup |
@@ -1781,9 +1781,17 @@ Four properties are worth keeping in mind when reading the pair:
 - **While the flag is up, the verdict describes the *previous* attempt.** The Delta Sync tab gives
   the queued chip precedence for that reason — showing both would read as "queued, and it failed"
   for a rebuild that has not run yet.
-- **The verdict travels with the flag.** A site history wipe drops both (the row goes back to what a
-  brand-new site has, and a verdict about checkpoints the wipe just deleted describes nothing); an
-  ordinary re-baseline keeps both, because it keeps the flag.
+- **The verdict lives exactly as long as the checkpoints it describes.** A site history wipe drops
+  it, and so does an ordinary re-baseline, which deletes every `checkpoints` row of the site
+  (#142) — the verdict would describe nothing afterwards. It is deliberately *not* tied to
+  `rebuild_requested`, which a re-baseline leaves standing: the flag says "a rebuild is owed", the
+  verdict says "this is what the last one did".
+- **A verdict superseded by a later checkpoint stops shouting.** Only a forced rebuild writes one,
+  so a `FAILED` verdict would otherwise paint a critical chip for ever, outliving every nightly
+  build that has since succeeded. Where `lastCheckpointAt` is later than `lastRebuildOutcomeAt` the
+  UI keeps the label, the time and the message and drops the colour — a checkpoint built since is
+  exact evidence that the condition cleared. Where nothing has succeeded since, the chip stays as
+  loud as it was.
 
 The message is bounded at 1,000 characters by the writer — a value wider than the column would
 throw at flush and lose the verdict entirely, which is where this ticket started. It is shown
@@ -1793,7 +1801,18 @@ carries no message at all). For `FRAME_UNAVAILABLE` and `DEFERRED` it keeps the 
 diagnosis but **replaces its advice**: both of those messages are worded for
 `CheckpointScheduler`, which really does revisit the site, and end by promising that the next tick
 tries again — which on this path is false, since the nightly tick calls `buildCheckpoint` and never
-`rebuildFromFrame`, so a forced rebuild is retried only when somebody asks again.
+`rebuildFromFrame`, so a forced rebuild is retried only when somebody asks again. `DEFERRED` has
+two texts, and only a deferral that **spent its wait** names contention and prescribes raising
+`delta.checkpoint.fold-wait-seconds` — the same split `delta.checkpoint.builds.deferred` makes,
+since a non-blocking probe and an interrupted wait are not contention.
+
+**`lastRebuildMessage` is on the admin projection only.** For a `FAILED` verdict it is the
+exception's own text — a `PSQLException` naming a constraint or a column, an S3 error naming the
+bucket and endpoint — and `GET /api/v1/account/sites/{siteId}/delta/sync-state` is the one place a
+tenant user could read it. The account owner cannot request a rebuild in the first place (the route
+is ROLE_ADMIN), so the owner projection carries `lastRebuildOutcome` and `lastRebuildOutcomeAt` and
+leaves the message null — the same rule that keeps storage keys off the segment projection and
+claim tokens off the artifact projection.
 
 ### No S3 inside a queue worker (issue #164)
 
