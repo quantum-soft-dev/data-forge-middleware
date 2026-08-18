@@ -1768,7 +1768,18 @@ both sync-state projections as `lastRebuildOutcome`, `lastRebuildOutcomeAt` and
 | The rebuild queue would not take it | `FAILED` — the executor's own refusal, quoted | released | ask again |
 | S3 would not say whether the frame is there (#157) | `FRAME_UNAVAILABLE` | released | restore the bucket policy or IAM grant (`delta.s3.read-denied`), then ask again |
 | Another build held the fold budget (#178) | `DEFERRED` | released | ask again once the nightly build has finished, or raise `delta.checkpoint.fold-wait-seconds` |
+| A wipe or re-baseline replaced the baseline under it (#136/#142) | `DISCARDED` | released | ask again if the rebuild is still wanted, against the new baseline |
+| The site has no frame and no segments | `NOTHING_TO_REBUILD` | released | nothing to do: the site has no checkpoint history to rebuild from |
 | The process is shutting down (#162) | **none written** | **kept** | nothing — the next process re-drives it at startup |
+
+The two middle endings used to reach `DeltaCheckpointRebuildService` as an ordinary empty fold and
+were reported as `COMPLETED` — a green "Rebuilt" chip over a rebuild that published nothing.
+`CheckpointService` throws for both now (`BuildDiscardedException`, `NothingToRebuildException`),
+which is the rule #157 and #162 established: a caller cannot tell an empty fold from a finished
+build. `CheckpointScheduler` logs the discard at INFO and skips retention for that site, exactly as
+it behaved when the ending was silent; `NothingToRebuildException` is thrown **only on the forced
+pass**, because for the nightly tick that state is the routine quiet visit to a site named by an
+unmaterialized checkpoint row.
 
 Four properties are worth keeping in mind when reading the pair:
 

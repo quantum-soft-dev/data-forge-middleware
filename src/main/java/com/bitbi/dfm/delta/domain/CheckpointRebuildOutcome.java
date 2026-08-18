@@ -44,5 +44,20 @@ public enum CheckpointRebuildOutcome {
      * {@code delta.checkpoint.fold-wait-seconds}, so this one never folded anything (issue #178).
      * It repairs itself: ask again once the neighbouring build has finished.
      */
-    DEFERRED
+    DEFERRED,
+
+    /**
+     * The site's baseline was replaced while the rebuild was running — a history wipe or a
+     * FULL_SNAPSHOT re-baseline (issues #136, #142) — so {@code CheckpointEpochGuard} refused every
+     * write and nothing was published. Not a failure: the new baseline is what the next build
+     * starts from. Ask again if the rebuild is still wanted.
+     */
+    DISCARDED,
+
+    /**
+     * The site has neither a checkpoint frame nor a changelog segment, so there was nothing to
+     * rebuild its checkpoints from. Reported instead of {@code COMPLETED} because a rebuild that
+     * had no source did not rebuild anything (issue #186).
+     */
+    NOTHING_TO_REBUILD
 }

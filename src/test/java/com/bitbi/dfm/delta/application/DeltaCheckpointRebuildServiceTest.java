@@ -192,6 +192,39 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
+    void doesNotReportADiscardedBuildAsCompleted() {
+        // Raised in review, round 2, and it is this ticket's own property violated: a build whose
+        // site was wiped or re-baselined under it (#136/#142) publishes nothing, and until
+        // CheckpointService threw for it, runRebuild saw a normal return and wrote COMPLETED — a
+        // green "Rebuilt" chip over a rebuild that did nothing. Worse, that verdict lands *after*
+        // the reset's own clearRebuildOutcome(), so it sticks.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE))
+                .thenThrow(new CheckpointService.BuildDiscardedException(SITE, "history replaced"));
+
+        assertTrue(service.requestRebuild(SITE));
+
+        assertThat(recordedMessage(CheckpointRebuildOutcome.DISCARDED))
+                .contains("history was replaced")
+                .contains("Request it again");
+    }
+
+    @Test
+    void doesNotClaimToHaveRebuiltASiteWithNoHistory() {
+        // The other false COMPLETED: no seed frame and no segments means there was no source to
+        // rebuild from. The nightly tick passes over such a site quietly; a forced rebuild is a
+        // question, and "rebuilt" is not a truthful answer to it.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE))
+                .thenThrow(new CheckpointService.NothingToRebuildException(SITE));
+
+        assertTrue(service.requestRebuild(SITE));
+
+        assertThat(recordedMessage(CheckpointRebuildOutcome.NOTHING_TO_REBUILD))
+                .contains("nothing to rebuild");
+    }
+
+    @Test
     void duplicateRequestShortCircuitsWithoutASecondBuild() {
         // Flag already set: a second click must not queue a second full rebuild whose
         // sibling's settle would flip the UI to "idle" mid-run.

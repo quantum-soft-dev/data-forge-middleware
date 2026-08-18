@@ -25,6 +25,12 @@ const KNOWN: Record<string, RebuildOutcomeDescription> = {
   FRAME_UNAVAILABLE: { label: 'Rebuild could not start', severity: 'critical' },
   // Repairs itself once the neighbouring build finishes (#178) — a prompt, not an alarm.
   DEFERRED: { label: 'Rebuild deferred', severity: 'elevated' },
+  // The site's baseline was replaced under the build (#136/#142). Routine, and the next build
+  // starts from the new baseline — so a prompt to ask again, not a failure.
+  DISCARDED: { label: 'Rebuild discarded', severity: 'elevated' },
+  // No frame and no segments: there was no source to rebuild from, which is a statement about the
+  // site rather than about the attempt.
+  NOTHING_TO_REBUILD: { label: 'Nothing to rebuild', severity: 'elevated' },
 };
 
 /**

@@ -200,6 +200,27 @@ public class DeltaCheckpointRebuildService {
             log.error("Forced checkpoint rebuild for site {} did not run: {}. Nothing was recorded "
                     + "and the flag is released — request the rebuild again once S3 reads are "
                     + "allowed (see delta.s3.read-denied)", siteId, e.getMessage());
+        } catch (CheckpointService.BuildDiscardedException e) {
+            // The site's baseline was replaced under the build (#136/#142). Nothing was published,
+            // so reporting COMPLETED would paint a green "Rebuilt" chip over a rebuild that did
+            // nothing — the false success this ticket exists to remove. The flag is released like
+            // any other finished attempt: the operator can ask again against the new baseline.
+            //
+            // The verdict may land *after* the wipe's own clearRebuildOutcome(), and that is
+            // intended rather than a race to close: it is the answer to the click, and the click is
+            // what the operator is waiting on.
+            outcome = CheckpointRebuildOutcome.DISCARDED;
+            message = "The site's history was replaced while the rebuild was running (a wipe or a "
+                    + "full re-baseline), so nothing was published. Request it again if the "
+                    + "rebuild is still wanted.";
+            log.warn("Forced checkpoint rebuild for site {} published nothing: {}",
+                    siteId, e.getMessage());
+        } catch (CheckpointService.NothingToRebuildException e) {
+            outcome = CheckpointRebuildOutcome.NOTHING_TO_REBUILD;
+            message = "This site has no checkpoint frame and no changelog segments, so there is "
+                    + "nothing to rebuild its checkpoints from.";
+            log.warn("Forced checkpoint rebuild for site {} had nothing to rebuild: {}",
+                    siteId, e.getMessage());
         } catch (CheckpointFoldBudget.BuildDeferredException e) {
             // Two different endings share this exception, and settling them alike would lose the
             // operator's request (raised in review of #178). A shutdown — or an interrupt — ends

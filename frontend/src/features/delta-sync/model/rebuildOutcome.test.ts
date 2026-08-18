@@ -16,6 +16,14 @@ describe('describeRebuildOutcome (#186)', () => {
       label: 'Rebuild deferred',
       severity: 'elevated',
     });
+    expect(describeRebuildOutcome('DISCARDED')).toEqual({
+      label: 'Rebuild discarded',
+      severity: 'elevated',
+    });
+    expect(describeRebuildOutcome('NOTHING_TO_REBUILD')).toEqual({
+      label: 'Nothing to rebuild',
+      severity: 'elevated',
+    });
   });
 
   it('renders an outcome it has never heard of instead of dropping it', () => {

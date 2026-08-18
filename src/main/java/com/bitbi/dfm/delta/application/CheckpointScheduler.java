@@ -149,6 +149,16 @@ public class CheckpointScheduler {
                 // no reason. During an S3 read outage this branch fires for every site.
                 foldBudgetIsContended = false;
                 log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
+            } catch (CheckpointService.BuildDiscardedException e) {
+                // The site's baseline was replaced under the build (#136/#142) — a wipe or a
+                // re-baseline, both routine. It used to reach here as a silent empty fold, and it
+                // is thrown since #186 only so the *forced* path can tell it from a build that
+                // published something; nothing about this tick changes but the line it logs, which
+                // must not read as a failure. Retention is skipped for the same reason the two
+                // branches above skip it: this build moved no pointer, and after a wipe the pointer
+                // is zero anyway. The latch is cleared as above — the build did hold the budget.
+                foldBudgetIsContended = false;
+                log.info("Skipping site {} this tick: {}", siteId, e.getMessage());
             } catch (RuntimeException e) {
                 foldBudgetIsContended = false;
                 log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());

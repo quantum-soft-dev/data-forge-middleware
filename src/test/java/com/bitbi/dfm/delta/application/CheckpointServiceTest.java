@@ -1812,7 +1812,8 @@ class CheckpointServiceTest {
         recordUploads("checkpoints/parquet-key");
         wipedTo(1L);
 
-        assertEquals(Map.of(), service.buildCheckpoint(SITE), "a discarded build folds to nothing");
+        assertThrows(CheckpointService.BuildDiscardedException.class,
+                () -> service.buildCheckpoint(SITE), "a discarded build publishes nothing");
 
         verify(checkpointRepository, never()).save(any());
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
@@ -1857,7 +1858,11 @@ class CheckpointServiceTest {
         recordUploads("checkpoints/parquet-key");
         wipedAfterThePreCheck(1L);
 
-        assertEquals(Map.of(), service.buildCheckpoint(SITE), "a discarded build folds to nothing");
+        // Since #186 the discard is thrown rather than returned as an empty fold, so a forced
+        // rebuild can tell it from a build that published something; nothing else about the ending
+        // moves — no row, no pointer, no event.
+        assertThrows(CheckpointService.BuildDiscardedException.class,
+                () -> service.buildCheckpoint(SITE));
 
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(checkpointRepository, never()).save(any());
@@ -1881,7 +1886,8 @@ class CheckpointServiceTest {
         // table loop this test is about.
         wipedAfterThePreCheck(1L);
 
-        service.buildCheckpoint(SITE);
+        assertThrows(CheckpointService.BuildDiscardedException.class,
+                () -> service.buildCheckpoint(SITE));
 
         verify(metrics, never()).checkpointTableUnmaterialized(any());
         assertEquals(1, uploaded.size(), "the build stops at the first table it cannot publish");
@@ -1897,7 +1903,8 @@ class CheckpointServiceTest {
         recordUploads("checkpoints/recovered-key");
         wipedTo(1L);
 
-        service.buildCheckpoint(SITE);
+        assertThrows(CheckpointService.BuildDiscardedException.class,
+                () -> service.buildCheckpoint(SITE));
 
         // The key is attached to the in-memory row before the write is attempted; what matters is
         // that the write is refused, so the wiped site keeps no trace of the recovered snapshot.
@@ -1920,7 +1927,8 @@ class CheckpointServiceTest {
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
 
-        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+        assertThrows(CheckpointService.BuildDiscardedException.class,
+                () -> service.buildCheckpoint(SITE));
 
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
@@ -1957,7 +1965,8 @@ class CheckpointServiceTest {
         rebaselined.resetForRebaseline(0L);
         when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(rebaselined));
 
-        assertEquals(Map.of(), service.buildCheckpoint(SITE), "a discarded build folds to nothing");
+        assertThrows(CheckpointService.BuildDiscardedException.class,
+                () -> service.buildCheckpoint(SITE), "a discarded build publishes nothing");
 
         assertEquals(0L, rebaselined.getGeneration(), "the re-baseline must not move the wire epoch");
         verify(checkpointRepository, never()).save(any());

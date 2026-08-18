@@ -470,9 +470,10 @@ pages/{feature}/            # Route pages
   is the *least* permanent of the three. V54 adds `site_sync_state.last_rebuild_outcome` /
   `_outcome_at` / `_message`, all nullable, where NULL means "no finished attempt on record" — which
   is what every existing row is. `CheckpointRebuildOutcome` is
-  `COMPLETED | FAILED | FRAME_UNAVAILABLE | DEFERRED`; the queue-full rejection (both at request
-  time and in `resumePendingRebuilds`) is `FAILED` with its own text rather than a fifth value,
-  since its remedy is the same "ask again" and only the startup one was ever invisible.
+  `COMPLETED | FAILED | FRAME_UNAVAILABLE | DEFERRED | DISCARDED | NOTHING_TO_REBUILD`; an executor
+  rejection (both at request time and in `resumePendingRebuilds`) is `FAILED` quoting the refusal's
+  own words rather than a value of its own, since its remedy is the same "ask again" and only the
+  startup one was ever invisible.
   **Four properties carry the design.** Releasing the flag and writing the verdict are **one write**
   (`SiteSyncState.recordRebuildOutcome`), because releasing it without saying why is the state being
   removed. The **shutdown ending writes nothing** and keeps the flag (#162): it has not finished, and
@@ -480,10 +481,12 @@ pages/{feature}/            # Route pages
   waits for the next process — so `delta.checkpoint.builds.deferred` and this verdict disagree by
   construction on exactly that case, and both are right. While the flag *is* up the verdict describes
   the **previous** attempt, so the UI gives the queued chip precedence — showing both would read as
-  "queued, and it failed" for a rebuild that has not run yet. And **the verdict travels with the
-  flag**: `resetForWipe` drops both (the row goes back to what a brand-new site has, and a verdict
-  about checkpoints the wipe just deleted describes nothing), `resetForRebaseline` keeps both,
-  because it keeps the flag. The message for `FAILED` is the failure's **own** text prefixed with
+  "queued, and it failed" for a rebuild that has not run yet. And **the verdict lives exactly as
+  long as the checkpoints it describes**: `resetForWipe` and `resetForRebaseline` both drop it,
+  because both delete every `checkpoints` row of the site (#142) and a verdict about them then
+  describes nothing; it is deliberately *not* tied to `rebuild_requested`, which the re-baseline
+  leaves standing — the flag says "a rebuild is owed", the verdict says "this is what the last one
+  did". The message for `FAILED` is the failure's **own** text prefixed with
   the exception's simple name, since an S3 client error, a JDBC error or an interrupt frequently
   carries no message at all and "the rebuild failed" alone says nothing; for `FRAME_UNAVAILABLE`
   and `DEFERRED` it keeps the exception's diagnosis and **replaces its advice**, because both of
@@ -496,9 +499,11 @@ pages/{feature}/            # Route pages
   verdict rather than as a bare flag release. `DeltaSyncStateService.clearRebuildRequested` is gone,
   replaced by `recordRebuildOutcome(siteId, outcome, message)` — there is no longer a way to release
   the flag without saying why. **DTO change** (additive): `DeltaSyncStateResponseDto` gains
-  `lastRebuildOutcome`, `lastRebuildOutcomeAt`, `lastRebuildMessage` on **both** sync-state
-  projections, owner and admin — the owner cannot trigger a rebuild but already reads every other
-  field of this row, and a per-audience projection for one string was not worth two DTOs.
+  `lastRebuildOutcome` and `lastRebuildOutcomeAt` on both sync-state projections and
+  `lastRebuildMessage` on the **admin** one only (`forAdmin` / `forOwner` replace `fromEntity`) —
+  for `FAILED` that string is the exception's own text, and the owner endpoint would be the one
+  place a tenant user could read a `PSQLException` or an S3 endpoint, on an action the owner cannot
+  even request.
   On the frontend the field is deliberately **`z.string()` and not `z.enum`**, the
   `deltaSegmentSchema.mode` precedent of 023 r3: this payload drives the whole Delta Sync tab, so a
   value added on the server must degrade to an unrecognised chip rather than failing the parse and
@@ -506,6 +511,18 @@ pages/{feature}/            # Route pages
   heard of. The message is clamped to four lines with the full string on hover. No gRPC, proto,
   configuration-key, metric, S3-key or route change. See `docs/delta-client-v2-guide.md`
   ("A forced rebuild says what it did").
+  **Two rounds of review then changed six decisions, and the first finding of round 2 was this
+  ticket's own property violated**: `CheckpointService` swallowed two more endings into an empty
+  fold — a build discarded because the site was wiped or re-baselined under it (#136/#142), and a
+  forced rebuild of a site with neither frame nor segments — and `runRebuild`, seeing a normal
+  return, wrote `COMPLETED` for both. A green "Rebuilt" chip over a rebuild that published nothing
+  is exactly the false success being removed, and the discarded one is worse than cosmetic: the
+  verdict lands *after* the reset's own `clearRebuildOutcome()`, so it sticks. Both are thrown now
+  (`BuildDiscardedException`, `NothingToRebuildException`), the third and fourth application of the
+  rule #157 and #162 established — a caller cannot tell an empty fold from a finished build.
+  `CheckpointScheduler` catches the discard and logs it at INFO where it used to see a silent empty
+  fold, and `NothingToRebuildException` is thrown **only on the forced pass**, since for the nightly
+  tick that state is the ordinary quiet visit to a site named by an unmaterialized row.
   **Review round 1 changed four decisions and one field's audience.** The `FAILED` message is the
   exception's own text, and `lastRebuildMessage` therefore now sits on the **admin projection
   only**: a `PSQLException` naming a constraint or an S3 error naming the bucket and endpoint would
