@@ -318,10 +318,11 @@ public class DeltaS3OrphanSweeper {
                         prefix, walk.objectsRead());
             }
         } finally {
-            // What the pages already decided is worth saying however the walk ended: a dry run
-            // that reports nothing because the last page threw is a dry run an operator cannot act
-            // on, and the per-site catch above would otherwise swallow the summary with the throw.
-            sweep.report();
+            // Whatever the walk did, the keys already judged are still orphans and the counts are
+            // still worth saying: a dry run that reports nothing because the last page threw is a
+            // dry run an operator cannot act on, and the per-site catch above would otherwise
+            // swallow both the last partial delete chunk and the summary with the throw.
+            sweep.finish();
         }
     }
 
@@ -358,6 +359,18 @@ public class DeltaS3OrphanSweeper {
         private long heldBack;
         private long wouldReclaim;
         private final List<String> wouldReclaimSample = new ArrayList<>();
+
+        /**
+         * Orphans judged but not yet handed to {@code DeleteObjects}, so a round trip carries a
+         * chunk rather than a page (raised in review).
+         *
+         * <p>A page is at most 1000 keys and so is a chunk, so deleting per page would have turned
+         * the sparse steady state — a handful of superseded objects every thousand keys — into one
+         * request per page, on a tick that walks every site prefix in the bucket. Buffering costs
+         * under two chunks of keys at the peak, which is the same order as the page the walk hands
+         * over, so the bound this ticket is about is untouched.</p>
+         */
+        private final List<String> pendingDeletes = new ArrayList<>();
 
         private SiteSweep(ReclaimScope scope, UUID siteId, String prefix, Instant cutoff) {
             this.scope = scope;
@@ -442,23 +455,37 @@ public class DeltaS3OrphanSweeper {
             }
         }
 
+        /** Buffer this page's orphans and send every chunk that is full. */
         private void delete(List<String> orphans) {
+            pendingDeletes.addAll(orphans);
             // Chunked as well as inside deleteObjects (raised in review): that method catches
             // S3Exception but not SdkClientException, so a network failure part-way through would
             // otherwise throw out after some chunks had already been deleted and report every key
-            // as left behind. One chunk per try keeps both counters true. A page is already at
-            // most one chunk; the loop stays for the day a page is not.
-            for (int from = 0; from < orphans.size(); from += DELETE_CHUNK) {
-                deleteChunk(scope, prefix,
-                        orphans.subList(from, Math.min(from + DELETE_CHUNK, orphans.size())));
+            // as left behind. One chunk per try keeps both counters true.
+            while (pendingDeletes.size() >= DELETE_CHUNK) {
+                flush(DELETE_CHUNK);
             }
         }
 
+        private void flush(int count) {
+            List<String> chunk = List.copyOf(pendingDeletes.subList(0, count));
+            // Cleared before the delete, not after: deleteChunk reports its own failure and the
+            // next sweep retries those keys, so a throw must not leave them queued for a second
+            // attempt inside this same pass.
+            pendingDeletes.subList(0, count).clear();
+            deleteChunk(scope, prefix, chunk);
+        }
+
         /**
-         * One line per site, not per page: the pages are an implementation detail of the walk, and
-         * an operator reading a dry run wants the site's total and a sample of its keys.
+         * Send what is left in the buffer and say what the site's pages decided.
+         *
+         * <p>One line per site, not per page: the pages are an implementation detail of the walk,
+         * and an operator reading a dry run wants the site's total and a sample of its keys.</p>
          */
-        private void report() {
+        private void finish() {
+            if (!pendingDeletes.isEmpty()) {
+                flush(pendingDeletes.size());
+            }
             if (heldBack > 0) {
                 log.info("Holding back {} unreferenced object(s) under {}: no site row, so this "
                                 + "prefix cannot be tied to this database. Set "

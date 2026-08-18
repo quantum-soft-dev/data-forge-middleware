@@ -1837,6 +1837,13 @@ write is still in flight, and the window is a day past the longest such gap. The
 read with those rows is *older* than the pages that follow, and an older pointer protects strictly
 more keys, so that half errs only towards keeping the object.
 
+The **delete** is buffered rather than paged, which is a different question from the listing: a page
+and a `DeleteObjects` chunk are both 1000 keys, so one round trip per page would turn the sparse
+steady state — a handful of superseded objects every thousand keys — into one request per page on a
+tick that walks every site prefix in the bucket. Orphans are judged per page and queued; a full
+chunk goes out during the walk and the remainder when the site ends, so the peak is under two chunks
+of keys.
+
 The complete-listing callers are untouched: the site history wipe compares every key against one
 instant and `requireCompleteKeys` (batch deletion, retention) needs the whole set or none, so both
 keep `S3PrefixLister.listAll`.
@@ -1860,7 +1867,7 @@ Every guard fails towards keeping the object:
 |---|---|---|
 | **Age** — strictly older than `min-age-seconds`, default 24 h; a missing `LastModified` counts as new | Deleting an object whose row is not written yet: a segment mid-commit, and the frame between `uploadFrame(N)` and the `recordCheckpoint(N)` that adopts it | One interval of delay |
 | **Shape** — only `{segmentId}.pb.gz`, `_frame/seq={n}/frame.pb.gz`, `{table}/seq={n}/snapshot.parquet\|.csv.gz` | Deleting an artifact kind added later that this sweep has never heard of | That kind accumulates, exactly as everything did before #158 |
-| **Rows read after the page they judge** | Using a row set from before a row that was written during the walk | Nothing |
+| **Rows read after the first page that produced a candidate** — for a prefix of one page that is "after the listing"; beyond it the rows predate the later pages and the **age window** is the guarantee instead (a row appears only for an object whose write is still in flight, and the window is a day past the longest such gap) | Using a row set from before a row that was written during the walk | Nothing on the first page; beyond it, what the age window costs |
 | **A row set that cannot be read skips the site**, every remaining page of it included | Reading "the query failed" as "no references" | One interval of delay |
 | **A truncated walk sweeps only the pages it was handed** (what earlier pages already reclaimed stands — they were judged against the rows, not against the walk finishing) | Nothing invented | One interval of delay |
 | **A prefix whose site has no `sites` row is left alone** unless `reclaim-unknown-sites` is set | Deleting another deployment's live objects out of a shared bucket | A hard-deleted site's objects stay until the bucket is declared exclusive |

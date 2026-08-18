@@ -450,8 +450,8 @@ class DeltaS3OrphanSweeperTest {
     }
 
     @Test
-    @DisplayName("a multi-page prefix is judged and deleted page by page, never as one listing")
-    void judgesEachPageAsItArrives() {
+    @DisplayName("orphans thinly spread over pages are still deleted in one round trip")
+    void batchesDeletesAcrossPages() {
         String first = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
         String second = SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz";
         segmentSitePages(false, List.of(object(first, OLD)), List.of(object(second, OLD)));
@@ -459,12 +459,31 @@ class DeltaS3OrphanSweeperTest {
 
         sweeper().sweep(NOW);
 
-        // Two round trips with one page's keys each: a materializing sweep would delete both in one.
-        verify(objectDeleter).deleteObjects(List.of(first));
-        verify(objectDeleter).deleteObjects(List.of(second));
-        verify(objectDeleter, times(2)).deleteObjects(anyList());
+        // Judged per page, deleted per chunk. A round trip per page would turn the sparse steady
+        // state — a few superseded objects every thousand keys — into one DeleteObjects per page,
+        // on a tick that walks every site prefix in the bucket.
+        verify(objectDeleter, times(1)).deleteObjects(List.of(first, second));
         assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isEqualTo(2.0);
         assertThat(counter("delta.s3-orphan.candidates", "segments")).isEqualTo(2.0);
+    }
+
+    @Test
+    @DisplayName("a delete goes out as soon as a chunk is full, so the buffer stays bounded")
+    void flushesEveryFullChunkWithoutWaitingForTheWalk() {
+        List<S3ListedObject> page = new ArrayList<>();
+        for (int i = 0; i < 1500; i++) {
+            page.add(object(SEGMENT_PREFIX + UUID.randomUUID() + ".pb.gz", OLD));
+        }
+        segmentSitePages(false, page);
+        when(segmentRepository.findAllS3KeysBySiteId(SITE)).thenReturn(List.of());
+
+        sweeper().sweep(NOW);
+
+        // Batching must not become accumulating: 1000 leave while the walk runs, 500 at the end.
+        var chunks = forClass(List.class);
+        verify(objectDeleter, times(2)).deleteObjects(chunks.capture());
+        assertThat(chunks.getAllValues()).extracting(List::size).containsExactly(1000, 500);
+        assertThat(counter("delta.s3-orphan.reclaimed", "segments")).isEqualTo(1500.0);
     }
 
     @Test

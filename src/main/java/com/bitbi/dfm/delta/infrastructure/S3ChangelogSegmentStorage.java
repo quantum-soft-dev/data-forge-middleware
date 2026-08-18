@@ -3,7 +3,6 @@ package com.bitbi.dfm.delta.infrastructure;
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -69,18 +68,14 @@ public class S3ChangelogSegmentStorage {
     }
 
     /**
-     * Every object under a prefix, following continuation tokens.
+     * Every object under a prefix, one page at a time (issue #199).
      *
-     * @param prefix the prefix to enumerate
-     * @return the pages read, with lastModified per object and a truncation flag
-     */
-    public S3PrefixListing listPrefix(String prefix) {
-        return S3PrefixLister.listAll(s3Client, bucketName, prefix);
-    }
-
-    /**
-     * The same walk, one page at a time (issue #199) — for a caller that only filters the prefix
-     * and must not hold a site's whole history in heap.
+     * <p>There is deliberately no materializing twin here. The whole-prefix form
+     * ({@code S3PrefixLister.listAll}) exists for callers that must see the whole set before they
+     * can act on any of it — the site history wipe, batch deletion — and none of them reads this
+     * prefix; the one caller that does only filters it, and this class's listing is the one #199
+     * was opened to bound. Add {@code listAll} back only for a caller that genuinely cannot work
+     * page by page.</p>
      *
      * @param prefix the prefix to enumerate
      * @param page   receives each page as it arrives
