@@ -1,5 +1,8 @@
 package com.bitbi.dfm.delta.infrastructure;
 
+import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
+import com.bitbi.dfm.shared.storage.S3PrefixLister;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,12 +36,43 @@ public class S3ChangelogSegmentStorage {
 
     private static final Logger log = LoggerFactory.getLogger(S3ChangelogSegmentStorage.class);
 
+    /** The prefix every changelog segment of every site lives under. */
+    private static final String SEGMENT_ROOT_PREFIX = "delta/";
+
     private final S3Client s3Client;
     private final String bucketName;
 
     public S3ChangelogSegmentStorage(S3Client s3Client, @Value("${s3.bucket.name}") String bucketName) {
         this.s3Client = s3Client;
         this.bucketName = bucketName;
+    }
+
+    /**
+     * @param siteId site identifier
+     * @return the prefix holding every changelog segment of one site
+     */
+    public static String segmentPrefix(UUID siteId) {
+        return SEGMENT_ROOT_PREFIX + siteId + "/segments/";
+    }
+
+    /**
+     * The sites that still have segment objects, asked of the bucket rather than of the database
+     * (issue #158) — the rows are exactly what an orphan lacks.
+     *
+     * @return child prefixes of {@code delta/}, one per site; possibly truncated
+     */
+    public S3ChildPrefixListing listSitePrefixes() {
+        return S3PrefixLister.listChildPrefixes(s3Client, bucketName, SEGMENT_ROOT_PREFIX);
+    }
+
+    /**
+     * Every object under a prefix, following continuation tokens.
+     *
+     * @param prefix the prefix to enumerate
+     * @return the pages read, with lastModified per object and a truncation flag
+     */
+    public S3PrefixListing listPrefix(String prefix) {
+        return S3PrefixLister.listAll(s3Client, bucketName, prefix);
     }
 
     /**
@@ -50,7 +84,7 @@ public class S3ChangelogSegmentStorage {
      * @return the S3 key the segment was stored at
      */
     public String uploadSegment(UUID siteId, UUID segmentId, byte[] content) {
-        String s3Key = String.format("delta/%s/segments/%s.pb.gz", siteId, segmentId);
+        String s3Key = segmentPrefix(siteId) + segmentId + ".pb.gz";
         try {
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(bucketName)

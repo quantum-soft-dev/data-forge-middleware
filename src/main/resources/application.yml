@@ -14,14 +14,18 @@ spring:
         # a checkpoint build, which can run for hours, postponed the scratch sweep, the batch
         # timeout sweep and the monthly partition creation behind it.
         #
-        # Six is derived, not guessed: FOUR of the fifteen scheduled tasks can hold their thread for
-        # minutes — the nightly checkpoint build and the retention cleanup (both due at 02:00 by
-        # default), the orphaned-provisional sweep in its 500-segment worst case, and the batch
-        # timeout sweep once a backlog makes its unbounded query and single transaction long. So the
-        # floor is FIVE, for a short tick never to queue behind them; six is that floor plus one for
-        # the burst of short ticks that fall on the same second, and
+        # Seven is derived, not guessed: FIVE of the sixteen scheduled tasks can hold their thread
+        # for minutes — the nightly checkpoint build and the retention cleanup (both due at 02:00 by
+        # default), the orphaned-provisional sweep in its 500-segment worst case, the batch timeout
+        # sweep once a backlog makes its unbounded query and single transaction long, and the S3
+        # orphan sweep of #158, which lists every site prefix in the bucket. So the floor is SIX,
+        # for a short tick never to queue behind them; seven is that floor plus one for the burst of
+        # short ticks that fall on the same second, and
         # stays below spring.datasource.hikari.maximum-pool-size (10). Adding a scheduled task that
         # blocks means revisiting this — ScheduledTaskInventoryTest fails until the audit is redone.
+        # It went from six to seven when #158 added its tick: the value moves with the count of long
+        # tasks, which is exactly what "revisiting this" means, and leaving it at six would have
+        # spent the burst margin instead.
         #
         # Read that last bound for exactly what it is: the scheduler on its own cannot empty the
         # connection pool. It is not a guarantee about total background demand — the queue workers
@@ -29,17 +33,19 @@ spring:
         # lives beside spring.datasource.hikari.maximum-pool-size below; this pool is one of its
         # terms, and the largest, so moving it moves that derivation as well.
         #
-        # Five of the fifteen tasks never open a connection at all (the three queue-worker sweeps,
+        # Five of the sixteen tasks never open a connection at all (the three queue-worker sweeps,
         # which only wake their own pool, the scratch sweep, which touches the filesystem, and the
-        # Auth0 token refresh, which is an HTTP call). Ten can — but only the four classified
+        # Auth0 token refresh, which is an HTTP call). Eleven can — but only the five classified
         # Cost.LONG hold one long enough for the connection pool to have to reserve for them, which
-        # is the term the derivation below actually uses. The rest release between statements.
+        # is the term the derivation below actually uses, and even that is an over-estimate by two
+        # (the checkpoint build and the S3 orphan sweep hold their thread, never a connection across
+        # S3). The rest release between statements.
         #
         # The key is the standard Spring Boot one, so SPRING_TASK_SCHEDULING_POOL_SIZE overrides it
         # without a placeholder of our own. It only takes effect because SchedulingConfiguration
         # declares the TaskScheduler bean: under spring.threads.virtual.enabled the auto-configured
         # scheduler is a SimpleAsyncTaskScheduler, which this key does not configure at all.
-        size: 6
+        size: 7
 
   security:
     oauth2:
@@ -58,7 +64,7 @@ spring:
       # BackgroundConnectionDemandTest keeps every number below honest and fails when a new
       # background pool lands without this arithmetic being redone.
       #
-      # The audited background pools declare THIRTY-FOUR threads between them — the scheduler (6),
+      # The audited background pools declare THIRTY-FIVE threads between them — the scheduler (7),
       # pluginExecutor (10), pluginExecutionExecutor (8), pluginAuditExecutor (2), the three queue
       # workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) —
       # before a single HTTP or gRPC request asks for a connection, and both request layers are
@@ -87,14 +93,18 @@ spring:
       #   floor    long-holding background threads + a request reserve <= pool
       #            A "long" holder pins the connection across S3 I/O or a bounded wait instead of
       #            releasing it between statements, so queueing would stall it rather than slow it.
-      #            NOTE WHICH THREADS THOSE ARE — for the scheduler it is the four ticks
-      #            ScheduledTaskInventoryTest classifies Cost.LONG, NOT its six threads: a short
+      #            NOTE WHICH THREADS THOSE ARE — for the scheduler it is the five ticks
+      #            ScheduledTaskInventoryTest classifies Cost.LONG, NOT its seven threads: a short
       #            tick that waits for a connection simply runs on its next wake, so counting the
       #            whole pool here would be the same conflation of "holds a thread" with "holds a
       #            connection" that this derivation exists to undo.
-      #                4 long scheduled ticks
+      #                5 long scheduled ticks
       #              + 2 reserved for request threads
-      #              = 6 <= 10
+      #              = 7 <= 10
+      #            Five is itself an over-estimate kept on purpose: two of those ticks (the
+      #            checkpoint build and the S3 orphan sweep of #158) hold no connection while they
+      #            hold their thread. BackgroundConnectionDemandTest says why it borrows the count
+      #            anyway rather than keeping a second, disagreeing classification.
       #            Everything else is short (one INSERT, a claim, a publish) and may queue. The
       #            two workers this used to budget as long — delta.egress and delta-sql — were
       #            shortened by #164: they no longer hold a connection across S3 or the generation
@@ -502,6 +512,48 @@ delta:
     # budget: docs/delta-client-v2-guide.md ("Sizing note"), issues #131 and #138.
     max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}
     temp-dir: ${DELTA_BATCH_PARQUET_TEMP_DIR:${java.io.tmpdir}}
+  s3-orphan:
+    # Reclaims objects under delta/{siteId}/segments/ and checkpoints/{siteId}/ that no row
+    # references (issue #158). Nothing else can: every deleter above collects keys FROM rows, the
+    # site wipe walks these prefixes for one site only, retention prunes segments and never touches
+    # checkpoints, and there is no bucket lifecycle rule for either. On by default because an
+    # orphan is never resolved by anything else — turning it off is how the litter accumulates,
+    # not how it is made safe.
+    enabled: ${DELTA_S3_ORPHAN_ENABLED:true}
+    # Reports what it would reclaim and deletes nothing. TRUE BY DEFAULT, on purpose: the set this
+    # sweep would take on a deployment that has been running for months cannot be inspected after
+    # the fact, and it includes the last good snapshot.parquet of every table whose key
+    # abandonStaleSnapshot has detached — recoverable by hand today, gone afterwards. The deploy
+    # that ships this happens before anyone reads a guide, so the acknowledgement is the default.
+    # Read one pass (INFO, per prefix, with a sample of keys), then clear this.
+    dry-run: ${DELTA_S3_ORPHAN_DRY_RUN:true}
+    # THE OTHER PRECONDITION, and the one this application cannot check for itself: does this bucket
+    # belong to this database alone? The sweep reads "no rows for this site" as "dead", which for a
+    # shared bucket would be a stranger's live site — two deployments keep separate databases and
+    # therefore separate site ids, so each would delete the other's changelog and checkpoint seed.
+    # A site's own `sites` row is the closest proof available, so by default a prefix whose site
+    # this database has never heard of is left alone and logged. It proves site-id knowledge, not
+    # exclusivity: a database restored from another environment's dump shares the ids. Set this true
+    # only where no other deployment writes this bucket; it is what reclaims a site hard-deleted
+    # through DELETE /api/v1/sites/{siteId}, which removes the row and nothing under either prefix.
+    reclaim-unknown-sites: ${DELTA_S3_ORPHAN_RECLAIM_UNKNOWN_SITES:false}
+    # THE GUARD THAT MATTERS. An object is only a candidate when S3 reports it strictly older than
+    # this, which is what protects an object whose row has not been written yet: a segment uploaded
+    # before its ingestion transaction (#147), and — much the longer of the two — a checkpoint frame
+    # between uploadFrame(N) and the recordCheckpoint(N) that adopts it, which spans a whole
+    # site's snapshot loop. A day is a margin, not a measurement. Raise it if a build can take
+    # longer; lowering it below the longest possible build is how a live frame gets deleted, and a
+    # site that loses its frame reads as history_gone and gives its checkpoint rows up after
+    # delta.checkpoint.max-materialize-attempts nights (#149).
+    min-age-seconds: ${DELTA_S3_ORPHAN_MIN_AGE_SECONDS:86400}
+    # The population changes once per nightly checkpoint build, so daily is as often as this can
+    # find anything new. It walks every site prefix in the bucket, so it is a Cost.LONG tick in the
+    # ScheduledTaskInventoryTest audit — it holds no connection across S3 (#164), but it does hold
+    # its scheduler thread.
+    sweep-ms: ${DELTA_S3_ORPHAN_SWEEP_MS:86400000}
+    # Nothing here is crash recovery — an orphan is a day old by definition — so the first pass
+    # stays out of the startup window, unlike the queue-drain sweeps.
+    initial-delay-ms: ${DELTA_S3_ORPHAN_INITIAL_DELAY_MS:600000}
 
 # OpenAPI Configuration
 springdoc:

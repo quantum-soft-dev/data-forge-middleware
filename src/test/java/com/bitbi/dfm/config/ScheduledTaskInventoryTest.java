@@ -98,6 +98,14 @@ class ScheduledTaskInventoryTest {
         // One listing per scratch directory, plus the deletes; the tick whose timeliness the sizing
         // note in docs/delta-client-v2-guide.md depends on.
         tasks.put("com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeper#sweep", Cost.SHORT);
+        // The S3 twin of the sweep above (issue #158), and long where that one is short: it walks
+        // every site prefix in the bucket, so it costs one listing per site plus one short query
+        // per site with candidates. Safe beside the rest for the reason every deleter here is: it
+        // only ever deletes objects OLDER than delta.s3-orphan.min-age-seconds (24 h) that no row
+        // names, and every object a live build, commit or neighbouring tick is working on is
+        // younger than that by orders of magnitude — the same argument that lets the scratch sweep
+        // run beside a live checkpoint build.
+        tasks.put("com.bitbi.dfm.delta.application.DeltaS3OrphanSweeper#sweep", Cost.LONG);
         // findExpiredBatches has no LIMIT and the whole loop is one transaction, so after a backlog
         // this holds its thread and its connection for as long as the backlog is deep.
         tasks.put("com.bitbi.dfm.batch.application.BatchTimeoutScheduler#checkExpiredBatches", Cost.LONG);

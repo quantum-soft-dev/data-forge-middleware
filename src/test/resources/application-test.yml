@@ -20,6 +20,15 @@ delta:
     # Production is already 1 h; declare it here so a later cut of the production
     # default cannot silently restore a fast tick under test (issue #167).
     scratch-orphan-sweep-ms: 3600000
+  s3-orphan:
+    # Off under test, structurally rather than by assuming a suite shorter than the 10-minute
+    # initial delay: a longer integrationTest run would otherwise fire the real tick against the
+    # shared LocalStack bucket, and "the age filter spares everything a test wrote" is the kind of
+    # incidental safety #167 refused to rely on. The integration test builds its own sweeper.
+    enabled: false
+    # Production is 24 h; declare it so a later cut of the production default cannot restore a
+    # fast tick under test (issue #167).
+    sweep-ms: 3600000
   ingestion:
     # 5 min / 15 min in production. A suite longer than that would otherwise race
     # these ticks in every cached context; tests that need them call the methods.
