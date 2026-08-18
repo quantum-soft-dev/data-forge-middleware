@@ -110,6 +110,28 @@ class CheckpointSchedulerTest {
     }
 
     @Test
+    void aDiscardedSiteDoesNotStopTheSweepAndIsNotPruned() {
+        // Since #186 a build whose site was wiped or re-baselined under it (#136/#142) is thrown
+        // rather than returned as an empty fold, so the forced path can tell it from a build that
+        // published something. For the tick nothing may change but the log line — and one thing
+        // does, deliberately: retention is skipped for that site, as it is for the read denial and
+        // the deferral, because the build moved no pointer.
+        UUID discarded = UUID.randomUUID();
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(discarded, ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(discarded), anyBoolean()))
+                .thenThrow(new CheckpointService.BuildDiscardedException(discarded, "history replaced"));
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(eq(ok), anyBoolean());
+        verify(retentionService).prune(ok);
+        verify(retentionService, never()).prune(discarded);
+    }
+
+    @Test
     void paysTheFoldBudgetWaitOncePerPassRatherThanOncePerSite() {
         // Raised in review of #178. Waiting per site multiplies: a holder that never finishes turns
         // a 200-site tick into 200 x delta.checkpoint.fold-wait-seconds, and while it runs the

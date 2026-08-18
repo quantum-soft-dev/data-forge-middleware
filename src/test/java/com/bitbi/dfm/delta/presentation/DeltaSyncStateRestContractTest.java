@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -50,6 +51,15 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                 """, siteId);
     }
 
+    private void seedRebuildVerdict(UUID siteId, String outcome, String message) {
+        jdbc.update("""
+                UPDATE site_sync_state
+                   SET last_rebuild_outcome = ?, last_rebuild_outcome_at = '2026-07-05 12:29:00',
+                       last_rebuild_message = ?
+                 WHERE site_id = ?
+                """, outcome, message, siteId);
+    }
+
     @Nested
     @DisplayName("GET /api/v1/account/sites/{siteId}/delta/sync-state (owner)")
     class OwnerSyncState {
@@ -69,6 +79,40 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                     .andExpect(jsonPath("$.updatedAt").isNotEmpty())
                     .andExpect(jsonPath("$.rebaselineRequested").value(false))
                     .andExpect(jsonPath("$.rebuildRequested").value(true));
+        }
+
+        @Test
+        @DisplayName("carries no rebuild verdict for a site that was never rebuilt")
+        void shouldReturnNullRebuildVerdictWhenNoneWasRecorded() throws Exception {
+            // The three fields must be present-and-null rather than absent: the UI decides between
+            // "no verdict" and "a verdict" on their value, and an absent key would read as neither.
+            seedSyncState(OWNED_SITE);
+
+            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE))
+                            .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lastRebuildOutcome").value(nullValue()))
+                    .andExpect(jsonPath("$.lastRebuildOutcomeAt").value(nullValue()))
+                    .andExpect(jsonPath("$.lastRebuildMessage").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("returns the last rebuild verdict and its time, but withholds the diagnosis")
+        void shouldReturnTheRebuildVerdictWithoutItsMessage() throws Exception {
+            // Raised in review. For a FAILED verdict the message is the exception's own text — a
+            // PSQLException naming a constraint, an S3 error naming the bucket — and this endpoint
+            // is the one place a tenant user could read it. The owner cannot request a rebuild
+            // anyway (that route is ROLE_ADMIN), so the outcome and its time are the whole of what
+            // this projection owes them.
+            seedSyncState(OWNED_SITE);
+            seedRebuildVerdict(OWNED_SITE, "FAILED", "PSQLException: duplicate key value violates ...");
+
+            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE))
+                            .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lastRebuildOutcome").value("FAILED"))
+                    .andExpect(jsonPath("$.lastRebuildOutcomeAt").isNotEmpty())
+                    .andExpect(jsonPath("$.lastRebuildMessage").value(nullValue()));
         }
 
         @Test
@@ -119,6 +163,21 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.lastAppliedSeq").value(4821))
                     .andExpect(jsonPath("$.rebuildRequested").value(true));
+        }
+
+        @Test
+        @DisplayName("returns the last rebuild verdict with its diagnosis")
+        void shouldReturnTheRebuildVerdictWithItsMessage() throws Exception {
+            seedSyncState(FOREIGN_SITE);
+            seedRebuildVerdict(FOREIGN_SITE, "DEFERRED", "another checkpoint build held the fold budget");
+
+            mockMvc.perform(get(ADMIN_URL.formatted(FOREIGN_SITE))
+                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lastRebuildOutcome").value("DEFERRED"))
+                    .andExpect(jsonPath("$.lastRebuildOutcomeAt").isNotEmpty())
+                    .andExpect(jsonPath("$.lastRebuildMessage")
+                            .value("another checkpoint build held the fold budget"));
         }
 
         @Test

@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V53**, next is **V54**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V54**, next is **V55**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -450,7 +450,7 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
+- Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
 - async-executor-guard: Every `@Async` in `src/main/java` names the executor it runs on, and a
@@ -540,6 +540,172 @@ pages/{feature}/            # Route pages
   assertions, verified with a probe annotation in each direction. The exclusion is stated in the
   failure message, so the two shapes only one scan can see by construction are visible where someone
   would otherwise be tempted to silence the check.
+- rebuild-outcome: A forced checkpoint rebuild says what it did, where before it said only that it
+  had stopped (issue #186, raised reviewing #183/#178 and older than both). `rebuild_requested` was
+  the whole record of an operator's click — raised by `POST .../delta/checkpoints/rebuild`, released
+  when the attempt settled — and **three of the four settling endings ran nothing at all**: the
+  build threw, S3 would not say whether the seed frame is there (#157), or another build held the
+  process's fold budget past `delta.checkpoint.fold-wait-seconds` (#178). From outside the pod all
+  four were identical: the "Rebuild queued" chip vanished and the checkpoints did not change, and
+  the only recourse was to notice that nothing had happened and click again — which is exactly what
+  the code's own log line said to do, in a log the operator cannot read. **Holding the flag is not
+  the fix and has been rejected twice** (#157 round 2, #178): nothing re-drives a held flag — the
+  nightly tick calls `buildCheckpoint`, never `rebuildFromFrame` — and `requestRebuild`
+  short-circuits while it is set, so a held flag leaves the operator unable even to ask again. So
+  the ticket's **option 1** is taken and its options 2 and 3 (re-submitting a deferral, answering
+  409 at request time) are not: both are palliatives that cover the deferral alone, and the deferral
+  is the *least* permanent of the three. V54 adds `site_sync_state.last_rebuild_outcome` /
+  `_outcome_at` / `_message`, all nullable, where NULL means "no finished attempt on record" — which
+  is what every existing row is. `CheckpointRebuildOutcome` is
+  `COMPLETED | FAILED | FRAME_UNAVAILABLE | DEFERRED | DISCARDED | NOTHING_TO_REBUILD`; an executor
+  rejection (both at request time and in `resumePendingRebuilds`) is `FAILED` quoting the refusal's
+  own words rather than a value of its own, since its remedy is the same "ask again" and only the
+  startup one was ever invisible.
+  **Four properties carry the design.** Releasing the flag and writing the verdict are **one write**
+  (`SiteSyncState.recordRebuildOutcome`), because releasing it without saying why is the state being
+  removed. The **shutdown ending writes nothing** and keeps the flag (#162): it has not finished, and
+  a verdict would contradict a flag that is deliberately still up while `resumePendingRebuilds()`
+  waits for the next process — so `delta.checkpoint.builds.deferred` and this verdict disagree by
+  construction on exactly that case, and both are right. While the flag *is* up the verdict describes
+  the **previous** attempt, so the UI gives the queued chip precedence — showing both would read as
+  "queued, and it failed" for a rebuild that has not run yet. And **the verdict lives exactly as
+  long as the checkpoints it describes**: `resetForWipe` and `resetForRebaseline` both drop it,
+  because both delete every `checkpoints` row of the site (#142) and a verdict about them then
+  describes nothing; it is deliberately *not* tied to `rebuild_requested`, which the re-baseline
+  leaves standing — the flag says "a rebuild is owed", the verdict says "this is what the last one
+  did". The message for `FAILED` is the failure's **own** text prefixed with
+  the exception's simple name, since an S3 client error, a JDBC error or an interrupt frequently
+  carries no message at all and "the rebuild failed" alone says nothing; for `FRAME_UNAVAILABLE`
+  and `DEFERRED` it keeps the exception's diagnosis and **replaces its advice**, because both of
+  those messages are worded for `CheckpointScheduler` — which really does revisit the site — and
+  end by promising that the next tick tries again, which on this path is false and would tell the
+  operator to wait for a retry that is never coming. Truncated to
+  `MAX_REBUILD_MESSAGE_LENGTH` (1000) **in the entity**, because a value wider than the column throws
+  at flush and would lose the verdict entirely, which is where this ticket started. `runRebuild`
+  pre-sets `FAILED` before the `try`, so a `Throwable` that is not an `Exception` still settles as a
+  verdict rather than as a bare flag release. `DeltaSyncStateService.clearRebuildRequested` is gone,
+  replaced by `recordRebuildOutcome(siteId, outcome, message)` — there is no longer a way to release
+  the flag without saying why. **DTO change** (additive): `DeltaSyncStateResponseDto` gains
+  `lastRebuildOutcome` and `lastRebuildOutcomeAt` on both sync-state projections and
+  `lastRebuildMessage` on the **admin** one only (`forAdmin` / `forOwner` replace `fromEntity`) —
+  for `FAILED` that string is the exception's own text, and the owner endpoint would be the one
+  place a tenant user could read a `PSQLException` or an S3 endpoint, on an action the owner cannot
+  even request.
+  On the frontend the field is deliberately **`z.string()` and not `z.enum`**, the
+  `deltaSegmentSchema.mode` precedent of 023 r3: this payload drives the whole Delta Sync tab, so a
+  value added on the server must degrade to an unrecognised chip rather than failing the parse and
+  blanking the tab — `describeRebuildOutcome` renders `Rebuild: <value>` for anything it has not
+  heard of. The message is clamped to four lines with the full string on hover. No gRPC, proto,
+  configuration-key, metric, S3-key or route change. See `docs/delta-client-v2-guide.md`
+  ("A forced rebuild says what it did").
+  **Two rounds of review then changed six decisions, and the first finding of round 2 was this
+  ticket's own property violated**: `CheckpointService` swallowed two more endings into an empty
+  fold — a build discarded because the site was wiped or re-baselined under it (#136/#142), and a
+  forced rebuild of a site with neither frame nor segments — and `runRebuild`, seeing a normal
+  return, wrote `COMPLETED` for both. A green "Rebuilt" chip over a rebuild that published nothing
+  is exactly the false success being removed, and the discarded one is worse than cosmetic: the
+  verdict lands *after* the reset's own `clearRebuildOutcome()`, so it sticks. Both are thrown now
+  (`BuildDiscardedException`, `NothingToRebuildException`), the third and fourth application of the
+  rule #157 and #162 established — a caller cannot tell an empty fold from a finished build.
+  `CheckpointScheduler` catches the discard and logs it at INFO where it used to see a silent empty
+  fold, and `NothingToRebuildException` is thrown **only on the forced pass**, since for the nightly
+  tick that state is the ordinary quiet visit to a site named by an unmaterialized row.
+  **Review round 1 changed four decisions and one field's audience.** The `FAILED` message is the
+  exception's own text, and `lastRebuildMessage` therefore now sits on the **admin projection
+  only**: a `PSQLException` naming a constraint or an S3 error naming the bucket and endpoint would
+  otherwise be readable by a tenant user on `GET /api/v1/account/sites/{siteId}/delta/sync-state`,
+  which is the one surface that exposes it — and the owner cannot request a rebuild at all, so the
+  outcome and its time are the whole of what that projection owes them (`forAdmin` / `forOwner`
+  replace `fromEntity`; the same rule keeps storage keys off the segment projection). `DEFERRED`
+  gained a **second text**, because `BuildDeferredException` also carries a non-blocking probe and a
+  bare interrupt, and telling those to raise `delta.checkpoint.fold-wait-seconds` prescribes a
+  remedy for contention that did not happen — the split is `waitWasSpent()`, exactly the one
+  `delta.checkpoint.builds.deferred` already makes. The queue-refusal text **quotes the refusal**
+  instead of asserting "the queue was full", #171's lesson verbatim: `ThreadPoolTaskExecutor` raises
+  `RejectedExecutionException` for "executor shutting down" too, and naming the wrong one sends an
+  operator after a capacity problem during a routine rollout. And the "travels with the flag" rule
+  was **wrong in one direction**: `resetForRebaseline` deletes every `checkpoints` row (#142), so a
+  verdict about them describes nothing afterwards for exactly the reason the wipe drops it — both
+  now clear it, while the flag stays a separate question that the re-baseline deliberately does not
+  answer. One more, on the UI: only a forced rebuild ever writes a verdict, so a `FAILED` one used
+  to paint a **permanent** critical chip that outlived every nightly build that had since succeeded
+  — `lastCheckpointAt` later than `lastRebuildOutcomeAt` is exact evidence that the condition
+  cleared, so the chip keeps its label, its time and its message and drops the colour.
+  **Round 3** hardened the write and closed the exception the taxonomy had left open. The
+  truncation bounded length but not **content**, which is the same failure it exists to prevent and
+  worse: `recordRebuildOutcome` is called from a `finally`, so a value PostgreSQL refuses would lose
+  the verdict *and* strand `rebuild_requested` with no task behind it — a `U+0000` quoted out of a
+  row by a JDBC error is rejected outright, and a cut at a `char` boundary can leave an unpaired
+  surrogate the driver's UTF-8 encoder rejects; control characters are replaced with spaces and the
+  cut steps back off a high surrogate. The queue-refusal path is now **shutdown-aware**: it settled
+  a `TaskRejectedException` as a terminal `FAILED` even when the refusal *was* the pod closing,
+  losing exactly the request `resumePendingRebuilds()` exists to re-drive — the same #162 rule every
+  other ending here follows, and it reads `ApplicationShutdownSignal` rather than the exception's
+  text because the two cases say the same thing (this closed **#204**, filed in round 1 to defer
+  it). Three smaller ones: the value list in the migration's `COMMENT ON COLUMN`, both `@Operation`
+  descriptions and the frontend schema doc still named four of the six outcomes; the scheduler's new
+  catch **does** change one thing the guide claimed it did not — retention no longer runs for a
+  discarded site in that tick, which matches the read-denial and deferral branches and is a no-op
+  today only because both triggers imply a reset that just zeroed the pointer, now said out loud and
+  pinned by a `CheckpointSchedulerTest` case; and the mute is documented as the **one-way** signal
+  it is — `lastCheckpointAt` moves only when a build advances the pointer, so an idle site whose
+  nightly rematerialize repaired everything keeps its loud chip, and what clears a verdict is
+  another rebuild, which is what the chip already asks for.
+- test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so no
+  context taking the profile's defaults writes or deletes in the machine-wide temp directory
+  (issue #187, the half #168 named and deliberately left open). The exception is deliberate and is
+  #168's own: `CheckpointParquetIntegrationTest` overrides both keys to per-class directories it
+  creates under `java.io.tmpdir` — named `dfm-it-scratch-*` precisely so no sweeper's prefix
+  matches them — and its decoy file, planted there for one assertion, is removed in a `finally`. Undeclared, `delta.checkpoint.temp-dir` and
+  `delta.batch-parquet.temp-dir` fall back to `${java.io.tmpdir}`, and
+  `ParquetScratchOrphanSweeper`'s `@Scheduled` carries `initialDelayString = "0"` — so **every**
+  cached Spring context swept the host's temp directory once at refresh (#167 slowed the cadence to
+  an hour; it does not remove the refresh pass) and deleted any regular file named `checkpoint-*` or
+  `batch-parquet-*` older than four hours, whoever wrote it. That is what #168 saw from the other
+  side: its leak assertion lost a file it did not own, deleted by another JVM. The suite was the
+  perpetrator as well as the victim, and the population is not hypothetical — two worktrees running
+  `./gradlew integrationTest` at once is the ordinary shape of `/github-issue-runner`.
+  **Option 1 of the ticket, not option 2**: making the sweep inert under `test`
+  (`scratch-orphan-age-seconds` far in the future) is one line and would stop the deletions, but it
+  leaves the suite writing production-shaped scratch into `/tmp` and removes the only place the
+  scheduled sweeper runs against a real directory at all — `ParquetScratchOrphanSweeperTest` drives
+  the object over `@TempDir`s, never the wired bean over the wired directories. Both keys now read
+  `${dfm.test.parquet-scratch-root:build/test-scratch/parquet}/{checkpoint,batch-parquet}`, and the
+  root is supplied **absolutely** by `tasks.withType<Test>` in `build.gradle.kts`
+  (`layout.buildDirectory`), so it is this build's directory whatever working directory the JVM is
+  given and `clean` removes what a run leaves; the relative default keeps an IDE run that sets no
+  system property inside the build tree rather than back in `/tmp`. Per worktree by construction,
+  which is the property the ticket is really buying. The two writers get **separate**
+  subdirectories, the split `CheckpointParquetIntegrationTest` already makes for its own context
+  (#168), so a completed-batch drain cannot put a file where a checkpoint assertion looks.
+  **Two guards, because neither surface sees what the other does**, sharing one definition of "a
+  directory this run owns" (`RunOwnedScratch`) rather than each carrying its own.
+  `ParquetScratchTestProfileTest` is static and on the fast gate: both keys declared, each resolved
+  value (placeholders expanded against system properties, the way the `Environment` would) inside
+  the run's tree, and the two directories **distinct** — a copy-paste pointing both at
+  `…/checkpoint` otherwise passes everything silently.
+  `ParquetScratchSweepIsolationIntegrationTest` holds the **wired** context on the shared
+  `BaseIntegrationTest`: the directories this context actually resolved are the run's own — the
+  only guard that can see an **OS environment override**, since `DELTA_CHECKPOINT_TEMP_DIR` binds
+  to this key and outranks every `application*.yml` — and an aged `checkpoint-*` inside the
+  configured directory is **still deleted**, which is what stops "fixed" from meaning "the sweeper
+  was switched off under test" and keeps the literal prefix the test shares with the
+  package-private production `ParquetScratch` from drifting unnoticed. Both were **proven red by
+  mutation** (the two keys removed). **Two shapes were tried and rejected in review**: planting an
+  aged `checkpoint-*` in `java.io.tmpdir` and asserting it survives reads as the more direct
+  proof, but any *other* process sweeping that directory — a locally running backend under `dev`,
+  or a concurrent worktree on a branch predating this fix, which is the ordinary shape of
+  `/github-issue-runner` — decides it, and it would fail accusing this suite of the very defect it
+  guards, so the wired configuration answers it deterministically instead — and the behaviour the
+  probe was there for is structural rather than assumed, since `sweep()` iterates exactly the
+  directories the bean was constructed with, over which `ParquetScratchOrphanSweeperTest` already
+  drives every rule (age, prefix, pod-private cutoff, a missing directory); and "the run's tree" is **not** an ancestor directory named `build`,
+  since an IntelliJ run configured to build with the IDE compiles to `out/` and a guard that goes
+  red on a developer's build layout rather than on a regression is worse than no guard — it is the
+  Gradle-supplied root when present, the checkout (located by `settings.gradle.kts`) otherwise.
+  Test-only — no production code, REST, gRPC, DTO, migration,
+  production configuration-key, metric, S3-key or frontend change; `k8s/` and the deployed
+  `*_TEMP_DIR` keys are untouched, so the sizing arithmetic of #131/#138/#150 is unaffected.
 - prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
   uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
   reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a

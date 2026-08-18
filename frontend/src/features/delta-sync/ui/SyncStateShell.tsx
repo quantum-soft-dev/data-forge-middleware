@@ -4,8 +4,9 @@
  * Per design handoff v2 §1a: outer shell #EFEFEF r16 p10, grid `1fr 340px`;
  * inner white cards r12. Left: Lag card with severity chip, 34px headline and
  * the sqrt-scaled lag track (max 20k, ticks at 1k/10k, .6s ease animation).
- * Right: Last checkpoint (+ "Rebuild queued" chip) and Schema version /
- * Last activity (live pulse or "Sync stalled?").
+ * Right: Last checkpoint (+ the "Rebuild queued" chip, or the verdict of the last finished
+ * forced rebuild — issue #186) and Schema version / Last activity (live pulse or
+ * "Sync stalled?").
  */
 
 import { Activity, AlertTriangle, Clock } from 'lucide-react';
@@ -17,6 +18,7 @@ import {
   isStalled,
   lagTrackPercent,
 } from '../model/severity';
+import { describeRebuildOutcome, isRebuildOutcomeSuperseded } from '../model/rebuildOutcome';
 import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface SyncStateShellProps {
@@ -34,6 +36,23 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
   const sev = severityTokens[severity];
   const stalled = isStalled(state.updatedAt, now);
   const fillPercent = lagTrackPercent(lag);
+  // While the request flag is up the verdict describes the PREVIOUS attempt, so the queued chip
+  // wins outright — showing both would read as "queued, and it failed" for a rebuild that has not
+  // run yet (#186).
+  const rebuildOutcome = state.rebuildRequested
+    ? null
+    : describeRebuildOutcome(state.lastRebuildOutcome);
+  // Only a forced rebuild writes a verdict, so a failed one would otherwise stay critical for ever,
+  // outliving every nightly build that has since succeeded. A checkpoint recorded after it is exact
+  // evidence that the condition cleared, so the chip keeps its label and its time and goes quiet.
+  const outcomeSuperseded = isRebuildOutcomeSuperseded(state);
+  const outcomeChipStyle =
+    rebuildOutcome && !outcomeSuperseded
+      ? {
+          background: severityTokens[rebuildOutcome.severity].bg,
+          color: severityTokens[rebuildOutcome.severity].text,
+        }
+      : { background: t.subtleBg, color: t.textSecondary };
 
   return (
     <div
@@ -180,6 +199,15 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
                 Rebuild queued
               </span>
             )}
+            {rebuildOutcome && (
+              <span
+                className="rounded-full px-2 py-0.5 text-xs font-medium"
+                style={outcomeChipStyle}
+                data-testid="rebuild-outcome-chip"
+              >
+                {rebuildOutcome.label}
+              </span>
+            )}
           </div>
           <div
             className="mt-1 text-[22px] font-medium"
@@ -191,6 +219,29 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
             <Clock className="h-3.5 w-3.5" strokeWidth={1.5} />
             {state.lastCheckpointAt ? formatRelativeTime(state.lastCheckpointAt) : 'never built'}
           </div>
+          {rebuildOutcome && (
+            <div className="mt-3 border-t pt-2 text-[12px]" style={{ borderColor: t.separator }}>
+              <div style={{ color: t.textSecondary }}>
+                Forced rebuild
+                {state.lastRebuildOutcomeAt
+                  ? ` · ${formatRelativeTime(state.lastRebuildOutcomeAt)}`
+                  : ''}
+              </div>
+              {state.lastRebuildMessage && (
+                // Clamped rather than truncated: the message is the failure's own text (up to a
+                // kilobyte) and is the operator's whole diagnosis, so the full string stays
+                // available on hover instead of being cut server-side.
+                <p
+                  className="mt-0.5 line-clamp-4 break-words"
+                  style={{ color: t.textMuted }}
+                  title={state.lastRebuildMessage}
+                  data-testid="rebuild-outcome-message"
+                >
+                  {state.lastRebuildMessage}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Schema version + last activity */}

@@ -142,6 +142,18 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
     finalizedBy(tasks.jacocoTestReport)
+
+    // Where the test profile puts the file-backed Parquet scratch (issue #187). Undeclared, both
+    // temp-dir keys fall back to ${java.io.tmpdir} and every cached Spring context boots a
+    // ParquetScratchOrphanSweeper over the host's temp directory, deleting checkpoint-* /
+    // batch-parquet-* files this run does not own — another worktree's suite among them. An
+    // absolute path from Gradle rather than the relative default in application-test.yml, so it is
+    // this build's directory whatever working directory the JVM is given, and `clean` removes
+    // whatever a run leaves behind.
+    systemProperty(
+        "dfm.test.parquet-scratch-root",
+        layout.buildDirectory.dir("test-scratch/parquet").get().asFile.absolutePath,
+    )
 }
 
 // Per-task gate (pre-commit hook): `./gradlew test -PexcludeIntegration` runs unit + contract

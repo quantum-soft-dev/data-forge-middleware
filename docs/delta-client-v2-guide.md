@@ -794,8 +794,9 @@ answers pull in opposite directions.
   aborts that never repair themselves, and this one is repaired by the process that replaces it.
   **The forced path is the exception to that last clause**: a scheduled tick is found again by the
   nightly work list, but `POST .../delta/checkpoints/rebuild` has only its durable
-  `rebuild_requested` flag, so a rebuild cut short by a rollout leaves the flag set (and does not
-  log "completed") and `resumePendingRebuilds()` re-drives it on the next start. Without that, an
+  `rebuild_requested` flag, so a rebuild cut short by a rollout leaves the flag set (does not
+  log "completed", and writes no #186 verdict, since it has not finished) and
+  `resumePendingRebuilds()` re-drives it on the next start. Without that, an
   operator's click during a deployment would disappear silently — on the very action that is the
   documented recovery from a row that has given up.
 - **An idle visit is cheap.** The "is there anything to rematerialize here?" probe now runs *before*
@@ -849,7 +850,8 @@ does not come back when the permission does.
   (`CheckpointService.FramePresenceUnknownException`) rather than returned as an empty fold, for the
   reason #162 made the shutdown case distinguishable: `CheckpointScheduler` logs it and moves to the
   next site, while a **forced rebuild** logs an ERROR saying it did not run instead of reporting a
-  rebuild that never happened. Its durable `rebuild_requested` flag is still **released**, unlike
+  rebuild that never happened, and records the verdict `FRAME_UNAVAILABLE` (#186) so the operator
+  can see it without the log. Its durable `rebuild_requested` flag is still **released**, unlike
   the shutdown case: a shutdown implies the restart that re-drives the flag, a bucket-policy
   incident does not, the nightly tick runs `buildCheckpoint` rather than `rebuildFromFrame`, and
   `POST .../delta/checkpoints/rebuild` answers "already queued" while the flag is set — so holding
@@ -936,7 +938,8 @@ A build that finds the budget taken **waits**, up to `DELTA_CHECKPOINT_FOLD_WAIT
 folded, nothing uploaded, no row saved, no materialize attempt spent, `delta.checkpoint.builds.deferred`
 incremented and a WARN naming the site. The nightly sweep skips that site's retention too — the
 pointer did not move, so there is nothing new to prune — and carries on to the next; a forced
-rebuild releases its `rebuild_requested` flag and says to ask again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
+rebuild releases its `rebuild_requested` flag, records the verdict `DEFERRED` (#186) and says to
+ask again. Deferral is deliberately **not** a fifth value on `delta.checkpoint.builds.aborted`: every
 value there is a refusal that never repairs itself, and this one clears the moment the neighbouring
 build finishes. `delta.checkpoint.builds.deferred` counts only the deferrals that **spent a wait** —
 the sweep's non-blocking probes after the first one, and a wait cut short by a shutdown, are not
@@ -1448,7 +1451,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts` | GET | admin | Queue diagnostics for unified completed-batch artifacts: table, status, attempts, last error, and timestamps; storage and claim internals are omitted |
 | `/api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue` | POST | admin | Audited recovery: reset `ABANDONED`, or `BUILDING` after its lease expires, to a fresh `PENDING` lifecycle; `409` for a live/unrecoverable state and `404` for a route mismatch |
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
-| `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
+| `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`; released with a `lastRebuildOutcome` verdict when the attempt finishes — #186) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
 | `.../delta/rebaseline` | DELETE | owner · admin | Takes a pending request back (issue #84): clears `rebaseline_requested` only — watermark, checkpoints and segments untouched → `GetSyncState` answers `PROCEED` again. Idempotent, always `200`, `status` says what it achieved: `cancelled` (called off before the client was told), `snapshot-in-progress` (a FULL_SNAPSHOT is uploading and still replaces the baseline), `client-notified` (the client already holds NEED_REBASELINE and may start at any moment), `not-requested` (nothing was pending) |
 | `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
@@ -1751,6 +1754,97 @@ nothing. A full rebuild queue answers 503 (flag cleared); rebuild flags orphaned
 re-driven on startup, so the "Rebuild queued" chip can no longer stick forever. The queued build
 calls `rebuildFromFrame`: it rematerializes every table from the existing frame even
 when there are no new segments, and it does not move the checkpoint pointer.
+
+### A forced rebuild says what it did (issue #186)
+
+`rebuild_requested` used to be the whole record of an operator's click: raised by the request,
+released when the attempt settled. Three of the four settling endings ran **nothing at all** — the
+build threw, S3 would not say whether the seed frame is there (#157), or another build held the
+process's fold budget past `delta.checkpoint.fold-wait-seconds` (#178) — and from outside the pod
+all four looked the same: the "Rebuild queued" chip vanished and the checkpoints did not change.
+The only recourse was to notice that nothing had happened and click again, which is exactly what
+the code's own log line said to do, in a log the operator cannot read.
+
+Holding the flag instead is **not** the fix and has been rejected twice (#157 round 2, #178).
+Nothing re-drives a held flag: the nightly tick calls `buildCheckpoint`, never `rebuildFromFrame`,
+and `requestRebuild` short-circuits while the flag is set, so a held flag leaves the operator unable
+even to ask again. So the flag keeps its semantics exactly, and the attempt now leaves a **verdict**
+beside it — V54's `site_sync_state.last_rebuild_outcome` / `_outcome_at` / `_message`, published on
+both sync-state projections as `lastRebuildOutcome`, `lastRebuildOutcomeAt` and
+`lastRebuildMessage`.
+
+| Ending | Verdict | Flag | What to do |
+|---|---|---|---|
+| The rebuild ran | `COMPLETED` (no message) | released | nothing |
+| It threw | `FAILED` — the exception's type and text | released | fix what the message names, ask again |
+| The rebuild queue would not take it | `FAILED` — the executor's own refusal, quoted | released | ask again |
+| S3 would not say whether the frame is there (#157) | `FRAME_UNAVAILABLE` | released | restore the bucket policy or IAM grant (`delta.s3.read-denied`), then ask again |
+| Another build held the fold budget (#178) | `DEFERRED` | released | ask again once the nightly build has finished, or raise `delta.checkpoint.fold-wait-seconds` |
+| A wipe or re-baseline replaced the baseline under it (#136/#142) | `DISCARDED` | released | ask again if the rebuild is still wanted, against the new baseline |
+| The site has no frame and no segments | `NOTHING_TO_REBUILD` | released | nothing to do: the site has no checkpoint history to rebuild from |
+| The process is shutting down (#162) | **none written** | **kept** | nothing — the next process re-drives it at startup |
+
+The two middle endings used to reach `DeltaCheckpointRebuildService` as an ordinary empty fold and
+were reported as `COMPLETED` — a green "Rebuilt" chip over a rebuild that published nothing.
+`CheckpointService` throws for both now (`BuildDiscardedException`, `NothingToRebuildException`),
+which is the rule #157 and #162 established: a caller cannot tell an empty fold from a finished
+build. `NothingToRebuildException` is thrown **only on the forced pass**, because for the nightly
+tick that state is the routine quiet visit to a site named by an unmaterialized checkpoint row.
+
+`CheckpointScheduler` logs the discard at INFO and **skips retention for that site in that tick**,
+where the silent empty fold used to fall through to it. That is deliberate and matches the read
+denial and the deferral beside it — the build moved no pointer, so there is nothing new to prune —
+and today it changes nothing either way, since both triggers imply a wipe or a re-baseline that has
+just zeroed `last_checkpoint_seq`. It is worth stating rather than leaving implicit: a future source
+of `EpochChangedException` that left the pointer standing would skip a prune that had work to do,
+until the next tick.
+
+Four properties are worth keeping in mind when reading the pair:
+
+- **Releasing the flag and writing the verdict are one write.** Releasing it without saying why is
+  the state this removed, so the two cannot come apart.
+- **The shutdown ending deliberately writes nothing.** It keeps `rebuild_requested`, so the request
+  has not finished; a verdict there would contradict the flag that is still up, and the UI's
+  "Rebuild queued" chip is the correct thing to show while `resumePendingRebuilds()` waits for the
+  next process.
+- **While the flag is up, the verdict describes the *previous* attempt.** The Delta Sync tab gives
+  the queued chip precedence for that reason — showing both would read as "queued, and it failed"
+  for a rebuild that has not run yet.
+- **The verdict lives exactly as long as the checkpoints it describes.** A site history wipe drops
+  it, and so does an ordinary re-baseline, which deletes every `checkpoints` row of the site
+  (#142) — the verdict would describe nothing afterwards. It is deliberately *not* tied to
+  `rebuild_requested`, which a re-baseline leaves standing: the flag says "a rebuild is owed", the
+  verdict says "this is what the last one did".
+- **A verdict superseded by a later checkpoint stops shouting.** Only a forced rebuild writes one,
+  so a `FAILED` verdict would otherwise paint a critical chip for ever, outliving every nightly
+  build that has since succeeded. Where `lastCheckpointAt` is later than `lastRebuildOutcomeAt` the
+  UI keeps the label, the time and the message and drops the colour — a checkpoint built since is
+  exact evidence that the condition cleared. It is a **one-way** signal: `lastCheckpointAt` moves
+  only when a build advances the pointer, so an idle site whose nightly rematerialize quietly
+  repaired everything keeps its loud chip. What clears a verdict is another rebuild — which is what
+  the chip's own message asks for — and this only spares the operator that round trip when the
+  answer is already in the payload.
+
+The message is bounded at 1,000 characters by the writer — a value wider than the column would
+throw at flush and lose the verdict entirely, which is where this ticket started. It is shown
+clamped in the card, with the full string on hover. For `FAILED` it is the exception's own type and
+text (the type included, because an S3 client error, a JDBC error or an interrupt frequently
+carries no message at all). For `FRAME_UNAVAILABLE` and `DEFERRED` it keeps the exception's
+diagnosis but **replaces its advice**: both of those messages are worded for
+`CheckpointScheduler`, which really does revisit the site, and end by promising that the next tick
+tries again — which on this path is false, since the nightly tick calls `buildCheckpoint` and never
+`rebuildFromFrame`, so a forced rebuild is retried only when somebody asks again. `DEFERRED` has
+two texts, and only a deferral that **spent its wait** names contention and prescribes raising
+`delta.checkpoint.fold-wait-seconds` — the same split `delta.checkpoint.builds.deferred` makes,
+since a non-blocking probe and an interrupted wait are not contention.
+
+**`lastRebuildMessage` is on the admin projection only.** For a `FAILED` verdict it is the
+exception's own text — a `PSQLException` naming a constraint or a column, an S3 error naming the
+bucket and endpoint — and `GET /api/v1/account/sites/{siteId}/delta/sync-state` is the one place a
+tenant user could read it. The account owner cannot request a rebuild in the first place (the route
+is ROLE_ADMIN), so the owner projection carries `lastRebuildOutcome` and `lastRebuildOutcomeAt` and
+leaves the message null — the same rule that keeps storage keys off the segment projection and
+claim tokens off the artifact projection.
 
 ### No S3 inside a queue worker (issue #164)
 

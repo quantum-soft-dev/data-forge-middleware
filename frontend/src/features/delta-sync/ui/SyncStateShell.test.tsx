@@ -71,6 +71,91 @@ describe('SyncStateShell (F5)', () => {
     expect(screen.queryByText('Full snapshot scheduled on next connect')).not.toBeInTheDocument()
   })
 
+  it('reports the verdict of the last finished rebuild', () => {
+    // Issue #186. Before this, a rebuild that never ran was indistinguishable from one that
+    // worked: the chip vanished either way and the checkpoints did not change.
+    render(
+      <SyncStateShell
+        state={{
+          ...baseState,
+          lastRebuildOutcome: 'DEFERRED',
+          lastRebuildOutcomeAt: '2026-07-05T11:30:00Z',
+          lastRebuildMessage: 'another checkpoint build held the fold budget',
+        }}
+        now={NOW}
+      />,
+    )
+
+    expect(screen.getByText('Rebuild deferred')).toBeInTheDocument()
+    expect(
+      screen.getByText('another checkpoint build held the fold budget'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows no message for a rebuild that simply completed', () => {
+    render(
+      <SyncStateShell
+        state={{
+          ...baseState,
+          lastRebuildOutcome: 'COMPLETED',
+          lastRebuildOutcomeAt: '2026-07-05T11:30:00Z',
+        }}
+        now={NOW}
+      />,
+    )
+
+    expect(screen.getByText('Rebuilt')).toBeInTheDocument()
+    expect(screen.queryByTestId('rebuild-outcome-message')).not.toBeInTheDocument()
+  })
+
+  it('lets the queued chip win over the previous verdict', () => {
+    // While rebuildRequested is up the verdict describes the PREVIOUS attempt, so showing both
+    // would read as "queued, and it failed" for a rebuild that has not run yet.
+    render(
+      <SyncStateShell
+        state={{
+          ...baseState,
+          rebuildRequested: true,
+          lastRebuildOutcome: 'FAILED',
+          lastRebuildOutcomeAt: '2026-07-05T11:30:00Z',
+          lastRebuildMessage: 'boom',
+        }}
+        now={NOW}
+      />,
+    )
+
+    expect(screen.getByText('Rebuild queued')).toBeInTheDocument()
+    expect(screen.queryByText('Rebuild failed')).not.toBeInTheDocument()
+    expect(screen.queryByText('boom')).not.toBeInTheDocument()
+  })
+
+  it('lets a verdict go quiet once a checkpoint has been built since', () => {
+    // Raised in review: only a forced rebuild writes a verdict, so a FAILED one would otherwise
+    // paint a critical chip for ever, outliving every nightly build that has since succeeded.
+    const failedAndSuperseded = {
+      ...baseState,
+      lastCheckpointAt: '2026-07-05T11:45:00Z',
+      lastRebuildOutcome: 'FAILED',
+      lastRebuildOutcomeAt: '2026-07-05T11:00:00Z',
+      lastRebuildMessage: 'boom',
+    }
+    const { rerender } = render(<SyncStateShell state={failedAndSuperseded} now={NOW} />)
+
+    // Still reported, with its message — only the tone changes.
+    expect(screen.getByText('Rebuild failed')).toBeInTheDocument()
+    expect(screen.getByTestId('rebuild-outcome-message')).toBeInTheDocument()
+    const quiet = screen.getByTestId('rebuild-outcome-chip').style.background
+
+    rerender(
+      <SyncStateShell
+        state={{ ...failedAndSuperseded, lastCheckpointAt: '2026-07-05T10:00:00Z' }}
+        now={NOW}
+      />,
+    )
+
+    expect(screen.getByTestId('rebuild-outcome-chip').style.background).not.toBe(quiet)
+  })
+
   it('renders schema version and checkpoint value', () => {
     render(<SyncStateShell state={baseState} now={NOW} />)
     expect(screen.getByText('v 12')).toBeInTheDocument()
