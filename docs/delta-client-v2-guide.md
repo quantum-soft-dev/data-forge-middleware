@@ -1817,6 +1817,30 @@ for checkpoints it is the `checkpoints` keys **plus** the frame at
 The site list comes from the **bucket**, not the database, and that is not an optimization: a
 hard-deleted site has no row to enumerate, and it is the population with the most to reclaim.
 
+**One page at a time** (issue #199). Those four things happen per *page* of the listing, not per
+prefix: `S3PrefixLister.forEachPage` hands the walk over one `ListObjectsV2` page at a time and the
+sweep keeps nothing else but counters and a ten-key sample for the dry-run line, so its heap is
+bounded by a page instead of by a site's history. It matters here more than at the walk's other
+callers, because the first deleting pass is by construction the **largest listing this application
+ever takes** — the premise of the whole sweep is that superseded generations accumulated nightly for
+months with nothing reclaiming them — and it runs on a scheduler thread beside the checkpoint fold
+budget (#152, #178) and the Parquet scratch budget (#150), neither of which knows about it.
+
+The **row set** is deliberately not paged, and that asymmetry is the point: the listing is bounded by
+nothing, while the rows are bounded by what still exists — retention prunes segments, and
+`checkpoints` is one row per table. So it stays **one read per site**, made lazily on the first page
+that produces a candidate, which is the same single query the sweep always made: no S3 call and no
+database call is added or removed by #199. For a site whose prefix fits one page — the overwhelming
+majority — "rows read after the listing" is therefore unchanged. Beyond the first page the ordering
+guard is weaker and the **age window** is what carries it: a row can only appear for an object whose
+write is still in flight, and the window is a day past the longest such gap. The checkpoint pointer
+read with those rows is *older* than the pages that follow, and an older pointer protects strictly
+more keys, so that half errs only towards keeping the object.
+
+The complete-listing callers are untouched: the site history wipe compares every key against one
+instant and `requireCompleteKeys` (batch deletion, retention) needs the whole set or none, so both
+keep `S3PrefixLister.listAll`.
+
 **Which raises the question nothing in S3 can answer: does this bucket belong to this database?**
 Every deleter before this one worked forward from a row, so a stranger's objects were never at risk;
 this one reads "no rows for this site" as "dead". Two deployments sharing a bucket keep separate
@@ -1836,9 +1860,9 @@ Every guard fails towards keeping the object:
 |---|---|---|
 | **Age** — strictly older than `min-age-seconds`, default 24 h; a missing `LastModified` counts as new | Deleting an object whose row is not written yet: a segment mid-commit, and the frame between `uploadFrame(N)` and the `recordCheckpoint(N)` that adopts it | One interval of delay |
 | **Shape** — only `{segmentId}.pb.gz`, `_frame/seq={n}/frame.pb.gz`, `{table}/seq={n}/snapshot.parquet\|.csv.gz` | Deleting an artifact kind added later that this sweep has never heard of | That kind accumulates, exactly as everything did before #158 |
-| **Rows read after the listing** | Using a row set from before a row that was written during the walk | Nothing |
-| **A row set that cannot be read skips the site** | Reading "the query failed" as "no references" | One interval of delay |
-| **A truncated listing sweeps only what it read** | Nothing invented | One interval of delay |
+| **Rows read after the page they judge** | Using a row set from before a row that was written during the walk | Nothing |
+| **A row set that cannot be read skips the site**, every remaining page of it included | Reading "the query failed" as "no references" | One interval of delay |
+| **A truncated walk sweeps only the pages it was handed** (what earlier pages already reclaimed stands — they were judged against the rows, not against the walk finishing) | Nothing invented | One interval of delay |
 | **A prefix whose site has no `sites` row is left alone** unless `reclaim-unknown-sites` is set | Deleting another deployment's live objects out of a shared bucket | A hard-deleted site's objects stay until the bucket is declared exclusive |
 | **A checkpoint key at or above `last_checkpoint_seq` is left alone** (a pointer of **zero** is "no checkpoint", not a sequence, so it protects nothing — otherwise a wiped site would be immune for as long as its restarted counters took to climb back) | The one race the age window does not cover: `seq`-addressed keys are *rewritable*, so a key that was weeks old at listing time can be uploaded and adopted before the delete lands | A frame a build never adopted waits until the pointer passes it, which a live site does nightly |
 | **Dry run** (`delta.s3-orphan.dry-run`, default **true**) | Deleting anything at all before an operator has seen what one pass would take | Nothing is reclaimed until the flag is cleared |
