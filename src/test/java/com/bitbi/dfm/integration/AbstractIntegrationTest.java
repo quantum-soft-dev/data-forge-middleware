@@ -230,9 +230,11 @@ public abstract class AbstractIntegrationTest {
      * this table accumulates across the whole suite. The caller names the sites it asserts on, so
      * the statement's blast radius is those sites rather than every row in the table. That is a
      * smaller footprint, <em>not</em> a guarantee — a sibling context still draining the same site
-     * can block this delete exactly as it could block a table-wide one, and no {@code lock_timeout}
-     * is set. What actually shrinks that window is the slowed
-     * {@code plugin.sql-generation.delta-sweep-ms} in {@code application-test.yml}.</p>
+     * can block this delete exactly as it could block a table-wide one. What shrinks that window is
+     * the slowed {@code plugin.sql-generation.delta-sweep-ms} in {@code application-test.yml}; what
+     * bounds the block when it happens anyway is the {@code lock_timeout} the same file sets on
+     * every pooled connection, so this delete fails and names itself rather than stopping the run
+     * (#197).</p>
      *
      * @param siteIds sites whose generations to delete
      */

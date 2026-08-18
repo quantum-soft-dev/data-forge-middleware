@@ -453,6 +453,43 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- test-lock-wait-bound: A statement of the integration suite that waits on a lock now fails and
+  names itself instead of stopping the run (issue #197, the residual behind #159 and #175). Every
+  cached Spring context keeps its background workers alive against the one shared PostgreSQL
+  database, so the class under test can wait on a lock a sibling context holds —
+  `@Sql("/test-data.sql")` deleting the `%.example.com` rows, a `clearPluginSqlGenerations`
+  delete, the delta-SQL queue's claim — and PostgreSQL's default `lock_timeout` is **0**, wait for
+  ever: the JUnit thread never returns, CI kills the job after its own much longer timeout, and no
+  test is named. `spring.datasource.hikari.connection-init-sql: SET lock_timeout = '10s'` in
+  `src/test/resources/application-test.yml` is the whole of it; the blocked statement is then
+  aborted by the server with SQLSTATE **55P03** and "canceling statement due to lock timeout",
+  which names the cause as well as the test. **Database-side rather than a JUnit `@Timeout`**, the
+  first of the ticket's three candidates: a plain `@Timeout` is only checked after the method
+  returns, so a hung method still hangs, and a preemptive one abandons a thread parked in the
+  driver while it still holds a pooled connection. **`statement_timeout` is deliberately not set**
+  — it would bound legitimate work (these queries scan rows accumulated across the whole run) and
+  bounds none of the hangs that are not statements, so it buys flakes rather than the failure this
+  is about. **The 10 s is measured against the suite's own deliberate waits, not against its
+  slowest statement**, since `lock_timeout` bounds waiting for a lock and never holding one: the
+  longest deliberate wait is `SiteHistoryWipeIntegrationTest`, which holds the `site_sync_state`
+  row for 1.5 s while a checkpoint build blocks on it on purpose. Two guards, the #187 shape:
+  `LockWaitBoundTestProfileTest` holds the key on the fast gate, and
+  `DatabaseLockWaitBoundIntegrationTest` holds what a **pooled** connection actually carries (a
+  file can only show what was declared) and produces a genuinely blocked statement, requiring it
+  to be aborted with 55P03 while the holder is still holding. They share `LockWaitBound` — one
+  parser and the agreed 5 s–60 s range — rather than each carrying its own idea of a sane bound,
+  the `RunOwnedScratch` precedent. The probe blocks on an **advisory** lock rather than on a row:
+  `lock_timeout` is one GUC over the whole lock manager (PostgreSQL applies it to "a table, index,
+  row, or other database object" alike, and nothing configures the kinds separately), so an
+  advisory lock proves the bound for the row locks the ticket is about, while a literal key is the
+  one lock in this shared database that no other class and no background worker can be holding —
+  the probe cannot become the hazard it tests for, and it leaves no row behind for the next class
+  to count. Its own wait is bounded as well (the future is read with the bound plus a margin, and
+  the statement cancelled before the failure is reported), so a regression fails the guard instead
+  of hanging the run the guard is about. Two comments that stated the opposite are corrected
+  rather than left standing (`AbstractIntegrationTest.clearPluginSqlGenerations`,
+  `BitBiDeltaSqlIntegrationTest.drainQueue`). Test-only — no production code, REST, gRPC, DTO,
+  migration, production configuration-key, metric, S3-key or frontend change.
 - test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so no
   context taking the profile's defaults writes or deletes in the machine-wide temp directory
   (issue #187, the half #168 named and deliberately left open). The exception is deliberate and is

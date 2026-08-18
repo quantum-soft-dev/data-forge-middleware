@@ -157,9 +157,9 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
      * of the bound, both deliberate: a genuinely slow but progressing drain (someone else's backlog
      * rendering SQL through S3 behind a {@code max-concurrent 2} semaphore) fails here, which is
      * why the budget is minutes rather than seconds; and the deadline is only read between calls,
-     * so a single call blocked on a row lock still hangs — bounding that needs a
-     * {@code lock_timeout} the profile does not set, and it is the pre-existing behaviour of every
-     * drain in this class rather than something this bound introduced.</p>
+     * so a single call blocked on a row lock is not this loop's to bound — that one is the
+     * {@code lock_timeout} the profile now sets on every pooled connection (#197), which aborts the
+     * blocked statement and surfaces here as the failure of whichever call was waiting.</p>
      */
     private void drainQueue() {
         Instant deadline = Instant.now().plus(MAX_DRAIN_TIME);
