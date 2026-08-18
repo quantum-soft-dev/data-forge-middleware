@@ -453,6 +453,55 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- rebuild-outcome: A forced checkpoint rebuild says what it did, where before it said only that it
+  had stopped (issue #186, raised reviewing #183/#178 and older than both). `rebuild_requested` was
+  the whole record of an operator's click — raised by `POST .../delta/checkpoints/rebuild`, released
+  when the attempt settled — and **three of the four settling endings ran nothing at all**: the
+  build threw, S3 would not say whether the seed frame is there (#157), or another build held the
+  process's fold budget past `delta.checkpoint.fold-wait-seconds` (#178). From outside the pod all
+  four were identical: the "Rebuild queued" chip vanished and the checkpoints did not change, and
+  the only recourse was to notice that nothing had happened and click again — which is exactly what
+  the code's own log line said to do, in a log the operator cannot read. **Holding the flag is not
+  the fix and has been rejected twice** (#157 round 2, #178): nothing re-drives a held flag — the
+  nightly tick calls `buildCheckpoint`, never `rebuildFromFrame` — and `requestRebuild`
+  short-circuits while it is set, so a held flag leaves the operator unable even to ask again. So
+  the ticket's **option 1** is taken and its options 2 and 3 (re-submitting a deferral, answering
+  409 at request time) are not: both are palliatives that cover the deferral alone, and the deferral
+  is the *least* permanent of the three. V54 adds `site_sync_state.last_rebuild_outcome` /
+  `_outcome_at` / `_message`, all nullable, where NULL means "no finished attempt on record" — which
+  is what every existing row is. `CheckpointRebuildOutcome` is
+  `COMPLETED | FAILED | FRAME_UNAVAILABLE | DEFERRED`; the queue-full rejection (both at request
+  time and in `resumePendingRebuilds`) is `FAILED` with its own text rather than a fifth value,
+  since its remedy is the same "ask again" and only the startup one was ever invisible.
+  **Four properties carry the design.** Releasing the flag and writing the verdict are **one write**
+  (`SiteSyncState.recordRebuildOutcome`), because releasing it without saying why is the state being
+  removed. The **shutdown ending writes nothing** and keeps the flag (#162): it has not finished, and
+  a verdict would contradict a flag that is deliberately still up while `resumePendingRebuilds()`
+  waits for the next process — so `delta.checkpoint.builds.deferred` and this verdict disagree by
+  construction on exactly that case, and both are right. While the flag *is* up the verdict describes
+  the **previous** attempt, so the UI gives the queued chip precedence — showing both would read as
+  "queued, and it failed" for a rebuild that has not run yet. And **the verdict travels with the
+  flag**: `resetForWipe` drops both (the row goes back to what a brand-new site has, and a verdict
+  about checkpoints the wipe just deleted describes nothing), `resetForRebaseline` keeps both,
+  because it keeps the flag. The message is the failure's **own** text — for `FAILED` prefixed with
+  the exception's simple name, since an S3 client error, a JDBC error or an interrupt frequently
+  carries no message at all and "the rebuild failed" alone says nothing — truncated to
+  `MAX_REBUILD_MESSAGE_LENGTH` (1000) **in the entity**, because a value wider than the column throws
+  at flush and would lose the verdict entirely, which is where this ticket started. `runRebuild`
+  pre-sets `FAILED` before the `try`, so a `Throwable` that is not an `Exception` still settles as a
+  verdict rather than as a bare flag release. `DeltaSyncStateService.clearRebuildRequested` is gone,
+  replaced by `recordRebuildOutcome(siteId, outcome, message)` — there is no longer a way to release
+  the flag without saying why. **DTO change** (additive): `DeltaSyncStateResponseDto` gains
+  `lastRebuildOutcome`, `lastRebuildOutcomeAt`, `lastRebuildMessage` on **both** sync-state
+  projections, owner and admin — the owner cannot trigger a rebuild but already reads every other
+  field of this row, and a per-audience projection for one string was not worth two DTOs.
+  On the frontend the field is deliberately **`z.string()` and not `z.enum`**, the
+  `deltaSegmentSchema.mode` precedent of 023 r3: this payload drives the whole Delta Sync tab, so a
+  value added on the server must degrade to an unrecognised chip rather than failing the parse and
+  blanking the tab — `describeRebuildOutcome` renders `Rebuild: <value>` for anything it has not
+  heard of. The message is clamped to four lines with the full string on hover. No gRPC, proto,
+  configuration-key, metric, S3-key or route change. See `docs/delta-client-v2-guide.md`
+  ("A forced rebuild says what it did").
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
   references are reclaimed, by one mechanism for both prefixes (issue #158, which folded **#160** —
   the same defect in the second prefix, and the hard part, proving an object is dead without a row

@@ -97,7 +97,8 @@ public class DeltaSyncUserController {
     @Operation(
             summary = "Get delta sync state",
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
-                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading. "
+                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
+                    + "and lastRebuildOutcome/At/Message describing how the most recent finished forced rebuild ended. "
                     + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
