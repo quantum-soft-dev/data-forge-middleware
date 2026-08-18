@@ -363,14 +363,25 @@ public class SqlGenerationService {
      * Phase 2: Generates SQL content by dispatching to the appropriate strategy.
      * Runs outside transaction to avoid connection starvation during S3 I/O.
      * Checks JVM heap pressure before starting to prevent OOM.
+     *
+     * @return the generated SQL, or {@code null} when the batch genuinely produced no changes
+     * @throws MemoryPressureAbortedException if the pod's heap is above the configured threshold
      */
     private SqlGenerationResult generateSqlContent(SqlGenerationPersistence.BatchData data) throws IOException {
-        // Pre-flight memory pressure check before starting SQL generation
-        if (isMemoryPressureHigh()) {
+        // Pre-flight memory pressure check before starting SQL generation. Read once: the value
+        // that trips the check is the value reported and thrown, with no second sample in between.
+        int heapUsagePercent = getHeapUsagePercent();
+        if (isMemoryPressureHigh(heapUsagePercent)) {
             log.error("High memory pressure ({}%), aborting SQL generation for batch: {}",
-                    getHeapUsagePercent(), data.batch().getId());
+                    heapUsagePercent, data.batch().getId());
             meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
-            return null;
+            // Thrown, not returned as "no changes" (issue #181): a null here is the answer for an
+            // empty diff, and no caller could tell the two apart — the delta-SQL queue marked the
+            // segment processed and dropped the batch's SQL for good, while a regeneration wrote
+            // an empty artifact over a good one. Throwing puts the abort on the failure path that
+            // every caller already handles: the segment stays pending for the sweep, the
+            // regeneration never reaches markAsSuperseded, and the audit entry names the batch.
+            throw new MemoryPressureAbortedException(data.batch().getId(), heapUsagePercent, heapThresholdPercent);
         }
 
         // Segment-sourced generation with per-table baseline filtering (026).
@@ -432,10 +443,11 @@ public class SqlGenerationService {
      * {@code application-test.yml} above all, which put the abort into every Spring integration test
      * that generates SQL.
      *
+     * @param heapUsagePercent the reading to judge, as produced by {@link #getHeapUsagePercent()}
      * @return true if heap usage is strictly above the threshold percentage
      */
-    private boolean isMemoryPressureHigh() {
-        return getHeapUsagePercent() > heapThresholdPercent;
+    private boolean isMemoryPressureHigh(int heapUsagePercent) {
+        return heapUsagePercent > heapThresholdPercent;
     }
 
     /**
@@ -683,6 +695,30 @@ public class SqlGenerationService {
 
         public SqlGenerationException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    /**
+     * Thrown when a generation is refused because the pod's heap is above
+     * {@code plugin.sql-generation.heap-threshold-percent} (issue #181).
+     *
+     * <p>It is a failure and not an outcome: the batch's records are untouched and the same batch
+     * will generate normally once the heap recovers, which is why the delta-SQL queue is expected
+     * to leave the segment pending and offer it again on the next sweep. The condition is a
+     * property of the <em>pod at that instant</em>, not of the batch, so retrying is not a spin —
+     * unlike the deterministic Parquet size ceilings, whose refusal repeats for ever.</p>
+     *
+     * <p>A subclass of {@link SqlGenerationException} so it lands on the failure paths that
+     * already exist: {@code sql.generation.errors} / {@code sql.regeneration.errors}, a
+     * {@code SQL_GENERATION_FAILED} audit entry naming the batch, and a 500 from the two manual
+     * generation endpoints rather than a 200 reporting "no changes detected".</p>
+     */
+    public static class MemoryPressureAbortedException extends SqlGenerationException {
+        public MemoryPressureAbortedException(UUID batchId, int heapUsagePercent, int thresholdPercent) {
+            super("Refused to generate SQL for batch " + batchId + " under memory pressure: heap usage is "
+                    + heapUsagePercent + "%, above the configured threshold of " + thresholdPercent
+                    + "% (plugin.sql-generation.heap-threshold-percent). No SQL was produced for this "
+                    + "batch; its records are intact and the generation is retried once the heap recovers.");
         }
     }
 }

@@ -453,6 +453,52 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- memory-abort-visible: A memory-pressure abort is a refusal that says so, instead of an empty
+  `Optional` no caller could tell from "this batch produced no changes" (issue #181, found working
+  #174 and named by it as the reason that defect was expensive rather than merely wrong).
+  `generateSqlContent` returned `null` on the abort — which is also the legitimate answer for an
+  empty diff and for a baseline batch — and the two call sites read it in the two worst possible
+  ways. `DeltaSqlQueueService.processNextPending` ran `markPluginSqlProcessed()`, so the segment
+  was **consumed** and the batch's SQL was lost for good: the comment beside that line has always
+  stated the retry contract exactly ("throws on failure → mark is skipped → segment stays pending
+  for the sweep"), and the abort was the one failure that did not throw. `doRegenerateForBatch`
+  substituted a `-- No changes detected` artifact, **persisted** it, and `PluginHistoryService`
+  then marked the original generation superseded — so on the admin route the abort did not merely
+  drop work, it replaced a good generation with an empty one and reported success. That path is
+  the one an operator uses to recover a dropped batch, and heap pressure is likeliest during a
+  regeneration of a large batch, so recovering from one drop could destroy another.
+  **The ticket's first shape, taken as written**: `MemoryPressureAbortedException` (a subclass of
+  `SqlGenerationException`) is thrown where the `null` was, and every consequence then falls out of
+  paths that already exist rather than out of new branches — the queue's mark is skipped, the
+  regeneration never reaches `markAsSuperseded`, both `catch (RuntimeException)` blocks write the
+  `SQL_GENERATION_FAILED` audit entry **naming the batch** (`GET /api/v1/account/plugins/{pluginId}/logs`,
+  so the account sees it, not only an operator with a metrics console) and increment
+  `sql.generation.errors` / `sql.regeneration.errors`, and the two manual-generation endpoints
+  answer **500 quoting the refusal** through the `catch (Exception)` they already had, where they
+  used to answer 200 "SQL generation skipped". The DoD's second half is therefore satisfied twice
+  over — the batch is both retried and named — and `null` keeps its one remaining meaning.
+  **The ticket asked for the retry to be argued rather than assumed, and the argument is that this
+  abort is not a property of the batch**: it is a pre-flight reading of the *pod's* heap taken
+  before any work, so the same batch generates normally on a later sweep — the opposite of the
+  deterministic Parquet size ceilings, whose refusal repeats identically for ever and which are
+  therefore bounded by attempt counters (#149) or settled as `ABANDONED` (036). It cannot spin
+  either: the throw ends the whole `DeltaSqlSweepWorker` drain, so under sustained pressure the
+  cost is one attempt per `plugin.sql-generation.delta-sweep-ms` tick (60 s in production), and
+  the per-site head-of-line claim means the site's own order is preserved while it waits.
+  **No controller, DTO or REST-contract change** — deliberately, since a dedicated 503 would touch
+  both generate-SQL controllers, which #190 is parked on; a 500 whose body names memory pressure
+  already satisfies "distinguishable at every caller", and the status code can move with #190.
+  The DoD's third item is `DeltaSqlQueueMemoryPressureTest`, which wires the **real**
+  `SqlGenerationService` behind the queue rather than a mock: `DeltaSqlQueueServiceTest`'s existing
+  `shouldLeavePendingOnFailure` pins what a throw does and, by construction, could never pin that
+  the abort **is** a throw. Its third method drives the same wiring below the threshold, so the
+  first two cannot pass against a service that refuses everything. All five assertions were
+  **proven red by mutation** (the throw put back to `return null`). One small correctness gain came
+  with it: `generateSqlContent` reads the heap **once**, so the value logged and thrown is the
+  value that tripped the check rather than a second sample (`isMemoryPressureHigh` takes the
+  reading as a parameter). No gRPC, proto, DTO, migration, configuration-key, metric-**name**,
+  S3-key or frontend change; `sql.generation.aborted.memory_pressure` is unchanged and still
+  registered at zero. See `docs/020-sql-generation-optimization.md`.
 - rebuild-outcome: A forced checkpoint rebuild says what it did, where before it said only that it
   had stopped (issue #186, raised reviewing #183/#178 and older than both). `rebuild_requested` was
   the whole record of an operator's click — raised by `POST .../delta/checkpoints/rebuild`, released

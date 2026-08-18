@@ -98,7 +98,11 @@ public class DeltaSqlQueueService {
         } else if (DeltaSqlGenerationStrategy.MODE_FULL_SNAPSHOT.equals(segment.getMode())) {
             suspendBaselines(segment, site, activation.get());
         } else {
-            // throws on failure → mark is skipped → segment stays pending for the sweep
+            // throws on failure → mark is skipped → segment stays pending for the sweep. Since
+            // #181 the memory-pressure abort is one such failure (it used to return an empty
+            // Optional, indistinguishable from "no changes", and the segment was consumed with
+            // its SQL never generated); the condition belongs to the pod rather than the batch,
+            // so the next sweep generates normally once the heap recovers.
             sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
         }
 

@@ -320,17 +320,40 @@ Strict is what makes the key able to say "disabled" — the reading is clamped a
 `T`, `ceil(x) > T` is exactly `x > T`, so the predicate is "usage is strictly above `T`%" with no
 half-percent either way.
 
-**The abort is silent, and on one path it is worse than silent.** `generateSqlContent` returns
-`null`, which the callers cannot tell from "this batch produced no changes":
+**The abort is a refusal, not an outcome** (issue #181). It used to return `null`, which the
+callers could not tell from "this batch produced no changes":
 
-* `DeltaSqlQueueService.processNextPending` marks the segment processed, so the batch's SQL is
+* `DeltaSqlQueueService.processNextPending` marked the segment processed, so the batch's SQL was
   dropped and never retried;
-* `doRegenerateForBatch` substitutes a `-- No changes detected` artifact, persists it, and
-  `PluginHistoryService` then marks the **original** generation superseded — an abort during an
-  admin regeneration replaces a good generation with an empty one.
+* `doRegenerateForBatch` substituted a `-- No changes detected` artifact, persisted it, and
+  `PluginHistoryService` then marked the **original** generation superseded — an abort during an
+  admin regeneration replaced a good generation with an empty one, and the response reported
+  success. Heap pressure is most likely precisely during an admin regeneration of a large batch,
+  which is the recovery path for the queue-side drop, so an operator recovering from one dropped
+  batch could destroy another.
 
-`sql.generation.aborted.memory_pressure` is the only signal that it fired, and it does not name the
-batch. Issue #181 tracks making the outcome legible at both call sites.
+It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass of
+`SqlGenerationException`, so it lands on the failure paths that already exist:
+
+| Caller | Before | Now |
+|---|---|---|
+| `DeltaSqlQueueService.processNextPending` | segment marked processed, SQL lost | throws before the mark, so the segment stays pending and the sweep offers it again |
+| `SqlGenerationService.doRegenerateForBatch` | empty artifact stored, original superseded | nothing stored, `markAsSuperseded` never reached |
+| `POST .../plugins/{pluginId}/generate-sql` (owner and admin) | `200` "SQL generation skipped" | `500 INTERNAL_ERROR` quoting the refusal |
+| `generateSqlForBatchAsync` (reinit) | silent no-op | logged as a failed async generation |
+
+`null` keeps its one remaining meaning — the diff really was empty — and the batch that was refused
+is now named durably: the existing `catch (RuntimeException)` writes a `SQL_GENERATION_FAILED`
+audit entry (visible to the account on `GET /api/v1/account/plugins/{pluginId}/logs`) carrying the
+message, the heap reading and the threshold, and increments `sql.generation.errors` /
+`sql.regeneration.errors` beside the unchanged `sql.generation.aborted.memory_pressure` counter.
+
+**Retrying is safe here, and that is a property of this abort rather than a general rule.** The
+check is a pre-flight on the *pod's* heap, not on the batch, so the same batch generates normally
+on a later sweep; nothing about it is deterministically too large. The deterministic Parquet size
+ceilings are the opposite case and are deliberately not retried this way. Under sustained pressure
+the retry costs one attempt per `plugin.sql-generation.delta-sweep-ms` tick (60 s) rather than a
+spin: a throw ends the whole drain, and `DeltaSqlSweepWorker` re-wakes on the next sweep.
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary

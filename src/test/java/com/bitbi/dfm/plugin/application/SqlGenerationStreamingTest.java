@@ -32,8 +32,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -295,16 +299,21 @@ class SqlGenerationStreamingTest {
             when(batchRepository.findPreviousBatchForSiteWithFiles(siteId, batchId))
                     .thenReturn(Optional.empty());
 
-            // When
-            Optional<PluginSqlGeneration> result = service.generateSqlForBatch(batchId, accountPluginId);
+            // When / Then - the abort is refused work, not an empty diff: it throws, so no caller
+            // can read it as "this batch produced no changes" (issue #181)
+            assertThatThrownBy(() -> service.generateSqlForBatch(batchId, accountPluginId))
+                    .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
+                    .hasMessageContaining(batchId.toString());
 
-            // Then - should return empty (aborted due to memory pressure before strategy runs)
-            assertThat(result).isEmpty();
             // Should NOT have read from S3 (aborted before strategy invocation)
             verify(s3Client, never()).getObject(any(GetObjectRequest.class));
             // Should have recorded memory pressure metric
             assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
                     .isEqualTo(1.0);
+            // and the batch that was refused is named durably, not only counted
+            verify(pluginAuditService).logSqlGenerationFailed(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId),
+                    contains("memory pressure"), anyLong());
         }
 
         @Test
@@ -372,14 +381,39 @@ class SqlGenerationStreamingTest {
             Long accountPluginId = 1L;
             UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
 
-            // When
-            Optional<PluginSqlGeneration> result = service.generateSqlForBatch(batchId, accountPluginId);
+            // When / Then
+            assertThatThrownBy(() -> service.generateSqlForBatch(batchId, accountPluginId))
+                    .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
+                    .hasMessageContaining("81")
+                    .hasMessageContaining("80");
 
-            // Then
-            assertThat(result).isEmpty();
             verify(s3Client, never()).getObject(any(GetObjectRequest.class));
             assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count())
                     .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("regeneration: should not persist an empty artifact over a good generation")
+        void shouldNotPersistAnEmptyRegenerationOnMemoryPressure() {
+            // Given - the abort during an admin regeneration used to be read as "no changes",
+            // stored as a `-- No changes detected` artifact, and the original generation then
+            // marked superseded by PluginHistoryService — an operator recovering from one dropped
+            // batch destroyed another (issue #181).
+            SqlGenerationService service = spy(createService(80));
+            doReturn(81).when(service).getHeapUsagePercent();
+            Long accountPluginId = 1L;
+            UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
+
+            // When / Then
+            assertThatThrownBy(() -> service.regenerateForBatch(batchId, accountPluginId))
+                    .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
+                    .hasMessageContaining(batchId.toString());
+
+            // Nothing was written, so the caller never reaches markAsSuperseded
+            verify(s3SqlFileStorageService, never()).storeSqlFile(any(), any(), anyString());
+            verify(sqlGenerationRepository, never()).save(any());
+            verify(pluginAuditService).logSqlRegenerationFailed(
+                    eq("bit-bi"), any(), eq(batchId), any(), contains("memory pressure"), anyLong());
         }
     }
 }
