@@ -2,7 +2,7 @@ package com.bitbi.dfm.delta.infrastructure;
 
 import com.bitbi.dfm.shared.storage.S3ChildPrefixListing;
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import com.bitbi.dfm.shared.storage.S3ListedObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,7 +19,9 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Stores raw changelog segment bytes (bronze) in object storage (Delta Client v2 — 022).
@@ -66,13 +68,21 @@ public class S3ChangelogSegmentStorage {
     }
 
     /**
-     * Every object under a prefix, following continuation tokens.
+     * Every object under a prefix, one page at a time (issue #199).
+     *
+     * <p>There is deliberately no materializing twin here. The whole-prefix form
+     * ({@code S3PrefixLister.listAll}) exists for callers that must see the whole set before they
+     * can act on any of it — the site history wipe, batch deletion — and none of them reads this
+     * prefix; the one caller that does only filters it, and this class's listing is the one #199
+     * was opened to bound. Add {@code listAll} back only for a caller that genuinely cannot work
+     * page by page.</p>
      *
      * @param prefix the prefix to enumerate
-     * @return the pages read, with lastModified per object and a truncation flag
+     * @param page   receives each page as it arrives
+     * @return how many objects were handed over, and whether the walk stopped early
      */
-    public S3PrefixListing listPrefix(String prefix) {
-        return S3PrefixLister.listAll(s3Client, bucketName, prefix);
+    public S3PrefixLister.S3PrefixWalk walkPrefix(String prefix, Consumer<List<S3ListedObject>> page) {
+        return S3PrefixLister.forEachPage(s3Client, bucketName, prefix, page);
     }
 
     /**
