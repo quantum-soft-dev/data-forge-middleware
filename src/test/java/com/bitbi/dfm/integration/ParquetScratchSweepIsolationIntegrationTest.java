@@ -55,6 +55,10 @@ class ParquetScratchSweepIsolationIntegrationTest extends BaseIntegrationTest {
         Path hostTempDirectory = Path.of(System.getProperty("java.io.tmpdir"));
         Path plantedByAnotherProcess =
                 Files.createTempFile(hostTempDirectory, "checkpoint-187-guard-", ".parquet");
+        // The finally below is the removal; this covers the JVM dying mid-method, since after this
+        // change nothing sweeps that directory any more — a class asserting the suite leaves the
+        // host temp directory alone must not be the one thing left in it.
+        plantedByAnotherProcess.toFile().deleteOnExit();
         try {
             Files.setLastModifiedTime(plantedByAnotherProcess, FileTime.from(LONG_DEAD));
 

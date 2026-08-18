@@ -25,6 +25,11 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p>This is the static half of the guard: it fails the day either key is dropped from
  * {@code application-test.yml} or is pointed back outside the build tree. The behavioural half is
  * {@code ParquetScratchSweepIsolationIntegrationTest}, which drives the wired sweeper.</p>
+ *
+ * <p>It lives beside {@link ScheduledTaskTestProfileCadenceTest} rather than with the delta tests
+ * because its subject is the {@code test} profile itself, and it reads the profile through that
+ * class's package-private YAML helper instead of growing a second parser that could disagree
+ * with it.</p>
  */
 @DisplayName("Parquet scratch directories under the test profile (#187)")
 class ParquetScratchTestProfileTest {
