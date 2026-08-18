@@ -1369,6 +1369,15 @@ So, in order, to give the pool more room:
 `Executor`, every `max-concurrent` property, and every pool constructed directly in
 `src/main/java` — so a new background pool fails the build rather than the connection pool.
 
+One shape evades all three, and `AsyncExecutorQualifierTest` (**#195**) is what catches it: an
+`@Async` written **without** naming an executor. It is not a `@Bean`, not a `max-concurrent` key and
+not a `new ThreadPoolTaskExecutor(...)`, yet it is a pool — Boot's `applicationTaskExecutor` backs
+off in the presence of the `Executor` beans this application declares, so the fallback is a
+`SimpleAsyncTaskExecutor` that starts a **new thread per invocation with no ceiling**. Neither that
+nor a qualifier naming a bean nothing declares (resolved on first invocation, thrown there) fails
+the build or the startup on its own, so both are asserted: every `@Async` in `src/main/java` names
+an executor, and that name is one of the beans above.
+
 ### The deferred plugin audit write has a lane of its own
 
 Issue **#171**. A plugin audit entry that describes a *state change* is written by

@@ -609,8 +609,17 @@ class BackgroundConnectionDemandTest {
         return documents;
     }
 
-    /** Every {@code Class#method} annotated {@code @Bean} whose product is an {@link Executor}. */
-    private static Set<String> scanExecutorBeans() {
+    /**
+     * Every {@code Class#method} annotated {@code @Bean} whose product is an {@link Executor}.
+     *
+     * <p>Package-private so {@code AsyncExecutorQualifierTest} (#195) can assert that the set of
+     * executor beans an {@code @Async} may name is the same set this audit counts threads for. Two
+     * scans that could disagree would leave a pool visible to one and invisible to the other, which
+     * is the gap both classes exist to close.</p>
+     *
+     * @return fully qualified {@code class#method} names, sorted
+     */
+    static Set<String> scanExecutorBeans() {
         ClassPathScanningCandidateComponentProvider scanner =
                 new ClassPathScanningCandidateComponentProvider(false);
         scanner.addIncludeFilter(new AssignableTypeFilter(Object.class));

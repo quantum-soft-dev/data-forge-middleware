@@ -453,6 +453,47 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- async-executor-guard: Every `@Async` in `src/main/java` names the executor it runs on, and a
+  newcomer that does not fails the build (issue #195, raised reviewing #194/#165).
+  `AsyncConfiguration`'s Javadoc had stated the fact — every `@Async` site is an
+  `@Async("pluginExecutor")` method in the plugin package — and **nothing kept it true**. The two
+  ways it can stop being true are both invisible until production: an unqualified `@Async` falls
+  through to `AsyncExecutionAspectSupport`'s default resolution, and since
+  `TaskExecutionAutoConfiguration#applicationTaskExecutor` is
+  `@ConditionalOnMissingBean(Executor.class)` and this application declares several, Boot's bounded
+  pool **backs off** — so the live fallback is a `SimpleAsyncTaskExecutor` with a **new thread per
+  invocation and no ceiling**; and a qualifier naming no bean is resolved lazily and throws on the
+  **first invocation** of the method, not at startup. The first is exactly the shape
+  `BackgroundConnectionDemandTest` (#161) exists to keep out and is invisible to **all three** of
+  its discovery routes — not a `@Bean`, not a `max-concurrent` key, not a
+  `new ThreadPoolTaskExecutor(...)` — which is why the guard belongs on the annotation rather than
+  in that inventory. `AsyncExecutorQualifierTest` scans **two ways, because neither reaches
+  everything**: `src/main/java` as text with comments stripped (total over the code this repository
+  owns — nothing has to be concrete, independent or component-scannable, and the configuration
+  classes carry a good deal of prose about this very rule, hence the stripping), and the loaded
+  production classes through `MergedAnnotations` (the only way to resolve a value that is not a
+  string literal, and the only way to see an `@Async` arriving through a meta-annotation; type-level
+  as well as per-method, since a type-level one is the same defect at a larger radius). Every site
+  either finds goes through both assertions, and a third test fails when the two stop agreeing on
+  **which files** carry an `@Async` — a scan that has gone blind is otherwise indistinguishable from
+  a clean application. The names are resolved against `BackgroundConnectionDemandTest.scanExecutorBeans()`
+  itself (made package-private for it, the `ScheduledTaskInventoryTest.scanScheduledMethods()`
+  precedent), so the set an `@Async` may name and the set the connection pool is sized against
+  cannot drift apart: an executor visible to one and not the other is the gap both classes exist to
+  close. That equality also asserts the **premise** rather than leaving it as prose — with no
+  `Executor` bean declared, Boot's pool would no longer back off and the unbounded fallback would
+  not be the live branch. **No test can start red against a property that already holds**, so it was
+  proven by mutation, one per assertion: a bare `@Async` on `PluginEventDispatcher` (the unnamed
+  check), `@Async("comparisonExecutor")` — the bean #165 deleted — (the declared-bean check), and an
+  `@Async` on the `Plugin` **interface**, which `ClassPathScanningCandidateComponentProvider` will
+  not reach (the drift check). The parser is asserted directly as well, over synthetic sources:
+  bare, `@Async("")`, `@Async(value = "…")`, the fully qualified form, an expression argument (named
+  but not evaluable from text — the annotation scan resolves it, which is why a site is read twice),
+  `{@code @Async}` in Javadoc, and a method whose own parameter list must not be read as the
+  qualifier. Test-only — no production code beyond the `AsyncConfiguration` Javadoc, and no REST,
+  gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("The connection pool is smaller than the threads that can ask it
+  for a connection").
 - prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
   uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
   reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a
