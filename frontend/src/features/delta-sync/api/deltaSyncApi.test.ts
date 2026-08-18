@@ -75,6 +75,45 @@ describe('getDeltaSyncState', () => {
     mockedGet.mockRejectedValueOnce(new Error('boom'));
     await expect(getDeltaSyncState('s1', { admin: false })).rejects.toThrow('boom');
   });
+
+  it('carries the last rebuild verdict through (#186)', async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: {
+        ...syncStatePayload,
+        lastRebuildOutcome: 'FRAME_UNAVAILABLE',
+        lastRebuildOutcomeAt: '2026-07-05T12:29:00Z',
+        lastRebuildMessage: 'S3 would not say whether the frame exists',
+      },
+    });
+
+    const state = await getDeltaSyncState('s1', { admin: false });
+
+    expect(state?.lastRebuildOutcome).toBe('FRAME_UNAVAILABLE');
+    expect(state?.lastRebuildOutcomeAt).toBe('2026-07-05T12:29:00Z');
+    expect(state?.lastRebuildMessage).toBe('S3 would not say whether the frame exists');
+  });
+
+  it('keeps an outcome value it does not know rather than rejecting the payload', async () => {
+    // The whole sync-state response drives the Delta Sync tab, so a value added on the server
+    // must degrade to an unrecognised chip, not to a blank tab (the `mode` precedent, 023 r3).
+    mockedGet.mockResolvedValueOnce({
+      data: { ...syncStatePayload, lastRebuildOutcome: 'SOMETHING_NEW' },
+    });
+
+    const state = await getDeltaSyncState('s1', { admin: false });
+
+    expect(state?.lastRebuildOutcome).toBe('SOMETHING_NEW');
+  });
+
+  it('reads a payload without the verdict fields as "no rebuild on record"', async () => {
+    mockedGet.mockResolvedValueOnce({ data: syncStatePayload });
+
+    const state = await getDeltaSyncState('s1', { admin: false });
+
+    expect(state?.lastRebuildOutcome).toBeNull();
+    expect(state?.lastRebuildOutcomeAt).toBeNull();
+    expect(state?.lastRebuildMessage).toBeNull();
+  });
 });
 
 describe('admin-only and action endpoints', () => {

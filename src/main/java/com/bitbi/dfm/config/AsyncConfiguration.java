@@ -18,6 +18,14 @@ import java.util.concurrent.Executor;
  * therefore redundant today, and is kept as the application-wide declaration rather than leaving
  * async proxying to depend on a configuration in the plugin package.</p>
  *
+ * <p><b>That every site names its executor is asserted, not merely observed</b> (issue #195):
+ * {@code AsyncExecutorQualifierTest} fails when an {@code @Async} is added without one, and when it
+ * names an executor bean nothing declares. Neither is a build or a startup failure on its own — an
+ * unqualified {@code @Async} falls back to a {@code SimpleAsyncTaskExecutor} with a new thread per
+ * invocation, and an unknown qualifier is resolved on first invocation and throws there — so the
+ * sentence above is a claim the two scans in that class keep true rather than a note about the
+ * plugin package's current contents.</p>
+ *
  * <p>The one pool declared here is {@link #deltaRebuildExecutor()}. It is <em>not</em> reached
  * through {@code @Async}: {@code DeltaCheckpointRebuildService} injects it by
  * {@code @Qualifier("deltaRebuildExecutor")} and submits to it directly.</p>
@@ -25,7 +33,8 @@ import java.util.concurrent.Executor;
  * <p><b>A pool added here is background demand on the connection pool</b>, which is smaller than
  * the threads that can ask it for a connection (issue #161). {@code BackgroundConnectionDemandTest}
  * discovers every {@code @Bean} returning an {@link Executor} and fails until the newcomer is
- * classified there — including a pool with no caller at all, which is how
+ * classified there — the same set {@code AsyncExecutorQualifierTest} resolves {@code @Async}
+ * qualifiers against — including a pool with no caller at all, which is how
  * {@code comparisonExecutor} (declared in feature 009, orphaned when its only {@code @Async} method
  * was deleted before that feature shipped) was found and removed by issue #165.</p>
  */

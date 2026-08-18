@@ -336,6 +336,14 @@ public class CheckpointService {
                 return refuseRefold(siteId, segments, checkpointSeq, epoch, idlePass);
             }
             if (segments.isEmpty() && !haveFrame) {
+                // Nothing has ever been checkpointed for this site and there is no changelog to
+                // start from. For the nightly tick that is a routine visit to a site named by an
+                // unmaterialized row, so it returns quietly — but a *forced* rebuild is somebody
+                // asking a question, and answering "rebuilt" for a build with no source at all is
+                // the false success issue #186 exists to remove.
+                if (idlePass == SnapshotPass.FORCE) {
+                    throw new NothingToRebuildException(siteId);
+                }
                 return Map.of();
             }
             return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
@@ -375,7 +383,7 @@ public class CheckpointService {
             // re-baseline's) own deletes — they can only have committed before the row lock was
             // taken — and the objects it uploaded are orphans the next wipe sweeps.
             log.warn("Discarding the checkpoint build for site {}: {}", siteId, e.getMessage());
-            return Map.of();
+            throw new BuildDiscardedException(siteId, e.getMessage());
         }
     }
 
@@ -416,7 +424,9 @@ public class CheckpointService {
         if (!syncStateService.getSyncState(siteId).epoch().equals(epoch)) {
             log.warn("Discarding the checkpoint build for site {}: its history was replaced "
                     + "while the build was reading, taking frame@{} with it", siteId, checkpointSeq);
-            return Map.of();
+            throw new BuildDiscardedException(siteId,
+                    "its history was replaced while the build was reading, taking frame@"
+                            + checkpointSeq + " with it");
         }
         if (segments.isEmpty()) {
             metrics.checkpointBuildAborted("history_gone");
@@ -1202,6 +1212,41 @@ public class CheckpointService {
     private void stopIfShuttingDown(UUID siteId) {
         if (shutdownSignal.isShuttingDown()) {
             throw new BuildEndedByShutdownException(siteId, null, null);
+        }
+    }
+
+    /**
+     * The site's baseline was replaced while this build was running, so it published nothing
+     * (issues #136 and #142).
+     *
+     * <p>Thrown rather than returned as an empty fold, for the reason #157 and #162 are: a caller
+     * cannot tell an empty fold from a finished build. {@code CheckpointScheduler} logs it and moves
+     * to the next site, exactly as it did when this was a silent empty return; the forced path needs
+     * it because reporting a discarded build as {@code COMPLETED} paints a green "Rebuilt" chip for
+     * a rebuild that published nothing (issue #186). Not a failure of the site and not on
+     * {@code delta.checkpoint.builds.aborted}: a wipe and a re-baseline are routine operator and
+     * client actions, and the build after them starts from the new baseline.</p>
+     */
+    public static final class BuildDiscardedException extends RuntimeException {
+
+        BuildDiscardedException(UUID siteId, String reason) {
+            super("The checkpoint build for site " + siteId + " was discarded: " + reason);
+        }
+    }
+
+    /**
+     * A <b>forced</b> rebuild of a site that has no seed frame and no changelog (issue #186).
+     *
+     * <p>Only the forced pass throws: for the nightly tick this is the ordinary quiet visit to a
+     * site named by an unmaterialized checkpoint row, while a forced rebuild is a question somebody
+     * asked, and "rebuilt" is not a truthful answer when there was nothing to rebuild from. Nothing
+     * is written and nothing is counted.</p>
+     */
+    public static final class NothingToRebuildException extends RuntimeException {
+
+        NothingToRebuildException(UUID siteId) {
+            super("Site " + siteId + " has no checkpoint frame and no changelog segments, so there "
+                    + "is nothing to rebuild its checkpoints from");
         }
     }
 

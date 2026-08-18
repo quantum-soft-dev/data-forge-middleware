@@ -102,7 +102,8 @@ public class DeltaSyncAdminController {
     @Operation(
             summary = "Get delta sync state (admin)",
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
-                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading. "
+                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
+                    + "and lastRebuildOutcome/At/Message describing how the most recent finished forced rebuild ended. "
                     + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
@@ -117,7 +118,7 @@ public class DeltaSyncAdminController {
         siteService.getSite(siteId); // 404 when the site does not exist
         boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state, snapshotInProgress)))
+                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.forAdmin(state, snapshotInProgress)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -281,8 +282,11 @@ public class DeltaSyncAdminController {
     @Operation(
             summary = "Rebuild checkpoint now (admin)",
             description = "Sets the persistent rebuild_requested flag (shown as 'Rebuild queued' in the UI) and runs "
-                    + "the checkpoint build asynchronously outside the regular schedule; the flag is cleared when "
-                    + "the rebuild completes."
+                    + "the checkpoint build asynchronously outside the regular schedule. When the attempt finishes "
+                    + "the flag is released and lastRebuildOutcome on the sync-state projection says how it ended "
+                    + "(COMPLETED, FAILED, FRAME_UNAVAILABLE, DEFERRED, DISCARDED or NOTHING_TO_REBUILD); "
+                    + "a rebuild cut short by the process "
+                    + "shutting down keeps the flag instead and is re-driven at the next startup."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "202", description = "Checkpoint rebuild scheduled",
