@@ -7,6 +7,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,12 +34,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public final class LockWaitBound {
 
     /**
-     * The longest lock wait the suite legitimately produces is
-     * {@code SiteHistoryWipeIntegrationTest}, which holds the {@code site_sync_state} row for 1.5 s
-     * while a checkpoint build blocks on it at the epoch check. Anything at or below that turns a
-     * deliberate, asserted wait into a failure.
+     * The floor is the longest wait the suite <em>declares</em> for a statement it blocks on
+     * purpose, not the longest one usually observed.
+     * {@code BatchParquetQueueServiceIntegrationTest.staleWorkerCannotRenewTheClaimAfterAConcurrentOperatorRequeue}
+     * leaves an {@code UPDATE} waiting on an operator's row lock and releases it only after an
+     * awaitility poll budgeted at <b>10 s</b>; it resolves in milliseconds on an idle machine, but
+     * a bound at or under that budget turns a green test red on a loaded one.
+     * {@code SiteHistoryWipeIntegrationTest} and {@code DeltaRebaselineIntegrationTest} hold their
+     * rows for a fixed 1.5 s and are the easy ones.
      */
-    public static final Duration MIN = Duration.ofSeconds(5);
+    public static final Duration MIN = Duration.ofSeconds(15);
 
     /**
      * Above this the bound stops doing its job: a blocked statement is supposed to fail while there
@@ -48,16 +53,20 @@ public final class LockWaitBound {
 
     /**
      * Every way an init statement can leave a session's {@code lock_timeout} somewhere other than
-     * where the statement before it put it: an assignment to a number (PostgreSQL accepts a bare
-     * one as milliseconds, or one with a unit, quoted or not), an assignment to {@code DEFAULT},
-     * a {@code RESET} of this GUC or of everything, and the function form. The undoing shapes are
-     * matched rather than ignored precisely so a trailing one cannot pass as the assignment before
-     * it — for this GUC "back to the server default" is the 0 this guard exists to replace.
+     * where the statement before it put it. Three families, and the second two are the ones easy
+     * to miss: an assignment (to a number — PostgreSQL accepts a bare one as milliseconds, or one
+     * with a unit, quoted or not — or to {@code DEFAULT}, in either the {@code SET} or the
+     * {@code set_config} spelling); an undoing that never names the GUC ({@code RESET ALL},
+     * {@code DISCARD ALL}) as well as the one that does; and a **transaction-scoped** assignment
+     * ({@code SET LOCAL}, {@code set_config(..., true)}), which is undone by the commit Hikari
+     * makes after running the init SQL, so it leaves a pooled session exactly as unbounded as no
+     * statement at all.
      */
     private static final Pattern LOCK_TIMEOUT = Pattern.compile(
-            "(?i)(?:(?<reset>\\breset\\s+(?:lock_timeout|all)\\b)"
+            "(?i)(?:(?<reset>\\breset\\s+(?:lock_timeout|all)\\b|\\bdiscard\\s+all\\b)"
                     + "|\\bset_config\\s*\\(\\s*'lock_timeout'\\s*,\\s*'(?<config>[^']*)'"
-                    + "|\\block_timeout\\b\\s*(?:=|\\bto\\b)\\s*'?\\s*"
+                    + "\\s*,\\s*(?<islocal>[a-z]+)"
+                    + "|(?:\\bset\\s+(?<local>local\\s+))?\\block_timeout\\b\\s*(?:=|\\bto\\b)\\s*'?\\s*"
                     + "(?:(?<default>default)|(?<amount>\\d+)\\s*(?<unit>[a-z]*))\\s*'?)");
 
     /** The value {@code set_config} was handed, once the quotes are off. */
@@ -110,6 +119,11 @@ public final class LockWaitBound {
         if (matcher.group("reset") != null || matcher.group("default") != null) {
             return Duration.ZERO;
         }
+        if (matcher.group("local") != null || "true".equalsIgnoreCase(matcher.group("islocal"))) {
+            // Transaction-scoped, and Hikari commits the init SQL — the pooled session keeps
+            // nothing, so this reads as the unbounded session it really leaves behind.
+            return Duration.ZERO;
+        }
         String config = matcher.group("config");
         if (config != null) {
             return configuredBound(config, connectionInitSql);
@@ -141,7 +155,14 @@ public final class LockWaitBound {
                         + "does not use — the bound it really sets is not the one this reads, and "
                         + "the range check below would pass on a number that means something else "
                         + "(#197): " + connectionInitSql);
-        return scale.multipliedBy(Long.parseLong(amount));
+        try {
+            return scale.multipliedBy(Long.parseLong(amount));
+        } catch (NumberFormatException | ArithmeticException e) {
+            return fail("connection-init-sql gives lock_timeout the amount '" + amount + unit
+                    + "', which is not a duration this reader can hold — the range check below "
+                    + "would never judge it, and the guard has to say so rather than die on a raw "
+                    + e.getClass().getSimpleName() + " (#197): " + connectionInitSql);
+        }
     }
 
     /**
@@ -158,8 +179,9 @@ public final class LockWaitBound {
         assertTrue(bound.compareTo(MIN) >= 0,
                 what + " bounds a lock wait at " + bound + ", below the " + MIN
                         + " floor this suite's own deliberate lock waits need — "
-                        + "SiteHistoryWipeIntegrationTest holds the site_sync_state row for 1.5 s "
-                        + "while a checkpoint build blocks on it on purpose (#197)");
+                        + "BatchParquetQueueServiceIntegrationTest budgets 10 s for an UPDATE it "
+                        + "blocks on purpose, and a bound under that budget fails a healthy test "
+                        + "on a loaded machine (#197)");
         assertTrue(bound.compareTo(MAX) <= 0,
                 what + " bounds a lock wait at " + bound + ", above the " + MAX
                         + " ceiling: a bound that long no longer fails the blocked test while there "

@@ -469,15 +469,18 @@ pages/{feature}/            # Route pages
   driver while it still holds a pooled connection. **`statement_timeout` is deliberately not set**
   — it would bound legitimate work (these queries scan rows accumulated across the whole run) and
   bounds none of the hangs that are not statements, so it buys flakes rather than the failure this
-  is about. **The 10 s is measured against the suite's own deliberate waits, not against its
-  slowest statement**, since `lock_timeout` bounds waiting for a lock and never holding one: the
-  longest deliberate wait is `SiteHistoryWipeIntegrationTest`, which holds the `site_sync_state`
-  row for 1.5 s while a checkpoint build blocks on it on purpose. Two guards, the #187 shape:
-  `LockWaitBoundTestProfileTest` holds the key on the fast gate, and
+  is about. **The 30 s is measured against the suite's own deliberate waits, not against its
+  slowest statement**, since `lock_timeout` bounds waiting for a lock and never holding one — and
+  against the longest wait the suite *declares* rather than the longest one observed:
+  `BatchParquetQueueServiceIntegrationTest` leaves an `UPDATE` on an operator's row lock and
+  releases it only after an awaitility poll budgeted at **10 s**, which resolves in milliseconds
+  on an idle machine and would have failed a healthy test on a loaded one; the fixed 1.5 s holds
+  in `SiteHistoryWipeIntegrationTest` and `DeltaRebaselineIntegrationTest` are the easy ones. Two
+  guards, the #187 shape: `LockWaitBoundTestProfileTest` holds the key on the fast gate, and
   `DatabaseLockWaitBoundIntegrationTest` holds what a **pooled** connection actually carries (a
   file can only show what was declared) and produces a genuinely blocked statement, requiring it
   to be aborted with 55P03 while the holder is still holding. They share `LockWaitBound` — one
-  parser and the agreed 5 s–60 s range — rather than each carrying its own idea of a sane bound,
+  parser and the agreed 15 s–60 s range — rather than each carrying its own idea of a sane bound,
   the `RunOwnedScratch` precedent. The probe blocks on an **advisory** lock rather than on a row:
   `lock_timeout` is one GUC over the whole lock manager (PostgreSQL applies it to "a table, index,
   row, or other database object" alike, and nothing configures the kinds separately), so an
@@ -509,8 +512,19 @@ pages/{feature}/            # Route pages
   throwable rather than throwing it, so a pool that could not hand out a connection — four of
   them, one pinned by the holder — was reported two minutes later as an unbounded lock wait; it is
   now reported as itself. And the floor message said “at or below” for an assertion that accepts
-  the floor exactly. Test-only — no production code, REST, gRPC, DTO, migration, production
-  configuration-key, metric, S3-key or frontend change.
+  the floor exactly. **Round 3** moved the value, which is the finding worth keeping: the
+  derivation named the 1.5 s holds as the longest deliberate wait and had missed the 10 s
+  awaitility budget above, so the shipped 10 s had **zero** margin over a test that blocks an
+  `UPDATE` on purpose — 30 s now, with `MIN` raised to 15 s so the floor is the declared budget
+  rather than the observed one. Three more on the reader, all the same class of hole as round 2's:
+  `SET LOCAL lock_timeout` and `set_config(..., true)` are transaction-scoped and are undone by
+  the commit Hikari makes after the init SQL, so they leave a pooled session exactly as unbounded
+  as no statement at all while reading as the bound they name; `DISCARD ALL` joins `RESET ALL` as
+  an undoing that never names the GUC; a digit run no `Duration` can hold now fails as this guard
+  rather than as a raw `NumberFormatException`; and the static guard's missing-key message no
+  longer arrives as the string "null" read as a malformed statement. Test-only — no production
+  code, REST, gRPC, DTO, migration, production configuration-key, metric, S3-key or frontend
+  change.
 - async-executor-guard: Every `@Async` in `src/main/java` names the executor it runs on, and a
   newcomer that does not fails the build (issue #195, raised reviewing #194/#165).
   `AsyncConfiguration`'s Javadoc had stated the fact — every `@Async` site is an

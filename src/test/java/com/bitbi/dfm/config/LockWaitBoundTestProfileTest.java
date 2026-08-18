@@ -37,21 +37,29 @@ class LockWaitBoundTestProfileTest {
     @Test
     @DisplayName("every pooled connection is initialized with a lock_timeout")
     void shouldDeclareALockTimeoutOnConnectionInit() {
-        Object declared = testYaml().get(INIT_SQL_KEY);
-
-        assertNotNull(declared,
-                INIT_SQL_KEY + " is not declared in application-test.yml, so pooled connections keep "
-                        + "PostgreSQL's default lock_timeout of 0 and a statement blocked on a lock "
-                        + "held by another cached context waits for ever (#197)");
-        LockWaitBound.parseDeclared(declared.toString());
+        LockWaitBound.parseDeclared(declaredInitSql());
     }
 
     @Test
     @DisplayName("the bound clears the suite's own deliberate lock waits and still fails fast")
     void shouldBoundTheWaitWithinTheAgreedRange() {
-        Duration declared = LockWaitBound.parseDeclared(String.valueOf(testYaml().get(INIT_SQL_KEY)));
+        Duration declared = LockWaitBound.parseDeclared(declaredInitSql());
 
         LockWaitBound.assertBoundsALockWait(INIT_SQL_KEY, declared);
+    }
+
+    /**
+     * The declared statement, failing on the missing key by name — {@code String.valueOf(null)} is
+     * the string "null", which reads downstream as a statement that sets nothing rather than as a
+     * key nobody declared.
+     */
+    private static String declaredInitSql() {
+        Object declared = testYaml().get(INIT_SQL_KEY);
+        assertNotNull(declared,
+                INIT_SQL_KEY + " is not declared in application-test.yml, so pooled connections keep "
+                        + "PostgreSQL's default lock_timeout of 0 and a statement blocked on a lock "
+                        + "held by another cached context waits for ever (#197)");
+        return declared.toString();
     }
 
     private static Map<String, Object> testYaml() {

@@ -77,17 +77,21 @@ spring:
       # unwinds normally and says "canceling statement due to lock timeout" (SQLSTATE 55P03),
       # which names the cause as well as the test.
       #
-      # 10s is chosen against the suite's own deliberate waits, not against its slowest statement:
-      # lock_timeout bounds waiting for a lock, never holding one. The longest deliberate wait is
-      # SiteHistoryWipeIntegrationTest, which holds the site_sync_state row for 1.5 s while a
-      # checkpoint build blocks on it on purpose. A statement_timeout is deliberately NOT set: it
+      # 30s is chosen against the suite's own deliberate waits, not against its slowest statement:
+      # lock_timeout bounds waiting for a lock, never holding one. What sets the floor is the
+      # longest wait the suite *declares*, not the longest one usually observed —
+      # BatchParquetQueueServiceIntegrationTest leaves an UPDATE on an operator's row lock and
+      # releases it only after an awaitility poll budgeted at 10 s (milliseconds on an idle
+      # machine, but a bound at that budget would fail a healthy test on a loaded one); the fixed
+      # 1.5 s holds in SiteHistoryWipeIntegrationTest and DeltaRebaselineIntegrationTest are the
+      # easy ones. A statement_timeout is deliberately NOT set: it
       # would bound legitimate work (the queries here scan rows accumulated across the whole run)
       # while bounding none of the non-statement hangs, which are not what this fixes.
       #
       # LockWaitBoundTestProfileTest holds this key on the fast gate;
       # DatabaseLockWaitBoundIntegrationTest holds what a pooled connection actually carries and
       # proves a blocked statement is really aborted (issue #197).
-      connection-init-sql: SET lock_timeout = '10s'
+      connection-init-sql: SET lock_timeout = '30s'
       # A run keeps every distinct Spring context in the context cache, and each context holds
       # its own pool. The production defaults (max 10, min-idle 5) reserve about five connections
       # per cached context even while it sits idle, so roughly twenty contexts exhaust

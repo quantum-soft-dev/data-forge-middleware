@@ -21,6 +21,8 @@ class LockWaitBoundTest {
     void shouldReadTheDeclaredAmount() {
         assertThat(LockWaitBound.parseDeclared("SET lock_timeout = '10s'"))
                 .isEqualTo(Duration.ofSeconds(10));
+        assertThat(LockWaitBound.parseDeclared("SET lock_timeout = '30s'"))
+                .isEqualTo(Duration.ofSeconds(30));
         assertThat(LockWaitBound.parseDeclared("SET lock_timeout TO 10000"))
                 .isEqualTo(Duration.ofSeconds(10));
         assertThat(LockWaitBound.parseDeclared("set LOCK_TIMEOUT = '2min'"))
@@ -84,7 +86,7 @@ class LockWaitBoundTest {
         assertThat(bound).isEqualTo(Duration.ofMillis(30));
         assertThatThrownBy(() -> LockWaitBound.assertBoundsALockWait("a probe", bound))
                 .isInstanceOf(AssertionError.class)
-                .hasMessageContaining("below the PT5S");
+                .hasMessageContaining("below the PT15S");
     }
 
     @Test
@@ -93,6 +95,31 @@ class LockWaitBoundTest {
         assertThatThrownBy(() -> LockWaitBound.parseDeclared("SET application_name = 'dfm-test'"))
                 .isInstanceOf(AssertionError.class)
                 .hasMessageContaining("sets no lock_timeout");
+    }
+
+    @Test
+    @DisplayName("a bound that only survives its own transaction is not a bound on the session")
+    void shouldRefuseATransactionScopedAssignment() {
+        // Hikari commits the init SQL, so SET LOCAL leaves a pooled session exactly as unbounded
+        // as no statement at all — while reading, naively, as the 30 s it names.
+        assertThat(LockWaitBound.parseDeclared("SET LOCAL lock_timeout = '30s'"))
+                .isEqualTo(Duration.ZERO);
+        assertThat(LockWaitBound.parseDeclared(
+                "SELECT set_config('lock_timeout', '30s', true)"))
+                .isEqualTo(Duration.ZERO);
+        assertThat(LockWaitBound.parseDeclared("SET lock_timeout = '30s'; DISCARD ALL"))
+                .isEqualTo(Duration.ZERO);
+    }
+
+    @Test
+    @DisplayName("an amount no duration can hold fails as this guard, not as a raw JDK exception")
+    void shouldRefuseAnUnusableAmount() {
+        assertThatThrownBy(() -> LockWaitBound.parseDeclared("SET lock_timeout = '99999999999999999999'"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("#197");
+        assertThatThrownBy(() -> LockWaitBound.parseDeclared("SET lock_timeout = '9223372036854775807d'"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("#197");
     }
 
     @Test
