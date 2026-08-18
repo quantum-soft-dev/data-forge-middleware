@@ -477,18 +477,31 @@ pages/{feature}/            # Route pages
   which is the property the ticket is really buying. The two writers get **separate**
   subdirectories, the split `CheckpointParquetIntegrationTest` already makes for its own context
   (#168), so a completed-batch drain cannot put a file where a checkpoint assertion looks.
-  **Two guards, because either alone can go vacuous.** `ParquetScratchTestProfileTest` is static:
-  both keys declared, and each resolved value — placeholders expanded against system properties,
-  the way the `Environment` would — inside the build directory, which it derives from the compiled
-  test classes rather than from `user.dir` (the one thing an IDE run is free to move, and the
-  assertion must not quietly stop meaning anything when it does).
-  `ParquetScratchSweepIsolationIntegrationTest` drives the **wired** sweeper on the shared
-  `BaseIntegrationTest` context and asserts the two opposite directions: an aged `checkpoint-*`
-  planted in `java.io.tmpdir` survives a sweep (red before the fix), and an equally aged one inside
-  the configured directory is still deleted — the second is what stops "fixed" from meaning "the
-  sweeper was switched off under test", and it is also what keeps the literal `checkpoint-` prefix
-  the test shares with the production `ParquetScratch` (package-private, so the test cannot import
-  it) from drifting unnoticed. Test-only — no production code, REST, gRPC, DTO, migration,
+  **Two guards, because neither surface sees what the other does**, sharing one definition of "a
+  directory this run owns" (`RunOwnedScratch`) rather than each carrying its own.
+  `ParquetScratchTestProfileTest` is static and on the fast gate: both keys declared, each resolved
+  value (placeholders expanded against system properties, the way the `Environment` would) inside
+  the run's tree, and the two directories **distinct** — a copy-paste pointing both at
+  `…/checkpoint` otherwise passes everything silently.
+  `ParquetScratchSweepIsolationIntegrationTest` holds the **wired** context on the shared
+  `BaseIntegrationTest`: the directories this context actually resolved are the run's own — the
+  only guard that can see an **OS environment override**, since `DELTA_CHECKPOINT_TEMP_DIR` binds
+  to this key and outranks every `application*.yml` — and an aged `checkpoint-*` inside the
+  configured directory is **still deleted**, which is what stops "fixed" from meaning "the sweeper
+  was switched off under test" and keeps the literal prefix the test shares with the
+  package-private production `ParquetScratch` from drifting unnoticed. Both were **proven red by
+  mutation** (the two keys removed). **Two shapes were tried and rejected in review**: planting an
+  aged `checkpoint-*` in `java.io.tmpdir` and asserting it survives reads as the more direct
+  proof, but any *other* process sweeping that directory — a locally running backend under `dev`,
+  or a concurrent worktree on a branch predating this fix, which is the ordinary shape of
+  `/github-issue-runner` — decides it, and it would fail accusing this suite of the very defect it
+  guards, so the wired configuration answers it deterministically instead and
+  `ParquetScratchOrphanSweeperTest` already pins that the sweeper visits its configured
+  directories and no others; and "the run's tree" is **not** an ancestor directory named `build`,
+  since an IntelliJ run configured to build with the IDE compiles to `out/` and a guard that goes
+  red on a developer's build layout rather than on a regression is worse than no guard — it is the
+  Gradle-supplied root when present, the checkout (located by `settings.gradle.kts`) otherwise.
+  Test-only — no production code, REST, gRPC, DTO, migration,
   production configuration-key, metric, S3-key or frontend change; `k8s/` and the deployed
   `*_TEMP_DIR` keys are untouched, so the sizing arithmetic of #131/#138/#150 is unaffected.
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row

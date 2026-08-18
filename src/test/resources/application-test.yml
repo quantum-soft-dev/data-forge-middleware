@@ -25,8 +25,10 @@ delta:
     # task; the relative default keeps an IDE run that does not set it inside the build tree too.
     # Separate subdirectories per writer, as CheckpointParquetIntegrationTest already does for its
     # own context, so a completed-batch drain cannot leave a file where a checkpoint assertion
-    # looks. ParquetScratchTestProfileTest and ParquetScratchSweepIsolationIntegrationTest hold
-    # both halves of this.
+    # looks. ParquetScratchTestProfileTest holds this file (declared, inside the run's tree, two
+    # distinct directories) on the fast gate; ParquetScratchSweepIsolationIntegrationTest holds
+    # the wired context, which is the only place an OS environment override of these same keys
+    # (DELTA_CHECKPOINT_TEMP_DIR outranks every application*.yml) is visible.
     temp-dir: ${dfm.test.parquet-scratch-root:build/test-scratch/parquet}/checkpoint
     # 600 s in production (issue #178). Two checkpoint builds never overlap in a suite that
     # drives them one call at a time, so this only decides how a bug shows up: at the shipped

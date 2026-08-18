@@ -1,6 +1,7 @@
 package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeper;
+import com.bitbi.dfm.testsupport.RunOwnedScratch;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,23 +15,32 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Issue #187 — the sweeper wired into an integration context must sweep the directories this run
  * owns and nothing else.
  *
  * <p>Until the {@code test} profile declared them, both scratch keys fell back to
- * {@code ${java.io.tmpdir}}: every cached context booted a
- * {@link ParquetScratchOrphanSweeper} over the host's temp directory and, at refresh, deleted any
- * regular file named {@code checkpoint-*} or {@code batch-parquet-*} older than four hours —
- * another worktree's suite, or anything else on the machine using those prefixes.</p>
+ * {@code ${java.io.tmpdir}}: every cached context booted a {@link ParquetScratchOrphanSweeper} over
+ * the host's temp directory and, at refresh, deleted any regular file named {@code checkpoint-*} or
+ * {@code batch-parquet-*} older than four hours — another worktree's suite, or anything else on the
+ * machine using those prefixes.</p>
  *
- * <p>The two assertions are deliberately opposite. The first is the defect: an aged file planted in
- * {@code java.io.tmpdir} survives a sweep. The second is what stops the fix from being "the sweeper
- * was switched off under test" — an equally aged file inside the configured directory is still
- * deleted, so the profile redirected the sweep rather than disabling it, and the shared literal
- * prefix cannot drift away from the production one without failing here.</p>
+ * <p>The two assertions are deliberately opposite, and neither is a planted file in the host's temp
+ * directory: that probe would have been decided by any <em>other</em> process sweeping the same
+ * directory — a locally running backend under {@code dev}, or a concurrent worktree on a branch
+ * that predates this fix, which is the ordinary shape of {@code /github-issue-runner} — and would
+ * have failed accusing this suite of the defect it guards. The wired configuration answers the
+ * same question deterministically, and {@code ParquetScratchOrphanSweeperTest} already pins that
+ * the sweeper visits its configured directories and no others.</p>
+ *
+ * <p>The first assertion is the defect: the directories this context actually resolved are the
+ * run's own. Being wired rather than static, it is also the only guard that sees an {@code OS}
+ * environment override of these keys ({@code DELTA_CHECKPOINT_TEMP_DIR} outranks every
+ * {@code application*.yml}). The second is what stops the fix from being "the sweeper was switched
+ * off under test" — an aged file inside the configured directory is still deleted, so the profile
+ * redirected the sweep rather than disabling it, and the literal prefix this test shares with the
+ * package-private production {@code ParquetScratch} cannot drift away unnoticed.</p>
  *
  * <p>{@code BaseIntegrationTest} rather than a context of its own: nothing here needs a property
  * override, and an extra cached context costs another connection pool and another round of
@@ -49,35 +59,22 @@ class ParquetScratchSweepIsolationIntegrationTest extends BaseIntegrationTest {
     @Value("${delta.checkpoint.temp-dir:${java.io.tmpdir}}")
     private String checkpointTempDirectory;
 
+    @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}")
+    private String batchParquetTempDirectory;
+
     @Test
-    @DisplayName("a sweep leaves aged scratch in the machine-wide temp directory alone")
-    void shouldNotSweepTheMachineWideTempDirectory() throws IOException {
-        Path hostTempDirectory = Path.of(System.getProperty("java.io.tmpdir"));
-        Path plantedByAnotherProcess =
-                Files.createTempFile(hostTempDirectory, "checkpoint-187-guard-", ".parquet");
-        // The finally below is the removal; this covers the JVM dying mid-method, since after this
-        // change nothing sweeps that directory any more — a class asserting the suite leaves the
-        // host temp directory alone must not be the one thing left in it.
-        plantedByAnotherProcess.toFile().deleteOnExit();
-        try {
-            Files.setLastModifiedTime(plantedByAnotherProcess, FileTime.from(LONG_DEAD));
-
-            sweeper.sweep();
-
-            assertTrue(Files.exists(plantedByAnotherProcess),
-                    "the sweeper deleted " + plantedByAnotherProcess + ", a file this run does not own. "
-                            + "Under the test profile both scratch keys must name a directory inside the "
-                            + "build tree; undeclared they fall back to ${java.io.tmpdir} and the suite "
-                            + "deletes whatever else on the host uses these prefixes (#187)");
-        } finally {
-            Files.deleteIfExists(plantedByAnotherProcess);
-        }
+    @DisplayName("the directories this context sweeps belong to this run")
+    void shouldSweepOnlyDirectoriesThisRunOwns() {
+        RunOwnedScratch.assertOwnedByThisRun(
+                "delta.checkpoint.temp-dir", RunOwnedScratch.normalize(checkpointTempDirectory));
+        RunOwnedScratch.assertOwnedByThisRun(
+                "delta.batch-parquet.temp-dir", RunOwnedScratch.normalize(batchParquetTempDirectory));
     }
 
     @Test
     @DisplayName("a sweep still deletes aged scratch in the directory this run owns")
     void shouldStillSweepTheConfiguredDirectory() throws IOException {
-        Path configured = Path.of(checkpointTempDirectory);
+        Path configured = RunOwnedScratch.normalize(checkpointTempDirectory);
         Files.createDirectories(configured);
         Path orphan = Files.createTempFile(configured, "checkpoint-187-orphan-", ".parquet");
         try {
@@ -87,10 +84,10 @@ class ParquetScratchSweepIsolationIntegrationTest extends BaseIntegrationTest {
 
             assertFalse(Files.exists(orphan),
                     "the sweeper left " + orphan + " behind. The test profile is supposed to redirect "
-                            + "the sweep into the build tree, not disable it — recovery from a process "
-                            + "that died between createTempFile and its finally is the whole point of "
-                            + "the sweeper (#127), and this is the only place it runs against a real "
-                            + "directory (#187)");
+                            + "the sweep into the run's own tree, not disable it — recovery from a "
+                            + "process that died between createTempFile and its finally is the whole "
+                            + "point of the sweeper (#127), and this is the only place it runs against "
+                            + "a real directory (#187)");
         } finally {
             Files.deleteIfExists(orphan);
         }
