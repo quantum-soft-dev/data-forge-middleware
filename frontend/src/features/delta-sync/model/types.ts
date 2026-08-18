@@ -19,6 +19,19 @@ export const deltaSyncStateSchema = z.object({
   /** A FULL_SNAPSHOT session is uploading right now (#84) — outlives rebaselineRequested, which the
    * snapshot only consumes when it commits. Optional so an older backend still parses. */
   snapshotInProgress: z.boolean().optional().default(false),
+  /**
+   * How the last *finished* forced checkpoint rebuild ended (#186): COMPLETED, FAILED,
+   * FRAME_UNAVAILABLE, DEFERRED, DISCARDED or NOTHING_TO_REBUILD. Deliberately a plain string
+   * rather than a z.enum, for the same
+   * reason `deltaSegmentSchema.mode` is (review r3): this object drives the whole Delta Sync tab,
+   * and a value added on the server must degrade to an unrecognised chip rather than failing the
+   * parse and blanking the tab. Null while no rebuild has finished — and also while one is queued
+   * whose predecessor never ran, since an ending that keeps rebuildRequested records nothing.
+   */
+  lastRebuildOutcome: z.string().nullable().optional().default(null),
+  lastRebuildOutcomeAt: z.string().nullable().optional().default(null),
+  /** Operator-facing explanation; null for a rebuild that completed. */
+  lastRebuildMessage: z.string().nullable().optional().default(null),
 });
 export type DeltaSyncState = z.infer<typeof deltaSyncStateSchema>;
 

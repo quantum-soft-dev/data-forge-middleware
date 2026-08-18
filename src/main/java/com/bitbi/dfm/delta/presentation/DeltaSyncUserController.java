@@ -97,7 +97,9 @@ public class DeltaSyncUserController {
     @Operation(
             summary = "Get delta sync state",
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
-                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading. "
+                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
+                    + "and lastRebuildOutcome/At describing how the most recent finished forced rebuild ended "
+                    + "(lastRebuildMessage carries the diagnosis on the admin projection only). "
                     + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
@@ -112,7 +114,7 @@ public class DeltaSyncUserController {
         requireOwnedSite(siteId);
         boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state, snapshotInProgress)))
+                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.forOwner(state, snapshotInProgress)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

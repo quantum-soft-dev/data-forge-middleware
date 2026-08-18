@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.RebaselineCancellation;
+import com.bitbi.dfm.delta.domain.CheckpointRebuildOutcome;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.junit.jupiter.api.Test;
@@ -238,21 +239,24 @@ class DeltaSyncStateServiceTest {
     }
 
     @Test
-    void clearRebuildRequestedResetsFlag() {
+    void recordRebuildOutcomeResetsFlagAndStampsTheVerdict() {
         SiteSyncState state = SiteSyncState.initial(SITE);
         state.requestRebuild();
         when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
 
-        service.clearRebuildRequested(SITE);
+        service.recordRebuildOutcome(SITE, CheckpointRebuildOutcome.DEFERRED, "budget held");
 
         assertFalse(state.isRebuildRequested());
+        assertEquals(CheckpointRebuildOutcome.DEFERRED, state.getLastRebuildOutcome());
+        assertEquals("budget held", state.getLastRebuildMessage());
+        assertNotNull(state.getLastRebuildOutcomeAt());
         verify(repository).save(state);
     }
 
     @Test
-    void clearRebuildRequestedIsNoOpWhenRowAbsent() {
+    void recordRebuildOutcomeIsNoOpWhenRowAbsent() {
         when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
-        service.clearRebuildRequested(SITE);
+        service.recordRebuildOutcome(SITE, CheckpointRebuildOutcome.COMPLETED, null);
         verify(repository, never()).save(any());
     }
 

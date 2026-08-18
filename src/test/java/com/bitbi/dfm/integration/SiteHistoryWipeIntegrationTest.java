@@ -46,6 +46,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * End-to-end site history wipe (035 — issue #89): a fully populated site is emptied, its epoch
@@ -343,8 +344,12 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         long buildReturnedAt;
         try {
             // Reads generation 0, folds the pre-wipe history, then waits for the lock above at the
-            // pre-frame epoch check and is refused.
-            checkpointService.buildCheckpoint(SITE_ID);
+            // pre-frame epoch check and is refused. Since issue #186 the refusal is thrown rather
+            // than returned as an empty fold, so a forced rebuild can tell a discarded build from
+            // one that published something; nothing else about the ending moves, which is what the
+            // assertions below are for.
+            assertThatThrownBy(() -> checkpointService.buildCheckpoint(SITE_ID))
+                    .isInstanceOf(CheckpointService.BuildDiscardedException.class);
             buildReturnedAt = System.nanoTime();
             wipe.get(30, TimeUnit.SECONDS);
         } finally {
