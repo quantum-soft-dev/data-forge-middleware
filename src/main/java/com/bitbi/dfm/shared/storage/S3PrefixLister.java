@@ -8,16 +8,24 @@ import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Shared incremental {@code ListObjectsV2} walk (issue #122).
  *
  * <p>Walks pages one by one. On {@code S3Exception} or {@code SdkClientException} returns the
  * objects already read with {@code truncated=true} instead of throwing the walk away.</p>
+ *
+ * <p>Two forms over one walk (issue #199). {@link #listAll} materializes the prefix, which is what
+ * a caller needs when it must see the whole set before it can act on any of it — the wipe compares
+ * every key against one instant, {@link #requireCompleteKeys} needs all of them or none.
+ * {@link #forEachPage} hands the caller one page at a time, so a caller that only <em>filters</em>
+ * a prefix holds a page rather than a prefix; that is what bounds the orphan sweep, whose first
+ * deleting pass is by construction the largest listing this application ever takes.</p>
  */
 public final class S3PrefixLister {
 
@@ -35,14 +43,42 @@ public final class S3PrefixLister {
      * @return the pages read; {@link S3PrefixListing#truncated()} when the walk stopped early
      */
     public static S3PrefixListing listAll(S3Client client, String bucket, String prefix) {
+        List<S3ListedObject> objects = new ArrayList<>();
+        S3PrefixWalk walk = forEachPage(client, bucket, prefix, objects::addAll);
+        return walk.truncated() ? S3PrefixListing.truncated(objects) : S3PrefixListing.complete(objects);
+    }
+
+    /**
+     * The same walk, handed to {@code page} one page at a time (issue #199).
+     *
+     * <p>For a caller that only needs to <em>filter</em> a prefix: nothing here accumulates, so the
+     * peak is one page rather than one prefix. Truncation means what it means everywhere else —
+     * the pages already handed over stand, and {@link S3PrefixWalk#truncated()} says the walk
+     * stopped early, which a caller that deletes must read as "fewer objects this pass", never as
+     * "these are all of them".</p>
+     *
+     * <p>A failure raised by {@code page} itself is <b>not</b> caught: it is the caller's, and
+     * reporting it as a truncated listing would hide it behind a flag that means the opposite.</p>
+     *
+     * @param client the S3 client
+     * @param bucket bucket name
+     * @param prefix key prefix
+     * @param page   receives each page, in the order S3 returns them; never {@code null}, possibly
+     *               empty
+     * @return how many objects were handed over, and whether the walk stopped early
+     */
+    public static S3PrefixWalk forEachPage(S3Client client, String bucket, String prefix,
+                                           Consumer<List<S3ListedObject>> page) {
+        Iterable<ListObjectsV2Response> pages;
         try {
-            return collect(client.listObjectsV2Paginator(
-                    ListObjectsV2Request.builder().bucket(bucket).prefix(prefix).build()));
+            pages = client.listObjectsV2Paginator(
+                    ListObjectsV2Request.builder().bucket(bucket).prefix(prefix).build());
         } catch (S3Exception | SdkClientException e) {
             // Construction of the paginator itself failed — nothing was read.
             log.warn("Could not start listing objects under {}", prefix, e);
-            return S3PrefixListing.truncated(List.of());
+            return new S3PrefixWalk(0L, true);
         }
+        return forEachPage(pages, page);
     }
 
     /**
@@ -94,6 +130,19 @@ public final class S3PrefixLister {
         }
     }
 
+    /**
+     * What one page-by-page walk did (issue #199).
+     *
+     * <p>The page-by-page twin of {@link S3PrefixListing}: the objects went to the consumer, so all
+     * that is left to report is how many there were — which is what the truncation log line and the
+     * sweep's own accounting need — and whether the walk finished.</p>
+     *
+     * @param objectsRead objects handed to the consumer before the walk ended
+     * @param truncated   {@code true} when the walk stopped early
+     */
+    public record S3PrefixWalk(long objectsRead, boolean truncated) {
+    }
+
     /** The paginated walk of {@code prefix} did not finish. */
     public static final class IncompletePrefixException extends RuntimeException {
         public IncompletePrefixException(String prefix) {
@@ -109,17 +158,42 @@ public final class S3PrefixLister {
      */
     static S3PrefixListing collect(Iterable<ListObjectsV2Response> pages) {
         List<S3ListedObject> objects = new ArrayList<>();
-        try {
-            for (ListObjectsV2Response page : pages) {
-                for (S3Object object : page.contents()) {
-                    objects.add(new S3ListedObject(object.key(), object.lastModified()));
+        S3PrefixWalk walk = forEachPage(pages, objects::addAll);
+        return walk.truncated() ? S3PrefixListing.truncated(objects) : S3PrefixListing.complete(objects);
+    }
+
+    /**
+     * Drain an already-opened page iterable, handing each page over as it arrives.
+     *
+     * <p>Only the fetch is inside the catch. The consumer runs outside it on purpose: this walk's
+     * consumers talk to S3 themselves, so catching their {@code S3Exception} here would report a
+     * caller's failure as a listing that stopped early.</p>
+     *
+     * @param pages S3 list pages
+     * @param page  receives each page
+     * @return how many objects were handed over, and whether the walk stopped early
+     */
+    static S3PrefixWalk forEachPage(Iterable<ListObjectsV2Response> pages,
+                                    Consumer<List<S3ListedObject>> page) {
+        long read = 0L;
+        Iterator<ListObjectsV2Response> iterator = pages.iterator();
+        while (true) {
+            ListObjectsV2Response response;
+            try {
+                if (!iterator.hasNext()) {
+                    return new S3PrefixWalk(read, false);
                 }
+                response = iterator.next();
+            } catch (S3Exception | SdkClientException e) {
+                log.warn("Prefix listing stopped after {} object(s); returning a truncated result",
+                        read, e);
+                return new S3PrefixWalk(read, true);
             }
-            return S3PrefixListing.complete(objects);
-        } catch (S3Exception | SdkClientException e) {
-            log.warn("Prefix listing stopped after {} object(s); returning a truncated result",
-                    objects.size(), e);
-            return S3PrefixListing.truncated(objects);
+            List<S3ListedObject> objects = response.contents().stream()
+                    .map(object -> new S3ListedObject(object.key(), object.lastModified()))
+                    .toList();
+            read += objects.size();
+            page.accept(objects);
         }
     }
 
