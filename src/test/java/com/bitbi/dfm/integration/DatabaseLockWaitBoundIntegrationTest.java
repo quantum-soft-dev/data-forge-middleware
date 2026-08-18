@@ -111,9 +111,7 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
                         statement.execute("SELECT pg_advisory_xact_lock(" + PROBE_LOCK_KEY + ")");
                         return null;
                     })));
-            assertThat(statementIsOpen.await(2, TimeUnit.MINUTES))
-                    .as("the probe never got a pooled connection to block on")
-                    .isTrue();
+            requireStatementOpen(statementIsOpen, blocked);
 
             Throwable failure = awaitOutcome(blocked, bound, blockedStatement);
             SQLException reported = lockTimeout(failure);
@@ -152,6 +150,26 @@ class DatabaseLockWaitBoundIntegrationTest extends BaseIntegrationTest {
         }
         fail("the probe never acquired its own lock, so nothing was blocked and this test proves "
                 + "nothing about the bound (#197)");
+    }
+
+    /**
+     * Waits until the probe holds a statement to block on, and fails with the probe's own cause
+     * when it never gets one. The task returns its failure rather than throwing it, so a pool that
+     * could not hand out a connection — four of them here, one pinned by the holder for the whole
+     * test — is reported as itself instead of as an unbounded lock wait two minutes later.
+     */
+    private static void requireStatementOpen(CountDownLatch statementIsOpen,
+                                             Future<Throwable> blocked) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
+        while (!statementIsOpen.await(1, TimeUnit.SECONDS)) {
+            if (blocked.isDone()) {
+                fail("the probe never reached a statement to block on: " + blocked.get());
+            }
+            if (System.nanoTime() > deadline) {
+                fail("the probe never got a pooled connection to block on, and is still waiting "
+                        + "for one — nothing here says anything about the bound (#197)");
+            }
+        }
     }
 
     /**

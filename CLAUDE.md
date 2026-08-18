@@ -500,9 +500,17 @@ pages/{feature}/            # Route pages
   waits 30 s for one, longer than the budget for the abort, so a momentarily busy pool would have
   been reported as “the profile does not bound a lock wait”. Two smaller ones: the English message
   assertion was dropped for the locale-independent 55P03 it duplicated, and a holder that failed
-  before taking the lock no longer has its exception swallowed by the `Future`. Test-only — no
-  production code, REST, gRPC, DTO, migration, production configuration-key, metric, S3-key or
-  frontend change.
+  before taking the lock no longer has its exception swallowed by the `Future`. **Round 2** closed
+  the same hole one spelling wider and one symmetry short. The last-wins rule only recognised
+  `SET` and `RESET lock_timeout`, so `RESET ALL` — which never names the GUC — and
+  `set_config('lock_timeout', '0', false)` still read as the assignment before them; both are
+  matched now (and `set_config` is read as a bound when it sets one), pinned by mutation. The
+  probe's own failure was swallowed where the holder's had just been fixed: the task returns its
+  throwable rather than throwing it, so a pool that could not hand out a connection — four of
+  them, one pinned by the holder — was reported two minutes later as an unbounded lock wait; it is
+  now reported as itself. And the floor message said “at or below” for an assertion that accepts
+  the floor exactly. Test-only — no production code, REST, gRPC, DTO, migration, production
+  configuration-key, metric, S3-key or frontend change.
 - async-executor-guard: Every `@Async` in `src/main/java` names the executor it runs on, and a
   newcomer that does not fails the build (issue #195, raised reviewing #194/#165).
   `AsyncConfiguration`'s Javadoc had stated the fact — every `@Async` site is an

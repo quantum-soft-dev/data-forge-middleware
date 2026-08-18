@@ -47,16 +47,21 @@ public final class LockWaitBound {
     public static final Duration MAX = Duration.ofSeconds(60);
 
     /**
-     * Every way an init statement can name {@code lock_timeout}: an assignment to a number
-     * (PostgreSQL accepts a bare one as milliseconds, or one with a unit, quoted or not), an
-     * assignment to {@code DEFAULT}, or a {@code RESET}. The last two mean "back to the server
-     * default", which for this GUC is the 0 this guard exists to replace — they are matched rather
-     * than ignored so a trailing one cannot pass as the assignment before it.
+     * Every way an init statement can leave a session's {@code lock_timeout} somewhere other than
+     * where the statement before it put it: an assignment to a number (PostgreSQL accepts a bare
+     * one as milliseconds, or one with a unit, quoted or not), an assignment to {@code DEFAULT},
+     * a {@code RESET} of this GUC or of everything, and the function form. The undoing shapes are
+     * matched rather than ignored precisely so a trailing one cannot pass as the assignment before
+     * it — for this GUC "back to the server default" is the 0 this guard exists to replace.
      */
     private static final Pattern LOCK_TIMEOUT = Pattern.compile(
-            "(?i)(?:(?<reset>\\breset\\s+lock_timeout\\b)"
+            "(?i)(?:(?<reset>\\breset\\s+(?:lock_timeout|all)\\b)"
+                    + "|\\bset_config\\s*\\(\\s*'lock_timeout'\\s*,\\s*'(?<config>[^']*)'"
                     + "|\\block_timeout\\b\\s*(?:=|\\bto\\b)\\s*'?\\s*"
                     + "(?:(?<default>default)|(?<amount>\\d+)\\s*(?<unit>[a-z]*))\\s*'?)");
+
+    /** The value {@code set_config} was handed, once the quotes are off. */
+    private static final Pattern CONFIG_VALUE = Pattern.compile("(?i)^\\s*(\\d+)\\s*([a-z]*)\\s*$");
 
     /** Time units PostgreSQL accepts for a GUC; an empty unit means milliseconds. */
     private static final Map<String, Duration> UNITS = Map.of(
@@ -105,14 +110,38 @@ public final class LockWaitBound {
         if (matcher.group("reset") != null || matcher.group("default") != null) {
             return Duration.ZERO;
         }
-        String unit = matcher.group("unit").toLowerCase(Locale.ROOT);
+        String config = matcher.group("config");
+        if (config != null) {
+            return configuredBound(config, connectionInitSql);
+        }
+        return scaled(matcher.group("amount"), matcher.group("unit"), connectionInitSql);
+    }
+
+    /**
+     * {@code set_config('lock_timeout', ..., false)} is the function spelling of {@code SET}, and
+     * an empty string is its spelling of {@code RESET}.
+     */
+    private static Duration configuredBound(String value, String connectionInitSql) {
+        if (value.isBlank() || "default".equalsIgnoreCase(value.trim())) {
+            return Duration.ZERO;
+        }
+        Matcher amount = CONFIG_VALUE.matcher(value);
+        assertTrue(amount.matches(),
+                "connection-init-sql hands set_config the lock_timeout value '" + value + "', which "
+                        + "this reader cannot turn into a duration — the bound it really sets is not "
+                        + "the one the range check below would judge (#197): " + connectionInitSql);
+        return scaled(amount.group(1), amount.group(2), connectionInitSql);
+    }
+
+    private static Duration scaled(String amount, String rawUnit, String connectionInitSql) {
+        String unit = rawUnit.toLowerCase(Locale.ROOT);
         Duration scale = UNITS.get(unit);
         assertNotNull(scale,
                 "connection-init-sql gives lock_timeout the unit '" + unit + "', which PostgreSQL "
                         + "does not use — the bound it really sets is not the one this reads, and "
                         + "the range check below would pass on a number that means something else "
                         + "(#197): " + connectionInitSql);
-        return scale.multipliedBy(Long.parseLong(matcher.group("amount")));
+        return scale.multipliedBy(Long.parseLong(amount));
     }
 
     /**
@@ -127,8 +156,8 @@ public final class LockWaitBound {
                 what + " sets lock_timeout to 0, which is PostgreSQL for \"wait for ever\" — the "
                         + "default this guard exists to replace (#197)");
         assertTrue(bound.compareTo(MIN) >= 0,
-                what + " bounds a lock wait at " + bound + ", at or below the " + MIN
-                        + " the suite legitimately spends waiting on a lock — "
+                what + " bounds a lock wait at " + bound + ", below the " + MIN
+                        + " floor this suite's own deliberate lock waits need — "
                         + "SiteHistoryWipeIntegrationTest holds the site_sync_state row for 1.5 s "
                         + "while a checkpoint build blocks on it on purpose (#197)");
         assertTrue(bound.compareTo(MAX) <= 0,

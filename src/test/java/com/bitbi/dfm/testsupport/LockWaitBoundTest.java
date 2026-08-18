@@ -41,6 +41,34 @@ class LockWaitBoundTest {
     }
 
     @Test
+    @DisplayName("the other two ways of undoing the bound are read as undoing it")
+    void shouldReadTheUndoingSpellingsThatDoNotNameTheGucDirectly() {
+        // RESET ALL never names lock_timeout, and set_config is the function spelling of SET —
+        // both leave the session at the server default of 0 while a naive read of the statement
+        // before them says 10 s.
+        assertThat(LockWaitBound.parseDeclared("SET lock_timeout = '10s'; RESET ALL"))
+                .isEqualTo(Duration.ZERO);
+        assertThat(LockWaitBound.parseDeclared(
+                "SET lock_timeout = '10s'; SELECT set_config('lock_timeout', '0', false)"))
+                .isEqualTo(Duration.ZERO);
+        assertThat(LockWaitBound.parseDeclared(
+                "SELECT set_config('lock_timeout', '', false)"))
+                .isEqualTo(Duration.ZERO);
+    }
+
+    @Test
+    @DisplayName("set_config is read as the bound it sets, not only as a way of clearing one")
+    void shouldReadTheFunctionSpellingOfSet() {
+        assertThat(LockWaitBound.parseDeclared(
+                "SELECT set_config('lock_timeout', '10s', false)"))
+                .isEqualTo(Duration.ofSeconds(10));
+        assertThatThrownBy(() -> LockWaitBound.parseDeclared(
+                "SELECT set_config('lock_timeout', 'ten seconds', false)"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("ten seconds");
+    }
+
+    @Test
     @DisplayName("a unit PostgreSQL does not use fails instead of being read as milliseconds")
     void shouldRefuseAnUnknownUnit() {
         assertThatThrownBy(() -> LockWaitBound.parseDeclared("SET lock_timeout = '30000xyz'"))
@@ -56,7 +84,7 @@ class LockWaitBoundTest {
         assertThat(bound).isEqualTo(Duration.ofMillis(30));
         assertThatThrownBy(() -> LockWaitBound.assertBoundsALockWait("a probe", bound))
                 .isInstanceOf(AssertionError.class)
-                .hasMessageContaining("at or below");
+                .hasMessageContaining("below the PT5S");
     }
 
     @Test
