@@ -520,6 +520,26 @@ pages/{feature}/            # Route pages
   through its implementors and attributed to the interface's own file — the honest blind spot is a
   carrier the classpath scan cannot reach at all (an abstract class with no concrete subclass), which
   is what the drift check is now pinned against.
+  **Round 2** was five more findings, all about the guard firing on *correct* code rather than
+  missing anything, and one about what it costs. The stripper keeps literals verbatim (it must — the
+  qualifier is one), so an `@Async` named in a log line or an exception message counted as a site;
+  the kept literals are now **masked**, and a match beginning inside one is skipped. A `@Qualifier`
+  on an executor `@Bean` is now a name an `@Async` may use, because that is what
+  `BeanFactoryAnnotationUtils` resolves against. Executor beans are de-duplicated by method
+  signature before the name-clash check, so a `@Bean` inherited from a base `@Configuration` — which
+  `getAllDeclaredMethods` reports once per subclass — is not read as two beans clashing over one
+  name, while the set compared with the connection audit keeps one entry per scanned type because
+  that is what the audit itself produces. The assertion messages are suppliers and the classpath scan
+  is memoized: the green path ran five ASM scans plus a `Class.forName` over every production class,
+  on a gate that fires on every commit. And the case the class's own Javadoc names as the reason the
+  annotation scan exists would have **failed** it: a meta-annotated `@Async` has its qualifier
+  written in the annotation's own file, which the classpath scan skips because an annotation type is
+  an interface, while the methods carrying the meta-annotation have no qualifier written on them at
+  all — two files, one count each, so the site-by-site comparison could not have matched. Those sites
+  are now excluded from the *comparison* and still required to name a declared executor by both
+  assertions, verified with a probe annotation in each direction. The exclusion is stated in the
+  failure message, so the two shapes only one scan can see by construction are visible where someone
+  would otherwise be tempted to silence the check.
 - prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
   uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
   reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a
