@@ -260,6 +260,26 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
+    void keepsTheFlagWhenTheSubmitWasRefusedBecauseTheProcessIsShuttingDown() {
+        // Raised in review, round 3. ThreadPoolTaskExecutor refuses once the context starts
+        // closing, and settling that as a finished FAILED attempt loses a request that
+        // resumePendingRebuilds() would have re-driven in the next pod — the same #162 rule every
+        // other ending here already follows. The signal is read rather than the exception's text,
+        // because TaskRejectedException says the same thing for a full queue.
+        Executor rejecting = task -> {
+            throw new RejectedExecutionException("executor not accepting further tasks");
+        };
+        DeltaCheckpointRebuildService rejectingService = new DeltaCheckpointRebuildService(
+                syncStateService, checkpointService, shutdownSignal, rejecting);
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        shuttingDown = true;
+
+        assertThrows(RejectedExecutionException.class, () -> rejectingService.requestRebuild(SITE));
+
+        verify(syncStateService, never()).recordRebuildOutcome(any(), any(), any());
+    }
+
+    @Test
     void resumePendingRebuildsRedrivesFlaggedSites() {
         // Startup recovery: a restart between flag-commit and task execution orphans the flag;
         // flagged sites are re-driven (and their flags settled by the run).

@@ -28,8 +28,10 @@ ALTER TABLE site_sync_state
 
 COMMENT ON COLUMN site_sync_state.last_rebuild_outcome IS
     'How the most recent *finished* forced checkpoint rebuild ended: COMPLETED, FAILED, '
-    'FRAME_UNAVAILABLE (S3 would not say whether the seed frame is there — #157) or DEFERRED '
-    '(another build held the process fold budget — #178). NULL when the site has never had one. '
+    'FRAME_UNAVAILABLE (S3 would not say whether the seed frame is there — #157), DEFERRED '
+    '(another build held the process fold budget — #178), DISCARDED (a wipe or a re-baseline '
+    'replaced the site''s baseline under the build — #136/#142) or NOTHING_TO_REBUILD (the site '
+    'has no frame and no segments). NULL when the site has never had one. '
     'A rebuild cut short by the process shutting down writes nothing and keeps rebuild_requested, '
     'because it has not finished — the next process re-drives it (#162, issue #186).';
 COMMENT ON COLUMN site_sync_state.last_rebuild_outcome_at IS

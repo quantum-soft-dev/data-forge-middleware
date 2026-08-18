@@ -153,10 +153,17 @@ public class CheckpointScheduler {
                 // The site's baseline was replaced under the build (#136/#142) — a wipe or a
                 // re-baseline, both routine. It used to reach here as a silent empty fold, and it
                 // is thrown since #186 only so the *forced* path can tell it from a build that
-                // published something; nothing about this tick changes but the line it logs, which
-                // must not read as a failure. Retention is skipped for the same reason the two
-                // branches above skip it: this build moved no pointer, and after a wipe the pointer
-                // is zero anyway. The latch is cleared as above — the build did hold the budget.
+                // published something; the line it logs must not read as a failure.
+                //
+                // One thing *does* change and is deliberate (raised in review): retention no longer
+                // runs for this site in this tick, where the empty fold used to fall through to it.
+                // That matches the two branches above — this build moved no pointer, so there is
+                // nothing new to prune — and today it is a no-op either way, since both triggers
+                // imply a wipe or a re-baseline that has just zeroed last_checkpoint_seq. Stated
+                // rather than left implicit, because a future EpochChangedException raised while
+                // the pointer still stands would otherwise skip a prune that had work to do; the
+                // next tick does it regardless. The latch is cleared as above — the build did hold
+                // the budget.
                 foldBudgetIsContended = false;
                 log.info("Skipping site {} this tick: {}", siteId, e.getMessage());
             } catch (RuntimeException e) {

@@ -284,7 +284,8 @@ public class DeltaSyncAdminController {
             description = "Sets the persistent rebuild_requested flag (shown as 'Rebuild queued' in the UI) and runs "
                     + "the checkpoint build asynchronously outside the regular schedule. When the attempt finishes "
                     + "the flag is released and lastRebuildOutcome on the sync-state projection says how it ended "
-                    + "(COMPLETED, FAILED, FRAME_UNAVAILABLE or DEFERRED); a rebuild cut short by the process "
+                    + "(COMPLETED, FAILED, FRAME_UNAVAILABLE, DEFERRED, DISCARDED or NOTHING_TO_REBUILD); "
+                    + "a rebuild cut short by the process "
                     + "shutting down keeps the flag instead and is re-driven at the next startup."
     )
     @ApiResponses(value = {

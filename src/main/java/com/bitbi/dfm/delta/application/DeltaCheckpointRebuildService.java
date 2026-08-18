@@ -104,11 +104,7 @@ public class DeltaCheckpointRebuildService {
         try {
             rebuildExecutor.execute(() -> runRebuild(siteId));
         } catch (RejectedExecutionException e) {
-            // The flag committed before the submit; without this it would stick forever. The
-            // caller also gets the exception, but the verdict is what the site itself carries a
-            // minute later, and it is the same surface the startup-recovery rejection writes to.
-            syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
-                    queueRefusedMessage(e));
+            settleRefusedSubmit(siteId, e);
             throw e;
         }
         log.info("Checkpoint rebuild queued: siteId={}", siteId);
@@ -126,9 +122,8 @@ public class DeltaCheckpointRebuildService {
             try {
                 rebuildExecutor.execute(() -> runRebuild(siteId));
             } catch (RejectedExecutionException e) {
-                log.warn("Rebuild queue full during startup recovery — releasing flag: siteId={}", siteId, e);
-                syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
-                        queueRefusedMessage(e));
+                log.warn("Rebuild refused during startup recovery: siteId={}", siteId, e);
+                settleRefusedSubmit(siteId, e);
             }
         }
     }
@@ -267,13 +262,37 @@ public class DeltaCheckpointRebuildService {
     }
 
     /**
+     * Settle a rebuild {@code deltaRebuildExecutor} would not accept.
+     *
+     * <p>The flag committed before the submit, so leaving it alone would strand it — <b>unless the
+     * refusal is the process going away</b>, which is the one case where leaving it is the whole
+     * point (issue #162, raised in review): {@code ThreadPoolTaskExecutor} refuses once the context
+     * starts closing, and a request that arrives during the termination grace period should be
+     * re-driven by {@link #resumePendingRebuilds} in the next pod rather than settled as a failure
+     * that never ran. The signal is read rather than the exception's text, because
+     * {@code TaskRejectedException} says the same thing for a full queue and for a shutdown.</p>
+     *
+     * @param siteId  the site whose rebuild was refused
+     * @param refusal the executor's own refusal
+     */
+    private void settleRefusedSubmit(UUID siteId, RejectedExecutionException refusal) {
+        if (shutdownSignal.isShuttingDown()) {
+            logShutdown(siteId);
+            return;
+        }
+        syncStateService.recordRebuildOutcome(siteId, CheckpointRebuildOutcome.FAILED,
+                queueRefusedMessage(refusal));
+    }
+
+    /**
      * Verdict text for a rebuild {@code deltaRebuildExecutor} would not accept.
      *
      * <p>It quotes the refusal rather than asserting a cause, for the reason #171 records:
      * {@code ThreadPoolTaskExecutor} throws {@link RejectedExecutionException} both for a full
      * queue and for "executor shutting down", and naming the wrong one sends the operator after a
-     * capacity problem during a routine rollout. Either way the request never started and the
-     * remedy is the same.</p>
+     * capacity problem during a routine rollout. The shutdown case does not reach here at all —
+     * {@link #settleRefusedSubmit} keeps the flag for it — so what is left is a genuinely full
+     * queue, and the remedy is to ask again.</p>
      *
      * @param refusal the executor's own refusal
      * @return the verdict text

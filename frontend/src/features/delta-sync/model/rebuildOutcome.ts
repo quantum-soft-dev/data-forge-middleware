@@ -49,10 +49,16 @@ export function describeRebuildOutcome(
  * Has a checkpoint been built since the verdict was recorded?
  *
  * Only a forced rebuild ever writes a verdict, so a FAILED one would otherwise paint a critical
- * chip for ever — surviving every later nightly build that succeeded (raised in review). A
+ * chip for ever, surviving every later nightly build that succeeded (raised in review). A
  * checkpoint recorded *after* the verdict is exact evidence that whatever the rebuild ran into has
- * since cleared, so the chip keeps its label and its time and stops shouting. Where nothing has
- * succeeded since, the chip stays as loud as it was, which is honest.
+ * since cleared, so the chip keeps its label, its time and its message and stops shouting.
+ *
+ * This is a **one-way** signal, and deliberately so: `lastCheckpointAt` moves only when a build
+ * advances the pointer, so an idle site whose nightly rematerialize quietly repaired everything
+ * keeps its loud chip. That is not a hole to plug with a staleness threshold — the chip's own
+ * message says to request the rebuild again, and doing so writes a fresh verdict, which is the
+ * clearing mechanism. This only spares the operator the round trip when the answer is already
+ * in the payload.
  *
  * @param state the sync-state projection
  */

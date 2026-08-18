@@ -1776,10 +1776,16 @@ The two middle endings used to reach `DeltaCheckpointRebuildService` as an ordin
 were reported as `COMPLETED` — a green "Rebuilt" chip over a rebuild that published nothing.
 `CheckpointService` throws for both now (`BuildDiscardedException`, `NothingToRebuildException`),
 which is the rule #157 and #162 established: a caller cannot tell an empty fold from a finished
-build. `CheckpointScheduler` logs the discard at INFO and skips retention for that site, exactly as
-it behaved when the ending was silent; `NothingToRebuildException` is thrown **only on the forced
-pass**, because for the nightly tick that state is the routine quiet visit to a site named by an
-unmaterialized checkpoint row.
+build. `NothingToRebuildException` is thrown **only on the forced pass**, because for the nightly
+tick that state is the routine quiet visit to a site named by an unmaterialized checkpoint row.
+
+`CheckpointScheduler` logs the discard at INFO and **skips retention for that site in that tick**,
+where the silent empty fold used to fall through to it. That is deliberate and matches the read
+denial and the deferral beside it — the build moved no pointer, so there is nothing new to prune —
+and today it changes nothing either way, since both triggers imply a wipe or a re-baseline that has
+just zeroed `last_checkpoint_seq`. It is worth stating rather than leaving implicit: a future source
+of `EpochChangedException` that left the pointer standing would skip a prune that had work to do,
+until the next tick.
 
 Four properties are worth keeping in mind when reading the pair:
 
@@ -1801,8 +1807,11 @@ Four properties are worth keeping in mind when reading the pair:
   so a `FAILED` verdict would otherwise paint a critical chip for ever, outliving every nightly
   build that has since succeeded. Where `lastCheckpointAt` is later than `lastRebuildOutcomeAt` the
   UI keeps the label, the time and the message and drops the colour — a checkpoint built since is
-  exact evidence that the condition cleared. Where nothing has succeeded since, the chip stays as
-  loud as it was.
+  exact evidence that the condition cleared. It is a **one-way** signal: `lastCheckpointAt` moves
+  only when a build advances the pointer, so an idle site whose nightly rematerialize quietly
+  repaired everything keeps its loud chip. What clears a verdict is another rebuild — which is what
+  the chip's own message asks for — and this only spares the operator that round trip when the
+  answer is already in the payload.
 
 The message is bounded at 1,000 characters by the writer — a value wider than the column would
 throw at flush and lose the verdict entirely, which is where this ticket started. It is shown

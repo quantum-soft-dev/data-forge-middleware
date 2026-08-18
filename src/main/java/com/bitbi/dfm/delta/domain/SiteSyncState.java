@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Per-site delta-ingestion watermark (Delta Client v2 — feature 022).
@@ -40,6 +41,13 @@ public class SiteSyncState {
      * #186 found them, so {@link #recordRebuildOutcome} truncates instead.
      */
     public static final int MAX_REBUILD_MESSAGE_LENGTH = 1000;
+
+    /**
+     * Every control character, {@code U+0000} included. Replaced with a space rather than
+     * dropped: newlines and tabs are what a multi-line JDBC message is made of, and the text
+     * is read by a person. See {@link #truncateRebuildMessage}.
+     */
+    private static final Pattern CONTROL_CHARACTERS = Pattern.compile("\\p{Cntrl}");
 
     @Id
     @Column(name = "site_id", updatable = false, nullable = false)
@@ -323,11 +331,38 @@ public class SiteSyncState {
         this.lastRebuildMessage = null;
     }
 
+    /**
+     * Make a failure's own text safe to store, which is more than making it short (raised in
+     * review). Two things in it can throw at flush — the exact failure this bounding exists to
+     * prevent, and worse than losing the verdict, since {@code recordRebuildOutcome} is called from
+     * a {@code finally} and the throw would leave {@code rebuild_requested} standing with no task
+     * behind it:
+     *
+     * <ul>
+     *   <li>PostgreSQL rejects {@code U+0000} in a text value outright, and a JDBC or S3 error can
+     *       quote a row that contains one;</li>
+     *   <li>cutting at a {@code char} boundary can split a surrogate pair when the message embeds a
+     *       supplementary character (an emoji, a CJK extension), and the driver's UTF-8 encoder
+     *       rejects the unpaired half.</li>
+     * </ul>
+     *
+     * <p>So control characters are replaced before the cut, and the cut itself steps back off a
+     * high surrogate. Tabs and newlines survive as spaces rather than being dropped, because the
+     * text is read by a person.</p>
+     */
     private static String truncateRebuildMessage(String message) {
-        if (message == null || message.length() <= MAX_REBUILD_MESSAGE_LENGTH) {
-            return message;
+        if (message == null) {
+            return null;
         }
-        return message.substring(0, MAX_REBUILD_MESSAGE_LENGTH - 1) + "…";
+        String cleaned = CONTROL_CHARACTERS.matcher(message).replaceAll(" ");
+        if (cleaned.length() <= MAX_REBUILD_MESSAGE_LENGTH) {
+            return cleaned;
+        }
+        int cut = MAX_REBUILD_MESSAGE_LENGTH - 1;
+        if (Character.isHighSurrogate(cleaned.charAt(cut - 1))) {
+            cut--;
+        }
+        return cleaned.substring(0, cut) + "…";
     }
 
     /**

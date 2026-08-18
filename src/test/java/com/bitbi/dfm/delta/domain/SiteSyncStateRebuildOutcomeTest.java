@@ -90,6 +90,37 @@ class SiteSyncStateRebuildOutcomeTest {
     }
 
     @Test
+    @DisplayName("the cut never splits a surrogate pair")
+    void shouldNotSplitASurrogatePair() {
+        // Raised in review: bounding the length is not the same as making the value storable. An
+        // over-long message ending on the wrong char would leave an unpaired surrogate, which the
+        // driver's UTF-8 encoder rejects — a throw from the finally that both loses the verdict and
+        // strands rebuild_requested, which is the failure this bounding exists to prevent.
+        SiteSyncState state = requested();
+        String withEmoji = "x".repeat(SiteSyncState.MAX_REBUILD_MESSAGE_LENGTH - 2) + "\uD83D\uDCA5"
+                + "y".repeat(50);
+
+        state.recordRebuildOutcome(CheckpointRebuildOutcome.FAILED, withEmoji);
+
+        String stored = state.getLastRebuildMessage();
+        assertThat(stored.length()).isLessThanOrEqualTo(SiteSyncState.MAX_REBUILD_MESSAGE_LENGTH);
+        assertThat(Character.isHighSurrogate(stored.charAt(stored.length() - 2))).isFalse();
+        assertThat(stored.chars().anyMatch(c -> Character.isSurrogate((char) c))).isFalse();
+    }
+
+    @Test
+    @DisplayName("a NUL and other control characters never reach the column")
+    void shouldStripControlCharacters() {
+        // PostgreSQL rejects U+0000 in a text value outright, and a JDBC error can quote a row that
+        // contains one. Replaced rather than dropped, since a multi-line message is still readable.
+        SiteSyncState state = requested();
+
+        state.recordRebuildOutcome(CheckpointRebuildOutcome.FAILED, "bad\u0000value\nsecond line");
+
+        assertThat(state.getLastRebuildMessage()).isEqualTo("bad value second line");
+    }
+
+    @Test
     @DisplayName("a wipe drops the verdict together with the request flag")
     void shouldDropTheVerdictOnWipe() {
         // resetForWipe already puts the row back to what a brand-new site has, request flag

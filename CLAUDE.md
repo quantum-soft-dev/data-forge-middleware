@@ -544,6 +544,26 @@ pages/{feature}/            # Route pages
   to paint a **permanent** critical chip that outlived every nightly build that had since succeeded
   — `lastCheckpointAt` later than `lastRebuildOutcomeAt` is exact evidence that the condition
   cleared, so the chip keeps its label, its time and its message and drops the colour.
+  **Round 3** hardened the write and closed the exception the taxonomy had left open. The
+  truncation bounded length but not **content**, which is the same failure it exists to prevent and
+  worse: `recordRebuildOutcome` is called from a `finally`, so a value PostgreSQL refuses would lose
+  the verdict *and* strand `rebuild_requested` with no task behind it — a `U+0000` quoted out of a
+  row by a JDBC error is rejected outright, and a cut at a `char` boundary can leave an unpaired
+  surrogate the driver's UTF-8 encoder rejects; control characters are replaced with spaces and the
+  cut steps back off a high surrogate. The queue-refusal path is now **shutdown-aware**: it settled
+  a `TaskRejectedException` as a terminal `FAILED` even when the refusal *was* the pod closing,
+  losing exactly the request `resumePendingRebuilds()` exists to re-drive — the same #162 rule every
+  other ending here follows, and it reads `ApplicationShutdownSignal` rather than the exception's
+  text because the two cases say the same thing (this closed **#204**, filed in round 1 to defer
+  it). Three smaller ones: the value list in the migration's `COMMENT ON COLUMN`, both `@Operation`
+  descriptions and the frontend schema doc still named four of the six outcomes; the scheduler's new
+  catch **does** change one thing the guide claimed it did not — retention no longer runs for a
+  discarded site in that tick, which matches the read-denial and deferral branches and is a no-op
+  today only because both triggers imply a reset that just zeroed the pointer, now said out loud and
+  pinned by a `CheckpointSchedulerTest` case; and the mute is documented as the **one-way** signal
+  it is — `lastCheckpointAt` moves only when a build advances the pointer, so an idle site whose
+  nightly rematerialize repaired everything keeps its loud chip, and what clears a verdict is
+  another rebuild, which is what the chip already asks for.
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
   references are reclaimed, by one mechanism for both prefixes (issue #158, which folded **#160** —
   the same defect in the second prefix, and the hard part, proving an object is dead without a row

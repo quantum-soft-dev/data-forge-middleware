@@ -21,7 +21,8 @@ export const deltaSyncStateSchema = z.object({
   snapshotInProgress: z.boolean().optional().default(false),
   /**
    * How the last *finished* forced checkpoint rebuild ended (#186): COMPLETED, FAILED,
-   * FRAME_UNAVAILABLE or DEFERRED. Deliberately a plain string rather than a z.enum, for the same
+   * FRAME_UNAVAILABLE, DEFERRED, DISCARDED or NOTHING_TO_REBUILD. Deliberately a plain string
+   * rather than a z.enum, for the same
    * reason `deltaSegmentSchema.mode` is (review r3): this object drives the whole Delta Sync tab,
    * and a value added on the server must degrade to an unrecognised chip rather than failing the
    * parse and blanking the tab. Null while no rebuild has finished — and also while one is queued
