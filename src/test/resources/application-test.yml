@@ -10,7 +10,26 @@ delta:
     sweep-ms: 3600000
   batch-parquet:
     sweep-ms: 3600000
+    # See delta.checkpoint.temp-dir below — the two keys are declared for one reason and are
+    # deliberately separate directories.
+    temp-dir: ${dfm.test.parquet-scratch-root:build/test-scratch/parquet}/batch-parquet
   checkpoint:
+    # Undeclared, this key and its batch-parquet twin fall back to ${java.io.tmpdir}, so every
+    # cached Spring context boots a ParquetScratchOrphanSweeper over the machine-wide temp
+    # directory — and that sweeper deletes any regular file named checkpoint-* / batch-parquet-*
+    # older than four hours, whoever wrote it. The suite was both the victim (#168: a file it did
+    # not own vanished between two listings) and the perpetrator (#187: a run deleted another
+    # worktree's scratch, and wrote production-shaped scratch into the host's /tmp).
+    #
+    # dfm.test.parquet-scratch-root is the absolute build directory, supplied by every Gradle Test
+    # task; the relative default keeps an IDE run that does not set it inside the build tree too.
+    # Separate subdirectories per writer, as CheckpointParquetIntegrationTest already does for its
+    # own context, so a completed-batch drain cannot leave a file where a checkpoint assertion
+    # looks. ParquetScratchTestProfileTest holds this file (declared, inside the run's tree, two
+    # distinct directories) on the fast gate; ParquetScratchSweepIsolationIntegrationTest holds
+    # the wired context, which is the only place an OS environment override of these same keys
+    # (DELTA_CHECKPOINT_TEMP_DIR outranks every application*.yml) is visible.
+    temp-dir: ${dfm.test.parquet-scratch-root:build/test-scratch/parquet}/checkpoint
     # 600 s in production (issue #178). Two checkpoint builds never overlap in a suite that
     # drives them one call at a time, so this only decides how a bug shows up: at the shipped
     # value a test that did contend would hang the run for ten minutes before failing, where

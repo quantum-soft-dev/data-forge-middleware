@@ -453,6 +453,61 @@ pages/{feature}/            # Route pages
 - Migrations current at **V53**; next migration is **V54** (do not reuse numbers)
 
 ## Recent Changes
+- test-profile-scratch-directory: The `test` profile names both Parquet scratch directories, so no
+  context taking the profile's defaults writes or deletes in the machine-wide temp directory
+  (issue #187, the half #168 named and deliberately left open). The exception is deliberate and is
+  #168's own: `CheckpointParquetIntegrationTest` overrides both keys to per-class directories it
+  creates under `java.io.tmpdir` — named `dfm-it-scratch-*` precisely so no sweeper's prefix
+  matches them — and its decoy file, planted there for one assertion, is removed in a `finally`. Undeclared, `delta.checkpoint.temp-dir` and
+  `delta.batch-parquet.temp-dir` fall back to `${java.io.tmpdir}`, and
+  `ParquetScratchOrphanSweeper`'s `@Scheduled` carries `initialDelayString = "0"` — so **every**
+  cached Spring context swept the host's temp directory once at refresh (#167 slowed the cadence to
+  an hour; it does not remove the refresh pass) and deleted any regular file named `checkpoint-*` or
+  `batch-parquet-*` older than four hours, whoever wrote it. That is what #168 saw from the other
+  side: its leak assertion lost a file it did not own, deleted by another JVM. The suite was the
+  perpetrator as well as the victim, and the population is not hypothetical — two worktrees running
+  `./gradlew integrationTest` at once is the ordinary shape of `/github-issue-runner`.
+  **Option 1 of the ticket, not option 2**: making the sweep inert under `test`
+  (`scratch-orphan-age-seconds` far in the future) is one line and would stop the deletions, but it
+  leaves the suite writing production-shaped scratch into `/tmp` and removes the only place the
+  scheduled sweeper runs against a real directory at all — `ParquetScratchOrphanSweeperTest` drives
+  the object over `@TempDir`s, never the wired bean over the wired directories. Both keys now read
+  `${dfm.test.parquet-scratch-root:build/test-scratch/parquet}/{checkpoint,batch-parquet}`, and the
+  root is supplied **absolutely** by `tasks.withType<Test>` in `build.gradle.kts`
+  (`layout.buildDirectory`), so it is this build's directory whatever working directory the JVM is
+  given and `clean` removes what a run leaves; the relative default keeps an IDE run that sets no
+  system property inside the build tree rather than back in `/tmp`. Per worktree by construction,
+  which is the property the ticket is really buying. The two writers get **separate**
+  subdirectories, the split `CheckpointParquetIntegrationTest` already makes for its own context
+  (#168), so a completed-batch drain cannot put a file where a checkpoint assertion looks.
+  **Two guards, because neither surface sees what the other does**, sharing one definition of "a
+  directory this run owns" (`RunOwnedScratch`) rather than each carrying its own.
+  `ParquetScratchTestProfileTest` is static and on the fast gate: both keys declared, each resolved
+  value (placeholders expanded against system properties, the way the `Environment` would) inside
+  the run's tree, and the two directories **distinct** — a copy-paste pointing both at
+  `…/checkpoint` otherwise passes everything silently.
+  `ParquetScratchSweepIsolationIntegrationTest` holds the **wired** context on the shared
+  `BaseIntegrationTest`: the directories this context actually resolved are the run's own — the
+  only guard that can see an **OS environment override**, since `DELTA_CHECKPOINT_TEMP_DIR` binds
+  to this key and outranks every `application*.yml` — and an aged `checkpoint-*` inside the
+  configured directory is **still deleted**, which is what stops "fixed" from meaning "the sweeper
+  was switched off under test" and keeps the literal prefix the test shares with the
+  package-private production `ParquetScratch` from drifting unnoticed. Both were **proven red by
+  mutation** (the two keys removed). **Two shapes were tried and rejected in review**: planting an
+  aged `checkpoint-*` in `java.io.tmpdir` and asserting it survives reads as the more direct
+  proof, but any *other* process sweeping that directory — a locally running backend under `dev`,
+  or a concurrent worktree on a branch predating this fix, which is the ordinary shape of
+  `/github-issue-runner` — decides it, and it would fail accusing this suite of the very defect it
+  guards, so the wired configuration answers it deterministically instead — and the behaviour the
+  probe was there for is structural rather than assumed, since `sweep()` iterates exactly the
+  directories the bean was constructed with, over which `ParquetScratchOrphanSweeperTest` already
+  drives every rule (age, prefix, pod-private cutoff, a missing directory); and "the run's tree" is **not** an ancestor directory named `build`,
+  since an IntelliJ run configured to build with the IDE compiles to `out/` and a guard that goes
+  red on a developer's build layout rather than on a regression is worse than no guard — it is the
+  Gradle-supplied root when present, the checkout (located by `settings.gradle.kts`) otherwise.
+  Test-only — no production code, REST, gRPC, DTO, migration,
+  production configuration-key, metric, S3-key or frontend change; `k8s/` and the deployed
+  `*_TEMP_DIR` keys are untouched, so the sizing arithmetic of #131/#138/#150 is unaffected.
 - prefix-walk-paged: The shared `ListObjectsV2` walk has a page-by-page form, and the orphan sweep
   uses it, so its heap is bounded by a page rather than by a site's history (issue #199, raised
   reviewing #198/#158). `S3PrefixLister.listAll` materialized a whole prefix into a
