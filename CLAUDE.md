@@ -492,15 +492,18 @@ pages/{feature}/            # Route pages
   restore the peak. **The delete is buffered rather than paged**, which review had to point out: a
   page and a `DeleteObjects` chunk are both 1000 keys, so deleting per page would have turned the
   sparse steady state — a few superseded objects every thousand keys — into one round trip per page
-  on a tick that walks every site prefix in the bucket, where the whole-listing version issued four.
+  on a tick that walks every site prefix in the bucket: a site of two thousand pages holding four
+  thousand thinly spread orphans would have taken up to **two thousand** round trips where the
+  whole-listing version took four.
   Orphans are judged per page and queued, every full chunk goes out during the walk and the
   remainder in the `finally`, so the peak is under two chunks of keys — the same order as the page
   the walk hands over — and the bound this ticket is about is untouched. Pinned by tests on both sides: the
   walk hands pages over separately, keeps the pages already handed over on a mid-walk failure, and
-  does **not** swallow a consumer's `S3Exception`; the sweep deletes page by page (two pages, two
-  `DeleteObjects` round trips), reads the row set once for three pages, and — the assertion that
-  actually pins the design — records "rows" *before* "walk-finished", which a materializing
-  implementation cannot do. No REST, gRPC, proto, DTO, migration, configuration-key, metric-name,
+  does **not** swallow a consumer's `S3Exception`; the sweep sends orphans thinly spread over two
+  pages in **one** round trip and flushes a full chunk mid-walk (a 1500-key page leaves as 1000 then
+  500, so batching cannot become accumulating), reads the row set once for three pages, and — the
+  assertion that actually pins the design — records "rows" *before* "walk-finished", which a
+  materializing implementation cannot do. No REST, gRPC, proto, DTO, migration, configuration-key, metric-name,
   S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Objects no row references are
   reclaimed").
 - s3-orphan-sweep: Objects under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` that no row
