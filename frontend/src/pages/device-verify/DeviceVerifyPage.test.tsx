@@ -91,6 +91,19 @@ describe('DeviceVerifyPage', () => {
     expect(lookedUpCodes()).toEqual(['M9Q2-4AML']);
   });
 
+  // A malformed direct URL must not leave the page on a confirmation card with
+  // nothing to confirm: the lookup cannot fire for an incomplete code, so that
+  // state renders neither the details nor the spinner (#211).
+  it('falls back to the input state when the URL code is incomplete', () => {
+    search.code = 'M9Q24AM';
+
+    renderPage();
+
+    expect(screen.getByText('Enter Device Code')).toBeInTheDocument();
+    expect(screen.getByLabelText('Device Code')).toHaveValue('M9Q2-4AM');
+    expect(lookedUpCodes()).toEqual([]);
+  });
+
   it('moves to confirmation once a typed code resolves', async () => {
     renderPage();
 

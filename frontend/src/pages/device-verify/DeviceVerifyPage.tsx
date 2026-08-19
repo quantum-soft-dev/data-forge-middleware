@@ -45,7 +45,12 @@ export default function DeviceVerifyPage() {
   const userCodeFromUrl = formatUserCode(search?.code || '');
 
   const [userCode, setUserCode] = useState(userCodeFromUrl);
-  const [pageState, setPageState] = useState<PageState>(userCodeFromUrl ? 'confirm' : 'input');
+  // Only a complete code goes straight to confirmation: an incomplete one
+  // cannot be looked up, and a confirm state with no info to show renders
+  // neither the details nor the spinner — a blank page (#211).
+  const [pageState, setPageState] = useState<PageState>(
+    isCompleteUserCode(userCodeFromUrl) ? 'confirm' : 'input'
+  );
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [createdSiteName, setCreatedSiteName] = useState<string | null>(null);
 
@@ -56,7 +61,7 @@ export default function DeviceVerifyPage() {
   if (userCodeFromUrl && userCodeFromUrl !== syncedUrlCode) {
     setSyncedUrlCode(userCodeFromUrl);
     setUserCode(userCodeFromUrl);
-    setPageState('confirm');
+    setPageState(isCompleteUserCode(userCodeFromUrl) ? 'confirm' : 'input');
     setErrorMessage('');
     setCreatedSiteName(null);
   }
