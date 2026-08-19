@@ -453,6 +453,48 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- device-verify-false-toast: The one error signal on the device authorization path stopped being
+  wrong, and the direct URL the client prints works again (issue #211, two defects in one flow, both
+  frontend). **The toast is an off-by-one, not a race.** A `user_code` is eight characters rendered
+  as `XXXX-XXXX`, so the *formatted* value is nine characters long — but `DeviceVerifyPage` fired
+  its lookup at `userCode.length >= 8`, which is the keystroke **before** last. Typing `M9Q2-4AML`
+  therefore asked the backend about `M9Q2-4AM`, a seven-character code that cannot exist; the
+  backend answered 404, the global axios interceptor toasted "Resource not found.", and the ninth
+  character started a second lookup under a **new query key**, so the page's own error branch never
+  saw the failure and the flow went on to create the site. That is exactly the reported shape: a
+  transient toast over a verification that succeeds, with the page never showing an error. It is
+  invisible to a paste (one state change, one lookup, the complete code), which is why the existing
+  page test — written with `userEvent.paste` — could not see it. The threshold now lives in one
+  place (`features/device-auth/model/userCode.ts`: `formatUserCode`, `isCompleteUserCode`,
+  `USER_CODE_LENGTH`), shared by the query's `enabled`, the Continue button's `disabled`, the
+  field's `maxLength` and the hook's own guard, which had the same `>= 8` written a second time.
+  **Suppressing the 404 class was rejected as the fix and taken as the belt-and-braces**: the page
+  renders a message per status already (400 "already processed", 404 "not found or expired"), so
+  the interceptor was a *duplicate* report for every genuine failure and the *only* report for a
+  superseded one — `getVerifyInfo` therefore opts out through the existing
+  `suppressErrorToast` request flag (the `deltaSyncApi` precedent), which is one request rather
+  than a status class, so a real 404 anywhere else still toasts. **The second defect is the login
+  redirect, and it is what forced the typing in the first place.** `?code=` was stripped on load,
+  the field came up empty, and the operator retyped the code by hand — the keystrokes the first
+  defect needs. TanStack Router was ruled out by experiment: it keeps unvalidated search params and
+  leaves the href alone. The mechanism is Auth0: `cacheLocation="memory"` means nothing survives a
+  page load, so **every** cold load of a protected route starts unauthenticated, the guard calls
+  `loginWithRedirect`, an SSO session makes the round trip invisible (no prompt — which is why the
+  report says the session was live), and `Auth0Provider.onRedirectCallback` then restores the
+  address bar from `appState.returnTo` with `history.replaceState` — patched by `@tanstack/history`,
+  so the router follows it. `returnTo` was `window.location.pathname`: everything after the path was
+  gone before the app rendered. `currentReturnTo()` (`shared/lib/auth/returnTo.ts`) is
+  path + search + hash and is used by `AuthenticationGuard`, `UserOnlyGuard` and
+  `useAuth.signinRedirect`; it is assembled from the current location and stays root-relative, so it
+  cannot become an off-origin redirect target. This fixes deep links with query parameters for
+  **every** protected route, not only `/device-verify`. The page also normalizes the code it takes
+  from the URL, since that value is pasted by hand and need not arrive in the presentation the
+  backend stores (`?code=m9q24aml` now resolves to `M9Q2-4AML` rather than 404ing). Three existing
+  tests pinned the old path-only `returnTo` and were rewritten rather than left standing — the
+  behaviour changed deliberately. Frontend only: no REST, gRPC, proto, DTO, migration,
+  configuration-key, metric, S3-key, route-path or TanStack Query key change; `/device-verify` and
+  its `?code=` parameter are the contract the PostgreSQL Data Extractor TUI prints and are untouched.
+  See `docs/device-flow-client-guide.md` (Step 2 tips, Troubleshooting).
 - memory-abort-visible: A memory-pressure abort is a refusal that says so, instead of an empty
   `Optional` no caller could tell from "this batch produced no changes" (issue #181, found working
   #174 and named by it as the reason that defect was expensive rather than merely wrong).
