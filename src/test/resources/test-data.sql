@@ -18,8 +18,14 @@ DELETE FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE 
 DELETE FROM admin_action_logs WHERE target_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com') OR admin_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
--- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted before batches
-DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
+-- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted
+-- before batches -- and by that relationship as well as by account (issue #226): the constraint is
+-- fk_account_plugins_baseline_batch, which RESTRICTs on the *batch*, so an activation owned by an
+-- account this predicate does not match still blocks the DELETE FROM batches below. Same reasoning
+-- as the changelog_segments sweep further down; these two are the only FKs to batches without a
+-- cascade.
+DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com')
+                               OR baseline_batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 -- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches.
 -- Both relationships are cleared, not just site_id (issue #226): the blocking constraint is
 -- changelog_segments_batch_id_fkey, and a segment's batch need not belong to the segment's site --

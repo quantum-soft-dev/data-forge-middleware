@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.util.UUID;
@@ -67,9 +69,13 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
     @Autowired
     private DataSource dataSource;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     @AfterEach
     void removeForeignFixtures() {
         jdbc.update("DELETE FROM changelog_segments WHERE id = ?", strandedSegment);
+        jdbc.update("DELETE FROM account_plugins WHERE account_id = ?", foreignAccount);
         jdbc.update("DELETE FROM sites WHERE id = ?", foreignSite);
         jdbc.update("DELETE FROM accounts WHERE id = ?", foreignAccount);
     }
@@ -88,38 +94,97 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 .isFalse();
     }
 
+    @Test
+    @DisplayName("clears an activation whose baseline batch it deletes but whose account it does not match")
+    void shouldClearActivationReachableOnlyThroughItsBaselineBatch() {
+        seedForeignAccountWithSeededBaselineBatch();
+
+        assertThatCode(this::runFixtureScript)
+                .as("test-data.sql must not be blocked by fk_account_plugins_baseline_batch")
+                .doesNotThrowAnyException();
+
+        assertThat(activationExists())
+                .as("the stranded activation must be gone, not merely survive an unblocked script")
+                .isFalse();
+    }
+
+    /**
+     * The sibling of the segment above, and the only other foreign key to {@code batches} without a
+     * cascade: {@code fk_account_plugins_baseline_batch} is {@code ON DELETE RESTRICT} (V25), while
+     * the fixture sweeps {@code account_plugins} by <em>account</em>. An activation owned by an
+     * account outside {@code %@example.com} whose baseline batch the fixture deletes therefore
+     * blocks the same statement, one constraint over.
+     */
+    private void seedForeignAccountWithSeededBaselineBatch() {
+        insertForeignAccount();
+        jdbc.update("""
+                INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active,
+                                             activated_at, baseline_batch_id)
+                VALUES (?, 'bit-bi', '{}'::jsonb, true, CURRENT_TIMESTAMP, ?)
+                """, foreignAccount, SEEDED_BATCH);
+    }
+
+    private boolean activationExists() {
+        Integer count = jdbc.queryForObject(
+                "SELECT count(*) FROM account_plugins WHERE account_id = ?", Integer.class, foreignAccount);
+        return count != null && count > 0;
+    }
+
     /**
      * The row the fixture cannot see: its site is not an {@code %.example.com} one, so the
      * {@code site_id} sweep skips it, while its batch belongs to a site the fixture does delete.
      */
     private void seedForeignSiteWithSeededBatchSegment() {
-        jdbc.update("""
-                INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-                VALUES (?, ?, 'Cleanup guard 226', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """, foreignAccount, "cleanup-guard-226@" + FOREIGN_DOMAIN);
+        insertForeignAccount();
         jdbc.update("""
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
                 VALUES (?, ?, ?, 'x', 'Cleanup guard 226', true,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
                 """, foreignSite, foreignAccount, FOREIGN_DOMAIN, FOREIGN_DOMAIN);
+        // Both queue stamps are set, not just plugin_sql_at: findNextPendingEgress is as global and
+        // as site-predicate-free as findNextPendingPluginSql (#175), so a pending row here can be
+        // claimed FOR UPDATE SKIP LOCKED by any live cached context's egress worker, which would
+        // then try to download an object that was never uploaded and hold a row lock on the very
+        // row runFixtureScript() is about to delete -- surfacing under the 30 s lock_timeout of
+        // #197 as a 55P03 this class would blame on changelog_segments_batch_id_fkey.
         jdbc.update("""
                 INSERT INTO changelog_segments (id, site_id, batch_id, first_seq, last_seq,
                                                 record_count, content_hash, s3_key, mode,
-                                                provisional, plugin_sql_at)
-                VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE, CURRENT_TIMESTAMP)
+                                                provisional, plugin_sql_at, egress_at)
+                VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """, strandedSegment, foreignSite, SEEDED_BATCH,
                 "delta/" + foreignSite + "/segments/1.pb.gz");
     }
 
     /**
-     * Runs the fixture the way Spring's {@code @Sql} does — same script, same splitter — so the
-     * guard cannot pass against a construct {@code ScriptUtils} would choke on.
+     * Runs the fixture the way Spring's {@code @Sql} does — same script, same splitter, and the same
+     * all-or-nothing outcome.
+     *
+     * <p>The transaction is the half that is easy to miss. {@code @Sql} defaults to
+     * {@code transactionMode = INFERRED}, so with a {@code PlatformTransactionManager} in the context
+     * the script runs in a transaction that rolls back when a statement fails, whereas
+     * {@code ResourceDatabasePopulator.execute(DataSource)} auto-commits statement by statement. Left
+     * that way, a future regression of the sweep would commit every {@code DELETE} and never reach
+     * the {@code INSERT}s — stripping the shared database of the whole {@code %.example.com} fixture
+     * and failing the classes that carry no {@code @Sql} of their own, for a reason that has nothing
+     * to do with them. That is the exact failure this ticket exists to remove, so the guard must not
+     * be able to cause it.
      */
     private void runFixtureScript() {
         ResourceDatabasePopulator populator =
                 new ResourceDatabasePopulator(new ClassPathResource("test-data.sql"));
-        populator.execute(dataSource);
+        new TransactionTemplate(transactionManager)
+                .executeWithoutResult(status -> populator.execute(dataSource));
+    }
+
+    /** Deliberately outside {@code %@example.com}, so the fixture's account sweep cannot reach it. */
+    private void insertForeignAccount() {
+        jdbc.update("""
+                INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
+                VALUES (?, ?, 'Cleanup guard 226', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, foreignAccount, "cleanup-guard-226@" + FOREIGN_DOMAIN);
     }
 
     private boolean segmentExists() {
