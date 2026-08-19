@@ -480,10 +480,18 @@ pages/{feature}/            # Route pages
   cleared them, which is the second mechanism the ticket records — `findNextPendingPluginSql` has
   **no site predicate** (the queue is global, #175), so a leaked pending head is claimed by an
   assertion in another class that believes it owns the database.
-  **What was deliberately not concluded**: the exact blocking row was never reproduced locally — the
-  captured mismatches are between two `%.example.com` sites, which the `site_id` sweep still
-  removes, so they explain the leak but not the `DELETE FROM batches` failure. Eight fast-gate
-  passes and a full-suite pass did not produce it. The fix is therefore justified structurally (the
+  **What was deliberately not concluded, and it is the important half**: this change is hardening
+  that closes a proven mechanism, **not** a demonstrated fix for the failures that prompted the
+  ticket. The captured mismatches are between two `%.example.com` sites, which the old sweep still
+  removed, so they explain the cross-class leak but have never been shown to block anything. And a
+  backlog pass on the ticket (comment of 16:08, which this work initially missed by reading the
+  issue without its comments) established the sharper fact: **the fast gate cannot create the
+  blocking row at all**, since `build.gradle.kts` excludes `**/integration/**` by path and no class
+  outside that package persists a site whose domain falls outside `%.example.com` — verified again
+  here, where the only such class is now this ticket's own guard. The originally observed failure
+  was in the fast gate, so it has a mechanism this fix does not address (a row committed by another
+  connection *between* the two statements is the open candidate, and `OR batch_id IN (...)` does
+  nothing for it). Eight fast-gate passes and a full-suite pass did not reproduce it. The fix is therefore justified structurally (the
   constraint and the `uploaded_files` precedent) and pinned by a guard that **constructs** the
   blocking row, rather than by a reproduction; the two observed `develop` failures
   (`DeltaSessionLivenessIntegrationTest`, `DeltaSqlQueueRepositoryIntegrationTest`) are consistent

@@ -49,8 +49,10 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 @DisplayName("test-data.sql fixture cleanup")
 class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
 
-    /** A COMPLETED batch of store-01.example.com, seeded by test-data.sql. */
-    private static final UUID SEEDED_BATCH = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    /** store-01.example.com, seeded by test-data.sql -- a site the fixture deletes. */
+    private static final UUID SEEDED_SITE = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
+    /** The account owning {@link #SEEDED_SITE}, seeded by test-data.sql. */
+    private static final UUID SEEDED_ACCOUNT = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
     /**
      * Deliberately not an {@code %.example.com} domain: the fixture must not be able to reach this
@@ -62,6 +64,17 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
     private final UUID foreignAccount = UUID.randomUUID();
     private final UUID foreignSite = UUID.randomUUID();
     private final UUID strandedSegment = UUID.randomUUID();
+    /**
+     * The guard's own batch under {@link #SEEDED_SITE}, rather than one of the seeded batches.
+     * It has to belong to a site the fixture deletes -- that is what makes the delete fire the
+     * constraint -- but it must not be a batch other classes read: the batch-keyed queries have no
+     * site predicate either ({@code findByBatchIdOrderByFirstSeq},
+     * {@code SqlGenerationPersistence.loadBatchData}, {@code BatchHistoryService}), so hanging the
+     * stranded segment off store-01's flagship COMPLETED batch would let a batch-parquet build
+     * replay a segment whose object was never uploaded and fail an artifact for a batch this class
+     * does not own. Nothing knows this id, so nothing reads it.
+     */
+    private final UUID guardBatch = UUID.randomUUID();
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -76,6 +89,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
     void removeForeignFixtures() {
         jdbc.update("DELETE FROM changelog_segments WHERE id = ?", strandedSegment);
         jdbc.update("DELETE FROM account_plugins WHERE account_id = ?", foreignAccount);
+        jdbc.update("DELETE FROM batches WHERE id = ?", guardBatch);
         jdbc.update("DELETE FROM sites WHERE id = ?", foreignSite);
         jdbc.update("DELETE FROM accounts WHERE id = ?", foreignAccount);
     }
@@ -117,11 +131,12 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
      */
     private void seedForeignAccountWithSeededBaselineBatch() {
         insertForeignAccount();
+        insertGuardBatch();
         jdbc.update("""
                 INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active,
                                              activated_at, baseline_batch_id)
                 VALUES (?, 'bit-bi', '{}'::jsonb, true, CURRENT_TIMESTAMP, ?)
-                """, foreignAccount, SEEDED_BATCH);
+                """, foreignAccount, guardBatch);
     }
 
     private boolean activationExists() {
@@ -136,6 +151,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
      */
     private void seedForeignSiteWithSeededBatchSegment() {
         insertForeignAccount();
+        insertGuardBatch();
         jdbc.update("""
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
@@ -154,7 +170,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                                                 provisional, plugin_sql_at, egress_at)
                 VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """, strandedSegment, foreignSite, SEEDED_BATCH,
+                """, strandedSegment, foreignSite, guardBatch,
                 "delta/" + foreignSite + "/segments/1.pb.gz");
     }
 
@@ -177,6 +193,20 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 new ResourceDatabasePopulator(new ClassPathResource("test-data.sql"));
         new TransactionTemplate(transactionManager)
                 .executeWithoutResult(status -> populator.execute(dataSource));
+    }
+
+    /**
+     * A batch of {@link #SEEDED_SITE}, so the fixture's {@code DELETE FROM batches} sweep reaches it
+     * -- which is what makes the guard's row block that statement -- while no other class knows the
+     * id. See {@link #guardBatch}.
+     */
+    private void insertGuardBatch() {
+        jdbc.update("""
+                INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
+                                     total_size, has_errors, started_at, created_at, completed_at)
+                VALUES (?, ?, ?, 'COMPLETED', 'cleanup-guard-226/', 0, 0, false,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, guardBatch, SEEDED_ACCOUNT, SEEDED_SITE);
     }
 
     /** Deliberately outside {@code %@example.com}, so the fixture's account sweep cannot reach it. */

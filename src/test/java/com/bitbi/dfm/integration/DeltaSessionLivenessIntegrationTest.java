@@ -410,6 +410,11 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
                     + "(SELECT id FROM batches WHERE site_id = ?)", siteId, siteId);
             jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", siteId);
+            // The second non-cascading reference to batches: fk_account_plugins_baseline_batch is
+            // ON DELETE RESTRICT (V25). Cleared by the same batch relationship, so this method is
+            // symmetric with the fixture's own sweep rather than fixing one of the two.
+            jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
+                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId);
             jdbc.update("DELETE FROM batches WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM sites WHERE id = ?", siteId);
         }
