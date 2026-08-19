@@ -540,6 +540,78 @@ pages/{feature}/            # Route pages
   and #212 above. No gRPC, proto, DTO, migration, configuration-key, metric-**name**,
   S3-key or frontend change; `sql.generation.aborted.memory_pressure` is unchanged and still
   registered at zero. See `docs/020-sql-generation-optimization.md`.
+- test-lock-wait-bound: A statement of the integration suite that waits on a lock now fails and
+  names itself instead of stopping the run (issue #197, the residual behind #159 and #175). Every
+  cached Spring context keeps its background workers alive against the one shared PostgreSQL
+  database, so the class under test can wait on a lock a sibling context holds —
+  `@Sql("/test-data.sql")` deleting the `%.example.com` rows, a `clearPluginSqlGenerations`
+  delete, the delta-SQL queue's claim — and PostgreSQL's default `lock_timeout` is **0**, wait for
+  ever: the JUnit thread never returns, CI kills the job after its own much longer timeout, and no
+  test is named. `spring.datasource.hikari.connection-init-sql: SET lock_timeout = '10s'` in
+  `src/test/resources/application-test.yml` is the whole of it; the blocked statement is then
+  aborted by the server with SQLSTATE **55P03** and "canceling statement due to lock timeout",
+  which names the cause as well as the test. **Database-side rather than a JUnit `@Timeout`**, the
+  first of the ticket's three candidates: a plain `@Timeout` is only checked after the method
+  returns, so a hung method still hangs, and a preemptive one abandons a thread parked in the
+  driver while it still holds a pooled connection. **`statement_timeout` is deliberately not set**
+  — it would bound legitimate work (these queries scan rows accumulated across the whole run) and
+  bounds none of the hangs that are not statements, so it buys flakes rather than the failure this
+  is about. **The 30 s is measured against the suite's own deliberate waits, not against its
+  slowest statement**, since `lock_timeout` bounds waiting for a lock and never holding one — and
+  against the longest wait the suite *declares* rather than the longest one observed:
+  `BatchParquetQueueServiceIntegrationTest` leaves an `UPDATE` on an operator's row lock and
+  releases it only after an awaitility poll budgeted at **10 s**, which resolves in milliseconds
+  on an idle machine and would have failed a healthy test on a loaded one; the fixed 1.5 s holds
+  in `SiteHistoryWipeIntegrationTest` and `DeltaRebaselineIntegrationTest` are the easy ones. Two
+  guards, the #187 shape: `LockWaitBoundTestProfileTest` holds the key on the fast gate, and
+  `DatabaseLockWaitBoundIntegrationTest` holds what a **pooled** connection actually carries (a
+  file can only show what was declared) and produces a genuinely blocked statement, requiring it
+  to be aborted with 55P03 while the holder is still holding. They share `LockWaitBound` — one
+  parser and the agreed 15 s–60 s range — rather than each carrying its own idea of a sane bound,
+  the `RunOwnedScratch` precedent. The probe blocks on an **advisory** lock rather than on a row:
+  `lock_timeout` is one GUC over the whole lock manager (PostgreSQL applies it to "a table, index,
+  row, or other database object" alike, and nothing configures the kinds separately), so an
+  advisory lock proves the bound for the row locks the ticket is about, while a literal key is the
+  one lock in this shared database that no other class and no background worker can be holding —
+  the probe cannot become the hazard it tests for, and it leaves no row behind for the next class
+  to count. Its own wait is bounded as well (the future is read with the bound plus a margin, and
+  the statement cancelled before the failure is reported), so a regression fails the guard instead
+  of hanging the run the guard is about. Two comments that stated the opposite are corrected
+  rather than left standing (`AbstractIntegrationTest.clearPluginSqlGenerations`,
+  `BitBiDeltaSqlIntegrationTest.drainQueue`). **Review round 1 corrected the guards, not the
+  bound**, and two of the five are worth remembering. The parser read the *first* `lock_timeout`
+  in the init statement while PostgreSQL applies the last one of a multi-statement string, so `SET
+  lock_timeout = '10s'; RESET lock_timeout` passed the fast gate while every pooled connection
+  waited for ever — the exact false green the guard exists to prevent, now red under mutation
+  (`LockWaitBoundTest`), with `RESET` and `TO DEFAULT` read as the zero they restore and an
+  unrecognised unit failing by name instead of silently meaning milliseconds (`'30000us'` is 30 ms
+  and used to read as 30 s). And the probe's bounded wait started at submit time rather than when
+  the blocked statement existed: the holder pins one of the profile's four connections and Hikari
+  waits 30 s for one, longer than the budget for the abort, so a momentarily busy pool would have
+  been reported as “the profile does not bound a lock wait”. Two smaller ones: the English message
+  assertion was dropped for the locale-independent 55P03 it duplicated, and a holder that failed
+  before taking the lock no longer has its exception swallowed by the `Future`. **Round 2** closed
+  the same hole one spelling wider and one symmetry short. The last-wins rule only recognised
+  `SET` and `RESET lock_timeout`, so `RESET ALL` — which never names the GUC — and
+  `set_config('lock_timeout', '0', false)` still read as the assignment before them; both are
+  matched now (and `set_config` is read as a bound when it sets one), pinned by mutation. The
+  probe's own failure was swallowed where the holder's had just been fixed: the task returns its
+  throwable rather than throwing it, so a pool that could not hand out a connection — four of
+  them, one pinned by the holder — was reported two minutes later as an unbounded lock wait; it is
+  now reported as itself. And the floor message said “at or below” for an assertion that accepts
+  the floor exactly. **Round 3** moved the value, which is the finding worth keeping: the
+  derivation named the 1.5 s holds as the longest deliberate wait and had missed the 10 s
+  awaitility budget above, so the shipped 10 s had **zero** margin over a test that blocks an
+  `UPDATE` on purpose — 30 s now, with `MIN` raised to 15 s so the floor is the declared budget
+  rather than the observed one. Three more on the reader, all the same class of hole as round 2's:
+  `SET LOCAL lock_timeout` and `set_config(..., true)` are transaction-scoped and are undone by
+  the commit Hikari makes after the init SQL, so they leave a pooled session exactly as unbounded
+  as no statement at all while reading as the bound they name; `DISCARD ALL` joins `RESET ALL` as
+  an undoing that never names the GUC; a digit run no `Duration` can hold now fails as this guard
+  rather than as a raw `NumberFormatException`; and the static guard's missing-key message no
+  longer arrives as the string "null" read as a malformed statement. Test-only — no production
+  code, REST, gRPC, DTO, migration, production configuration-key, metric, S3-key or frontend
+  change.
 - async-executor-guard: Every `@Async` in `src/main/java` names the executor it runs on, and a
   newcomer that does not fails the build (issue #195, raised reviewing #194/#165).
   `AsyncConfiguration`'s Javadoc had stated the fact — every `@Async` site is an
