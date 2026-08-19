@@ -344,6 +344,13 @@ delta:
     provisional-sweep-batch: ${DELTA_PROVISIONAL_SWEEP_BATCH:500}
     provisional-sweep-millis: ${DELTA_PROVISIONAL_SWEEP_MILLIS:900000}
   checkpoint:
+    # The only schedule on which checkpoints are produced (an operator-forced rebuild aside), so it
+    # is also the answer the Delta Sync tab gives a site that has none yet: since issue #213 the
+    # sync-state projection carries the next occurrence of this expression as nextCheckpointBuildAt,
+    # and CheckpointScheduler.CRON_PROPERTY is the single constant both the @Scheduled tick and
+    # CheckpointScheduleService resolve. Spring's "-" disables the tick; the surface then says only
+    # that a build is scheduled rather than promising a time. Resolved in the JVM's default zone.
+    cron: ${DELTA_CHECKPOINT_CRON:0 0 2 * * *}
     # A checkpoint snapshot is written to a local file per table and streamed to S3 from there
     # (issue #112); the all-INSERT reload frame is written the same way, into the same directory
     # (issue #126). Point temp-dir at a scratch volume if the node's default tmpdir is small.

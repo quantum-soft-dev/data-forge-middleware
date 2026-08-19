@@ -507,9 +507,12 @@ pages/{feature}/            # Route pages
   largest sites as critical on day one — the defect itself, aimed at the sites with most to lose.
   What is done instead: both surfaces keep the **count** (the site-list pill reads
   `No checkpoint · 1.2k` rather than dropping the number, which is what this entry had claimed and
-  the pill did not do), and the card names the build the state should not outlive ("Still missing
-  after that? The build is failing rather than pending"). Separating the two payloads needs persisted
-  state and a migration, filed as **#224**; the durable alarm stays `delta.checkpoint.builds.aborted`,
+  the pill did not do), and the card names the build the state should not outlive ("Still missing a
+  day later? The build is not completing" — round 2 corrected both the claim and the label: the sweep
+  walks sites serially and a build deferred behind the #178 fold budget is a *designed* miss that
+  repairs itself next tick, so "the build is failing" was the same over-claim one notch quieter, and
+  the value is the **next** occurrence rather than the first, recomputed per request). Separating
+  the two payloads needs persisted state and a migration, filed as **#224**; the durable alarm stays `delta.checkpoint.builds.aborted`,
   `delta.checkpoint.tables.given-up` and `delta.seq.lag`.
   **The ticket's second shape — building a checkpoint when a site's first snapshot commits — was
   weighed and rejected**: it moves a whole-site fold onto the very commit path the nightly cron
@@ -518,7 +521,9 @@ pages/{feature}/            # Route pages
   data — both halves are reporting — so the DoD's last item was taken as asked and **`priority: high`
   was dropped to `priority: medium`**. No migration (V54 is still the last applied, V55 free), no
   gRPC, proto, metric, cache, configuration-**key**, S3-key or route change; `delta.checkpoint.cron`
-  gains a second reader but keeps its name and default. See `docs/delta-client-v2-guide.md`
+  gains a second reader and, for the first time, a declaration in `application.yml`
+  (`DELTA_CHECKPOINT_CRON`, which relaxed binding already honoured) — its name and default are
+  unchanged. See `docs/delta-client-v2-guide.md`
   ("A site whose first checkpoint is not due yet").
 - memory-abort-visible: A memory-pressure abort is a refusal that says so, instead of an empty
   `Optional` no caller could tell from "this batch produced no changes" (issue #181, found working

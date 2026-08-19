@@ -1523,7 +1523,9 @@ Sync tab shows a neutral **"No checkpoint yet"** chip, keeps the number but labe
 awaiting the first checkpoint*, and **replaces** the lag track rather than recolouring it — the
 track's bands and its 1k/10k ticks are a scale of "how far behind", and no position on it is true for
 a site with nothing to be behind. In its place goes the moment the wait ends, from the new
-`nextCheckpointBuildAt` on the projection: the next occurrence of `delta.checkpoint.cron`, resolved
+`nextCheckpointBuildAt` on the projection — labelled *next* scheduled build, since it is recomputed
+per request and stops coinciding with the first the moment that one passes: the next occurrence of
+`delta.checkpoint.cron` (declared in `application.yml`, `DELTA_CHECKPOINT_CRON`), resolved
 in the JVM's own zone (the zone `@Scheduled` uses), null when the schedule names none — the sweep can
 be switched off with Spring's `-`, and promising a time the payload does not carry would be the same
 class of lie. `CheckpointScheduleService` and the `@Scheduled` tick share one constant, so the answer
@@ -1542,8 +1544,10 @@ no `checkpoints` row either, so a first build that has failed thirty nights carr
 payload of a site ingested this afternoon. It is deliberately **not** bounded by lag magnitude: a
 first FULL_SNAPSHOT is unbounded, so that bound would report the largest sites as critical on day one,
 which is the defect this removes. What is done instead — both surfaces keep the count, and the card
-names the build the state should not outlive ("Still missing after that? The build is failing rather
-than pending") — with the durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
+names the build the state should not outlive ("Still missing a day later? The build is not
+completing" — a day rather than "after that", because the sweep walks sites serially and a build
+deferred behind the fold budget of #178 is a designed miss that repairs itself next tick) — with the
+durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
 `delta.checkpoint.tables.given-up`, `delta.seq.lag`); separating the two payloads needs persisted
 state and a migration, filed as **#224**. Building a checkpoint on the ingest path when a site's first
 snapshot commits was the alternative and was **not** taken: it moves a whole-site fold onto the

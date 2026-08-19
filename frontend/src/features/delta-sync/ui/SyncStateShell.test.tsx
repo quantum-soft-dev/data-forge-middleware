@@ -196,7 +196,9 @@ describe('SyncStateShell (F5)', () => {
       expect(screen.queryByTestId('lag-fill')).not.toBeInTheDocument()
       expect(screen.queryByText('1k · watch')).not.toBeInTheDocument()
       expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(
-        /first scheduled build/i,
+        // "Next", not "First": the value is the next occurrence of the cron, recomputed per
+        // request, and the two stop coinciding the moment the first one passes (review r2).
+        /next scheduled build/i,
       )
     })
 
@@ -205,7 +207,9 @@ describe('SyncStateShell (F5)', () => {
       // so a first build that keeps failing would otherwise stay grey for ever (review r1).
       render(<SyncStateShell state={freshSite} now={NOW} />)
 
-      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(/still missing after that/i)
+      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(
+        /still missing a day later/i,
+      )
     })
 
     it('does not promise a build to a site that has applied nothing', () => {
@@ -231,7 +235,7 @@ describe('SyncStateShell (F5)', () => {
 
       expect(screen.getByTestId('first-checkpoint-note')).toBeInTheDocument()
       expect(screen.getByTestId('first-checkpoint-note')).not.toHaveTextContent(
-        /first scheduled build ·/i,
+        /next scheduled build ·/i,
       )
     })
 

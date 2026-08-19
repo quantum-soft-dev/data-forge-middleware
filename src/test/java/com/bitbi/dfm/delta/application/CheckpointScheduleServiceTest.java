@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -88,10 +89,18 @@ class CheckpointScheduleServiceTest {
     }
 
     @Test
-    @DisplayName("shares one schedule property with the scheduler that owns the tick")
-    void shouldShareTheSchedulerProperty() {
-        // The placeholder is a single constant referenced by both the @Scheduled annotation and
-        // this service's @Value, so a changed cron cannot leave the UI promising the old hour.
+    @DisplayName("reads the very placeholder the scheduled tick is annotated with")
+    void shouldShareTheSchedulerProperty() throws Exception {
+        // One constant is what keeps the promised hour and the tick that keeps it together, so the
+        // assertion is on the annotation rather than on the constant's text: re-inlining a literal
+        // into @Scheduled is exactly how the drift this constant prevents would come back, and a
+        // literal-to-literal comparison would not notice.
+        Scheduled scheduled = CheckpointScheduler.class
+                .getMethod("buildCheckpoints")
+                .getAnnotation(Scheduled.class);
+
+        assertThat(scheduled).isNotNull();
+        assertThat(scheduled.cron()).isEqualTo(CheckpointScheduler.CRON_PROPERTY);
         assertThat(CheckpointScheduler.CRON_PROPERTY).isEqualTo("${delta.checkpoint.cron:0 0 2 * * *}");
     }
 }

@@ -150,12 +150,16 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
               <>
                 {' '}
                 <span style={{ color: t.text }}>
-                  First scheduled build · {formatDateTime(state.nextCheckpointBuildAt)} (
+                  Next scheduled build · {formatDateTime(state.nextCheckpointBuildAt)} (
                   {formatRelativeTime(state.nextCheckpointBuildAt)})
                 </span>{' '}
                 {/* The state cannot age itself out — nothing persisted says how long this site has
-                    been waiting — so it says what to conclude if it outlives the build it names. */}
-                Still missing after that? The build is failing rather than pending.
+                    been waiting — so it says what to conclude if it outlives the build it names.
+                    A day rather than "after that": the sweep walks sites serially, and a build
+                    deferred behind the fold budget (#178) is a designed miss that repairs itself on
+                    the next tick — accusing either of failing would be the same over-claim one
+                    notch quieter. */}
+                Still missing a day later? The build is not completing.
               </>
             )}
           </div>
@@ -250,7 +254,7 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
           </div>
           {awaitingFirstCheckpoint && state.nextCheckpointBuildAt && (
             <div className="mt-1 text-[12px]" style={{ color: t.textMuted }}>
-              first scheduled build {formatRelativeTime(state.nextCheckpointBuildAt)}
+              next scheduled build {formatRelativeTime(state.nextCheckpointBuildAt)}
             </div>
           )}
           {rebuildOutcome && (
