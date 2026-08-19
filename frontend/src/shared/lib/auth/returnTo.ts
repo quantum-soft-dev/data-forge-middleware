@@ -18,3 +18,29 @@ export function currentReturnTo(): string {
   const { pathname, search, hash } = window.location;
   return `${pathname}${search}${hash}`;
 }
+
+/**
+ * Whether the current location is an Auth0 redirect callback.
+ *
+ * The same test `auth0-spa-js` applies (`hasAuthParams`): a `state` alongside
+ * either a `code` or an `error`. The `state` is what makes it safe — the device
+ * verification page carries its own `?code=`, and that one has no `state`.
+ */
+function isAuthCallbackLocation(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.has('state') && (params.has('code') || params.has('error'));
+}
+
+/**
+ * Where to come back to after retrying a login that has already failed once.
+ *
+ * The authentication-error screen renders at the `redirect_uri` with Auth0's
+ * callback parameters still in the URL — the SDK does not clean them up on the
+ * failure path — so returning to "the current location" would write a consumed
+ * `code`/`state` back into the address bar, which the SDK then reads as a fresh
+ * callback. The home page is the honest answer in that case; anywhere else the
+ * user really is where they think they are.
+ */
+export function retryReturnTo(): string {
+  return isAuthCallbackLocation() ? '/' : currentReturnTo();
+}

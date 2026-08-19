@@ -64,4 +64,17 @@ describe('AppContent, authentication error', () => {
       appState: { returnTo: '/device-verify?code=M9Q2-4AML' },
     });
   });
+
+  // The screen this button lives on is reached after a failed
+  // handleRedirectCallback, so the usual location *is* the callback URL, with
+  // Auth0's consumed parameters still on it (#211 review round 3).
+  it('does not return to the Auth0 callback URL it is usually showing', async () => {
+    window.history.replaceState({}, '', '/?code=CONSUMED&state=OLD');
+
+    render(<AppContent />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try Again' }));
+
+    expect(loginWithRedirect).toHaveBeenCalledWith({ appState: { returnTo: '/' } });
+  });
 });

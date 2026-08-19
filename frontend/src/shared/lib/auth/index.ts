@@ -16,7 +16,7 @@ export { AuthenticationGuard } from './AuthenticationGuard';
 export { RoleGuard } from './RoleGuard';
 export { UserOnlyGuard } from './UserOnlyGuard';
 export { useAuth0Roles } from './useAuth0Roles';
-export { currentReturnTo } from './returnTo';
+export { currentReturnTo, retryReturnTo } from './returnTo';
 export {
   setSessionExpired,
   getSessionExpired,
