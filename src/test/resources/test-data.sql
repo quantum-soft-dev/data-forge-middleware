@@ -24,6 +24,11 @@ DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_
 -- account this predicate does not match still blocks the DELETE FROM batches below. Same reasoning
 -- as the changelog_segments sweep further down; these two are the only FKs to batches without a
 -- cascade.
+-- Note the ownership this widens: the second predicate deletes activations of accounts the fixture
+-- does not otherwise own, whenever their baseline_batch_id points at a batch it is about to delete,
+-- and plugin_sql_generations / plugin_delta_baselines / download_links cascade with them. That is
+-- intended -- the alternative is the FK stopping the run -- but a test seeding an activation for a
+-- foreign account against a seeded batch will lose it mid-class, with nothing pointing here.
 DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com')
                                OR baseline_batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 -- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches.
