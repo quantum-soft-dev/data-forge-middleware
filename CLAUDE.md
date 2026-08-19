@@ -491,7 +491,15 @@ pages/{feature}/            # Route pages
   is lost** and a caller that deliberately renders its own taxonomy gets the global toast anyway;
   and a refresh that *succeeds* retries through `apiClient.request(...)`, which **re-enters the
   whole chain**, so a retry that fails too toasts on the inner request and again on the outer
-  rejection. The second is the ugliest and the fourth is the one that bounds this ticket's claim:
+  rejection. **The chain order is pinned by a test rather than asserted in prose** (review round 3,
+  which found this entry recording a delivered consequence that nothing held): a 401 whose refresh
+  repairs it must produce **no** toast, which is false the moment the two are registered the other
+  way round — registration count cannot see that, only the two interceptors together can, so it is
+  the one test in this file that wires `setupResponseInterceptor` beside this handler. Round 3 also
+  added `clearErrorHandler()`, the counterpart of `interceptors.ts`'s `clearResponseInterceptor()`:
+  ejecting by a remembered index is safe only while nobody resets the response chain, and a teardown
+  calling `.clear()` restarts the ids at 0, after which a remembered id names whatever now sits in
+  that slot. The second is the ugliest and the fourth is the one that bounds this ticket's claim:
   on the expired-refresh-token branch `interceptors.ts` stays deliberately silent so the logout
   redirect is quiet, and this handler fills that silence with "Network error. Please check your
   connection and try again." — a lie about the user's connection; while the fourth is **two

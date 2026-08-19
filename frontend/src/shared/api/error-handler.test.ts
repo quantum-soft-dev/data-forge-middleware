@@ -11,11 +11,13 @@
  * them about registration count; see the note in error-handler.ts.
  */
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { toast } from 'sonner';
 import { apiClient } from './client';
-import { setupErrorHandler } from './error-handler';
+import { clearErrorHandler, setupErrorHandler } from './error-handler';
+import { clearResponseInterceptor, setupResponseInterceptor } from './interceptors';
+import { initTokenRefresh, resetTokenRefreshState } from './token-refresh';
 
 vi.mock('sonner', () => ({
   toast: {
@@ -76,6 +78,58 @@ describe('setupErrorHandler', () => {
     await expect(
       apiClient.get('/anything', { adapter: notFoundAdapter, suppressErrorToast: true }),
     ).rejects.toThrow();
+
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The handler sits *behind* the 401 refresh interceptor, which is the order
+ * App.tsx registers them in. It matters, and it is a consequence of the eject:
+ * before it, the refresh interceptor re-registered on every effect run while
+ * this one only appended, so from the second run the accumulated toast handler
+ * ran **ahead** of the live refresh handler — and toasted a 401 that the refresh
+ * was about to resolve. Registration count cannot show that; only the two
+ * together can.
+ */
+describe('setupErrorHandler relative to the 401 refresh interceptor', () => {
+  /** 401 once, then 200 — i.e. a session the refresh genuinely repairs. */
+  const refreshableAdapter = () => {
+    let calls = 0;
+    return async (config: InternalAxiosRequestConfig) => {
+      calls += 1;
+      if (calls === 1) {
+        const response = {
+          data: {},
+          status: 401,
+          statusText: 'Unauthorized',
+          headers: {},
+          config,
+        } as AxiosResponse;
+        throw new AxiosError('401', AxiosError.ERR_BAD_REQUEST, config, null, response);
+      }
+      return { data: { ok: true }, status: 200, statusText: 'OK', headers: {}, config } as AxiosResponse;
+    };
+  };
+
+  beforeEach(() => {
+    vi.mocked(toast.error).mockClear();
+    initTokenRefresh(async () => 'fresh-token', () => {});
+    // App.tsx:53-61 order: refresh manager, then the 401 interceptor, then this one.
+    setupResponseInterceptor();
+    setupErrorHandler();
+  });
+
+  afterEach(() => {
+    clearResponseInterceptor();
+    clearErrorHandler();
+    resetTokenRefreshState();
+  });
+
+  it('stays silent on a 401 the refresh repairs', async () => {
+    await expect(
+      apiClient.get('/anything', { adapter: refreshableAdapter() }),
+    ).resolves.toMatchObject({ status: 200 });
 
     expect(toast.error).not.toHaveBeenCalled();
   });

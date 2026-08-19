@@ -88,6 +88,23 @@ export function getServerErrorStatus(error: unknown): number | undefined {
  */
 let errorInterceptorId: number | null = null
 
+/**
+ * Eject this module's interceptor and forget its id.
+ *
+ * The counterpart of clearResponseInterceptor() in interceptors.ts, and there
+ * for the same reason: ejecting by a remembered index is only safe while nobody
+ * resets `apiClient.interceptors.response`. A teardown that calls `.clear()`
+ * restarts the ids at 0, after which a remembered id points at whatever now
+ * occupies that slot — so a test that clears the chain resets this module too,
+ * rather than leaving it holding an index into an array it no longer knows.
+ */
+export function clearErrorHandler(): void {
+  if (errorInterceptorId !== null) {
+    apiClient.interceptors.response.eject(errorInterceptorId)
+    errorInterceptorId = null
+  }
+}
+
 export function setupErrorHandler() {
   if (errorInterceptorId !== null) {
     apiClient.interceptors.response.eject(errorInterceptorId)
