@@ -42,6 +42,12 @@ class TestJvmOutOfMemoryExitTest {
     /** {@code -XX:+ExitOnOutOfMemoryError} terminates with this status. */
     private static final int EXIT_ON_OOM_STATUS = 3;
 
+    /**
+     * How long a child may take. Generous against a 32 MB heap that fills in milliseconds, because
+     * the number this bounds is a hang, not the work.
+     */
+    private static final long CHILD_DEADLINE_SECONDS = 120;
+
     @Test
     @DisplayName("with the flag, a real allocation failure ends the JVM and says so")
     void shouldEndTheJvmNamingTheOutOfMemory(@TempDir Path dumpDir) throws Exception {
@@ -93,7 +99,13 @@ class TestJvmOutOfMemoryExitTest {
     }
 
     /**
-     * Runs one child JVM to completion with stderr folded into stdout.
+     * Runs one child JVM to completion, or kills it and fails when it outstays the deadline.
+     *
+     * <p>The output goes to a file rather than through a pipe, so the deadline is the only thing
+     * bounding this method. Reading a pipe to EOF first would make the timeout unreachable — a
+     * child that hangs (a stalled heap dump, a loaded runner) would park the JUnit thread for ever
+     * and stop the run without naming a test, which is the failure mode #197 exists to keep out
+     * and would be a poor way for the class about naming failures to fail.</p>
      *
      * @param main    class whose {@code main} the child runs
      * @param workDir working directory, so nothing the child writes lands in the checkout
@@ -110,14 +122,29 @@ class TestJvmOutOfMemoryExitTest {
         command.add(System.getProperty("java.class.path"));
         command.add(main.getName());
 
+        Path log = workDir.resolve("child-" + main.getSimpleName() + ".out");
         Process child = new ProcessBuilder(command)
                 .directory(workDir.toFile())
                 .redirectErrorStream(true)
+                .redirectOutput(log.toFile())
                 .start();
-        String output = new String(child.getInputStream().readAllBytes());
-        assertTrue(child.waitFor(2, TimeUnit.MINUTES),
-                "the child JVM did not finish; command was " + command);
-        return new Outcome(child.exitValue(), output);
+        if (!child.waitFor(CHILD_DEADLINE_SECONDS, TimeUnit.SECONDS)) {
+            child.destroyForcibly();
+            child.waitFor(CHILD_DEADLINE_SECONDS, TimeUnit.SECONDS);
+            throw new AssertionError("the child JVM did not finish within " + CHILD_DEADLINE_SECONDS
+                    + "s and was killed; command was " + command + ", output so far was:\n"
+                    + read(log));
+        }
+        return new Outcome(child.exitValue(), read(log));
+    }
+
+    /** The child's output, or a note in its place — a missing file must not mask the real failure. */
+    private static String read(Path log) {
+        try {
+            return Files.exists(log) ? Files.readString(log) : "(the child wrote no output file)";
+        } catch (IOException e) {
+            return "(the child's output could not be read: " + e + ")";
+        }
     }
 
     private static Path[] heapDumps(Path dumpDir) throws IOException {

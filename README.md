@@ -431,6 +431,13 @@ Terminating due to java.lang.OutOfMemoryError: Java heap space
 No test is named, because no test was at fault. The dump is deliberately **not** uploaded as a CI
 artifact — at this ceiling it can reach two gigabytes; reproduce locally instead.
 
+**Read the message before acting on it.** The flag fires for every `OutOfMemoryError` the VM
+raises, not only `Java heap space`: `unable to create native thread` and `Metaspace` end the worker
+the same way and lose every remaining test result with it. Raising `maxHeapSize` is the remedy for
+the first only — for native-thread exhaustion it makes matters worse. An `OutOfMemoryError` thrown
+by ordinary code (a Mockito stub, as `BatchParquetFinalizationIntegrationTest` does) never reaches
+this path and stays catchable.
+
 ## Monitoring
 
 ### Health Check

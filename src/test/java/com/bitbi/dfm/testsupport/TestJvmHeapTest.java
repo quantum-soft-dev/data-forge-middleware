@@ -7,6 +7,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -141,6 +142,69 @@ class TestJvmHeapTest {
         assertTrue(block.contains("-XX:+ExitOnOutOfMemoryError"),
                 "the character literal swallowed the flags: " + block);
         assertEquals(List.of("2g"), TestJvmHeap.declaredHeapSizes(script));
+    }
+
+    @Test
+    @DisplayName("a nested literal inside a template does not desynchronise the read")
+    void shouldReadAStringTemplateAsOneLiteral() {
+        // The shape build.gradle.kts already has: a template expression holding literals of its
+        // own. Pairing the inner opening quote with the outer one inverts every quote after it, and
+        // the two hazards below are then live rather than theoretical — a brace inside a nested
+        // literal is left in "code" with its partner masked, which runs the block match past the
+        // closing brace, and a // inside one blanks the rest of its line, declaration included.
+        String script = """
+                tasks.withType<Test> {
+                    systemProperty("odd", "${dir("{").path}")
+                    jvmArgs("-XX:HeapDumpPath=${dir("// reports").get().asFile.path}"); maxHeapSize = "2g"
+                    jvmArgs("-XX:+ExitOnOutOfMemoryError")
+                }
+                tasks.named<Test>("test") {
+                    maxHeapSize = "512m"
+                }
+                """;
+
+        String block = TestJvmHeap.allTestTasksBlock(script);
+
+        assertNotNull(block, "the template's braces ended the block before it began");
+        assertFalse(block.contains("512m"),
+                "an unpaired brace left in code by the desynchronised read ran the block match past "
+                        + "its own closing brace and swallowed the next task: " + block);
+        assertTrue(block.contains("-XX:+ExitOnOutOfMemoryError"),
+                "the read lost the flags declared after the template: " + block);
+        // Both declarations of the fixture, in order — the narrower one is still seen, which is
+        // what lets the guard refuse a build file that leaves a sibling task on the default.
+        assertEquals(List.of("2g", "512m"), TestJvmHeap.declaredHeapSizes(script),
+                "a // inside a template's nested literal blanked the rest of its line");
+    }
+
+    @Test
+    @DisplayName("a // inside a string literal is a URL, not a comment")
+    void shouldNotReadASlashInsideALiteralAsAComment() {
+        // Blanking to end of line here would take the declaration on the same line with it.
+        String script = """
+                tasks.withType<Test> {
+                    systemProperty("docs", "https://example.test/x"); maxHeapSize = "2g"
+                    jvmArgs("-XX:+ExitOnOutOfMemoryError")
+                }
+                """;
+
+        assertEquals(List.of("2g"), TestJvmHeap.declaredHeapSizes(script),
+                "the // of a URL blanked the rest of the line, declaration included");
+        assertTrue(TestJvmHeap.allTestTasksBlock(script).contains("-XX:+ExitOnOutOfMemoryError"));
+    }
+
+    @Test
+    @DisplayName("Kotlin block comments nest, so the first close does not end them")
+    void shouldReadNestedBlockComments() {
+        String script = """
+                /* outer /* inner */ maxHeapSize = "8g" */
+                tasks.withType<Test> {
+                    maxHeapSize = "2g"
+                }
+                """;
+
+        assertEquals(List.of("2g"), TestJvmHeap.declaredHeapSizes(script),
+                "the inner close ended the comment and a commented-out declaration was counted");
     }
 
     @Test

@@ -97,7 +97,8 @@ class TestJvmHeapCeilingTest {
     @Test
     @DisplayName("this JVM was actually given the declared ceiling")
     void shouldRunWithTheDeclaredCeiling() {
-        long declared = declaredCeiling();
+        String literal = declaredCeilingLiteral();
+        long declared = TestJvmHeap.parseSize(literal);
         long actual = Runtime.getRuntime().maxMemory();
 
         if (System.getProperty(RunOwnedScratch.SCRATCH_ROOT_PROPERTY) == null) {
@@ -110,7 +111,7 @@ class TestJvmHeapCeilingTest {
                     "this JVM was launched outside Gradle with a maximum heap of "
                             + TestJvmHeap.describe(actual) + ", below the "
                             + TestJvmHeap.describe(TestJvmHeap.MIN_HEAP_BYTES) + " the suite needs. "
-                            + "Add -Xmx" + TestJvmHeap.describe(declared) + " to the run configuration (#207)");
+                            + "Add -Xmx" + literal + " to the run configuration (#207)");
             return;
         }
         // The JVM keeps one region back from the reported maximum, so this is never an equality.
@@ -131,10 +132,21 @@ class TestJvmHeapCeilingTest {
      * {@code NoSuchElementException} out of an empty list says nothing about what is wrong.
      */
     private static long declaredCeiling() {
+        return TestJvmHeap.parseSize(declaredCeilingLiteral());
+    }
+
+    /**
+     * The one declared ceiling as it is written, failing by name when there is not exactly one — a
+     * raw {@code NoSuchElementException} out of an empty list says nothing about what is wrong.
+     *
+     * <p>Kept as the literal and not only as bytes because the IDE branch above quotes it back as a
+     * {@code -Xmx} argument, and the JVM takes {@code 2g} while it refuses {@code 2048 MiB}.</p>
+     */
+    private static String declaredCeilingLiteral() {
         List<String> declared = TestJvmHeap.declaredHeapSizes(TestJvmHeap.buildScript());
         assertEquals(1, declared.size(),
                 "build.gradle.kts must declare maxHeapSize exactly once, on "
                         + TestJvmHeap.ALL_TEST_TASKS + "; found " + declared + " (#207)");
-        return TestJvmHeap.parseSize(declared.getFirst());
+        return declared.getFirst();
     }
 }

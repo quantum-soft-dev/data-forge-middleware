@@ -195,88 +195,207 @@ public final class TestJvmHeap {
      * Blanks {@code //} and block comments, keeping every other character at its own offset so the
      * result can be indexed against {@link #maskLiterals(String)} of itself.
      */
-    static String stripComments(String source) {
+    private static String stripComments(String source) {
         char[] out = source.toCharArray();
+        for (Span span : lex(source)) {
+            if (span.comment()) {
+                blank(out, span.from(), span.to());
+            }
+        }
+        return new String(out);
+    }
+
+    /**
+     * Blanks the contents of every string and character literal, keeping the length, so a brace
+     * inside a path, a regular expression or a Kotlin template cannot unbalance the block match.
+     */
+    private static String maskLiterals(String source) {
+        char[] out = source.toCharArray();
+        for (Span span : lex(source)) {
+            if (!span.comment()) {
+                blank(out, span.from(), span.to());
+            }
+        }
+        return new String(out);
+    }
+
+    /** A comment or a literal, as a half-open range of the source. */
+    private record Span(int from, int to, boolean comment) {
+    }
+
+    /**
+     * Every comment and every literal in a Kotlin source, in one pass.
+     *
+     * <p>The hard part is the template: {@code "…${expr}…"} puts <em>code</em> inside a literal, and
+     * that code may hold literals of its own — {@code "-XX:HeapDumpPath=${dir("reports").path}"} is
+     * the shape this very build file has. A scanner that pairs the first inner quote with the outer
+     * one desynchronises from there on, and the two ways that shows up are both silent: a brace in
+     * a later template ends the block early (the guard reports no {@code tasks.withType<Test>} block
+     * at all) and a {@code //} inside a literal — a URL — blanks the rest of a line that may carry
+     * the declaration. The same class of hole as the char literal below and as the regex
+     * {@code AsyncExecutorQualifierTest} had to replace; found in review of #207.</p>
+     *
+     * <p>A template's expression is reported as part of the literal. For the two callers that is
+     * exactly right: brace matching must not see its braces, and no flag is ever written inside
+     * one.</p>
+     */
+    private static List<Span> lex(String source) {
+        List<Span> spans = new ArrayList<>();
         int i = 0;
-        while (i < out.length) {
+        while (i < source.length()) {
             if (source.startsWith("//", i)) {
                 int end = source.indexOf('\n', i);
-                i = blank(out, i, end < 0 ? out.length : end);
+                int stop = end < 0 ? source.length() : end;
+                spans.add(new Span(i, stop, true));
+                i = stop;
             } else if (source.startsWith("/*", i)) {
-                int end = source.indexOf("*/", i + 2);
-                i = blank(out, i, end < 0 ? out.length : end + 2);
+                int stop = endOfBlockComment(source, i);
+                spans.add(new Span(i, stop, true));
+                i = stop;
             } else if (source.startsWith("\"\"\"", i)) {
-                int end = source.indexOf("\"\"\"", i + 3);
-                i = end < 0 ? out.length : end + 3;
-            } else if (out[i] == '"') {
-                i = endOfStringLiteral(source, i);
-            } else if (out[i] == '\'') {
+                int stop = endOfRawString(source, i);
+                spans.add(new Span(i, stop, false));
+                i = stop;
+            } else if (source.charAt(i) == '"') {
+                int stop = endOfString(source, i);
+                spans.add(new Span(i, stop, false));
+                i = stop;
+            } else if (source.charAt(i) == '\'') {
+                int stop = endOfCharLiteral(source, i);
+                spans.add(new Span(i, stop, false));
+                i = stop;
+            } else {
+                i++;
+            }
+        }
+        return spans;
+    }
+
+    /**
+     * Offset just past the end of the block comment starting at {@code start}; Kotlin nests them.
+     *
+     * <p>The closing delimiter is deliberately not written here in {@code @code} form: Java lexes
+     * the sequence before any Javadoc tool sees it, so it would close this comment mid-sentence —
+     * the mistake {@code AsyncExecutorQualifierTest} made and had to correct.</p>
+     */
+    private static int endOfBlockComment(String source, int start) {
+        int depth = 0;
+        int i = start;
+        while (i < source.length()) {
+            if (source.startsWith("/*", i)) {
+                depth++;
+                i += 2;
+            } else if (source.startsWith("*/", i)) {
+                depth--;
+                i += 2;
+                if (depth == 0) {
+                    return i;
+                }
+            } else {
+                i++;
+            }
+        }
+        return source.length();
+    }
+
+    /**
+     * Offset just past the quote closing the ordinary string literal at {@code start}.
+     *
+     * <p>A newline ends it as well: an ordinary Kotlin literal cannot span lines, so meeting one
+     * means the source is malformed, and stopping there costs a line rather than the rest of the
+     * file.</p>
+     */
+    private static int endOfString(String source, int start) {
+        int i = start + 1;
+        while (i < source.length()) {
+            char c = source.charAt(i);
+            if (c == '\\') {
+                i += 2;
+            } else if (c == '"') {
+                return i + 1;
+            } else if (c == '\n') {
+                return i;
+            } else if (c == '$' && i + 1 < source.length() && source.charAt(i + 1) == '{') {
+                i = endOfTemplate(source, i + 1);
+            } else {
+                i++;
+            }
+        }
+        return source.length();
+    }
+
+    /** Offset just past the {@code """} closing the raw string at {@code start}; no escapes there. */
+    private static int endOfRawString(String source, int start) {
+        int i = start + 3;
+        while (i < source.length()) {
+            if (source.startsWith("\"\"\"", i)) {
+                return i + 3;
+            }
+            if (source.charAt(i) == '$' && i + 1 < source.length() && source.charAt(i + 1) == '{') {
+                i = endOfTemplate(source, i + 1);
+            } else {
+                i++;
+            }
+        }
+        return source.length();
+    }
+
+    /**
+     * Offset just past the brace closing the template expression whose {@code &#123;} is at
+     * {@code open}. The expression is ordinary code, so its own literals are skipped whole and its
+     * braces are counted.
+     */
+    private static int endOfTemplate(String source, int open) {
+        int depth = 0;
+        int i = open;
+        while (i < source.length()) {
+            char c = source.charAt(i);
+            if (c == '{') {
+                depth++;
+                i++;
+            } else if (c == '}') {
+                depth--;
+                i++;
+                if (depth == 0) {
+                    return i;
+                }
+            } else if (source.startsWith("\"\"\"", i)) {
+                i = endOfRawString(source, i);
+            } else if (c == '"') {
+                i = endOfString(source, i);
+            } else if (c == '\'') {
                 i = endOfCharLiteral(source, i);
             } else {
                 i++;
             }
         }
-        return new String(out);
+        return source.length();
     }
 
     /**
-     * Blanks the contents of every string literal, keeping the length, so brace matching cannot be
-     * thrown by a brace inside a path, a regular expression or a Kotlin template.
-     */
-    static String maskLiterals(String source) {
-        char[] out = source.toCharArray();
-        int i = 0;
-        while (i < out.length) {
-            if (source.startsWith("\"\"\"", i)) {
-                int end = source.indexOf("\"\"\"", i + 3);
-                int stop = end < 0 ? out.length : end + 3;
-                blank(out, i + 3, Math.max(i + 3, stop - 3));
-                i = stop;
-            } else if (out[i] == '"') {
-                int stop = endOfStringLiteral(source, i);
-                blank(out, i + 1, Math.max(i + 1, stop - 1));
-                i = stop;
-            } else if (out[i] == '\'') {
-                int stop = endOfCharLiteral(source, i);
-                blank(out, i + 1, Math.max(i + 1, stop - 1));
-                i = stop;
-            } else {
-                i++;
-            }
-        }
-        return new String(out);
-    }
-
-    /** Offset just past the closing quote of the literal starting at {@code start}. */
-    private static int endOfStringLiteral(String source, int start) {
-        int i = start + 1;
-        while (i < source.length() && source.charAt(i) != '"') {
-            i += source.charAt(i) == '\\' ? 2 : 1;
-        }
-        return Math.min(i + 1, source.length());
-    }
-
-    /**
-     * Offset just past the closing quote of the Kotlin character literal starting at
-     * {@code start}. Read at all because {@code '"'} would otherwise open a string literal that
-     * swallows the code up to the next quote — the shape that cost
-     * {@code AsyncExecutorQualifierTest} forty lines of a file it claimed to scan in full.
+     * Offset just past the closing quote of the Kotlin character literal at {@code start}, or one
+     * character on when what follows is not one.
+     *
+     * <p>Read at all because {@code '"'} would otherwise open a string literal that swallows the
+     * code up to the next quote. Bounded to the two shapes a character literal can have, so a stray
+     * apostrophe in code costs one character rather than running to the next one.</p>
      */
     private static int endOfCharLiteral(String source, int start) {
         int i = start + 1;
-        while (i < source.length() && source.charAt(i) != '\'') {
-            i += source.charAt(i) == '\\' ? 2 : 1;
+        if (i < source.length() && source.charAt(i) == '\\') {
+            i += 2;
+        } else {
+            i++;
         }
-        return Math.min(i + 1, source.length());
+        return i < source.length() && source.charAt(i) == '\'' ? i + 1 : start + 1;
     }
 
-    /** Replaces {@code [from, to)} with spaces, keeping newlines so line numbers survive. */
-    private static int blank(char[] out, int from, int to) {
-        for (int i = from; i < Math.min(to, out.length); i++) {
+    /** Replaces {@code [from, to)} with spaces, keeping newlines so offsets and lines both survive. */
+    private static void blank(char[] out, int from, int to) {
+        for (int i = Math.max(from, 0); i < Math.min(to, out.length); i++) {
             if (out[i] != '\n') {
                 out[i] = ' ';
             }
         }
-        return Math.min(to, out.length);
     }
 }

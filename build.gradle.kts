@@ -190,6 +190,13 @@ tasks.withType<Test> {
         // real child JVMs, including that an `OutOfMemoryError` a Mockito stub throws stays
         // catchable (BatchParquetFinalizationIntegrationTest asserts exactly that).
         "-XX:+ExitOnOutOfMemoryError",
+        // It fires for every OutOfMemoryError the VM itself raises, not only "Java heap space":
+        // "unable to create native thread" and "Metaspace" end the worker the same way, and every
+        // remaining test result is lost with it. That is still better than the swallow — the build
+        // says which error it was — but the remedy differs, and raising maxHeapSize makes native
+        // thread exhaustion likelier rather than less likely, so read the message before acting.
+        // An OutOfMemoryError a Mockito stub throws is not affected: it never reaches this path.
+        //
         // The JVM is about to disappear, so the dump is the only evidence left for re-sizing.
         "-XX:+HeapDumpOnOutOfMemoryError",
         "-XX:HeapDumpPath=${layout.buildDirectory.dir("reports/test-oom").get().asFile.absolutePath}",
