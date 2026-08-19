@@ -19,6 +19,17 @@ export type {
   DeviceAuthError,
 } from './model/types';
 
+// User code shape
+export {
+  USER_CODE_CHARS,
+  USER_CODE_LENGTH,
+  formatUserCode,
+  isCompleteUserCode,
+} from './model/userCode';
+
+// Failure wording
+export { describeVerifyFailure } from './model/verifyError';
+
 // Hooks
 export {
   deviceAuthKeys,

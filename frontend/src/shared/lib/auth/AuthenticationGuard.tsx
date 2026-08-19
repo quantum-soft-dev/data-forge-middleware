@@ -1,5 +1,6 @@
 import { ComponentType, useEffect } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
+import { currentReturnTo } from './returnTo';
 
 /**
  * Loading spinner component shown during authentication redirect.
@@ -46,7 +47,7 @@ export function AuthenticationGuard({ component: Component }: AuthenticationGuar
     if (isLoading || isAuthenticated) return;
 
     void loginWithRedirect({
-      appState: { returnTo: window.location.pathname },
+      appState: { returnTo: currentReturnTo() },
     });
   }, [isAuthenticated, isLoading, loginWithRedirect]);
 

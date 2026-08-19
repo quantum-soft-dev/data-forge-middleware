@@ -5,6 +5,7 @@ import { ErrorBoundary } from '@/app/ErrorBoundary'
 import { setupInterceptors, setupResponseInterceptor } from '@/shared/api/interceptors'
 import { initTokenRefresh } from '@/shared/api/token-refresh'
 import { setupErrorHandler } from '@/shared/api/error-handler'
+import { retryReturnTo } from '@/shared/lib/auth/returnTo'
 import { SessionExpiredBanner } from '@/entities/user-session/ui/SessionExpiredBanner'
 import { Toaster } from 'sonner'
 
@@ -21,7 +22,7 @@ import { Toaster } from 'sonner'
  * @author Data Forge Team
  * @version 2.0.0 (Auth0 migration)
  */
-function AppContent() {
+export function AppContent() {
   const { isLoading, isAuthenticated, error, getAccessTokenSilently, loginWithRedirect, logout } = useAuth0()
 
   // Setup axios interceptors when auth is ready
@@ -84,7 +85,10 @@ function AppContent() {
             {error.message}
           </p>
           <button
-            onClick={() => loginWithRedirect()}
+            // The current URL rather than the callback's `/` — but never the
+            // callback URL itself, whose consumed code/state the SDK would read
+            // as a fresh callback on the way back (#211).
+            onClick={() => loginWithRedirect({ appState: { returnTo: retryReturnTo() } })}
             className="mt-4 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
             Try Again

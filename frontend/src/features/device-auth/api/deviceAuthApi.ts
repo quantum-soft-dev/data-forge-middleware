@@ -31,7 +31,13 @@ import type {
  */
 export async function getVerifyInfo(userCode: string): Promise<DeviceVerifyInfoResponse> {
   const response = await apiClient.get<DeviceVerifyInfoResponse>(
-    `${DEVICE_AUTHORIZATION_VERIFY}?code=${encodeURIComponent(userCode)}`
+    `${DEVICE_AUTHORIZATION_VERIFY}?code=${encodeURIComponent(userCode)}`,
+    // The verification page renders this call's failures itself, with a message
+    // per status (400 already processed, 404 unknown or expired). Letting the
+    // global interceptor toast them as well produces two reports of one failure,
+    // and for a lookup superseded by a later keystroke the toast is the only
+    // one the user sees — over a flow that goes on to succeed (issue #211).
+    { suppressErrorToast: true }
   );
   return response.data;
 }

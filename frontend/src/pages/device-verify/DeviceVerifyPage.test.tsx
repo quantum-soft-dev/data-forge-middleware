@@ -42,6 +42,10 @@ function renderPage() {
   );
 }
 
+function lookedUpCodes(): string[] {
+  return vi.mocked(deviceAuthApi.getVerifyInfo).mock.calls.map(([code]) => code);
+}
+
 function httpError(status: number, description?: string) {
   return {
     response: { status, data: description ? { error_description: description } : {} },
@@ -76,16 +80,65 @@ describe('DeviceVerifyPage', () => {
     expect(deviceAuthApi.getVerifyInfo).toHaveBeenCalledWith('ABCD-1234');
   });
 
+  // The direct URL is printed by a client TUI and pasted by hand, so the code
+  // in it need not arrive in the presentation the backend stores (#211).
+  it('normalizes a code that arrives in the URL', async () => {
+    search.code = 'm9q24aml';
+
+    renderPage();
+
+    expect(await screen.findByText('Authorize Device')).toBeInTheDocument();
+    expect(lookedUpCodes()).toEqual(['M9Q2-4AML']);
+  });
+
+  // A malformed direct URL must not leave the page on a confirmation card with
+  // nothing to confirm: the lookup cannot fire for an incomplete code, so that
+  // state renders neither the details nor the spinner (#211).
+  it('falls back to the input state when the URL code is incomplete', () => {
+    search.code = 'M9Q24AM';
+
+    renderPage();
+
+    expect(screen.getByText('Enter Device Code')).toBeInTheDocument();
+    expect(screen.getByLabelText('Device Code')).toHaveValue('M9Q2-4AM');
+    expect(lookedUpCodes()).toEqual([]);
+  });
+
   it('moves to confirmation once a typed code resolves', async () => {
     renderPage();
 
-    // The query fires as soon as the code is long enough; the page switches to
+    // The query fires as soon as the code is complete; the page switches to
     // the confirm state when the info arrives, without pressing Continue.
     await userEvent.click(screen.getByLabelText('Device Code'));
     await userEvent.paste('ABCD1234');
 
     expect(await screen.findByText('Authorize Device')).toBeInTheDocument();
-    expect(deviceAuthApi.getVerifyInfo).toHaveBeenCalledWith('ABCD-1234');
+    expect(lookedUpCodes()).toEqual(['ABCD-1234']);
+  });
+
+  // A user code is eight characters rendered as XXXX-XXXX, so the formatted
+  // value is nine characters long. Looking one up at eight meant the last
+  // keystroke was preceded by a lookup of a seven-character code, which the
+  // backend answers 404 — and the global interceptor toasts "Resource not
+  // found." for it while the flow goes on to succeed (issue #211).
+  it('does not look up a code that is still being typed', async () => {
+    renderPage();
+
+    const field = screen.getByLabelText('Device Code');
+    await userEvent.type(field, 'M9Q24AM');
+
+    expect(field).toHaveValue('M9Q2-4AM');
+    expect(lookedUpCodes()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  });
+
+  it('looks a typed code up exactly once, when its last character arrives', async () => {
+    renderPage();
+
+    await userEvent.type(screen.getByLabelText('Device Code'), 'M9Q24AML');
+
+    expect(await screen.findByText('Authorize Device')).toBeInTheDocument();
+    expect(lookedUpCodes()).toEqual(['M9Q2-4AML']);
   });
 
   it('reports an already-processed authorization (HTTP 400)', async () => {
@@ -108,6 +161,19 @@ describe('DeviceVerifyPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Error', level: 2 })).toBeInTheDocument();
     expect(screen.getByText('Device code not found')).toBeInTheDocument();
+  });
+
+  // The global toast is suppressed for this call, so the page's own message is
+  // the only report and must not blame the code for an outage (#211 review).
+  it('does not blame the code when the request never reached the server', async () => {
+    search.code = 'ABCD-1234';
+    vi.mocked(deviceAuthApi.getVerifyInfo).mockRejectedValue(new Error('Network Error'));
+
+    renderPage();
+
+    await screen.findByRole('heading', { name: 'Error', level: 2 });
+    expect(screen.queryByText(/not found or expired/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/connection/i)).toBeInTheDocument();
   });
 
   it('returns to the input state from the error state', async () => {

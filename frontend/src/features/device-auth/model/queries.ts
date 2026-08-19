@@ -13,6 +13,7 @@ import {
   approveAuthorization,
   denyAuthorization,
 } from '../api/deviceAuthApi';
+import { isCompleteUserCode } from './userCode';
 
 /**
  * Query keys factory for cache management.
@@ -33,7 +34,9 @@ export function useVerifyInfo(userCode: string, options?: { enabled?: boolean })
   return useQuery({
     queryKey: deviceAuthKeys.verifyInfo(userCode),
     queryFn: () => getVerifyInfo(userCode),
-    enabled: (options?.enabled ?? true) && userCode.length >= 8,
+    // Only a complete code is worth asking about: a partial one is a certain
+    // 404 that says nothing about the code the user is still typing (#211).
+    enabled: (options?.enabled ?? true) && isCompleteUserCode(userCode),
     retry: false, // Don't retry on 404
     staleTime: 30000, // 30 seconds
     gcTime: 60000, // 1 minute
