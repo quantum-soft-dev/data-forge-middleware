@@ -42,6 +42,10 @@ function renderPage() {
   );
 }
 
+function lookedUpCodes(): string[] {
+  return vi.mocked(deviceAuthApi.getVerifyInfo).mock.calls.map(([code]) => code);
+}
+
 function httpError(status: number, description?: string) {
   return {
     response: { status, data: description ? { error_description: description } : {} },
@@ -79,13 +83,38 @@ describe('DeviceVerifyPage', () => {
   it('moves to confirmation once a typed code resolves', async () => {
     renderPage();
 
-    // The query fires as soon as the code is long enough; the page switches to
+    // The query fires as soon as the code is complete; the page switches to
     // the confirm state when the info arrives, without pressing Continue.
     await userEvent.click(screen.getByLabelText('Device Code'));
     await userEvent.paste('ABCD1234');
 
     expect(await screen.findByText('Authorize Device')).toBeInTheDocument();
-    expect(deviceAuthApi.getVerifyInfo).toHaveBeenCalledWith('ABCD-1234');
+    expect(lookedUpCodes()).toEqual(['ABCD-1234']);
+  });
+
+  // A user code is eight characters rendered as XXXX-XXXX, so the formatted
+  // value is nine characters long. Looking one up at eight meant the last
+  // keystroke was preceded by a lookup of a seven-character code, which the
+  // backend answers 404 — and the global interceptor toasts "Resource not
+  // found." for it while the flow goes on to succeed (issue #211).
+  it('does not look up a code that is still being typed', async () => {
+    renderPage();
+
+    const field = screen.getByLabelText('Device Code');
+    await userEvent.type(field, 'M9Q24AM');
+
+    expect(field).toHaveValue('M9Q2-4AM');
+    expect(lookedUpCodes()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  });
+
+  it('looks a typed code up exactly once, when its last character arrives', async () => {
+    renderPage();
+
+    await userEvent.type(screen.getByLabelText('Device Code'), 'M9Q24AML');
+
+    expect(await screen.findByText('Authorize Device')).toBeInTheDocument();
+    expect(lookedUpCodes()).toEqual(['M9Q2-4AML']);
   });
 
   it('reports an already-processed authorization (HTTP 400)', async () => {

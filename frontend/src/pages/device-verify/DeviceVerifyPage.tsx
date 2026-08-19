@@ -29,6 +29,9 @@ import {
   useVerifyInfo,
   useApproveAuthorization,
   useDenyAuthorization,
+  formatUserCode,
+  isCompleteUserCode,
+  USER_CODE_LENGTH,
 } from '@/features/device-auth';
 import { AlertTriangle, CheckCircle2, XCircle, Smartphone, Loader2, Server } from 'lucide-react';
 
@@ -61,7 +64,9 @@ export default function DeviceVerifyPage() {
     isLoading: isLoadingVerifyInfo,
     error: verifyInfoError,
     refetch: refetchVerifyInfo,
-  } = useVerifyInfo(userCode, { enabled: userCode.length >= 8 && pageState !== 'success' && pageState !== 'denied' });
+  } = useVerifyInfo(userCode, {
+    enabled: isCompleteUserCode(userCode) && pageState !== 'success' && pageState !== 'denied',
+  });
 
   // Mutations
   const approveMutation = useApproveAuthorization();
@@ -94,7 +99,7 @@ export default function DeviceVerifyPage() {
 
   const handleCodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (userCode.length >= 8) {
+    if (isCompleteUserCode(userCode)) {
       setErrorMessage('');
       refetchVerifyInfo();
     }
@@ -123,15 +128,6 @@ export default function DeviceVerifyPage() {
         ?.response?.data?.error_description;
       setErrorMessage(errorMsg || 'Failed to deny authorization. Please try again.');
     }
-  };
-
-  const formatUserCode = (code: string) => {
-    // Format as XXXX-1234
-    const cleaned = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (cleaned.length <= 4) {
-      return cleaned;
-    }
-    return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}`;
   };
 
   const handleUserCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,7 +190,7 @@ export default function DeviceVerifyPage() {
                     value={userCode}
                     onChange={handleUserCodeChange}
                     placeholder="XXXX-1234"
-                    maxLength={9}
+                    maxLength={USER_CODE_LENGTH}
                     className="text-center text-2xl tracking-widest font-mono"
                     autoFocus
                   />
@@ -205,7 +201,7 @@ export default function DeviceVerifyPage() {
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={userCode.length < 8 || isLoadingVerifyInfo}
+                  disabled={!isCompleteUserCode(userCode) || isLoadingVerifyInfo}
                 >
                   {isLoadingVerifyInfo ? (
                     <>
