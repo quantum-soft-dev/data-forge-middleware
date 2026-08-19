@@ -403,9 +403,18 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
     void cleanUpSeededData() {
         for (UUID siteId : createdSites) {
             jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", siteId);
-            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", siteId);
+            // Both relationships, not just site_id (issue #226): changelog_segments_batch_id_fkey
+            // carries no cascade, and a segment's batch need not belong to the segment's site, so a
+            // site_id-only sweep can leave a row that blocks the DELETE FROM batches below.
+            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ? OR batch_id IN "
+                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId, siteId);
             jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", siteId);
+            // The second non-cascading reference to batches: fk_account_plugins_baseline_batch is
+            // ON DELETE RESTRICT (V25). Cleared by the same batch relationship, so this method is
+            // symmetric with the fixture's own sweep rather than fixing one of the two.
+            jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
+                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId);
             jdbc.update("DELETE FROM batches WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM sites WHERE id = ?", siteId);
         }

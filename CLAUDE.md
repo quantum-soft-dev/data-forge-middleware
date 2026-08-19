@@ -453,6 +453,77 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- fixture-clears-by-batch: The suite's shared-database cleanups clear `changelog_segments` by the
+  relationship the constraint actually uses, not only by `site_id` (issue #226, filed by the
+  `/github-issue-runner` dispatcher when `develop` went red on a change that could not have caused
+  it). `test-data.sql` swept segments by `site_id` and then deleted `batches` by `site_id`, but the
+  constraint standing in the way of the second statement is `changelog_segments_batch_id_fkey`, on
+  **`batch_id`** — and only `site_id` carries `ON DELETE CASCADE`. The two are the same relationship
+  for a segment the application wrote and **different** relationships for one a test wrote, because
+  `ChangelogSegment.create(siteId, batchId, ...)` takes them independently and nothing requires the
+  batch to belong to the site. A segment pairing a site the predicate does not match with a batch
+  the next statement deletes therefore survived the sweep and blocked it — surfacing as a
+  `ScriptStatementFailedException` **inside `@Sql`** in whichever class ran next, so the failure was
+  reported against an innocent test and cost a full investigation each time, the complaint #207 was
+  filed for one layer down. **Both** non-cascading references to
+  `batches` are swept by the relationship their constraint uses, in **three** cleanups:
+  `changelog_segments.batch_id` and — added in review round 1 — `account_plugins.baseline_batch_id`,
+  which is `ON DELETE RESTRICT` (V25) and the only other FK to `batches` without a cascade, so an
+  activation owned by an account outside `%@example.com` blocks the identical statement one
+  constraint over. `test-data.sql`, `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` and
+  `BatchTerminalTransitionLockingIntegrationTest.tearDown` all carry the pair; the third seeds
+  neither today and is fixed anyway, since "safe because nobody writes one yet" is how this sat
+  latent. It is the shape `uploaded_files` already uses two statements earlier for the same
+  constraint-shaped reason.
+  **The rows were real rather than hypothetical, and the ticket asked for their origin before a
+  fix.** Instrumenting the fixture over a full-suite run (a single statement carrying its payload in
+  a cast error — Spring's `ScriptUtils` splits on `;` and does not understand a `DO $$ … $$` block,
+  which is itself worth knowing before anyone puts one in that file) caught segments of
+  `store-02.example.com` pointing at `store-01`'s seeded batch, `first_seq` 1 and 7, keys
+  `delta/{store-02}/segments/{1,7}.pb.gz` — `DeltaSqlQueueRepositoryIntegrationTest.seedSegment`,
+  which passed one `BATCH` constant for both of its sites. It is fixed **at source** as well
+  (`batchOf`, so the batch follows the site), rather than only tolerated: a re-run of the
+  instrumented suite finds no mismatched row anywhere except the one the new guard plants
+  deliberately. Those rows also leaked into 51 other classes' fixtures before their own `@Sql`
+  cleared them, which is the second mechanism the ticket records — `findNextPendingPluginSql` has
+  **no site predicate** (the queue is global, #175), so a leaked pending head is claimed by an
+  assertion in another class that believes it owns the database.
+  **What was deliberately not concluded, and it is the important half**: this change is hardening
+  that closes a proven mechanism, **not** a demonstrated fix for the failures that prompted the
+  ticket. The captured mismatches are between two `%.example.com` sites, which the old sweep still
+  removed, so they explain the cross-class leak but have never been shown to block anything. And a
+  backlog pass on the ticket (comment of 16:08, which this work initially missed by reading the
+  issue without its comments) established the sharper fact: **the fast gate cannot create the
+  blocking row at all**, since `build.gradle.kts` excludes `**/integration/**` by path and no class
+  outside that package persists a site whose domain falls outside `%.example.com` — verified again
+  here, where the only such class is now this ticket's own guard. The originally observed failure
+  was in the fast gate, so it has a mechanism this fix does not address (a row committed by another
+  connection *between* the two statements is the open candidate, and `OR batch_id IN (...)` does
+  nothing for it). Eight fast-gate passes and a full-suite pass did not reproduce it. The fix is therefore justified structurally (the
+  constraint and the `uploaded_files` precedent) and pinned by a guard that **constructs** the
+  blocking row, rather than by a reproduction; the two observed `develop` failures
+  (`DeltaSessionLivenessIntegrationTest`, `DeltaSqlQueueRepositoryIntegrationTest`) are consistent
+  with it but not proof of it. A rate hypothesis is recorded on the ticket rather than acted on:
+  #207 raising the test JVM from 512 MB to 2 GiB removes the memory pressure that evicted cached
+  Spring contexts, so more contexts stay alive against the one shared database.
+  `TestDataFixtureCleanupContractTest` is the leftover-then-clear guard of #119 and #159 — it seeds
+  exactly the blocking row (a site outside `%.example.com` holding a seeded batch), runs the **real**
+  script through `ResourceDatabasePopulator` (the same splitter `@Sql` uses, so it cannot pass
+  against a construct `ScriptUtils` would choke on), and requires the row to be **gone** rather than
+  the script merely to survive, since "it did not throw" passes against a fixture that never had the
+  row. **Two methods, one per constraint**, each mutation-proven against its own: the segment one
+  fails on `changelog_segments_batch_id_fkey` against the unfixed sweep, and
+  `shouldClearActivationReachableOnlyThroughItsBaselineBatch` fails on
+  `fk_account_plugins_baseline_batch` against the account-only one. It lives outside
+  `**/integration/**` so the per-task gate runs it, and removes its own account, site and batch,
+  which the fixture by construction cannot reach — a leaking guard would have become the next #226.
+  The stranded rows hang off a batch the guard creates itself rather than store-01's flagship one
+  (review round 2): the batch-keyed readers — `findByBatchIdOrderByFirstSeq`,
+  `SqlGenerationPersistence.loadBatchData`, `BatchHistoryService` — have no site predicate either, so
+  a batch-parquet build would have replayed a segment whose object was never uploaded and failed an
+  artifact for a batch this class does not own.
+  Test-only — no production code, REST, gRPC, proto, DTO, migration, configuration-key, metric,
+  S3-key or frontend change.
 - first-checkpoint-state: A freshly ingested site stops reading as broken — the two surfaces that
   reported a scheduled wait as a failure now say what they are waiting for (issue #213, folding
   **#214**, both from the same PDE QA run). **The ticket's own first task was to establish which of

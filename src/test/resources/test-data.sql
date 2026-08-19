@@ -18,10 +18,27 @@ DELETE FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE 
 DELETE FROM admin_action_logs WHERE target_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com') OR admin_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
--- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted before batches
-DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
--- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches
-DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
+-- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted
+-- before batches -- and by that relationship as well as by account (issue #226): the constraint is
+-- fk_account_plugins_baseline_batch, which RESTRICTs on the *batch*, so an activation owned by an
+-- account this predicate does not match still blocks the DELETE FROM batches below. Same reasoning
+-- as the changelog_segments sweep further down; these two are the only FKs to batches without a
+-- cascade.
+-- Note the ownership this widens: the second predicate deletes activations of accounts the fixture
+-- does not otherwise own, whenever their baseline_batch_id points at a batch it is about to delete,
+-- and plugin_sql_generations / plugin_delta_baselines / download_links cascade with them. That is
+-- intended -- the alternative is the FK stopping the run -- but a test seeding an activation for a
+-- foreign account against a seeded batch will lose it mid-class, with nothing pointing here.
+DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com')
+                               OR baseline_batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
+-- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches.
+-- Both relationships are cleared, not just site_id (issue #226): the blocking constraint is
+-- changelog_segments_batch_id_fkey, and a segment's batch need not belong to the segment's site --
+-- ChangelogSegment.create(siteId, batchId, ...) takes the two independently, so a test can pair a
+-- site this predicate does not match with a batch the next statement deletes. Same shape as the
+-- uploaded_files sweep above, and for the same constraint-shaped reason.
+DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com')
+                                  OR batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 DELETE FROM checkpoints WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM site_sync_state WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
