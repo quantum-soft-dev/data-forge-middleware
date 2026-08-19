@@ -32,6 +32,14 @@ export const deltaSyncStateSchema = z.object({
   lastRebuildOutcomeAt: z.string().nullable().optional().default(null),
   /** Operator-facing explanation; null for a rebuild that completed. */
   lastRebuildMessage: z.string().nullable().optional().default(null),
+  /**
+   * When the scheduled checkpoint build next runs (#213). Checkpoints come from that one nightly
+   * cron and from an operator-forced rebuild, so `lastCheckpointSeq === 0` means the first build
+   * has not come round yet rather than that the site is behind — this is what lets the surface say
+   * when the wait ends instead of colouring it as a backlog. Null when the schedule names no
+   * occurrence (the sweep is switched off), and optional so an older backend still parses.
+   */
+  nextCheckpointBuildAt: z.string().nullable().optional().default(null),
 });
 export type DeltaSyncState = z.infer<typeof deltaSyncStateSchema>;
 

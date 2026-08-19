@@ -72,4 +72,29 @@ describe('SyncHealthPill (F11)', () => {
     const { container } = render(<SyncHealthPill isLoading={true} now={NOW} />)
     expect(container).toBeEmptyDOMElement()
   })
+
+  it('renders the neutral "No checkpoint yet" pill for a site awaiting its first build (#213)', () => {
+    // Every record applied so far counts as lag while the pointer is zero, so a freshly ingested
+    // site used to arrive in the site list wearing an amber "Lag 1.2k" — a designed wait shown as
+    // a backlog, on the one surface an operator scans for trouble.
+    render(
+      <SyncHealthPill
+        health={health({ lastAppliedSeq: 1_155, lastCheckpointSeq: 0 })}
+        isLoading={false}
+        now={NOW}
+      />,
+    )
+    expect(screen.getByTestId('sync-health-pill')).toHaveTextContent('No checkpoint yet')
+  })
+
+  it('still reports a stalled client on a site with no checkpoint', () => {
+    render(
+      <SyncHealthPill
+        health={health({ lastAppliedSeq: 1_155, lastCheckpointSeq: 0, updatedAt: '2026-07-04T10:00:00Z' })}
+        isLoading={false}
+        now={NOW}
+      />,
+    )
+    expect(screen.getByTestId('sync-health-pill')).toHaveTextContent('Stalled · 26 h')
+  })
 })

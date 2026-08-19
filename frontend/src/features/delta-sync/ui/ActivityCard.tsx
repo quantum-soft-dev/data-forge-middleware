@@ -9,8 +9,8 @@
 
 import { formatNumber } from '@/shared/lib/formatters';
 import type { DeltaSegment } from '../model/types';
-import type { SyncSeverity } from '../model/severity';
-import { severityTokens, monitoringTokens as t } from '@/shared/ui/tokens';
+import { syncStatusTone, type SyncStatus } from '../model/severity';
+import { monitoringTokens as t } from '@/shared/ui/tokens';
 import { sparklinePoints } from '../model/useLagHistory';
 
 const SPARK_WIDTH = 400;
@@ -20,15 +20,16 @@ const THROUGHPUT_BARS = 16;
 interface ActivityCardProps {
   /** Lag samples accumulated since page open, oldest first. */
   lagSamples: number[];
-  severity: SyncSeverity;
+  /** The site's current sync verdict — colors the lag line (a pending first checkpoint is grey). */
+  status: SyncStatus;
   /** Recent segments, newest first (admin data). */
   segments?: DeltaSegment[];
   /** False while P2 is unresolved for owners — hides the throughput panel. */
   showThroughput: boolean;
 }
 
-export function ActivityCard({ lagSamples, severity, segments, showThroughput }: ActivityCardProps) {
-  const sev = severityTokens[severity];
+export function ActivityCard({ lagSamples, status, segments, showThroughput }: ActivityCardProps) {
+  const sev = syncStatusTone(status);
   const points = sparklinePoints(lagSamples, SPARK_WIDTH, SPARK_HEIGHT);
 
   // Oldest → newest, left to right, capped at the last 16 segments.

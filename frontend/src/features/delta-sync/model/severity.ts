@@ -7,7 +7,21 @@
  * overrides the lag color.
  */
 
+import { monitoringTokens, severityTokens, type SeverityToken } from '@/shared/ui/tokens';
+
 export type SyncSeverity = 'healthy' | 'elevated' | 'critical' | 'stalled';
+
+/**
+ * What a sync surface reports — a lag verdict, or the state that has no lag verdict at all.
+ *
+ * `awaiting-first-checkpoint` is issue #213: checkpoints are produced by one nightly cron
+ * (`CheckpointScheduler`) and by an operator-forced rebuild, so a site ingested during the day has
+ * none until that tick fires. Every record it has applied then counts as lag against a pointer of
+ * zero, and a freshly ingested site read as "Elevated — 1,155 records behind checkpoint": a
+ * designed wait rendered as a backlog alarm. It is a distinct state rather than a lag band because
+ * there is nothing for it to be behind.
+ */
+export type SyncStatus = SyncSeverity | 'awaiting-first-checkpoint';
 
 export const LAG_ELEVATED_THRESHOLD = 1_000;
 export const LAG_CRITICAL_THRESHOLD = 10_000;
@@ -46,4 +60,64 @@ export function formatLagShort(lag: number): string {
     return `${(lag / 1_000).toFixed(1)}k`;
   }
   return String(lag);
+}
+
+/**
+ * Has this site ever had a checkpoint built?
+ *
+ * Zero is the canonical "none": it is the initial value of `site_sync_state.last_checkpoint_seq`
+ * and what a history wipe and a re-baseline reset it to, and the backend applies the same test
+ * before seeding a build from a frame. The bulk health projection carries null for the same thing.
+ *
+ * @param state anything carrying the checkpoint pointer
+ */
+export function hasCheckpoint(state: { lastCheckpointSeq: number | null }): boolean {
+  return (state.lastCheckpointSeq ?? 0) > 0;
+}
+
+/**
+ * The verdict a surface shows for a site (issue #213).
+ *
+ * Order matters twice. "Stalled" wins over the pending checkpoint deliberately: it is a statement
+ * about the client having gone quiet for a day, which is both more actionable and independent of
+ * whether a checkpoint exists. And the pending state wins over every lag band, because a lag
+ * measured against a pointer of zero is not a backlog.
+ *
+ * @param state the sync-state projection or a bulk health entry
+ * @param now   injectable clock
+ */
+export function getSyncStatus(
+  state: { lastAppliedSeq: number; lastCheckpointSeq: number | null; updatedAt: string },
+  now: Date = new Date(),
+): SyncStatus {
+  if (isStalled(state.updatedAt, now)) return 'stalled';
+  if (!hasCheckpoint(state)) return 'awaiting-first-checkpoint';
+  return getSyncSeverity(
+    computeLag({ lastAppliedSeq: state.lastAppliedSeq, lastCheckpointSeq: state.lastCheckpointSeq ?? 0 }),
+    state.updatedAt,
+    now,
+  );
+}
+
+/**
+ * Neutral tone for the one status that is neither healthy nor a problem. Grey rather than green:
+ * "nothing is wrong" and "everything is materialized" are different claims, and only the first is
+ * true here.
+ */
+const AWAITING_FIRST_CHECKPOINT_TONE: SeverityToken = {
+  dot: monitoringTokens.textMuted,
+  text: monitoringTokens.textSecondary,
+  bg: monitoringTokens.subtleBg,
+  label: 'No checkpoint yet',
+};
+
+/**
+ * Chip colors and label for a status, so every sync surface paints the same verdict the same way.
+ *
+ * @param status the verdict from {@link getSyncStatus}
+ */
+export function syncStatusTone(status: SyncStatus): SeverityToken {
+  return status === 'awaiting-first-checkpoint'
+    ? AWAITING_FIRST_CHECKPOINT_TONE
+    : severityTokens[status];
 }
