@@ -47,6 +47,36 @@ class TestJvmHeapTest {
         assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("2gb"));
         assertThrows(IllegalArgumentException.class,
                 () -> TestJvmHeap.parseSize("99999999999999999999999g"));
+        // Gradle passes the string through verbatim, so "2 g" reaches the JVM as `-Xmx2 g`.
+        assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("2 g"));
+    }
+
+    @Test
+    @DisplayName("a product that wraps a long fails instead of reading as a plausible ceiling")
+    void shouldRefuseASizeThatOverflows() {
+        // The digits fit a long and the product does not. 17179869186g wraps to exactly 2 GiB —
+        // inside the agreed range, so every assertion of the ceiling guard would have passed.
+        assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("17179869186g"));
+        // And this one wraps negative, which used to be reported as a negative ceiling.
+        assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("9999999999g"));
+        // The largest heap that does fit is still read.
+        assertEquals(8L * 1024 * 1024 * 1024, TestJvmHeap.parseSize("8g"));
+    }
+
+    @Test
+    @DisplayName("a -Xmx outside a comment is seen, one inside a comment is not")
+    void shouldFindARawXmxOnlyWhereItIsCode() {
+        assertTrue(TestJvmHeap.declaresRawXmx("""
+                tasks.named<Test>("integrationTest") {
+                    jvmArgs("-Xmx512m")
+                }
+                """), "a -Xmx smuggled through jvmArgs overrides the ceiling unseen");
+        assertFalse(TestJvmHeap.declaresRawXmx("""
+                tasks.withType<Test> {
+                    // Never pass -Xmx here; maxHeapSize is the only form the guard reads.
+                    maxHeapSize = "2g"
+                }
+                """), "a sentence about the flag was read as the flag");
     }
 
     @Test

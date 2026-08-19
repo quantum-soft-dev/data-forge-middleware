@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -31,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link TestJvmHeap} rather than carrying a second idea of them.</p>
  */
 @DisplayName("Test JVM heap ceiling (#207)")
-class TestJvmHeapCeilingTest {
+public class TestJvmHeapCeilingTest {
 
     @Test
     @DisplayName("exactly one heap ceiling is declared, and it binds every Test task")
@@ -42,10 +43,12 @@ class TestJvmHeapCeilingTest {
                 "build.gradle.kts declares maxHeapSize "
                         + TestJvmHeap.declaredHeapSizes(script).size() + " times "
                         + TestJvmHeap.declaredHeapSizes(script)
-                        + ". Exactly one is required: none leaves every test JVM on Gradle's 512 MB "
-                        + "default, and a second one on a narrower task ("
-                        + "tasks.named<Test>(\"test\"), integrationTest) wins for that task while "
-                        + "leaving its sibling on the default (#207)");
+                        + ". Exactly one is required. None leaves every test JVM on Gradle's 512 MB "
+                        + "default; a second one on a narrower task (tasks.named<Test>(\"test\"), "
+                        + "integrationTest) overrides the shared ceiling for that task alone, so the "
+                        + "value checked here is not the value that task runs on — and the hazard is "
+                        + "the narrowed task dropping below the floor, since its siblings keep the "
+                        + "shared ceiling (#207)");
 
         String block = TestJvmHeap.allTestTasksBlock(script);
         assertNotNull(block, "build.gradle.kts has no " + TestJvmHeap.ALL_TEST_TASKS + " block");
@@ -53,6 +56,17 @@ class TestJvmHeapCeilingTest {
                 "maxHeapSize is declared outside " + TestJvmHeap.ALL_TEST_TASKS + ", so it does not "
                         + "bind every Test task — `test`, `integrationTest` and anything added later "
                         + "must all get the ceiling (#207)");
+    }
+
+    @Test
+    @DisplayName("no task states a heap of its own through jvmArgs")
+    void shouldNotSmuggleAHeapThroughJvmArgs() {
+        assertFalse(TestJvmHeap.declaresRawXmx(TestJvmHeap.buildScript()),
+                "build.gradle.kts passes a -Xmx of its own. maxHeapSize is the only form this guard "
+                        + "can read, so a -Xmx in a task's jvmArgs overrides the ceiling for that "
+                        + "task while leaving every assertion here green — on integrationTest, the "
+                        + "task that boots the most Spring contexts, that is exactly the defect #207 "
+                        + "exists to remove (#207)");
     }
 
     @Test
@@ -97,6 +111,18 @@ class TestJvmHeapCeilingTest {
     @Test
     @DisplayName("this JVM was actually given the declared ceiling")
     void shouldRunWithTheDeclaredCeiling() {
+        assertRunsWithTheDeclaredCeiling();
+    }
+
+    /**
+     * The dynamic half, shared with {@code TestJvmHeapCeilingIntegrationTest}.
+     *
+     * <p>This class is under {@code config/} and {@code integrationTest} includes
+     * {@code **}{@code /integration/**} only, so it never observes the Testcontainers task's JVM.
+     * The twin in that package does, and both call this rather than each carrying its own idea of
+     * the check — the {@code RunOwnedScratch} precedent.</p>
+     */
+    public static void assertRunsWithTheDeclaredCeiling() {
         String literal = declaredCeilingLiteral();
         long declared = TestJvmHeap.parseSize(literal);
         long actual = Runtime.getRuntime().maxMemory();

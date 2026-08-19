@@ -165,8 +165,11 @@ tasks.withType<Test> {
     // 3 GiB never let G1 expand past 1014 MB; the highest occupancy after a collection was 801 MB
     // and the highest before one 965 MB. So 1 GiB sits on the cliff, and the shipped default was
     // under it. TestJvmHeapCeilingTest holds this value inside an agreed range and fails if a
-    // second, narrower declaration appears — one on `test` or `integrationTest` would win for that
-    // task and quietly leave its sibling on the 512 MB default.
+    // second, narrower declaration appears — one on `test` or `integrationTest` overrides this
+    // ceiling for that task alone, so the value the guard checked is not the value that task runs
+    // on. It also refuses a -Xmx passed through jvmArgs, which is the same override in a form no
+    // guard can read; and its twin under src/test/java/com/bitbi/dfm/integration/ checks the JVM
+    // the Testcontainers task is actually given, which nothing under config/ can observe.
     maxHeapSize = "2g"
 
     // ONE JVM, deliberately: no forkEvery and no maxParallelForks.

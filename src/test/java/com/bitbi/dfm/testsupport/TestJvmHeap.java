@@ -70,11 +70,14 @@ public final class TestJvmHeap {
 
     /**
      * A JVM size literal: digits with an optional {@code k}/{@code m}/{@code g} suffix, and
-     * nothing else — exactly what {@code -Xmx} takes. Deliberately not tolerant of a trailing
-     * {@code b}: {@code "2gb"} is a value the JVM refuses to start on, and a guard that reads it as
-     * 2 GiB would report a ceiling for a build that cannot run.
+     * nothing else — exactly what {@code -Xmx} takes.
+     *
+     * <p>Deliberately intolerant of a trailing {@code b} and of a space before the suffix.
+     * {@code "2gb"} and {@code "2 g"} are both values the JVM refuses to start on, and Gradle
+     * passes this string through verbatim, so a guard that read either as 2 GiB would report a
+     * ceiling for a build that cannot run.</p>
      */
-    private static final Pattern SIZE = Pattern.compile("(\\d+)\\s*([kmg]?)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SIZE = Pattern.compile("(\\d+)([kmg]?)", Pattern.CASE_INSENSITIVE);
 
     /** The block every {@code Test} task is configured by, the only place these settings bind all of them. */
     public static final String ALL_TEST_TASKS = "tasks.withType<Test>";
@@ -140,10 +143,11 @@ public final class TestJvmHeap {
     /**
      * Every {@code maxHeapSize} assignment in the build script, in source order.
      *
-     * <p>Read as a list rather than as a first match on purpose: a second assignment on a narrower
-     * task ({@code tasks.named<Test>("test")}, {@code integrationTest}) wins for that task and
-     * would leave the other one running on Gradle's 512 MB default while the guard reported a
-     * ceiling. Callers require exactly one.</p>
+     * <p>Read as a list rather than as a first match on purpose. A second assignment on a narrower
+     * task ({@code tasks.named<Test>("test")}, {@code integrationTest}) overrides the shared
+     * ceiling for that task alone, so the value the guard checked is not the value that task runs
+     * on — the hazard being the narrowed one dropping below the floor, since the shared assignment
+     * still covers its siblings. Callers require exactly one.</p>
      *
      * @param script build script source
      * @return declared values, e.g. {@code ["2g"]}
@@ -162,8 +166,9 @@ public final class TestJvmHeap {
      *
      * @param literal e.g. {@code 2g}, {@code 2048m}, {@code 2147483648}
      * @return size in bytes
-     * @throws IllegalArgumentException when the literal is not a size, rather than silently
-     *                                  reading an unrecognised suffix as bytes
+     * @throws IllegalArgumentException when the literal is not a size or does not fit a
+     *                                  {@code long}, rather than silently reading an unrecognised
+     *                                  suffix as bytes or a wrapped product as a plausible ceiling
      */
     public static long parseSize(String literal) {
         Matcher matcher = SIZE.matcher(literal.trim());
@@ -183,7 +188,31 @@ public final class TestJvmHeap {
             case "g" -> 1024L * 1024 * 1024;
             default -> 1L;
         };
-        return value * multiplier;
+        try {
+            // multiplyExact, not *: a digit run that fits a long and then wraps is the one overflow
+            // the parse above cannot see, and it lands inside the agreed range rather than outside
+            // it — "17179869186g" wraps to exactly 2 GiB and would pass every assertion, while
+            // "9999999999g" goes negative and is reported as a negative ceiling instead of failing.
+            return Math.multiplyExact(value, multiplier);
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException(
+                    "'" + literal + "' is larger than any heap the JVM can take", e);
+        }
+    }
+
+    /**
+     * Whether the build script passes a {@code -Xmx} of its own anywhere.
+     *
+     * <p>{@code maxHeapSize} is the only way this build may state the ceiling, because it is the
+     * only one the guard can read. A {@code -Xmx} smuggled through {@code jvmArgs} — on
+     * {@code integrationTest}, say — overrides it for that task while leaving every assertion here
+     * green, which is exactly the shape #207 exists to remove.</p>
+     *
+     * @param script build script source
+     * @return true when a {@code -Xmx} appears outside a comment
+     */
+    public static boolean declaresRawXmx(String script) {
+        return stripComments(script).contains("-Xmx");
     }
 
     /** Human-readable MiB, for failure messages. */

@@ -525,6 +525,41 @@ pages/{feature}/            # Route pages
   defect was invisible locally. The DoD's last item (`./gradlew test` green on `develop` twice in a
   row) can only be observed after the merge. No production code, REST, gRPC, proto, DTO, migration,
   configuration-key, metric, S3-key or frontend change. See `README.md` ("The test JVM").
+  **Two rounds of review then hardened the guard rather than the value, and the finding that
+  mattered was a hole in its own coverage.** `TestJvmHeapCeilingTest` lives under `config/` and
+  `integrationTest` includes `**/integration/**` alone, so its dynamic half could only ever observe
+  the `test` task's JVM: a `-Xmx` added to `integrationTest`'s own `jvmArgs` left all four
+  assertions green while the Testcontainers suite — the task that boots the most Spring contexts —
+  ran on 512 MB, which is #207's own defect in the worst place for it. Closed twice: a static check
+  refusing **any** `-Xmx` in the build script (`maxHeapSize` is the only form the guard can read,
+  and the override in a form it cannot read is the same override), and a twin in the `integration`
+  package that reads `Runtime.maxMemory()` of the JVM that task is actually given — no Spring
+  context, no container, in that package for the one reason that it is what the filter includes.
+  Both fire under mutation. Round 1's finding was the reader: `"…${f("x")}…"` paired the nested
+  literal's opening quote with the outer one and desynchronised from there, and both consequences
+  were silent — an unpaired brace left in what the scan then read as code ran the block match past
+  its own closing brace, and a `//` inside a literal blanked the rest of its line, declaration
+  included. `build.gradle.kts` already had that shape three times and only re-balanced by luck, so
+  the first mutation-proof fixture had to be rewritten to carry both hazards rather than the benign
+  one. The scanner is now a Kotlin lexer (nested block comments, raw strings, char literals,
+  recursive template expressions), and the Javadoc explaining it closed its own comment on the first
+  attempt — the `AsyncExecutorQualifierTest` mistake, made again and caught by the compiler. Three
+  more, all small and all the same class: `runChild` read the child's output to EOF *before*
+  `waitFor`, so the deadline was unreachable and a hung child would have parked the JUnit thread for
+  ever — the #197 failure mode inside the class about naming failures (the output goes to a file
+  now, and the child is killed when it outstays the bound); `parseSize` caught the parse but not the
+  multiplication, so `"17179869186g"` wrapped to exactly 2 GiB and passed every assertion while
+  `"9999999999g"` was reported as a negative ceiling (`Math.multiplyExact`), and `"2 g"` — which
+  Gradle passes through verbatim and the JVM refuses — was read as 2 GiB; and the IDE-branch message
+  told a developer to add `-Xmx1536 MiB`, which is not an argument the JVM takes. One finding was
+  answered with prose rather than code, deliberately: `-XX:+ExitOnOutOfMemoryError` fires for
+  **every** VM-raised `OutOfMemoryError`, so `unable to create native thread` and `Metaspace` end
+  the worker the same way and lose every remaining result — HotSpot has no per-message form, the
+  trade still favours the flag over the swallow, and what an operator needs is the warning that
+  raising the ceiling is the remedy for the first only and makes native-thread exhaustion likelier.
+  The exactly-once message was also misdiagnosing the case it fires on: the shared assignment
+  already covers the siblings, so the hazard is the *narrowed* task dropping below the floor, not a
+  sibling left on Gradle's default.
 - memory-abort-visible: A memory-pressure abort is a refusal that says so, instead of an empty
   `Optional` no caller could tell from "this batch produced no changes" (issue #181, found working
   #174 and named by it as the reason that defect was expensive rather than merely wrong).
