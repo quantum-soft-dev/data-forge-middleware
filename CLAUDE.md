@@ -453,6 +453,113 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- test-jvm-heap-ceiling: The test JVM has a heap ceiling, and an allocation failure in it now names
+  itself instead of an innocent test (issue #207, found by the `/github-issue-runner` dispatcher on
+  a `develop` pipeline that went red on a change which could not have caused it).
+  `tasks.withType<Test>` declared `useJUnitPlatform()` and nothing else, so every test JVM took
+  Gradle's **512 MB** default — and CI runs the whole suite in one of them (`./gradlew test
+  --no-daemon`, ~2470 tests, 444 classes, **24 cached Spring contexts** alive at once). The margin
+  was whatever the runner happened to leave, which is why it fired intermittently and, worse, why
+  it fired somewhere else each time: an `OutOfMemoryError` is an ordinary `Throwable`, so it
+  unwound into whichever caller was on the stack — Spring's `ConstructorResolver`, re-reported as a
+  `BeanCreationException` of a contract test that allocates nothing, and a retry in the same job
+  named two *different* tests. `CLAUDE.md` tells every agent never to write off a red check without
+  checking which test it is, so each occurrence cost a full investigation that ended at a name with
+  nothing to do with the failure.
+  **The number is measured, not chosen.** `./gradlew test -PtestHeapLog` (the opt-in this ticket
+  adds, one `-Xlog:gc` file per `Test` task under `build/reports/test-heap/`) at a deliberately
+  generous 3 GiB ran the suite green in 5m27s and never let G1 expand past **1014 MB**; the highest
+  occupancy *after* a collection was **801 MB** and the highest before one **965 MB**. So a 1 GiB
+  heap sits exactly on the cliff and the shipped default was under it — `maxHeapSize = "2g"`, about
+  2.5x the live set, is the ceiling, with the guard's agreed range 1.5 GiB–4 GiB. The upper bound
+  is the runner rather than the suite: `ubuntu-latest` has 16 GB shared with the PostgreSQL, Redis
+  and LocalStack service containers, the Gradle build JVM and every Testcontainers image, and past
+  that the kernel's OOM killer answers first — a failure that names nothing at all.
+  **The DoD's second item answered explicitly: one JVM, no `forkEvery`.** Forking would bound the
+  context accumulation by discarding the Spring `TestContext` cache, and that cache is exactly what
+  makes 444 classes affordable — a fresh JVM rebuilds every context it needs, Flyway migration
+  included, and restarts the Testcontainers singletons. It is the right tool for accumulation with
+  no ceiling; this accumulation has one, being **one context per distinct configuration** (24), a
+  property of the test classes and not of the test count, which is what the measurement shows
+  levelling off under a gigabyte. `maxParallelForks` is excluded for an unrelated reason and is
+  worth stating separately: the suite deliberately shares one PostgreSQL database across every
+  context — `test-data.sql` deletes by `%.example.com`, the delta-SQL queue is global (#175), and
+  #197 had to bound lock waits precisely because sibling contexts already contend on the same rows.
+  **The self-naming half is `-XX:+ExitOnOutOfMemoryError`**, with
+  `-XX:+HeapDumpOnOutOfMemoryError` + `-XX:HeapDumpPath=build/reports/test-oom` beside it because
+  the JVM is about to disappear and the dump is the only evidence left for re-sizing. Verified
+  against a real one by forcing the suite to 96 MB: the build prints
+  `java.lang.OutOfMemoryError: Java heap space`, the dump path, `Terminating due to
+  java.lang.OutOfMemoryError`, and fails as `Process 'Gradle Test Executor 4' finished with
+  non-zero exit value 3` — **no test named, because no test was at fault**. The dump is
+  deliberately *not* added to the CI artifact upload: at this ceiling it can reach two gigabytes,
+  and the log line already carries the diagnosis the ticket asked for.
+  **Three guards, and the third is the one worth reviewing.** `TestJvmHeapCeilingTest` (fast gate)
+  requires `maxHeapSize` to be declared **exactly once** and inside `tasks.withType<Test>` — a
+  second declaration on `tasks.named<Test>("test")` or `integrationTest` wins for that task and
+  would quietly leave its sibling on the 512 MB default — requires the value to sit in the agreed
+  range, requires both flags, and reads `Runtime.maxMemory()` to check that Gradle really launched
+  *this* JVM with the declared value, since `GRADLE_OPTS`, `org.gradle.jvmargs` or a later `-Xmx`
+  would make the build file documentation rather than configuration (that assertion caught its own
+  premise during development: an init script setting a heap *before* the build script is silently
+  overridden by it). Outside Gradle — an IDE run configuration, detected by the absence of the
+  `dfm.test.parquet-scratch-root` property Gradle always sets — only the floor is required, the
+  `RunOwnedScratch` fallback and for its reason. `TestJvmOutOfMemoryExitTest` is the wired half a
+  build file cannot be: three **child** JVMs at 32 MB, one per branch of the claim — with the flag a
+  real allocation failure exits 3, names `java.lang.OutOfMemoryError` and never reaches the child's
+  own `catch` (and a heap dump *is* written, so the two flags do co-operate in that order); without
+  it the identical child catches the error and exits 0, which is the swallow being removed and is
+  what stops the first assertion from passing against a JVM that would have died anyway; and with
+  the flag a `throw new OutOfMemoryError(...)` from ordinary code **stays catchable**, because it
+  never reaches the VM's allocation-failure path — the property that keeps
+  `BatchParquetFinalizationIntegrationTest`'s Mockito stub working, which otherwise reads as a
+  landmine. `TestJvmHeapTest` asserts the reader itself over synthetic build scripts (a size
+  literal with each suffix, `"2 GiB"` refused by name rather than read as two bytes, a flag named
+  only in a comment not counted, an unbalanced brace inside a string literal not ending the block,
+  and every declaration reported rather than the first) — the `LockWaitBoundTest` precedent, since
+  a guard that misreads the file is worse than no guard. `RunOwnedScratch.projectRoot()` becomes
+  public so `TestJvmHeap` locates `build.gradle.kts` the same way rather than growing a second idea
+  of where the checkout is.
+  **`.github/workflows/ci-cd.yml` is deliberately untouched**: the ceiling belongs in the build
+  file, where it applies to a developer's run and to CI alike — the ticket's own point that the
+  defect was invisible locally. The DoD's last item (`./gradlew test` green on `develop` twice in a
+  row) can only be observed after the merge. No production code, REST, gRPC, proto, DTO, migration,
+  configuration-key, metric, S3-key or frontend change. See `README.md` ("The test JVM").
+  **Two rounds of review then hardened the guard rather than the value, and the finding that
+  mattered was a hole in its own coverage.** `TestJvmHeapCeilingTest` lives under `config/` and
+  `integrationTest` includes `**/integration/**` alone, so its dynamic half could only ever observe
+  the `test` task's JVM: a `-Xmx` added to `integrationTest`'s own `jvmArgs` left all four
+  assertions green while the Testcontainers suite — the task that boots the most Spring contexts —
+  ran on 512 MB, which is #207's own defect in the worst place for it. Closed twice: a static check
+  refusing **any** `-Xmx` in the build script (`maxHeapSize` is the only form the guard can read,
+  and the override in a form it cannot read is the same override), and a twin in the `integration`
+  package that reads `Runtime.maxMemory()` of the JVM that task is actually given — no Spring
+  context, no container, in that package for the one reason that it is what the filter includes.
+  Both fire under mutation. Round 1's finding was the reader: `"…${f("x")}…"` paired the nested
+  literal's opening quote with the outer one and desynchronised from there, and both consequences
+  were silent — an unpaired brace left in what the scan then read as code ran the block match past
+  its own closing brace, and a `//` inside a literal blanked the rest of its line, declaration
+  included. `build.gradle.kts` already had that shape three times and only re-balanced by luck, so
+  the first mutation-proof fixture had to be rewritten to carry both hazards rather than the benign
+  one. The scanner is now a Kotlin lexer (nested block comments, raw strings, char literals,
+  recursive template expressions), and the Javadoc explaining it closed its own comment on the first
+  attempt — the `AsyncExecutorQualifierTest` mistake, made again and caught by the compiler. Three
+  more, all small and all the same class: `runChild` read the child's output to EOF *before*
+  `waitFor`, so the deadline was unreachable and a hung child would have parked the JUnit thread for
+  ever — the #197 failure mode inside the class about naming failures (the output goes to a file
+  now, and the child is killed when it outstays the bound); `parseSize` caught the parse but not the
+  multiplication, so `"17179869186g"` wrapped to exactly 2 GiB and passed every assertion while
+  `"9999999999g"` was reported as a negative ceiling (`Math.multiplyExact`), and `"2 g"` — which
+  Gradle passes through verbatim and the JVM refuses — was read as 2 GiB; and the IDE-branch message
+  told a developer to add `-Xmx1536 MiB`, which is not an argument the JVM takes. One finding was
+  answered with prose rather than code, deliberately: `-XX:+ExitOnOutOfMemoryError` fires for
+  **every** VM-raised `OutOfMemoryError`, so `unable to create native thread` and `Metaspace` end
+  the worker the same way and lose every remaining result — HotSpot has no per-message form, the
+  trade still favours the flag over the swallow, and what an operator needs is the warning that
+  raising the ceiling is the remedy for the first only and makes native-thread exhaustion likelier.
+  The exactly-once message was also misdiagnosing the case it fires on: the shared assignment
+  already covers the siblings, so the hazard is the *narrowed* task dropping below the floor, not a
+  sibling left on Gradle's default.
 - memory-abort-visible: A memory-pressure abort is a refusal that says so, instead of an empty
   `Optional` no caller could tell from "this batch produced no changes" (issue #181, found working
   #174 and named by it as the reason that defect was expensive rather than merely wrong).
