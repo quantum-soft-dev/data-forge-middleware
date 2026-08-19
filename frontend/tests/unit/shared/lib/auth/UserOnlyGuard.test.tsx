@@ -40,7 +40,12 @@ describe('UserOnlyGuard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     Object.defineProperty(window, 'location', {
-      value: { pathname: '/account/sites', href: '/account/sites' },
+      value: {
+        pathname: '/device-verify',
+        search: '?code=M9Q2-4AML',
+        hash: '',
+        href: '/device-verify?code=M9Q2-4AML',
+      },
       writable: true,
     })
     mockAuth0State({ isAuthenticated: true, isLoading: false })
@@ -77,8 +82,11 @@ describe('UserOnlyGuard', () => {
     render(<UserOnlyGuard component={() => <div>User Content</div>} />)
 
     expect(screen.queryByText('User Content')).not.toBeInTheDocument()
+    // The whole location, not just the path. This guard protects
+    // /device-verify, whose ?code= the PostgreSQL Data Extractor prints in the
+    // URL it hands the operator; dropping it emptied the code field (#211).
     expect(loginWithRedirect).toHaveBeenCalledWith({
-      appState: { returnTo: '/account/sites' },
+      appState: { returnTo: '/device-verify?code=M9Q2-4AML' },
     })
   })
 

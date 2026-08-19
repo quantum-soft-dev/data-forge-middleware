@@ -24,7 +24,7 @@ describe('AuthenticationGuard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     Object.defineProperty(window, 'location', {
-      value: { pathname: '/dashboard' },
+      value: { pathname: '/dashboard', search: '?tab=errors', hash: '' },
       writable: true,
     })
   })
@@ -62,8 +62,10 @@ describe('AuthenticationGuard', () => {
     render(<AuthenticationGuard component={TestComponent} />)
 
     expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
+    // The whole location, not just the path: onRedirectCallback restores the
+    // address bar from this string, so anything it omits is gone (issue #211).
     expect(loginWithRedirect).toHaveBeenCalledWith({
-      appState: { returnTo: '/dashboard' },
+      appState: { returnTo: '/dashboard?tab=errors' },
     })
   })
 
