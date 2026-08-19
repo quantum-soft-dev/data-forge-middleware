@@ -5,7 +5,11 @@
  * "Batch #" + 8-char id, Completed + "Delta session" + grey mode chips,
  * Started / Completed / Seq range meta row) and the "Table changes" card
  * (grid 1.6fr 1fr×4, +green / blue / −red / bold Total, Total row, client-side
- * sort by table name). Delta sessions carry no files — the file UI never renders.
+ * sort by table name). Delta sessions carry no uploaded files — the file UI never renders.
+ *
+ * The File column serves the unified completed-batch artifact (036), which is enqueued when the
+ * session completes; while the session is still open it says so rather than showing a bare dash
+ * (issue #213).
  */
 
 import { useState } from 'react';
@@ -127,6 +131,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
         <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">Table changes</h3>
         <p className="mt-0.5 text-xs text-ink-secondary">
           Changes are applied directly to each table; download the session's typed delta Parquet per table.
+          {inProgress && ' One file per table is built when the session ends — the records above are already applied.'}
         </p>
 
         <div className="mt-3 overflow-x-auto">
@@ -171,6 +176,17 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                     >
                       Parquet
                     </button>
+                  ) : inProgress ? (
+                    // The file is the unified completed-batch artifact (036), enqueued on
+                    // BATCH_COMPLETED — so for the whole life of a CONTINUOUS session there is
+                    // nothing to link to (#213). A bare em dash said "missing" for "not due yet".
+                    <span
+                      className="rounded-full bg-surface-subtle px-2 py-0.5 text-xs font-medium text-ink-secondary"
+                      title="The session's Parquet file for this table is built when the session ends"
+                      data-testid="delta-file-pending"
+                    >
+                      After session
+                    </span>
                   ) : (
                     <span className="text-xs text-ink-muted">—</span>
                   )}

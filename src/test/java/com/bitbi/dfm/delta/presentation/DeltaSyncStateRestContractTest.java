@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -8,8 +9,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.time.Instant;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -116,6 +119,24 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
         }
 
         @Test
+        @DisplayName("names when the scheduled checkpoint build next runs")
+        void shouldNameTheNextScheduledBuild() throws Exception {
+            // Issue #213: a site whose first checkpoint is not due yet used to read as a backlog,
+            // because nothing on the projection could say when the wait ends. The value is the next
+            // occurrence of delta.checkpoint.cron, so it is always in the future.
+            seedSyncState(OWNED_SITE);
+
+            String body = mockMvc.perform(get(USER_URL.formatted(OWNED_SITE))
+                            .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.nextCheckpointBuildAt").isNotEmpty())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(Instant.parse(JsonPath.read(body, "$.nextCheckpointBuildAt").toString()))
+                    .isAfter(Instant.now());
+        }
+
+        @Test
         @DisplayName("returns 404 when the site has no sync state row yet")
         void shouldReturn404WhenNoSyncState() throws Exception {
             mockMvc.perform(get(USER_URL.formatted(OWNED_SITE))
@@ -178,6 +199,17 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                     .andExpect(jsonPath("$.lastRebuildOutcomeAt").isNotEmpty())
                     .andExpect(jsonPath("$.lastRebuildMessage")
                             .value("another checkpoint build held the fold budget"));
+        }
+
+        @Test
+        @DisplayName("names when the scheduled checkpoint build next runs")
+        void shouldNameTheNextScheduledBuild() throws Exception {
+            seedSyncState(FOREIGN_SITE);
+
+            mockMvc.perform(get(ADMIN_URL.formatted(FOREIGN_SITE))
+                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.nextCheckpointBuildAt").isNotEmpty());
         }
 
         @Test

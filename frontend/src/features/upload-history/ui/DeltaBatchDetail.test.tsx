@@ -170,6 +170,28 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
     expect(screen.queryByRole('button', { name: 'Parquet' })).not.toBeInTheDocument();
   });
 
+  it('says the file is not due yet while the session is in progress (issue #213)', () => {
+    // The File column reads the unified completed-batch artifact (036), which is enqueued on
+    // BATCH_COMPLETED — so for the whole life of a CONTINUOUS session there is nothing to link to.
+    // A bare em dash said "missing" for "not built yet", and a QA operator read it as a lost file.
+    render(<DeltaBatchDetail batch={makeBatch({ status: 'IN_PROGRESS', completedAt: null })} />);
+
+    const pending = screen.getAllByTestId('delta-file-pending');
+    expect(pending).toHaveLength(2);
+    expect(pending[0]).toHaveTextContent('After session');
+    expect(pending[0].title).toMatch(/when the session ends/i);
+    expect(screen.getByText(/built when the session ends/i)).toBeInTheDocument();
+  });
+
+  it('does not promise a file for a session that ended without completing', () => {
+    // Nothing enqueues an artifact for a failed session, so "after session" would be a promise
+    // nothing keeps.
+    render(<DeltaBatchDetail batch={makeBatch({ status: 'FAILED' })} />);
+
+    expect(screen.queryByTestId('delta-file-pending')).not.toBeInTheDocument();
+    expect(screen.queryByText(/built when the session ends/i)).not.toBeInTheDocument();
+  });
+
   it('renders the status pill via the shared mapping (Completed = healthy)', () => {
     render(<DeltaBatchDetail batch={makeBatch()} />);
     expect(statusPill('Completed')).toHaveStyle({

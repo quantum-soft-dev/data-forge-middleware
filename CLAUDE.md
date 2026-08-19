@@ -453,6 +453,79 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- first-checkpoint-state: A freshly ingested site stops reading as broken — the two surfaces that
+  reported a scheduled wait as a failure now say what they are waiting for (issue #213, folding
+  **#214**, both from the same PDE QA run). **The ticket's own first task was to establish which of
+  two candidates the Upload History "File" column was, and the answer is candidate 1**: that pill
+  presigns the unified completed-batch artifact of 036
+  (`GET .../delta/batches/{batchId}/tables/{table}/parquet`), which
+  `BatchParquetFinalizationService` enqueues on `BATCH_COMPLETED` — and since 029 a batch *is* a
+  session, so a CONTINUOUS session holds its batch `IN_PROGRESS` for hours and there is **by design**
+  nothing to link to for its whole life. Per-segment egress is not involved and has no defect here
+  (`DeltaSessionCommitTransaction` wakes the worker on the commit itself; `delta.egress.sweep-ms` is
+  only a backstop), so #215 and this ticket do not meet. The column rendered that as a bare em dash,
+  which reads as "the file is missing"; it now says **"After session"** with the reason on hover, and
+  only while the session is `IN_PROGRESS` — nothing enqueues an artifact for a session that failed,
+  so promising one there would be a promise nothing keeps.
+  **The lag surface is the same defect one level up.** `CheckpointScheduler.buildCheckpoints`
+  (`delta.checkpoint.cron`, 02:00) is the only producer of checkpoints apart from a forced rebuild,
+  so a FULL_SNAPSHOT committing at 15:45 cannot have one before the next night — but lag is
+  `lastAppliedSeq − lastCheckpointSeq`, and against a pointer of **zero** every record the site has
+  ever applied is backlog: the QA site read "Elevated — 1,155 records behind checkpoint" with an
+  amber pill beside it in the site list. `lastCheckpointSeq == 0` is now a **state of its own**
+  (`getSyncStatus` → `awaiting-first-checkpoint`), which is the canonical "no checkpoint" already
+  used by the backend — the initial row carries it, a wipe and a re-baseline reset to it, and
+  `CheckpointService` applies the same test before seeding from a frame. The chip is neutral, the
+  number stays with the caption *records awaiting the first checkpoint*, and the lag track is
+  **replaced rather than recoloured**: its bands and its 1k/10k ticks are a scale of "how far
+  behind", and no position on it is true for a site with nothing to be behind. In its place goes the
+  moment the wait ends.
+  That moment is the one backend addition: **`nextCheckpointBuildAt`** on `DeltaSyncStateResponseDto`
+  (both projections — it is the deployment's schedule, not a diagnosis, and the owner is exactly the
+  user staring at a site with no checkpoint, so the `lastRebuildMessage` reasoning of #186 does not
+  apply). New `CheckpointScheduleService` resolves the next occurrence of the cron in the JVM's own
+  zone (the zone `@Scheduled` uses when the annotation names none) and shares **one constant** with
+  the `@Scheduled` tick, so the promised hour cannot drift from the tick that keeps it; Spring's
+  disabled `-`, a blank value and — defensively, since Spring would refuse to start on it — an
+  unparseable expression all answer empty rather than throwing on a request path, and the UI then
+  says only that the build is scheduled. On the frontend the field is `z.string().nullable()
+  .optional().default(null)` for the #186/023-r3 reason: this payload drives the whole Delta Sync
+  tab and must degrade rather than fail the parse.
+  **Three limits are deliberate and all are stated in the guide, two of them corrected in review.**
+  *Stalled still wins* over the pending checkpoint — a client that has not updated its sync state for
+  a day is more actionable and is independent of whether a checkpoint exists. *A site with nothing
+  applied is not in this state at all* (review r1): an all-zero row is what a wipe leaves and what
+  `requestRebaseline` creates for a client that never connected, and such a site is on **neither** of
+  `CheckpointScheduler`'s work lists — segments, unmaterialized `checkpoints` rows — so the promised
+  build is one nothing keeps, and nothing is waiting either. And the state says *no checkpoint
+  exists*, not *the build is healthy*: it **cannot age itself out**, because no persisted fact says
+  how long a site has been waiting — `site_sync_state` has no creation timestamp, and every
+  whole-site abort (`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`,
+  a deferral) leaves no `checkpoints` row either, so thirty failed nights carry byte-for-byte the
+  payload of an afternoon's ingest. Review proposed bounding it by lag magnitude and that is
+  **declined with reasons**: a first FULL_SNAPSHOT is unbounded, so the bound would report the
+  largest sites as critical on day one — the defect itself, aimed at the sites with most to lose.
+  What is done instead: both surfaces keep the **count** (the site-list pill reads
+  `No checkpoint · 1.2k` rather than dropping the number, which is what this entry had claimed and
+  the pill did not do), and the card names the build the state should not outlive ("Still missing a
+  day later? The build is not completing" — round 2 corrected both the claim and the label: the sweep
+  walks sites serially and a build deferred behind the #178 fold budget is a *designed* miss that
+  repairs itself next tick, so "the build is failing" was the same over-claim one notch quieter,
+  and the value is the **next** occurrence rather than the first, recomputed per request).
+  Separating the two payloads needs persisted state and a migration, filed as **#224**; the
+  durable alarm stays `delta.checkpoint.builds.aborted`, `delta.checkpoint.tables.given-up` and
+  `delta.seq.lag`.
+  **The ticket's second shape — building a checkpoint when a site's first snapshot commits — was
+  weighed and rejected**: it moves a whole-site fold onto the very commit path the nightly cron
+  exists to keep clear, and it would have to queue behind the fold budget (#152/#178) and the scratch
+  budget (#150), i.e. exactly the region #193 is parked on. Nothing here was losing or corrupting
+  data — both halves are reporting — so the DoD's last item was taken as asked and **`priority: high`
+  was dropped to `priority: medium`**. No migration (V54 is still the last applied, V55 free), no
+  gRPC, proto, metric, cache, configuration-**key**, S3-key or route change; `delta.checkpoint.cron`
+  gains a second reader and, for the first time, a declaration in `application.yml`
+  (`DELTA_CHECKPOINT_CRON`, which relaxed binding already honoured) — its name and default are
+  unchanged. See `docs/delta-client-v2-guide.md`
+  ("A site whose first checkpoint is not due yet").
 - device-verify-false-toast: The one error signal on the device authorization path stopped being
   wrong, and the direct URL the client prints works again (issue #211, two defects in one flow, both
   frontend). **The toast is an off-by-one, not a race.** A `user_code` is eight characters rendered

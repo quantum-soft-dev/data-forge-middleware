@@ -10,13 +10,14 @@
  */
 
 import { Activity, AlertTriangle, Clock } from 'lucide-react';
-import { formatNumber, formatRelativeTime } from '@/shared/lib/formatters';
+import { formatDateTime, formatNumber, formatRelativeTime } from '@/shared/lib/formatters';
 import type { DeltaSyncState } from '../model/types';
 import {
   computeLag,
-  getSyncSeverity,
+  getSyncStatus,
   isStalled,
   lagTrackPercent,
+  syncStatusTone,
 } from '../model/severity';
 import { describeRebuildOutcome, isRebuildOutcomeSuperseded } from '../model/rebuildOutcome';
 import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
@@ -32,10 +33,14 @@ const TICK_10K = lagTrackPercent(10_000);
 
 export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps) {
   const lag = computeLag(state);
-  const severity = getSyncSeverity(lag, state.updatedAt, now);
-  const sev = severityTokens[severity];
+  const status = getSyncStatus(state, now);
+  const sev = syncStatusTone(status);
   const stalled = isStalled(state.updatedAt, now);
   const fillPercent = lagTrackPercent(lag);
+  // Checkpoints come from one nightly cron, so a site ingested during the day has none until it
+  // fires (#213). Every applied record then counts against a pointer of zero, which the lag track
+  // rendered as a backlog — a scale of "how far behind" on a site with nothing to be behind.
+  const awaitingFirstCheckpoint = status === 'awaiting-first-checkpoint';
   // While the request flag is up the verdict describes the PREVIOUS attempt, so the queued chip
   // wins outright — showing both would read as "queued, and it failed" for a rebuild that has not
   // run yet (#186).
@@ -127,11 +132,38 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
             {formatNumber(lag)}
           </span>
           <span className="text-sm" style={{ color: t.textSecondary }}>
-            records behind checkpoint
+            {awaitingFirstCheckpoint ? 'records awaiting the first checkpoint' : 'records behind checkpoint'}
           </span>
         </div>
 
-        {/* Lag track */}
+        {/* Lag track — replaced, not recoloured, while no checkpoint exists: its bands and its
+            1k/10k ticks are a scale of "how far behind", and no position on it is true here. */}
+        {awaitingFirstCheckpoint ? (
+          <div
+            className="mt-4 rounded-lg px-3 py-2 text-[13px]"
+            style={{ background: t.subtleBg, color: t.textSecondary }}
+            data-testid="first-checkpoint-note"
+          >
+            No checkpoint has been built for this site yet — the scheduled build materializes the
+            first one.
+            {state.nextCheckpointBuildAt && (
+              <>
+                {' '}
+                <span style={{ color: t.text }}>
+                  Next scheduled build · {formatDateTime(state.nextCheckpointBuildAt)} (
+                  {formatRelativeTime(state.nextCheckpointBuildAt)})
+                </span>{' '}
+                {/* The state cannot age itself out — nothing persisted says how long this site has
+                    been waiting — so it says what to conclude if it outlives the build it names.
+                    A day rather than "after that": the sweep walks sites serially, and a build
+                    deferred behind the fold budget (#178) is a designed miss that repairs itself on
+                    the next tick — accusing either of failing would be the same over-claim one
+                    notch quieter. */}
+                Still missing a day later? The build is not completing.
+              </>
+            )}
+          </div>
+        ) : (
         <div className="mt-4">
           <div className="flex justify-between text-xs" style={{ color: t.textSecondary }}>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -181,6 +213,7 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
             </span>
           </div>
         </div>
+        )}
       </div>
 
       {/* Right column */}
@@ -219,6 +252,11 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
             <Clock className="h-3.5 w-3.5" strokeWidth={1.5} />
             {state.lastCheckpointAt ? formatRelativeTime(state.lastCheckpointAt) : 'never built'}
           </div>
+          {awaitingFirstCheckpoint && state.nextCheckpointBuildAt && (
+            <div className="mt-1 text-[12px]" style={{ color: t.textMuted }}>
+              next scheduled build {formatRelativeTime(state.nextCheckpointBuildAt)}
+            </div>
+          )}
           {rebuildOutcome && (
             <div className="mt-3 border-t pt-2 text-[12px]" style={{ borderColor: t.separator }}>
               <div style={{ color: t.textSecondary }}>

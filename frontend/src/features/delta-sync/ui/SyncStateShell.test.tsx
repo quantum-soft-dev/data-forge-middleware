@@ -161,4 +161,103 @@ describe('SyncStateShell (F5)', () => {
     expect(screen.getByText('v 12')).toBeInTheDocument()
     expect(screen.getByText('seq 4,809')).toBeInTheDocument()
   })
+
+  describe('a site whose first checkpoint is not due yet (issue #213)', () => {
+    // The QA run: a FULL_SNAPSHOT of 1,155 records committed at 15:45, the nightly build at 02:00.
+    // The tab reported "Elevated — 1,155 records behind checkpoint", i.e. a designed wait as an alarm.
+    const freshSite: DeltaSyncState = {
+      ...baseState,
+      lastAppliedSeq: 1_155,
+      lastCheckpointSeq: 0,
+      lastCheckpointAt: null,
+      nextCheckpointBuildAt: '2026-07-06T02:00:00Z',
+    }
+
+    it('says no checkpoint exists yet instead of naming a severity', () => {
+      render(<SyncStateShell state={freshSite} now={NOW} />)
+
+      expect(screen.getByTestId('severity-chip')).toHaveTextContent('No checkpoint yet')
+      expect(screen.getByTestId('severity-chip')).not.toHaveTextContent('Elevated')
+    })
+
+    it('keeps the number but says what it is waiting for', () => {
+      render(<SyncStateShell state={freshSite} now={NOW} />)
+
+      expect(screen.getByTestId('lag-headline')).toHaveTextContent('1,155')
+      expect(screen.getByText(/awaiting the first checkpoint/)).toBeInTheDocument()
+      expect(screen.queryByText(/records behind checkpoint/)).not.toBeInTheDocument()
+    })
+
+    it('replaces the threshold track with the moment the wait ends', () => {
+      // The track is the alarm: its bands and its 1k/10k ticks are a scale of "how bad", and no
+      // position on it is true for a site that has nothing to be behind.
+      render(<SyncStateShell state={freshSite} now={NOW} />)
+
+      expect(screen.queryByTestId('lag-fill')).not.toBeInTheDocument()
+      expect(screen.queryByText('1k · watch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(
+        // "Next", not "First": the value is the next occurrence of the cron, recomputed per
+        // request, and the two stop coinciding the moment the first one passes (review r2).
+        /next scheduled build/i,
+      )
+    })
+
+    it('says what it means if the state outlives that build', () => {
+      // The state cannot age itself out: nothing persisted says how long a site has been waiting,
+      // so a first build that keeps failing would otherwise stay grey for ever (review r1).
+      render(<SyncStateShell state={freshSite} now={NOW} />)
+
+      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(
+        /still missing a day later/i,
+      )
+    })
+
+    it('does not promise a build to a site that has applied nothing', () => {
+      // An all-zero row (a wipe, or a re-baseline requested for a client that never connected) is
+      // on neither of the scheduler's work lists, so no build is coming — and nothing is waiting.
+      render(
+        <SyncStateShell
+          state={{ ...freshSite, lastAppliedSeq: 0 }}
+          now={NOW}
+        />,
+      )
+
+      expect(screen.queryByTestId('first-checkpoint-note')).not.toBeInTheDocument()
+      expect(screen.getByTestId('severity-chip')).toHaveTextContent('Healthy')
+    })
+
+    it('says only that the build is scheduled when the schedule names no next run', () => {
+      // delta.checkpoint.cron can be disabled; promising a time the payload does not carry would
+      // be the same class of lie this ticket is about.
+      render(
+        <SyncStateShell state={{ ...freshSite, nextCheckpointBuildAt: null }} now={NOW} />,
+      )
+
+      expect(screen.getByTestId('first-checkpoint-note')).toBeInTheDocument()
+      expect(screen.getByTestId('first-checkpoint-note')).not.toHaveTextContent(
+        /next scheduled build ·/i,
+      )
+    })
+
+    it('goes back to the lag verdict as soon as a checkpoint exists', () => {
+      render(
+        <SyncStateShell
+          state={{ ...freshSite, lastCheckpointSeq: 1, lastCheckpointAt: '2026-07-05T02:00:00Z' }}
+          now={NOW}
+        />,
+      )
+
+      expect(screen.getByTestId('severity-chip')).toHaveTextContent('Elevated')
+      expect(screen.getByTestId('lag-fill')).toBeInTheDocument()
+      expect(screen.queryByTestId('first-checkpoint-note')).not.toBeInTheDocument()
+    })
+
+    it('lets a stalled client win over the pending checkpoint', () => {
+      render(
+        <SyncStateShell state={{ ...freshSite, updatedAt: '2026-07-04T10:00:00Z' }} now={NOW} />,
+      )
+
+      expect(screen.getByTestId('severity-chip')).toHaveTextContent('Stalled')
+    })
+  })
 })

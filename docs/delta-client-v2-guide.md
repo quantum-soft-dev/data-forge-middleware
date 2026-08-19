@@ -1444,7 +1444,7 @@ ownership, admin routes require ROLE_ADMIN):
 
 | Endpoint | Method | Access | Purpose |
 |---|---|---|---|
-| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags; 404 until the client first connects |
+| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags and `nextCheckpointBuildAt` (when the scheduled build next runs — #213); 404 until the client first connects |
 | `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with the `hasParquet` presence flag (`hasCsv` removed — #113) |
 | `.../delta/checkpoints/{table}/download?format=parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click. `format=csv` answers `410 Gone`: the snapshot is no longer produced |
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while an attempt is queued, running or pending retry (`PENDING`/`BUILDING`/`FAILED`); `404` when absent or abandoned after `max-attempts` (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
@@ -1507,6 +1507,64 @@ root-level stable layout. While an attempt is queued, running or awaiting retry 
 `409`; a missing or abandoned artifact returns `404`. Tables without a declared/renderable schema
 fail independently and do not block other tables. A finished batch that predates the feature is
 enqueued by the first click (`409`) and downloads on the next one.
+
+**A site whose first checkpoint is not due yet (issue #213)**: `CheckpointScheduler.buildCheckpoints`
+(`delta.checkpoint.cron`, `0 0 2 * * *` by default) is the only producer of checkpoints apart from an
+operator-forced rebuild, so a site whose FULL_SNAPSHOT commits at 15:45 has none until 02:00. That is
+the design, but the lag model could not say it: lag is `lastAppliedSeq − lastCheckpointSeq`, and
+against a pointer of zero every record the site has ever applied counts as backlog — a freshly
+ingested site read as **"Elevated — 1,155 records behind checkpoint"**, with the site-list pill amber
+beside it.
+
+`lastCheckpointSeq == 0` is now a **state of its own** on every sync surface. It is the canonical
+"no checkpoint": the initial `site_sync_state` row carries it, a history wipe and a re-baseline reset
+to it, and `CheckpointService` applies the same test before seeding a build from a frame. The Delta
+Sync tab shows a neutral **"No checkpoint yet"** chip, keeps the number but labels it *records
+awaiting the first checkpoint*, and **replaces** the lag track rather than recolouring it — the
+track's bands and its 1k/10k ticks are a scale of "how far behind", and no position on it is true for
+a site with nothing to be behind. In its place goes the moment the wait ends, from the new
+`nextCheckpointBuildAt` on the projection — labelled *next* scheduled build, since it is recomputed
+per request and stops coinciding with the first the moment that one passes: the next occurrence of
+`delta.checkpoint.cron` (declared in `application.yml`, `DELTA_CHECKPOINT_CRON`), resolved
+in the JVM's own zone (the zone `@Scheduled` uses), null when the schedule names none — the sweep can
+be switched off with Spring's `-`, and promising a time the payload does not carry would be the same
+class of lie. `CheckpointScheduleService` and the `@Scheduled` tick share one constant, so the answer
+cannot drift from the tick that produces it.
+
+Three limits are deliberate. **Stalled still wins**: a client that has not updated its sync state for
+a day is both more actionable and independent of whether a checkpoint exists. **A site with nothing
+applied is not in this state at all**: an all-zero row — what a wipe leaves, and what a re-baseline
+requested for a client that never connected creates — is on neither of `CheckpointScheduler`'s work
+lists (segments, unmaterialized `checkpoints` rows), so promising it a build would be a promise
+nothing keeps, and there is nothing waiting either. And the state says *no checkpoint exists*, not
+*the build is healthy*: it **cannot age itself out**, because nothing persisted says how long a site
+has been waiting — `site_sync_state` has no creation timestamp, and every whole-site abort
+(`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`, a deferral) leaves
+no `checkpoints` row either, so a first build that has failed thirty nights carries byte-for-byte the
+payload of a site ingested this afternoon. It is deliberately **not** bounded by lag magnitude: a
+first FULL_SNAPSHOT is unbounded, so that bound would report the largest sites as critical on day one,
+which is the defect this removes. What is done instead — both surfaces keep the count, and the card
+names the build the state should not outlive ("Still missing a day later? The build is not
+completing" — a day rather than "after that", because the sweep walks sites serially and a build
+deferred behind the fold budget of #178 is a designed miss that repairs itself next tick) — with the
+durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
+`delta.checkpoint.tables.given-up`, `delta.seq.lag`); separating the two payloads needs persisted
+state and a migration, filed as **#224**. Building a checkpoint on the ingest path when a site's first
+snapshot commits was the alternative and was **not** taken: it moves a whole-site fold onto the
+commit that the nightly cron exists to keep off it, and it would have to queue behind the same fold
+budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to introduce, since
+what was wrong was the reporting rather than the schedule.
+
+**The Upload History File column is the same defect, not an egress delay (issue #214, folded in)**:
+the **File** pill on a delta batch serves the unified completed-batch artifact of 036
+(`GET .../delta/batches/{batchId}/tables/{table}/parquet`), which `BatchParquetFinalizationService`
+enqueues on `BATCH_COMPLETED`. Since 029 a batch *is* a session, so a CONTINUOUS session holds its
+batch `IN_PROGRESS` for hours and there is by design nothing to link to for its whole life, however
+promptly the per-segment egress worker runs (it is woken by the commit itself — the sweep interval is
+only a backstop). The column showed a bare em dash, which reads as "the file is missing". It now says
+**"After session"** with the reason on hover, and only for a session still in progress: nothing
+enqueues an artifact for a session that failed, so promising one there would be a promise nothing
+keeps.
 
 **Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
 server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily
