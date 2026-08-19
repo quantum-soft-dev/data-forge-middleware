@@ -42,6 +42,15 @@ describe('formatUserCode on a value that is not a string', () => {
   it('accepts an array without throwing', () => {
     expect(() => formatUserCode(['A', 'B'] as unknown as string)).not.toThrow();
   });
+
+  // Stringifying an object would produce "[object Object]" -> "OBJE-CTOB",
+  // which reads as a *complete* code and sends the page to a lookup instead of
+  // the input form the fallback exists to produce (#211 review round 4).
+  it('reads an object as no code at all rather than as a bogus complete one', () => {
+    expect(formatUserCode({ a: 1 } as unknown as string)).toBe('');
+    expect(isCompleteUserCode({ a: 1 } as unknown as string)).toBe(false);
+    expect(formatUserCode(true as unknown as string)).toBe('');
+  });
 });
 
 describe('isCompleteUserCode', () => {

@@ -473,7 +473,14 @@ pages/{feature}/            # Route pages
   the interceptor was a *duplicate* report for every genuine failure and the *only* report for a
   superseded one — `getVerifyInfo` therefore opts out through the existing
   `suppressErrorToast` request flag (the `deltaSyncApi` precedent), which is one request rather
-  than a status class, so a real 404 anywhere else still toasts. **The second defect is the login
+  than a status class, so a real 404 anywhere else still toasts. **The suppression forced the page's
+  own wording to grow up**, which is user-visible for every status but 400: with the toast gone that
+  message is the *only* report, and the old fallback called everything non-400 a bad code — so a
+  network outage or a 500 told an operator holding a perfectly good code to retype it.
+  `describeVerifyFailure` (`features/device-auth/model/verifyError.ts`) splits it into no-response,
+  400, 403, 404 and everything else, quoting the server where it has wording of its own and reading
+  status and body through the existing `getServerErrorStatus`/`getServerErrorMessage`, so the
+  error-body contract keeps one home. **The second defect is the login
   redirect, and it is what forced the typing in the first place.** `?code=` was stripped on load,
   the field came up empty, and the operator retyped the code by hand — the keystrokes the first
   defect needs. TanStack Router was ruled out by experiment: it keeps unvalidated search params and
@@ -487,7 +494,15 @@ pages/{feature}/            # Route pages
   path + search + hash and is used by `AuthenticationGuard`, `UserOnlyGuard` and
   `useAuth.signinRedirect`; it is assembled from the current location and stays root-relative, so it
   cannot become an off-origin redirect target. This fixes deep links with query parameters for
-  **every** protected route, not only `/device-verify`. The page also normalizes the code it takes
+  **every** protected route, not only `/device-verify`. The **Try Again** button on the
+  application-wide authentication-error screen (`App.tsx`) uses `retryReturnTo()` instead, and the
+  difference is the one non-obvious rule in the module: that screen is reached after a failed
+  `handleRedirectCallback`, so the location it renders at *is* the callback URL with Auth0's own
+  parameters still on it — the SDK does not clean them up on the failure path — and returning there
+  would write a **consumed** `code`/`state` back into the address bar for the SDK to re-read as a
+  fresh callback. The test is the SDK's own `hasAuthParams` (`state` alongside a `code` or an
+  `error`), and the missing `state` is precisely what keeps `/device-verify?code=XXXX-XXXX` — which
+  has a `code` of its own — on the preserved side. The page also normalizes the code it takes
   from the URL, since that value is pasted by hand and need not arrive in the presentation the
   backend stores (`?code=m9q24aml` now resolves to `M9Q2-4AML` rather than 404ing), and a URL code
   that is *incomplete* pre-fills the input state instead of going straight to a confirmation card the

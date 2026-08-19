@@ -30,10 +30,16 @@ export const USER_CODE_LENGTH = USER_CODE_CHARS + 1;
  * its separator removed arrives as a **number**, and a repeated parameter
  * arrives as an **array**. Neither has `toUpperCase`, and this runs during
  * render, so the throw would take the page to the error boundary rather than
- * degrading to "enter your code".
+ * degrading to "enter your code" — which is also why anything that is not a
+ * string or a number is read as no code at all rather than stringified.
  */
 export function formatUserCode(code: unknown): string {
-  const cleaned = String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // Only the two shapes a code can honestly arrive as. Stringifying anything
+  // else would invent one: an object becomes "[object Object]", which strips to
+  // OBJE-CTOB — a *complete* code, so the page would look it up and report "not
+  // found" instead of falling back to the input form.
+  const raw = typeof code === 'string' || typeof code === 'number' ? String(code) : '';
+  const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (cleaned.length <= 4) {
     return cleaned;
   }
