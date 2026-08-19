@@ -92,9 +92,12 @@ class CheckpointScheduleServiceTest {
     @DisplayName("reads the very placeholder the scheduled tick is annotated with")
     void shouldShareTheSchedulerProperty() throws Exception {
         // One constant is what keeps the promised hour and the tick that keeps it together, so the
-        // assertion is on the annotation rather than on the constant's text: re-inlining a literal
-        // into @Scheduled is exactly how the drift this constant prevents would come back, and a
-        // literal-to-literal comparison would not notice.
+        // assertion is on the annotation rather than on the constant's text. What it catches is a
+        // cron changed on the tick without CRON_PROPERTY following it — the drift that leaves the
+        // surface promising the old hour — which a literal-to-literal comparison would not notice.
+        // It deliberately does NOT claim to catch someone re-inlining a literal into @Scheduled:
+        // CRON_PROPERTY is a constant expression, so javac inlines it into the class file either
+        // way and reflection reads the same bytes (review r3).
         Scheduled scheduled = CheckpointScheduler.class
                 .getMethod("buildCheckpoints")
                 .getAnnotation(Scheduled.class);

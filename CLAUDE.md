@@ -510,10 +510,11 @@ pages/{feature}/            # Route pages
   the pill did not do), and the card names the build the state should not outlive ("Still missing a
   day later? The build is not completing" — round 2 corrected both the claim and the label: the sweep
   walks sites serially and a build deferred behind the #178 fold budget is a *designed* miss that
-  repairs itself next tick, so "the build is failing" was the same over-claim one notch quieter, and
-  the value is the **next** occurrence rather than the first, recomputed per request). Separating
-  the two payloads needs persisted state and a migration, filed as **#224**; the durable alarm stays `delta.checkpoint.builds.aborted`,
-  `delta.checkpoint.tables.given-up` and `delta.seq.lag`.
+  repairs itself next tick, so "the build is failing" was the same over-claim one notch quieter,
+  and the value is the **next** occurrence rather than the first, recomputed per request).
+  Separating the two payloads needs persisted state and a migration, filed as **#224**; the
+  durable alarm stays `delta.checkpoint.builds.aborted`, `delta.checkpoint.tables.given-up` and
+  `delta.seq.lag`.
   **The ticket's second shape — building a checkpoint when a site's first snapshot commits — was
   weighed and rejected**: it moves a whole-site fold onto the very commit path the nightly cron
   exists to keep clear, and it would have to queue behind the fold budget (#152/#178) and the scratch
