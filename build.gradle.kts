@@ -154,6 +154,65 @@ tasks.withType<Test> {
         "dfm.test.parquet-scratch-root",
         layout.buildDirectory.dir("test-scratch/parquet").get().asFile.absolutePath,
     )
+
+    // The heap the suite runs on (issue #207). Gradle's default is 512 MB, and CI runs everything
+    // in one such JVM — ~2470 tests, 444 classes, 24 cached Spring contexts held for the length of
+    // the run — so the margin was whatever the runner happened to leave. When it ran out, the
+    // OutOfMemoryError surfaced wherever the allocation was: inside Spring's ConstructorResolver,
+    // reported as a BeanCreationException of a contract test that allocates nothing.
+    //
+    // 2 GiB is measured, not guessed. `./gradlew test -PtestHeapLog` at a deliberately generous
+    // 3 GiB never let G1 expand past 1014 MB; the highest occupancy after a collection was 801 MB
+    // and the highest before one 965 MB. So 1 GiB sits on the cliff, and the shipped default was
+    // under it. TestJvmHeapCeilingTest holds this value inside an agreed range and fails if a
+    // second, narrower declaration appears — one on `test` or `integrationTest` would win for that
+    // task and quietly leave its sibling on the 512 MB default.
+    maxHeapSize = "2g"
+
+    // ONE JVM, deliberately: no forkEvery and no maxParallelForks.
+    //
+    // forkEvery would bound the context accumulation by throwing the Spring TestContext cache away
+    // — and that cache is exactly what makes 444 classes affordable, since a fresh JVM rebuilds
+    // every context it needs (Flyway migration included) and restarts the Testcontainers
+    // singletons. It is the right tool for accumulation that has no ceiling; this accumulation
+    // does. It is one context per distinct configuration, a property of the test classes and not
+    // of the test count, which is what the measurement above shows levelling off well under 1 GiB.
+    //
+    // maxParallelForks is excluded for a different reason: the suite deliberately shares one
+    // PostgreSQL database across every context — `test-data.sql` deletes by `%.example.com`, the
+    // delta-SQL queue is global (#175), and #197 had to bound lock waits because sibling contexts
+    // already contend on the same rows. Parallel JVMs would make that contention the normal case.
+
+    jvmArgs(
+        // End the JVM on the first allocation failure instead of letting the error unwind into
+        // whichever caller is on the stack, be caught and re-reported as something else. This is
+        // what makes an OOM name itself; TestJvmOutOfMemoryExitTest proves both directions against
+        // real child JVMs, including that an `OutOfMemoryError` a Mockito stub throws stays
+        // catchable (BatchParquetFinalizationIntegrationTest asserts exactly that).
+        "-XX:+ExitOnOutOfMemoryError",
+        // The JVM is about to disappear, so the dump is the only evidence left for re-sizing.
+        "-XX:+HeapDumpOnOutOfMemoryError",
+        "-XX:HeapDumpPath=${layout.buildDirectory.dir("reports/test-oom").get().asFile.absolutePath}",
+    )
+
+    // Re-measure before moving the ceiling: `./gradlew test -PtestHeapLog` writes one GC log per
+    // Test task under build/reports/test-heap/. Read the occupancy after a `Pause Cleanup` or a
+    // `Pause Young (Mixed)` — that is the live set; the value before a collection is live set plus
+    // whatever the run had allocated since the last one.
+    if (project.hasProperty("testHeapLog")) {
+        val gcLog = layout.buildDirectory.file("reports/test-heap/gc-$name.log").get().asFile
+        jvmArgs("-Xlog:gc:file=${gcLog.absolutePath}:time,uptime")
+    }
+
+    // -XX:HeapDumpPath and -Xlog:file both need the directory to exist; the JVM will not create it,
+    // and a dump that could not be written is the evidence lost at the one moment it is needed.
+    // Resolved here rather than inside the action so nothing reaches for the project at execution.
+    val oomDir = layout.buildDirectory.dir("reports/test-oom").get().asFile
+    val heapLogDir = layout.buildDirectory.dir("reports/test-heap").get().asFile
+    doFirst {
+        oomDir.mkdirs()
+        heapLogDir.mkdirs()
+    }
 }
 
 // Per-task gate (pre-commit hook): `./gradlew test -PexcludeIntegration` runs unit + contract

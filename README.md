@@ -394,6 +394,43 @@ src/main/java/com/bitbi/dfm/
 open build/reports/jacoco/test/html/index.html
 ```
 
+### The test JVM
+
+Every Gradle `Test` task runs with `maxHeapSize = "2g"` (`build.gradle.kts`, `tasks.withType<Test>`).
+Gradle's default is 512 MB, and the whole suite runs in **one** JVM — ~2470 tests, 444 classes and
+24 cached Spring contexts held for the length of the run — so that default left no margin and CI
+failed intermittently, naming a different, innocent test each time.
+
+The value is measured rather than guessed. A `-Xlog:gc` pass over the full suite at a deliberately
+generous 3 GiB never let G1 expand past 1014 MB, with the highest occupancy after a collection at
+801 MB and the highest before one at 965 MB — so 1 GiB sits on the cliff and 512 MB was under it.
+Re-measure before moving the value:
+
+```bash
+./gradlew test -PtestHeapLog     # one GC log per Test task under build/reports/test-heap/
+```
+
+One JVM is the intended shape. `forkEvery` would bound the accumulation by throwing away the
+Spring `TestContext` cache — which is what makes 444 classes affordable — and it is the right tool
+only for accumulation that has no ceiling; this accumulation is one context per distinct
+configuration, a property of the test classes rather than of the test count. `maxParallelForks`
+stays at 1 because the suite deliberately shares one PostgreSQL database across every context.
+
+If the ceiling is reached anyway, `-XX:+ExitOnOutOfMemoryError` ends the JVM at the allocation that
+failed instead of letting the error be caught and re-reported as some unrelated test's
+`BeanCreationException`, and `-XX:+HeapDumpOnOutOfMemoryError` leaves the evidence in
+`build/reports/test-oom/`. The build then fails as:
+
+```
+java.lang.OutOfMemoryError: Java heap space
+Dumping heap to .../build/reports/test-oom/java_pid138960.hprof ...
+Terminating due to java.lang.OutOfMemoryError: Java heap space
+> Process 'Gradle Test Executor 4' finished with non-zero exit value 3
+```
+
+No test is named, because no test was at fault. The dump is deliberately **not** uploaded as a CI
+artifact — at this ceiling it can reach two gigabytes; reproduce locally instead.
+
 ## Monitoring
 
 ### Health Check
