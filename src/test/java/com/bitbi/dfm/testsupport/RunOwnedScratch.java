@@ -136,8 +136,14 @@ public final class RunOwnedScratch {
      * The checkout, found by walking up from the compiled test classes to the directory holding
      * {@code settings.gradle.kts}. The working directory is the fallback, and only the fallback:
      * it is the one thing a run configuration is free to move.
+     *
+     * <p>Public so {@code TestJvmHeap} (#207) locates {@code build.gradle.kts} the same way rather
+     * than growing a second idea of where the checkout is — the
+     * {@code ScheduledTaskInventoryTest.scanScheduledMethods()} precedent.</p>
+     *
+     * @return absolute, normalized checkout directory
      */
-    private static Path projectRoot() {
+    public static Path projectRoot() {
         CodeSource codeSource = RunOwnedScratch.class.getProtectionDomain().getCodeSource();
         if (codeSource == null || codeSource.getLocation() == null) {
             return normalize("");
