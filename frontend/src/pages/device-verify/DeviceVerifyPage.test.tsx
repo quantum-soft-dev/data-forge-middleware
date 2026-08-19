@@ -80,6 +80,17 @@ describe('DeviceVerifyPage', () => {
     expect(deviceAuthApi.getVerifyInfo).toHaveBeenCalledWith('ABCD-1234');
   });
 
+  // The direct URL is printed by a client TUI and pasted by hand, so the code
+  // in it need not arrive in the presentation the backend stores (#211).
+  it('normalizes a code that arrives in the URL', async () => {
+    search.code = 'm9q24aml';
+
+    renderPage();
+
+    expect(await screen.findByText('Authorize Device')).toBeInTheDocument();
+    expect(lookedUpCodes()).toEqual(['M9Q2-4AML']);
+  });
+
   it('moves to confirmation once a typed code resolves', async () => {
     renderPage();
 

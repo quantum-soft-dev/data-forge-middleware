@@ -1,6 +1,7 @@
 import { useAuth0 } from '@auth0/auth0-react'
 import { useState, useEffect } from 'react'
 import { env } from '@/shared/config/env'
+import { currentReturnTo } from '@/shared/lib/auth/returnTo'
 
 // Get claims namespace from environment
 const CLAIMS_NAMESPACE = env.auth0.claimsNamespace
@@ -126,7 +127,7 @@ export function useAuth(): AuthState {
   const signinRedirect = async () => {
     await loginWithRedirect({
       appState: {
-        returnTo: window.location.pathname
+        returnTo: currentReturnTo()
       }
     })
   }

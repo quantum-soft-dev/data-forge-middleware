@@ -39,7 +39,10 @@ type PageState = 'input' | 'confirm' | 'success' | 'denied' | 'expired' | 'error
 
 export default function DeviceVerifyPage() {
   const search = useSearch({ from: '/device-verify' }) as { code?: string };
-  const userCodeFromUrl = search?.code || '';
+  // The direct URL is printed by a client TUI and pasted by hand, so the code in
+  // it may not arrive in the presentation the backend stores; look up what the
+  // field would have produced, not the raw parameter (#211).
+  const userCodeFromUrl = formatUserCode(search?.code || '');
 
   const [userCode, setUserCode] = useState(userCodeFromUrl);
   const [pageState, setPageState] = useState<PageState>(userCodeFromUrl ? 'confirm' : 'input');
