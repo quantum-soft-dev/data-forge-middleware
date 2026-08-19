@@ -31,6 +31,7 @@ import {
   useDenyAuthorization,
   formatUserCode,
   isCompleteUserCode,
+  describeVerifyFailure,
   USER_CODE_LENGTH,
 } from '@/features/device-auth';
 import { AlertTriangle, CheckCircle2, XCircle, Smartphone, Loader2, Server } from 'lucide-react';
@@ -85,19 +86,10 @@ export default function DeviceVerifyPage() {
   if (verifyInfoError && verifyInfoError !== reportedError) {
     setReportedError(verifyInfoError);
 
-    const status = (verifyInfoError as { response?: { status?: number } })?.response?.status;
-    const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string; message?: string } } })
-      ?.response?.data?.error_description ||
-      (verifyInfoError as { response?: { data?: { message?: string } } })?.response?.data?.message;
-
     setPageState('error');
-    setErrorMessage(
-      // 400 = Authorization already processed (approved or denied) - show error, not success
-      status === 400
-        ? 'This authorization code has already been processed. Please start a new authorization from your device.'
-        // 404 = Not found or expired
-        : errorMsg || 'Device code not found or expired. Please check the code and try again.'
-    );
+    // The global toast is suppressed for this call, so this message is the only
+    // report of the failure and has to distinguish a bad code from a bad day.
+    setErrorMessage(describeVerifyFailure(verifyInfoError));
   }
 
   // Update page state when verify info is loaded

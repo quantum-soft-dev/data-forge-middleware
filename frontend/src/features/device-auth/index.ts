@@ -27,6 +27,9 @@ export {
   isCompleteUserCode,
 } from './model/userCode';
 
+// Failure wording
+export { describeVerifyFailure } from './model/verifyError';
+
 // Hooks
 export {
   deviceAuthKeys,

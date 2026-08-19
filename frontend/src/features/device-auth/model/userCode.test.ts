@@ -25,6 +25,25 @@ describe('formatUserCode', () => {
   });
 });
 
+describe('formatUserCode on a value that is not a string', () => {
+  // TanStack Router parses search values with JSON.parse, so a code that is all
+  // digits (the alphabet allows 2-9) arrives as a number once the separator is
+  // dropped, and a repeated parameter arrives as an array (#211 review).
+  it('accepts a number', () => {
+    expect(formatUserCode(23456789 as unknown as string)).toBe('2345-6789');
+  });
+
+  it('accepts null and undefined as an empty code', () => {
+    expect(formatUserCode(null as unknown as string)).toBe('');
+    expect(formatUserCode(undefined as unknown as string)).toBe('');
+    expect(isCompleteUserCode(undefined as unknown as string)).toBe(false);
+  });
+
+  it('accepts an array without throwing', () => {
+    expect(() => formatUserCode(['A', 'B'] as unknown as string)).not.toThrow();
+  });
+});
+
 describe('isCompleteUserCode', () => {
   it('rejects the keystroke before last', () => {
     // Seven characters render as eight — the length the lookup used to fire on.

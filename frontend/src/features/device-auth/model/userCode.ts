@@ -23,9 +23,17 @@ export const USER_CODE_LENGTH = USER_CODE_CHARS + 1;
  * Normalize free input into the `XXXX-XXXX` presentation: upper case,
  * non-alphanumeric characters dropped, a separator after the fourth character,
  * and anything past the eighth ignored.
+ *
+ * Takes `unknown` on purpose. One caller is a text input, but the other is the
+ * `?code=` search parameter, and TanStack Router parses search values with
+ * `JSON.parse`: the alphabet allows the digits 2-9, so an all-digit code with
+ * its separator removed arrives as a **number**, and a repeated parameter
+ * arrives as an **array**. Neither has `toUpperCase`, and this runs during
+ * render, so the throw would take the page to the error boundary rather than
+ * degrading to "enter your code".
  */
-export function formatUserCode(code: string): string {
-  const cleaned = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+export function formatUserCode(code: unknown): string {
+  const cleaned = String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (cleaned.length <= 4) {
     return cleaned;
   }
@@ -36,6 +44,6 @@ export function formatUserCode(code: string): string {
  * Whether a formatted code carries all eight characters — the only state in
  * which asking the server about it is a question with a meaningful answer.
  */
-export function isCompleteUserCode(code: string): boolean {
+export function isCompleteUserCode(code: unknown): boolean {
   return formatUserCode(code).length === USER_CODE_LENGTH;
 }

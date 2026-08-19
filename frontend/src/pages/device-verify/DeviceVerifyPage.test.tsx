@@ -163,6 +163,19 @@ describe('DeviceVerifyPage', () => {
     expect(screen.getByText('Device code not found')).toBeInTheDocument();
   });
 
+  // The global toast is suppressed for this call, so the page's own message is
+  // the only report and must not blame the code for an outage (#211 review).
+  it('does not blame the code when the request never reached the server', async () => {
+    search.code = 'ABCD-1234';
+    vi.mocked(deviceAuthApi.getVerifyInfo).mockRejectedValue(new Error('Network Error'));
+
+    renderPage();
+
+    await screen.findByRole('heading', { name: 'Error', level: 2 });
+    expect(screen.queryByText(/not found or expired/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/connection/i)).toBeInTheDocument();
+  });
+
   it('returns to the input state from the error state', async () => {
     search.code = 'ABCD-1234';
     vi.mocked(deviceAuthApi.getVerifyInfo).mockRejectedValue(httpError(400));
