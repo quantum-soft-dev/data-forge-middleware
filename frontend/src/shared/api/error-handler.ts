@@ -24,12 +24,20 @@ declare module 'axios' {
  * - 500 Server Error: Show generic server error
  * - Network Error: Show network error
  *
- * Note: 401 errors are NOT shown as toasts here because the response interceptor
- * handles them with automatic token refresh. If refresh fails, logout is triggered.
+ * Note: 401 is *meant* to be left to the response interceptor in interceptors.ts,
+ * which attempts a token refresh first. This handler does not currently stay out
+ * of its way, and that is a known open defect rather than the design: the switch
+ * below has no `case 401`, so a 401 that interceptor rejects falls to `default:`;
+ * and a *failed* refresh rejects with the Auth0 error rather than the original
+ * response, which carries no `.response` and so reads here as a network error —
+ * including on the expired-refresh-token branch, where interceptors.ts stays
+ * deliberately silent so the logout redirect is quiet. Recorded as a side finding
+ * of issue #225 rather than fixed there: what a failed refresh should say is a
+ * behaviour decision of its own.
  *
  * Usage: Call setupErrorHandler() in App.tsx. Calling it again replaces the
- * previous registration, so one failure produces one toast however often the
- * caller's effect re-runs.
+ * previous registration, so however often the caller's effect re-runs, repeated
+ * registrations cannot multiply the toasts for one failure (issue #225).
  */
 
 /**
@@ -90,8 +98,10 @@ export function setupErrorHandler() {
       const { status } = error.response
 
       switch (status) {
-        // Note: 401 is handled by setupResponseInterceptor() in interceptors.ts
-        // which attempts token refresh before showing any error
+        // 401 has no case of its own and therefore reaches `default:`.
+        // setupResponseInterceptor() in interceptors.ts refreshes the token
+        // first but does not stop the rejection reaching this handler — see
+        // the file docblock, a known open defect rather than the intent.
 
         case 403:
           // Forbidden - wrong token type or insufficient permissions

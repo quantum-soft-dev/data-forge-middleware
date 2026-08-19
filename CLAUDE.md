@@ -481,10 +481,19 @@ pages/{feature}/            # Route pages
   proto, DTO, migration, configuration-key, metric, S3-key, route or `App.tsx` change, and no doc
   named this code (the "exactly one toast" claim in `docs/delta-client-v2-guide.md` is about the
   download pills, whose presign requests suppress the global toast, so it was true throughout and
-  stays true). One side finding was recorded rather than folded in: the handler's `switch` has no
-  `case 401`, so a 401 falls to `default:` and toasts "An unexpected error occurred." on top of the
-  refresh interceptor's own message — contradicting this file's own Javadoc, a different mechanism
-  (two interceptors, not one registered twice), and a behaviour decision of its own.
+  stays true). One side finding was recorded rather than folded in, and review
+  widened it from one route to **two**: the handler's `switch` has no `case 401`, so a 401 the
+  refresh interceptor rejects without refreshing falls to `default:` — and when a refresh is
+  attempted and *fails*, `setupResponseInterceptor` rejects with the **Auth0 error** rather than the
+  original response, which carries no `.response` and is therefore read here as a network failure.
+  The second is the worse one: on the expired-refresh-token branch `interceptors.ts` stays
+  deliberately silent so the logout redirect is quiet, and this handler fills that silence with
+  "Network error. Please check your connection and try again." — one toast, and a lie about the
+  user's connection. Both contradict the two comments in this file asserting a 401 is never toasted
+  here, so **those comments are corrected rather than left standing** (the `AbstractIntegrationTest`
+  precedent of #197): the file now describes what it does and names the finding as the open
+  decision. Not fixed here — it is a different mechanism (two interceptors, not one registered
+  twice) and what a failed refresh should say is a behaviour decision of its own.
 - fixture-clears-by-batch: The suite's shared-database cleanups clear `changelog_segments` by the
   relationship the constraint actually uses, not only by `site_id` (issue #226, filed by the
   `/github-issue-runner` dispatcher when `develop` went red on a change that could not have caused

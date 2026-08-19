@@ -1,6 +1,6 @@
 /**
- * Global error toast interceptor. Two properties, both about a single failure
- * producing a single toast: callers that render their own error taxonomy
+ * Global error toast interceptor. Two properties, both about this handler not
+ * adding a toast of its own: callers that render their own error taxonomy
  * (e.g. openPresignedDownload) opt out via `suppressErrorToast` in the request
  * config, and registration is idempotent — App.tsx sets the handler up from an
  * effect that re-runs as auth settles, so a second call must replace the first
