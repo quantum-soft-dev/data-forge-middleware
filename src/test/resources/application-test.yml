@@ -60,6 +60,38 @@ spring:
 
   datasource:
     hikari:
+      # PostgreSQL's default lock_timeout is 0 — wait for ever — and this suite is the one place
+      # where that default has no owner. Every cached Spring context keeps its background workers
+      # alive for the rest of the run against the one shared database, so a statement of the class
+      # under test (@Sql("/test-data.sql") deleting the %.example.com rows, a
+      # clearPluginSqlGenerations delete, an ordinary repository write) can wait on a lock a
+      # sibling context holds. Unbounded, that wait ends the run rather than the test: the JUnit
+      # thread never returns, and CI kills the job without naming what was stuck. It is the
+      # residual behind #159's ScriptStatementFailedException, and it is why a test-side drain
+      # deadline (#175) is not enough — a call already blocked inside the database cannot be
+      # interrupted from the test.
+      #
+      # The bound belongs here rather than in a JUnit @Timeout: a plain @Timeout is checked only
+      # after the method returns, so a hung method still hangs, and a preemptive one abandons a
+      # thread parked in the driver holding a pooled connection. A statement aborted by the server
+      # unwinds normally and says "canceling statement due to lock timeout" (SQLSTATE 55P03),
+      # which names the cause as well as the test.
+      #
+      # 30s is chosen against the suite's own deliberate waits, not against its slowest statement:
+      # lock_timeout bounds waiting for a lock, never holding one. What sets the floor is the
+      # longest wait the suite *declares*, not the longest one usually observed —
+      # BatchParquetQueueServiceIntegrationTest leaves an UPDATE on an operator's row lock and
+      # releases it only after an awaitility poll budgeted at 10 s (milliseconds on an idle
+      # machine, but a bound at that budget would fail a healthy test on a loaded one); the fixed
+      # 1.5 s holds in SiteHistoryWipeIntegrationTest and DeltaRebaselineIntegrationTest are the
+      # easy ones. A statement_timeout is deliberately NOT set: it
+      # would bound legitimate work (the queries here scan rows accumulated across the whole run)
+      # while bounding none of the non-statement hangs, which are not what this fixes.
+      #
+      # LockWaitBoundTestProfileTest holds this key on the fast gate;
+      # DatabaseLockWaitBoundIntegrationTest holds what a pooled connection actually carries and
+      # proves a blocked statement is really aborted (issue #197).
+      connection-init-sql: SET lock_timeout = '30s'
       # A run keeps every distinct Spring context in the context cache, and each context holds
       # its own pool. The production defaults (max 10, min-idle 5) reserve about five connections
       # per cached context even while it sits idle, so roughly twenty contexts exhaust
