@@ -27,6 +27,11 @@ import java.time.ZoneOffset;
  * @param lastRebuildMessage  explanation of the outcome, <b>admin projection only</b>; null for a
  *                            rebuild that completed, which has nothing to explain, and null for the
  *                            owner, who gets the outcome and its time but not the diagnosis
+ * @param nextCheckpointBuildAt when the scheduled checkpoint build next runs (issue #213), or null
+ *                            when the schedule names no occurrence at all. Checkpoints are produced
+ *                            by that one cron and by an operator-forced rebuild, so a site with
+ *                            {@code lastCheckpointSeq == 0} is not behind — it is waiting for this
+ *                            moment, and a surface without it can only render the wait as a backlog
  */
 public record DeltaSyncStateResponseDto(
         long lastAppliedSeq,
@@ -39,20 +44,23 @@ public record DeltaSyncStateResponseDto(
         boolean snapshotInProgress,
         CheckpointRebuildOutcome lastRebuildOutcome,
         Instant lastRebuildOutcomeAt,
-        String lastRebuildMessage
+        String lastRebuildMessage,
+        Instant nextCheckpointBuildAt
 ) {
 
     /**
      * Convert the SiteSyncState entity to the <b>admin</b> REST projection, diagnosis included.
      *
-     * @param state              the sync state entity
-     * @param snapshotInProgress whether the site's open session is a FULL_SNAPSHOT — it outlives the
-     *                           request flag (a snapshot consumes that only at commit), so the UI
-     *                           needs it to keep showing that a full re-upload is under way
+     * @param state                 the sync state entity
+     * @param snapshotInProgress    whether the site's open session is a FULL_SNAPSHOT — it outlives
+     *                              the request flag (a snapshot consumes that only at commit), so
+     *                              the UI needs it to keep showing that a full re-upload is under way
+     * @param nextCheckpointBuildAt when the scheduled checkpoint build next runs, or null
      * @return response DTO
      */
-    public static DeltaSyncStateResponseDto forAdmin(SiteSyncState state, boolean snapshotInProgress) {
-        return build(state, snapshotInProgress, state.getLastRebuildMessage());
+    public static DeltaSyncStateResponseDto forAdmin(SiteSyncState state, boolean snapshotInProgress,
+                                                     Instant nextCheckpointBuildAt) {
+        return build(state, snapshotInProgress, state.getLastRebuildMessage(), nextCheckpointBuildAt);
     }
 
     /**
@@ -66,16 +74,23 @@ public record DeltaSyncStateResponseDto(
      * owes them; the same rule keeps storage keys and claim tokens off the segment and artifact
      * projections.</p>
      *
-     * @param state              the sync state entity
-     * @param snapshotInProgress whether the site's open session is a FULL_SNAPSHOT
+     * <p>{@code nextCheckpointBuildAt} is <em>not</em> withheld: it is the deployment's schedule,
+     * says nothing about the failure of anything, and the owner is precisely the user staring at a
+     * site whose first checkpoint has not been built yet.</p>
+     *
+     * @param state                 the sync state entity
+     * @param snapshotInProgress    whether the site's open session is a FULL_SNAPSHOT
+     * @param nextCheckpointBuildAt when the scheduled checkpoint build next runs, or null
      * @return response DTO with the rebuild diagnosis withheld
      */
-    public static DeltaSyncStateResponseDto forOwner(SiteSyncState state, boolean snapshotInProgress) {
-        return build(state, snapshotInProgress, null);
+    public static DeltaSyncStateResponseDto forOwner(SiteSyncState state, boolean snapshotInProgress,
+                                                     Instant nextCheckpointBuildAt) {
+        return build(state, snapshotInProgress, null, nextCheckpointBuildAt);
     }
 
     private static DeltaSyncStateResponseDto build(SiteSyncState state, boolean snapshotInProgress,
-                                                   String lastRebuildMessage) {
+                                                   String lastRebuildMessage,
+                                                   Instant nextCheckpointBuildAt) {
         return new DeltaSyncStateResponseDto(
                 state.getLastAppliedSeq(),
                 state.getLastCheckpointSeq(),
@@ -88,7 +103,8 @@ public record DeltaSyncStateResponseDto(
                 state.getLastRebuildOutcome(),
                 state.getLastRebuildOutcomeAt() == null
                         ? null : state.getLastRebuildOutcomeAt().toInstant(ZoneOffset.UTC),
-                lastRebuildMessage
+                lastRebuildMessage,
+                nextCheckpointBuildAt
         );
     }
 }

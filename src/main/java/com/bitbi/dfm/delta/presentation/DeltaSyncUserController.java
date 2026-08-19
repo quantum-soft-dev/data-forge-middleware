@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.presentation;
 
+import com.bitbi.dfm.delta.application.CheckpointScheduleService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
@@ -37,6 +38,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -61,6 +63,7 @@ public class DeltaSyncUserController {
     private static final Logger logger = LoggerFactory.getLogger(DeltaSyncUserController.class);
 
     private final DeltaSyncStateService syncStateService;
+    private final CheckpointScheduleService checkpointScheduleService;
     private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final BatchParquetDownloadService batchParquetDownloadService;
@@ -69,6 +72,7 @@ public class DeltaSyncUserController {
     private final AuthorizationHelper authorizationHelper;
 
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
+                                   CheckpointScheduleService checkpointScheduleService,
                                    DeltaRebaselineCancellationService cancellationService,
                                    DeltaCheckpointQueryService checkpointQueryService,
                                    BatchParquetDownloadService batchParquetDownloadService,
@@ -76,6 +80,7 @@ public class DeltaSyncUserController {
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
+        this.checkpointScheduleService = checkpointScheduleService;
         this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
         this.batchParquetDownloadService = batchParquetDownloadService;
@@ -99,7 +104,9 @@ public class DeltaSyncUserController {
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
                     + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
                     + "and lastRebuildOutcome/At describing how the most recent finished forced rebuild ended "
-                    + "(lastRebuildMessage carries the diagnosis on the admin projection only). "
+                    + "(lastRebuildMessage carries the diagnosis on the admin projection only), plus "
+                    + "nextCheckpointBuildAt naming when the scheduled checkpoint build next runs — "
+                    + "lastCheckpointSeq 0 means no checkpoint has been built yet rather than a backlog. "
                     + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
@@ -113,8 +120,10 @@ public class DeltaSyncUserController {
     public ResponseEntity<DeltaSyncStateResponseDto> getSyncState(@PathVariable UUID siteId) {
         requireOwnedSite(siteId);
         boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
+        Instant nextCheckpointBuildAt = checkpointScheduleService.nextBuildAt().orElse(null);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.forOwner(state, snapshotInProgress)))
+                .map(state -> ResponseEntity.ok(
+                        DeltaSyncStateResponseDto.forOwner(state, snapshotInProgress, nextCheckpointBuildAt)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

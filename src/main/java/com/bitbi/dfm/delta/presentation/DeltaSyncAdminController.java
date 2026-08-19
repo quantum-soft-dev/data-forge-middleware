@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.CheckpointScheduleService;
 import com.bitbi.dfm.delta.application.BatchParquetQueueService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointRebuildService;
@@ -38,6 +39,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -63,6 +65,7 @@ public class DeltaSyncAdminController {
     private static final int MAX_SEGMENTS_LIMIT = 100;
 
     private final DeltaSyncStateService syncStateService;
+    private final CheckpointScheduleService checkpointScheduleService;
     private final BatchParquetQueueService batchParquetQueueService;
     private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
@@ -72,6 +75,7 @@ public class DeltaSyncAdminController {
     private final SiteService siteService;
 
     public DeltaSyncAdminController(DeltaSyncStateService syncStateService,
+                                    CheckpointScheduleService checkpointScheduleService,
                                     BatchParquetQueueService batchParquetQueueService,
                                     DeltaRebaselineCancellationService cancellationService,
                                     DeltaCheckpointQueryService checkpointQueryService,
@@ -80,6 +84,7 @@ public class DeltaSyncAdminController {
                                     DeltaSiteWipeService wipeService,
                                     SiteService siteService) {
         this.syncStateService = syncStateService;
+        this.checkpointScheduleService = checkpointScheduleService;
         this.batchParquetQueueService = batchParquetQueueService;
         this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
@@ -103,7 +108,9 @@ public class DeltaSyncAdminController {
             summary = "Get delta sync state (admin)",
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
                     + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
-                    + "and lastRebuildOutcome/At/Message describing how the most recent finished forced rebuild ended. "
+                    + "and lastRebuildOutcome/At/Message describing how the most recent finished forced rebuild ended, "
+                    + "plus nextCheckpointBuildAt naming when the scheduled checkpoint build next runs — "
+                    + "lastCheckpointSeq 0 means no checkpoint has been built yet rather than a backlog. "
                     + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
@@ -117,8 +124,10 @@ public class DeltaSyncAdminController {
     public ResponseEntity<DeltaSyncStateResponseDto> getSyncState(@PathVariable UUID siteId) {
         siteService.getSite(siteId); // 404 when the site does not exist
         boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
+        Instant nextCheckpointBuildAt = checkpointScheduleService.nextBuildAt().orElse(null);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.forAdmin(state, snapshotInProgress)))
+                .map(state -> ResponseEntity.ok(
+                        DeltaSyncStateResponseDto.forAdmin(state, snapshotInProgress, nextCheckpointBuildAt)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
