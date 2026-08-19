@@ -68,8 +68,13 @@ public final class TestJvmHeap {
     private static final Pattern MAX_HEAP_SIZE =
             Pattern.compile("maxHeapSize\\s*=\\s*\"([^\"]*)\"");
 
-    /** A JVM size literal: digits with an optional {@code k}/{@code m}/{@code g} suffix. */
-    private static final Pattern SIZE = Pattern.compile("(\\d+)\\s*([kmg]?)b?", Pattern.CASE_INSENSITIVE);
+    /**
+     * A JVM size literal: digits with an optional {@code k}/{@code m}/{@code g} suffix, and
+     * nothing else — exactly what {@code -Xmx} takes. Deliberately not tolerant of a trailing
+     * {@code b}: {@code "2gb"} is a value the JVM refuses to start on, and a guard that reads it as
+     * 2 GiB would report a ceiling for a build that cannot run.
+     */
+    private static final Pattern SIZE = Pattern.compile("(\\d+)\\s*([kmg]?)", Pattern.CASE_INSENSITIVE);
 
     /** The block every {@code Test} task is configured by, the only place these settings bind all of them. */
     public static final String ALL_TEST_TASKS = "tasks.withType<Test>";
@@ -205,6 +210,8 @@ public final class TestJvmHeap {
                 i = end < 0 ? out.length : end + 3;
             } else if (out[i] == '"') {
                 i = endOfStringLiteral(source, i);
+            } else if (out[i] == '\'') {
+                i = endOfCharLiteral(source, i);
             } else {
                 i++;
             }
@@ -229,6 +236,10 @@ public final class TestJvmHeap {
                 int stop = endOfStringLiteral(source, i);
                 blank(out, i + 1, Math.max(i + 1, stop - 1));
                 i = stop;
+            } else if (out[i] == '\'') {
+                int stop = endOfCharLiteral(source, i);
+                blank(out, i + 1, Math.max(i + 1, stop - 1));
+                i = stop;
             } else {
                 i++;
             }
@@ -240,6 +251,20 @@ public final class TestJvmHeap {
     private static int endOfStringLiteral(String source, int start) {
         int i = start + 1;
         while (i < source.length() && source.charAt(i) != '"') {
+            i += source.charAt(i) == '\\' ? 2 : 1;
+        }
+        return Math.min(i + 1, source.length());
+    }
+
+    /**
+     * Offset just past the closing quote of the Kotlin character literal starting at
+     * {@code start}. Read at all because {@code '"'} would otherwise open a string literal that
+     * swallows the code up to the next quote — the shape that cost
+     * {@code AsyncExecutorQualifierTest} forty lines of a file it claimed to scan in full.
+     */
+    private static int endOfCharLiteral(String source, int start) {
+        int i = start + 1;
+        while (i < source.length() && source.charAt(i) != '\'') {
             i += source.charAt(i) == '\\' ? 2 : 1;
         }
         return Math.min(i + 1, source.length());

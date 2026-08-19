@@ -42,6 +42,8 @@ class TestJvmHeapTest {
         assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("2 GiB"));
         assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize(""));
         assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("2t"));
+        // A value the JVM itself refuses to start on must not read as a ceiling.
+        assertThrows(IllegalArgumentException.class, () -> TestJvmHeap.parseSize("2gb"));
         assertThrows(IllegalArgumentException.class,
                 () -> TestJvmHeap.parseSize("99999999999999999999999g"));
     }
@@ -118,6 +120,27 @@ class TestJvmHeapTest {
 
         assertFalse(block.contains("-XX:+HeapDumpOnOutOfMemoryError"),
                 "a sentence about the flag was read as the flag: " + block);
+    }
+
+    @Test
+    @DisplayName("a quote inside a character literal does not open a string literal")
+    void shouldNotReadACharacterLiteralAsAString() {
+        // Without char-literal handling the '"' opens a string that runs to the next quote and
+        // swallows the declaration between them, so the guard reports a block with no ceiling.
+        String script = """
+                tasks.withType<Test> {
+                    val quote = '"'
+                    maxHeapSize = "2g"
+                    jvmArgs("-XX:+ExitOnOutOfMemoryError")
+                }
+                """;
+
+        String block = TestJvmHeap.allTestTasksBlock(script);
+
+        assertTrue(block.contains("maxHeapSize"), "the character literal swallowed the block: " + block);
+        assertTrue(block.contains("-XX:+ExitOnOutOfMemoryError"),
+                "the character literal swallowed the flags: " + block);
+        assertEquals(List.of("2g"), TestJvmHeap.declaredHeapSizes(script));
     }
 
     @Test
