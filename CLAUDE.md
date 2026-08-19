@@ -465,8 +465,16 @@ pages/{feature}/            # Route pages
   the next statement deletes therefore survived the sweep and blocked it — surfacing as a
   `ScriptStatementFailedException` **inside `@Sql`** in whichever class ran next, so the failure was
   reported against an innocent test and cost a full investigation each time, the complaint #207 was
-  filed for one layer down. Both cleanups now sweep both relationships, which is the shape
-  `uploaded_files` already uses two statements earlier for the same constraint-shaped reason.
+  filed for one layer down. **Both** non-cascading references to
+  `batches` are swept by the relationship their constraint uses, in **three** cleanups:
+  `changelog_segments.batch_id` and — added in review round 1 — `account_plugins.baseline_batch_id`,
+  which is `ON DELETE RESTRICT` (V25) and the only other FK to `batches` without a cascade, so an
+  activation owned by an account outside `%@example.com` blocks the identical statement one
+  constraint over. `test-data.sql`, `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` and
+  `BatchTerminalTransitionLockingIntegrationTest.tearDown` all carry the pair; the third seeds
+  neither today and is fixed anyway, since "safe because nobody writes one yet" is how this sat
+  latent. It is the shape `uploaded_files` already uses two statements earlier for the same
+  constraint-shaped reason.
   **The rows were real rather than hypothetical, and the ticket asked for their origin before a
   fix.** Instrumenting the fixture over a full-suite run (a single statement carrying its payload in
   a cast error — Spring's `ScriptUtils` splits on `;` and does not understand a `DO $$ … $$` block,
@@ -503,9 +511,17 @@ pages/{feature}/            # Route pages
   script through `ResourceDatabasePopulator` (the same splitter `@Sql` uses, so it cannot pass
   against a construct `ScriptUtils` would choke on), and requires the row to be **gone** rather than
   the script merely to survive, since "it did not throw" passes against a fixture that never had the
-  row. It lives outside `**/integration/**` so the per-task gate runs it, and removes its own account
-  and site, which the fixture by construction cannot reach — a leaking guard would have become the
-  next #226. Verified red against the unfixed sweep, failing on `changelog_segments_batch_id_fkey`.
+  row. **Two methods, one per constraint**, each mutation-proven against its own: the segment one
+  fails on `changelog_segments_batch_id_fkey` against the unfixed sweep, and
+  `shouldClearActivationReachableOnlyThroughItsBaselineBatch` fails on
+  `fk_account_plugins_baseline_batch` against the account-only one. It lives outside
+  `**/integration/**` so the per-task gate runs it, and removes its own account, site and batch,
+  which the fixture by construction cannot reach — a leaking guard would have become the next #226.
+  The stranded rows hang off a batch the guard creates itself rather than store-01's flagship one
+  (review round 2): the batch-keyed readers — `findByBatchIdOrderByFirstSeq`,
+  `SqlGenerationPersistence.loadBatchData`, `BatchHistoryService` — have no site predicate either, so
+  a batch-parquet build would have replayed a segment whose object was never uploaded and failed an
+  artifact for a batch this class does not own.
   Test-only — no production code, REST, gRPC, proto, DTO, migration, configuration-key, metric,
   S3-key or frontend change.
 - first-checkpoint-state: A freshly ingested site stops reading as broken — the two surfaces that
