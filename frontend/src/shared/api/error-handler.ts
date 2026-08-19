@@ -27,7 +27,9 @@ declare module 'axios' {
  * Note: 401 errors are NOT shown as toasts here because the response interceptor
  * handles them with automatic token refresh. If refresh fails, logout is triggered.
  *
- * Usage: Call setupErrorHandler() in App.tsx
+ * Usage: Call setupErrorHandler() in App.tsx. Calling it again replaces the
+ * previous registration, so one failure produces one toast however often the
+ * caller's effect re-runs.
  */
 
 /**
@@ -57,8 +59,22 @@ export function getServerErrorStatus(error: unknown): number | undefined {
   return (error as AxiosError).response?.status
 }
 
+/**
+ * Id of the interceptor this module has registered, or null before the first
+ * call. App.tsx sets the handler up from an effect keyed on the Auth0 state,
+ * which re-runs as `isLoading` and `isAuthenticated` settle, so a second call
+ * has to replace the first interceptor — axios keeps every registration it is
+ * given, and each one would toast the same failure again. Same shape as
+ * setupInterceptors/setupResponseInterceptor in interceptors.ts.
+ */
+let errorInterceptorId: number | null = null
+
 export function setupErrorHandler() {
-  apiClient.interceptors.response.use(
+  if (errorInterceptorId !== null) {
+    apiClient.interceptors.response.eject(errorInterceptorId)
+  }
+
+  errorInterceptorId = apiClient.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
       if (error.config?.suppressErrorToast) {

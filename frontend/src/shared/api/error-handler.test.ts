@@ -1,7 +1,10 @@
 /**
- * Global error toast interceptor: callers that render their own error
- * taxonomy (e.g. openPresignedDownload) opt out via `suppressErrorToast`
- * in the request config, so a failed request never shows two toasts.
+ * Global error toast interceptor. Two properties, both about a single failure
+ * producing a single toast: callers that render their own error taxonomy
+ * (e.g. openPresignedDownload) opt out via `suppressErrorToast` in the request
+ * config, and registration is idempotent — App.tsx sets the handler up from an
+ * effect that re-runs as auth settles, so a second call must replace the first
+ * interceptor rather than stack a second one behind it.
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +45,19 @@ describe('setupErrorHandler', () => {
 
   beforeEach(() => {
     vi.mocked(toast.error).mockClear();
+  });
+
+  it('registers one interceptor however often it is set up', async () => {
+    // beforeAll already registered once; App.tsx's effect re-runs as `isLoading`
+    // and `isAuthenticated` settle, and `getAccessTokenSilently` changes identity.
+    setupErrorHandler();
+    setupErrorHandler();
+
+    await expect(
+      apiClient.get('/anything', { adapter: notFoundAdapter }),
+    ).rejects.toThrow();
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 
   it('toasts HTTP errors by default', async () => {

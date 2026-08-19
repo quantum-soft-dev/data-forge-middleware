@@ -453,6 +453,38 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- error-toast-once: `setupErrorHandler()` replaces its own interceptor instead of stacking another
+  one behind it, so one API failure produces one toast (issue #225, found by review round 3 on
+  #211/#223). It was the **only** `apiClient.interceptors.*.use(...)` in the application that kept
+  no handle on its registration — both siblings in `shared/api/interceptors.ts` store the id and
+  `eject` it first, precisely because they are called more than once — while `App.tsx` calls all
+  three from **one** `useEffect` keyed on
+  `[isLoading, isAuthenticated, getAccessTokenSilently, logout]`, which re-runs at least twice as
+  `isLoading` falls and `isAuthenticated` rises, with `getAccessTokenSilently` changing identity on
+  top. The new test reproduces the reported count exactly: three registrations, **three** toasts for
+  one 404. **Idempotent registration, not moving the call out of the effect** — the issue asked for
+  that shape and the reason is worth writing down: the effect *must* re-run, since the token getter
+  it installs closes over `isAuthenticated`, so what has to be safe is the registration and not its
+  cadence. **Two consequences fall out of the same line.** The accumulation also scrambled the
+  **order** of the response chain, which is not obvious from the symptom: axios ejects by nulling
+  the slot and registers by appending, and `setupResponseInterceptor` re-registers its 401 handler
+  on every run while the toast handler did not, so from the second run onwards the chain was
+  `[toast#1, 401#2, toast#2]` — the stale toast interceptor running **ahead** of the live refresh
+  handler; it is now always `[401, toast]`, the order `App.tsx` writes. And `initTokenRefresh`,
+  which the issue asked to audit because it is registered from the same effect, needs **nothing**:
+  it registers no interceptor at all, only assigns two module-scope callbacks, so a repeat call
+  overwrites where this one accumulated — `token-refresh.ts` is deliberately untouched.
+  **No test can start red against a property that already holds in one direction**, so the
+  assertion was proven by mutation both ways: with the `eject` removed it reads three toasts, and
+  with the freshly registered id ejected instead of the previous one — "one toast" satisfied by
+  leaving no handler at all — two of the three tests go red. Frontend-only: no backend, REST, gRPC,
+  proto, DTO, migration, configuration-key, metric, S3-key, route or `App.tsx` change, and no doc
+  named this code (the "exactly one toast" claim in `docs/delta-client-v2-guide.md` is about the
+  download pills, whose presign requests suppress the global toast, so it was true throughout and
+  stays true). One side finding was recorded rather than folded in: the handler's `switch` has no
+  `case 401`, so a 401 falls to `default:` and toasts "An unexpected error occurred." on top of the
+  refresh interceptor's own message — contradicting this file's own Javadoc, a different mechanism
+  (two interceptors, not one registered twice), and a behaviour decision of its own.
 - fixture-clears-by-batch: The suite's shared-database cleanups clear `changelog_segments` by the
   relationship the constraint actually uses, not only by `site_id` (issue #226, filed by the
   `/github-issue-runner` dispatcher when `develop` went red on a change that could not have caused
