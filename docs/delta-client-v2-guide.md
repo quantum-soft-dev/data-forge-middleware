@@ -1529,12 +1529,23 @@ be switched off with Spring's `-`, and promising a time the payload does not car
 class of lie. `CheckpointScheduleService` and the `@Scheduled` tick share one constant, so the answer
 cannot drift from the tick that produces it.
 
-Two limits are deliberate. **Stalled still wins**: a client that has not updated its sync state for a
-day is both more actionable and independent of whether a checkpoint exists. And the state says *no
-checkpoint exists*, not *the build is healthy* — a site still showing it after several nights has a
-build that is failing, which is what `delta.checkpoint.builds.aborted`,
-`delta.checkpoint.tables.given-up` and `delta.seq.lag` are for; the number itself stays on screen, so
-nothing is hidden by the neutral colour. Building a checkpoint on the ingest path when a site's first
+Three limits are deliberate. **Stalled still wins**: a client that has not updated its sync state for
+a day is both more actionable and independent of whether a checkpoint exists. **A site with nothing
+applied is not in this state at all**: an all-zero row — what a wipe leaves, and what a re-baseline
+requested for a client that never connected creates — is on neither of `CheckpointScheduler`'s work
+lists (segments, unmaterialized `checkpoints` rows), so promising it a build would be a promise
+nothing keeps, and there is nothing waiting either. And the state says *no checkpoint exists*, not
+*the build is healthy*: it **cannot age itself out**, because nothing persisted says how long a site
+has been waiting — `site_sync_state` has no creation timestamp, and every whole-site abort
+(`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`, a deferral) leaves
+no `checkpoints` row either, so a first build that has failed thirty nights carries byte-for-byte the
+payload of a site ingested this afternoon. It is deliberately **not** bounded by lag magnitude: a
+first FULL_SNAPSHOT is unbounded, so that bound would report the largest sites as critical on day one,
+which is the defect this removes. What is done instead — both surfaces keep the count, and the card
+names the build the state should not outlive ("Still missing after that? The build is failing rather
+than pending") — with the durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
+`delta.checkpoint.tables.given-up`, `delta.seq.lag`); separating the two payloads needs persisted
+state and a migration, filed as **#224**. Building a checkpoint on the ingest path when a site's first
 snapshot commits was the alternative and was **not** taken: it moves a whole-site fold onto the
 commit that the nightly cron exists to keep off it, and it would have to queue behind the same fold
 budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to introduce, since

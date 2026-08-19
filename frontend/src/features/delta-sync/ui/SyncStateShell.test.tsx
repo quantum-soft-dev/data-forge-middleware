@@ -200,6 +200,28 @@ describe('SyncStateShell (F5)', () => {
       )
     })
 
+    it('says what it means if the state outlives that build', () => {
+      // The state cannot age itself out: nothing persisted says how long a site has been waiting,
+      // so a first build that keeps failing would otherwise stay grey for ever (review r1).
+      render(<SyncStateShell state={freshSite} now={NOW} />)
+
+      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(/still missing after that/i)
+    })
+
+    it('does not promise a build to a site that has applied nothing', () => {
+      // An all-zero row (a wipe, or a re-baseline requested for a client that never connected) is
+      // on neither of the scheduler's work lists, so no build is coming — and nothing is waiting.
+      render(
+        <SyncStateShell
+          state={{ ...freshSite, lastAppliedSeq: 0 }}
+          now={NOW}
+        />,
+      )
+
+      expect(screen.queryByTestId('first-checkpoint-note')).not.toBeInTheDocument()
+      expect(screen.getByTestId('severity-chip')).toHaveTextContent('Healthy')
+    })
+
     it('says only that the build is scheduled when the schedule names no next run', () => {
       // delta.checkpoint.cron can be disabled; promising a time the payload does not carry would
       // be the same class of lie this ticket is about.

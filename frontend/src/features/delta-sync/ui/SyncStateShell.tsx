@@ -152,7 +152,10 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
                 <span style={{ color: t.text }}>
                   First scheduled build · {formatDateTime(state.nextCheckpointBuildAt)} (
                   {formatRelativeTime(state.nextCheckpointBuildAt)})
-                </span>
+                </span>{' '}
+                {/* The state cannot age itself out — nothing persisted says how long this site has
+                    been waiting — so it says what to conclude if it outlives the build it names. */}
+                Still missing after that? The build is failing rather than pending.
               </>
             )}
           </div>

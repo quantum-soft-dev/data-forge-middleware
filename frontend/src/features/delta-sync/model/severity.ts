@@ -83,6 +83,15 @@ export function hasCheckpoint(state: { lastCheckpointSeq: number | null }): bool
  * whether a checkpoint exists. And the pending state wins over every lag band, because a lag
  * measured against a pointer of zero is not a backlog.
  *
+ * It says *no checkpoint exists*, not *the build is healthy*, and it cannot age itself out: nothing
+ * persisted says how long a site has been waiting (`site_sync_state` has no creation timestamp, and
+ * a build that aborts before writing anything leaves no `checkpoints` row either), so a first build
+ * that keeps failing keeps this verdict. It is deliberately not bounded by lag magnitude — a first
+ * FULL_SNAPSHOT is unbounded, so that would report the largest sites as critical on day one, which
+ * is the defect this exists to remove. Both surfaces therefore keep the count visible, the card
+ * names the build the state should not outlive, and the durable alarm stays where it belongs:
+ * `delta.checkpoint.builds.aborted`, `delta.checkpoint.tables.given-up`, `delta.seq.lag`.
+ *
  * @param state the sync-state projection or a bulk health entry
  * @param now   injectable clock
  */
@@ -91,12 +100,17 @@ export function getSyncStatus(
   now: Date = new Date(),
 ): SyncStatus {
   if (isStalled(state.updatedAt, now)) return 'stalled';
-  if (!hasCheckpoint(state)) return 'awaiting-first-checkpoint';
-  return getSyncSeverity(
-    computeLag({ lastAppliedSeq: state.lastAppliedSeq, lastCheckpointSeq: state.lastCheckpointSeq ?? 0 }),
-    state.updatedAt,
-    now,
-  );
+  const lag = computeLag({
+    lastAppliedSeq: state.lastAppliedSeq,
+    lastCheckpointSeq: state.lastCheckpointSeq ?? 0,
+  });
+  // Nothing applied means nothing is waiting to be checkpointed — and no build is coming either:
+  // `CheckpointScheduler` visits the union of "has segments" and "has an unmaterialized checkpoint
+  // row", and an all-zero row (what a wipe leaves, and what a re-baseline requested for a client
+  // that never connected creates) is on neither list. Claiming a scheduled build for it would be a
+  // promise nothing keeps (review r1).
+  if (!hasCheckpoint(state) && lag > 0) return 'awaiting-first-checkpoint';
+  return getSyncSeverity(lag, state.updatedAt, now);
 }
 
 /**

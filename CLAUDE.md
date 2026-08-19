@@ -491,12 +491,26 @@ pages/{feature}/            # Route pages
   says only that the build is scheduled. On the frontend the field is `z.string().nullable()
   .optional().default(null)` for the #186/023-r3 reason: this payload drives the whole Delta Sync
   tab and must degrade rather than fail the parse.
-  **Two limits are deliberate and both are stated in the guide.** *Stalled still wins* over the
-  pending checkpoint — a client that has not updated its sync state for a day is more actionable and
-  is independent of whether a checkpoint exists. And the new state says *no checkpoint exists*, not
-  *the build is healthy*: a site still showing it after several nights has a failing build, which is
-  what `delta.checkpoint.builds.aborted`, `delta.checkpoint.tables.given-up` and `delta.seq.lag` are
-  for — and since the count itself stays on screen, the neutral colour hides nothing.
+  **Three limits are deliberate and all are stated in the guide, two of them corrected in review.**
+  *Stalled still wins* over the pending checkpoint — a client that has not updated its sync state for
+  a day is more actionable and is independent of whether a checkpoint exists. *A site with nothing
+  applied is not in this state at all* (review r1): an all-zero row is what a wipe leaves and what
+  `requestRebaseline` creates for a client that never connected, and such a site is on **neither** of
+  `CheckpointScheduler`'s work lists — segments, unmaterialized `checkpoints` rows — so the promised
+  build is one nothing keeps, and nothing is waiting either. And the state says *no checkpoint
+  exists*, not *the build is healthy*: it **cannot age itself out**, because no persisted fact says
+  how long a site has been waiting — `site_sync_state` has no creation timestamp, and every
+  whole-site abort (`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`,
+  a deferral) leaves no `checkpoints` row either, so thirty failed nights carry byte-for-byte the
+  payload of an afternoon's ingest. Review proposed bounding it by lag magnitude and that is
+  **declined with reasons**: a first FULL_SNAPSHOT is unbounded, so the bound would report the
+  largest sites as critical on day one — the defect itself, aimed at the sites with most to lose.
+  What is done instead: both surfaces keep the **count** (the site-list pill reads
+  `No checkpoint · 1.2k` rather than dropping the number, which is what this entry had claimed and
+  the pill did not do), and the card names the build the state should not outlive ("Still missing
+  after that? The build is failing rather than pending"). Separating the two payloads needs persisted
+  state and a migration, filed as **#224**; the durable alarm stays `delta.checkpoint.builds.aborted`,
+  `delta.checkpoint.tables.given-up` and `delta.seq.lag`.
   **The ticket's second shape — building a checkpoint when a site's first snapshot commits — was
   weighed and rejected**: it moves a whole-site fold onto the very commit path the nightly cron
   exists to keep clear, and it would have to queue behind the fold budget (#152/#178) and the scratch

@@ -84,7 +84,9 @@ describe('SyncHealthPill (F11)', () => {
         now={NOW}
       />,
     )
-    expect(screen.getByTestId('sync-health-pill')).toHaveTextContent('No checkpoint yet')
+    // The count stays on the pill (review r1): the tone says "not due yet", but dropping the
+    // number would hide how much is waiting on the one surface an operator scans for trouble.
+    expect(screen.getByTestId('sync-health-pill')).toHaveTextContent('No checkpoint · 1.2k')
   })
 
   it('still reports a stalled client on a site with no checkpoint', () => {

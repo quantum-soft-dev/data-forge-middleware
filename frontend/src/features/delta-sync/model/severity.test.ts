@@ -139,6 +139,16 @@ describe('getSyncStatus (issue #213)', () => {
     ).toBe('stalled');
   });
 
+  it('does not claim a site with nothing applied is waiting for a build (review r1)', () => {
+    // An all-zero row is what a wipe leaves and what requestRebaseline creates for a client that
+    // never connected. CheckpointScheduler visits the union of "has segments" and "has an
+    // unmaterialized checkpoint row", and such a site is on neither list — so promising it a
+    // scheduled build would be a promise nothing keeps. There is also nothing waiting.
+    expect(
+      getSyncStatus({ lastAppliedSeq: 0, lastCheckpointSeq: 0, updatedAt: fresh }, NOW),
+    ).toBe('healthy');
+  });
+
   it('hasCheckpoint reads zero as "none", the way the backend does', () => {
     // last_checkpoint_seq 0 is the initial value and what a wipe and a re-baseline reset to;
     // CheckpointService applies the same test before seeding from a frame.
