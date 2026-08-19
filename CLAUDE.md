@@ -481,19 +481,28 @@ pages/{feature}/            # Route pages
   proto, DTO, migration, configuration-key, metric, S3-key, route or `App.tsx` change, and no doc
   named this code (the "exactly one toast" claim in `docs/delta-client-v2-guide.md` is about the
   download pills, whose presign requests suppress the global toast, so it was true throughout and
-  stays true). One side finding was recorded rather than folded in, and review
-  widened it from one route to **two**: the handler's `switch` has no `case 401`, so a 401 the
-  refresh interceptor rejects without refreshing falls to `default:` — and when a refresh is
-  attempted and *fails*, `setupResponseInterceptor` rejects with the **Auth0 error** rather than the
-  original response, which carries no `.response` and is therefore read here as a network failure.
-  The second is the worse one: on the expired-refresh-token branch `interceptors.ts` stays
-  deliberately silent so the logout redirect is quiet, and this handler fills that silence with
-  "Network error. Please check your connection and try again." — one toast, and a lie about the
-  user's connection. Both contradict the two comments in this file asserting a 401 is never toasted
-  here, so **those comments are corrected rather than left standing** (the `AbstractIntegrationTest`
-  precedent of #197): the file now describes what it does and names the finding as the open
-  decision. Not fixed here — it is a different mechanism (two interceptors, not one registered
-  twice) and what a failed refresh should say is a behaviour decision of its own.
+  stays true). One side finding was recorded rather than folded in, and two
+  review rounds widened it from one route to **four** — which is the part of this ticket most worth
+  remembering, because it says what the fix does **not** buy. The handler speaks out of turn on
+  every 401 path, and none of the four is about registration count: the `switch` has no `case 401`,
+  so a 401 rejected without a refresh reaches `default:`; a *failed* refresh rejects with the
+  **Auth0 error** rather than the original response, which carries no `.response` and is therefore
+  read as a network failure; that same error carries no `.config` either, so **`suppressErrorToast`
+  is lost** and a caller that deliberately renders its own taxonomy gets the global toast anyway;
+  and a refresh that *succeeds* retries through `apiClient.request(...)`, which **re-enters the
+  whole chain**, so a retry that fails too toasts on the inner request and again on the outer
+  rejection. The second is the ugliest and the fourth is the one that bounds this ticket's claim:
+  on the expired-refresh-token branch `interceptors.ts` stays deliberately silent so the logout
+  redirect is quiet, and this handler fills that silence with "Network error. Please check your
+  connection and try again." — a lie about the user's connection; while the fourth is **two
+  identical toasts for one failure with a correctly registered interceptor**, which is why the PR
+  title claims only that the stacking stops, not that one failure now toasts once. All four
+  contradict the comments in this file asserting a 401 is never toasted here, so **those comments
+  are corrected rather than left standing** (the `AbstractIntegrationTest` precedent of #197): the
+  file enumerates the four routes and names the finding as the open decision, and the test-file
+  header's `suppressErrorToast` claim is narrowed for the same reason. Not fixed here — different
+  mechanisms (two interceptors and a re-entrant chain, not one interceptor registered twice) and
+  what a failed refresh should say is a behaviour decision of its own.
 - fixture-clears-by-batch: The suite's shared-database cleanups clear `changelog_segments` by the
   relationship the constraint actually uses, not only by `site_id` (issue #226, filed by the
   `/github-issue-runner` dispatcher when `develop` went red on a change that could not have caused

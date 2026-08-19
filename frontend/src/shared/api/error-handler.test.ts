@@ -5,6 +5,10 @@
  * config, and registration is idempotent — App.tsx sets the handler up from an
  * effect that re-runs as auth settles, so a second call must replace the first
  * interceptor rather than stack a second one behind it.
+ *
+ * Both are properties of a failure that carries its own response. On the 401 and
+ * token-refresh paths this handler still speaks out of turn — four routes, none of
+ * them about registration count; see the note in error-handler.ts.
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';

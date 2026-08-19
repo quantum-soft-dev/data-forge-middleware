@@ -26,14 +26,25 @@ declare module 'axios' {
  *
  * Note: 401 is *meant* to be left to the response interceptor in interceptors.ts,
  * which attempts a token refresh first. This handler does not currently stay out
- * of its way, and that is a known open defect rather than the design: the switch
- * below has no `case 401`, so a 401 that interceptor rejects falls to `default:`;
- * and a *failed* refresh rejects with the Auth0 error rather than the original
- * response, which carries no `.response` and so reads here as a network error —
- * including on the expired-refresh-token branch, where interceptors.ts stays
- * deliberately silent so the logout redirect is quiet. Recorded as a side finding
- * of issue #225 rather than fixed there: what a failed refresh should say is a
- * behaviour decision of its own.
+ * of its way, by four routes — all of them known open defects rather than the
+ * design, and all recorded as a side finding of issue #225:
+ *
+ *   1. The switch below has no `case 401`, so a 401 that interceptor rejects
+ *      without refreshing (already retried, or refresh not initialized) reaches
+ *      `default:`.
+ *   2. A *failed* refresh rejects with the Auth0 error rather than the original
+ *      response. It carries no `.response`, so it reads here as a network error —
+ *      including on the expired-refresh-token branch, where interceptors.ts stays
+ *      deliberately silent so the logout redirect is quiet.
+ *   3. That same Auth0 error carries no `.config` either, so `suppressErrorToast`
+ *      is lost and a caller that opted out of the global toast gets one anyway.
+ *   4. A refresh that *succeeds* retries via `apiClient.request(...)`, which
+ *      re-enters this whole chain: if the retry fails too, the inner request
+ *      toasts and the outer rejection toasts again — two toasts for one failure,
+ *      which no amount of registration hygiene changes.
+ *
+ * Not fixed with #225, whose subject is how many times this interceptor is
+ * registered: what a failed refresh should say is a behaviour decision of its own.
  *
  * Usage: Call setupErrorHandler() in App.tsx. Calling it again replaces the
  * previous registration, so however often the caller's effect re-runs, repeated
