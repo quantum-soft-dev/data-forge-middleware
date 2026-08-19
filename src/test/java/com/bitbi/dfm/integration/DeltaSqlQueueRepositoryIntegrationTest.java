@@ -29,7 +29,16 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
     /** store-02.example.com: second site of the same account (test-data.sql). */
     private static final UUID OTHER_SITE = UUID.fromString("0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7");
     private static final UUID ACCOUNT = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    /** A COMPLETED batch of {@link #SITE} (test-data.sql). */
     private static final UUID BATCH = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    /**
+     * A batch of {@link #OTHER_SITE} (test-data.sql). The batch has to follow the site: nothing in
+     * {@code ChangelogSegment.create(siteId, batchId, ...)} requires the two to agree, and a segment
+     * pairing one site with another site's batch is invisible to every cleanup that sweeps by
+     * {@code site_id} while still holding {@code changelog_segments_batch_id_fkey} against that
+     * batch's deletion (issue #226).
+     */
+    private static final UUID OTHER_BATCH = UUID.fromString("b1c2d3e4-f5a6-7890-bcde-f12345678905");
 
     @Autowired
     private ChangelogSegmentRepository segmentRepository;
@@ -45,10 +54,15 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
 
     private ChangelogSegment seedSegment(UUID siteId, long firstSeq, long lastSeq) {
         ChangelogSegment segment = ChangelogSegment.create(
-                siteId, BATCH, firstSeq, lastSeq, lastSeq - firstSeq + 1,
+                siteId, batchOf(siteId), firstSeq, lastSeq, lastSeq - firstSeq + 1,
                 "hash-" + firstSeq, "delta/" + siteId + "/segments/" + firstSeq + ".pb.gz",
                 "DELTA", Map.of());
         return segmentRepository.save(segment);
+    }
+
+    /** The seeded batch belonging to {@code siteId} — see {@link #OTHER_BATCH}. */
+    private static UUID batchOf(UUID siteId) {
+        return OTHER_SITE.equals(siteId) ? OTHER_BATCH : BATCH;
     }
 
     @Test

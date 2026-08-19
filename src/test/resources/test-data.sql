@@ -20,8 +20,14 @@ DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE 
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 -- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted before batches
 DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
--- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches
-DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
+-- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches.
+-- Both relationships are cleared, not just site_id (issue #226): the blocking constraint is
+-- changelog_segments_batch_id_fkey, and a segment's batch need not belong to the segment's site --
+-- ChangelogSegment.create(siteId, batchId, ...) takes the two independently, so a test can pair a
+-- site this predicate does not match with a batch the next statement deletes. Same shape as the
+-- uploaded_files sweep above, and for the same constraint-shaped reason.
+DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com')
+                                  OR batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 DELETE FROM checkpoints WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM site_sync_state WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
