@@ -251,6 +251,21 @@ old one and the fixing commit) or a stale observation (the fix is already in `de
 needed). Only if nothing matched, file the issue (described, labelled, milestoned, `Backlog` on
 the board) — and do not start work on it in the current cycle.
 
+**A ticket filed from a review says what it will touch.** A keyword search finds a *duplicate*; it
+does not find a *collision*, because two tickets in the same code often share no vocabulary at all —
+#200 was about a unique constraint and #190 about a transaction annotation, they read as unrelated,
+and they were one piece of work that could not be done in either order alone. What they shared was
+the files. So every follow-up states three things, in the body, before it is filed:
+
+- **the files it expects to touch** — enough for an overlap check, not a plan;
+- **whether it needs a Flyway migration** — the one collision that merges cleanly and breaks
+  startup, so "none" is worth writing down;
+- **which open tickets live in those same files** — named, and "none" is a valid answer.
+
+Three lines. `/github-issue-runner` computes the same overlap at step 2b by inferring it from prose;
+when the ticket says it outright, that inference becomes a read, and the dispatcher sees the clash
+before it puts two tickets in one window rather than two hours into an executor's session.
+
 ### Running several issues at once
 
 `/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
