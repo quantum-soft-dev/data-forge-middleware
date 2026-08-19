@@ -489,7 +489,10 @@ pages/{feature}/            # Route pages
   cannot become an off-origin redirect target. This fixes deep links with query parameters for
   **every** protected route, not only `/device-verify`. The page also normalizes the code it takes
   from the URL, since that value is pasted by hand and need not arrive in the presentation the
-  backend stores (`?code=m9q24aml` now resolves to `M9Q2-4AML` rather than 404ing). Three existing
+  backend stores (`?code=m9q24aml` now resolves to `M9Q2-4AML` rather than 404ing), and a URL code
+  that is *incomplete* pre-fills the input state instead of going straight to a confirmation card the
+  lookup cannot fill — which used to render neither the details nor the spinner, i.e. a blank page.
+  Three existing
   tests pinned the old path-only `returnTo` and were rewritten rather than left standing — the
   behaviour changed deliberately. Frontend only: no REST, gRPC, proto, DTO, migration,
   configuration-key, metric, S3-key, route-path or TanStack Query key change; `/device-verify` and
