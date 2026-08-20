@@ -84,6 +84,28 @@ public final class ParquetSchemaMapper {
         return new Schema.Field(column.name(), union, null, Schema.Field.NULL_DEFAULT_VALUE);
     }
 
+    /**
+     * Whether a declared PostgreSQL type is materialised as a Parquet <strong>DECIMAL</strong>, which
+     * is the one destination in this pipeline with no representation for {@code NaN} or
+     * {@code ±Infinity} — {@code ParquetCheckpointWriter.toBigDecimal} answers {@code null} for such a
+     * value whatever Java type it arrived as, so every Parquet artifact writes that cell NULL.
+     *
+     * <p>Answered by building the field's own Avro type rather than by re-reading the type string,
+     * so it cannot drift from what the writers actually do: a <em>bare</em> {@code numeric} is Avro
+     * STRING (it carries the token losslessly, non-finite included) and only a parametrised
+     * {@code numeric(p,s)} is DECIMAL — a distinction a second parser would be free to get wrong.</p>
+     *
+     * <p>Read by the Bit BI SQL path (issue #233): a value the Parquet side must NULL cannot be
+     * addressed by a WHERE clause the SQL side renders, so a record keyed on one is skipped rather
+     * than emitted against a baseline row whose key cell is NULL.</p>
+     *
+     * @param pgType the declared PostgreSQL column type
+     * @return {@code true} if the column materialises as a Parquet DECIMAL
+     */
+    public static boolean rendersAsParquetDecimal(String pgType) {
+        return avroType(pgType).getLogicalType() instanceof LogicalTypes.Decimal;
+    }
+
     private static Schema avroType(String pgType) {
         String type = pgType.trim().toLowerCase(Locale.ROOT);
         String base = type;

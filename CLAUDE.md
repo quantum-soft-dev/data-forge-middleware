@@ -604,12 +604,19 @@ pages/{feature}/            # Route pages
   `DeltaSqlGenerationStrategy.hasUnrepresentableKey` is therefore correct to match `DECIMAL_VALUE`
   alone — closing half of the coverage gap #240 declares (the `string_value` half was never a gap: a
   string is quoted anyway).
-  **One combination still disagrees and is documented rather than fixed here** (review round 1): the
-  rule keys on the wire case while the Parquet writers key on the **declared** type, so a column
-  declared `numeric` whose value arrives as `double_value` — which the wire contract forbids — is
-  NULL in every Parquet artifact and `'NaN'` in the SQL, and as a key it is not skipped either. Both
-  were already true, with the SQL additionally invalid; destination-awareness is #240's subject on
-  both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
+  **One combination disagrees, and review round 3 found that quoting turned its worst case from loud
+  to silent**: the rule keys on the wire case while the Parquet writers key on the **declared** type,
+  so a column declared `numeric(p,s)` whose value arrives as `double_value` — which the wire contract
+  forbids and nothing rejects at ingest — is NULL in every Parquet artifact and `'NaN'` in the SQL.
+  As a *key* that used to be harmless precisely because the SQL was invalid and Bit BI rejected the
+  file; `WHERE k = 'NaN'` applies cleanly against a baseline row whose key cell is NULL, matches
+  nothing and diverges the mirror silently — the outcome `hasUnrepresentableKey` exists to prevent.
+  So that guard now also skips a non-finite `double_value` **whose declared column materialises as a
+  Parquet DECIMAL**, asking `ParquetSchemaMapper.rendersAsParquetDecimal` — the field the writers
+  actually build — rather than parsing the type name a second time, which would have got a **bare**
+  `numeric` wrong (Avro STRING, carries the token losslessly, nothing to skip). The counter and WARN
+  are the existing ones. The **data** cells of that combination still differ; that is coercion, which
+  is #240's subject on both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
   already written**: `/sql-changes` returns the stored objects, so a pre-fix batch comes back
   byte-identical — the recoveries are delete + generate (with its documented re-delivery caveat) or
   `reinit`, which is what the guide now says instead of the "just re-fetch" this entry first

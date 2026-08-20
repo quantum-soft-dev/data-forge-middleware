@@ -123,6 +123,25 @@ public final class ValueMapper {
     }
 
     /**
+     * Whether this value is a floating point number the wire carried as {@code double_value} and
+     * IEEE calls non-finite — {@code NaN} or {@code ±Infinity}.
+     *
+     * <p>Unlike the decimal predicates above this is <em>not</em> a loss: {@link #toJava(Value)}
+     * returns the value, protobuf {@code double} carries it, and a column declared {@code real} or
+     * {@code double precision} materialises as Avro FLOAT/DOUBLE, which hold it natively. It is
+     * asked by a caller that must know whether the <em>declared</em> destination can hold it after
+     * all — a column declared {@code numeric(p,s)} whose value nevertheless arrives on this wire
+     * case, which the schema contract forbids and nothing rejects at ingest (issue #233).</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a {@code double_value} of {@code NaN} or {@code ±Infinity}
+     */
+    public static boolean isNonFiniteDouble(Value value) {
+        return value.getVCase() == Value.VCase.DOUBLE_VALUE
+                && !Double.isFinite(value.getDoubleValue());
+    }
+
+    /**
      * Whether this value is a decimal token {@link BigDecimal} cannot parse and which is <em>not</em>
      * one of PostgreSQL's non-finite spellings — i.e. a client sending nonsense (issue #215, review
      * round 1).

@@ -371,10 +371,13 @@ public class SqlStatementGenerator {
             return decimal.toPlainString();
         }
         if (value instanceof Double || value instanceof Float) {
-            String nonFinite = nonFiniteLiteral(((Number) value).doubleValue());
-            if (nonFinite != null) {
-                return "'" + nonFinite + "'";
-            }
+            // One vocabulary for the three spellings, shared with the DBF branch and with
+            // ChangelogFold rather than restated here -- a second copy of it is what issue #238 was.
+            // Java prints exactly PostgreSQL's own spellings, so the round trip through the token is
+            // free: the same string is returned unquoted when the value is finite.
+            String text = value.toString();
+            String nonFinite = ValueMapper.canonicalNonFinite(text);
+            return nonFinite != null ? "'" + nonFinite + "'" : text;
         }
         if (value instanceof Number) {
             return value.toString();
@@ -386,30 +389,6 @@ public class SqlStatementGenerator {
             return formatBytea(bytes);
         }
         return "'" + escapeString(value.toString()) + "'";
-    }
-
-    /**
-     * PostgreSQL's own spelling of a non-finite floating point value, or {@code null} when the
-     * value is finite and therefore renders as an ordinary unquoted number.
-     *
-     * <p>Java and PostgreSQL agree on all three spellings, so this is {@code Double.toString} for
-     * the non-finite cases spelled out — written out rather than called so that the three literals
-     * this pipeline emits are visible at the place that decides to emit them.</p>
-     *
-     * @param value the numeric value
-     * @return {@code "NaN"}, {@code "Infinity"}, {@code "-Infinity"}, or {@code null}
-     */
-    private static String nonFiniteLiteral(double value) {
-        if (Double.isNaN(value)) {
-            return "NaN";
-        }
-        if (value == Double.POSITIVE_INFINITY) {
-            return "Infinity";
-        }
-        if (value == Double.NEGATIVE_INFINITY) {
-            return "-Infinity";
-        }
-        return null;
     }
 
     /**

@@ -502,7 +502,7 @@ store it at all and writes NULL (issue #215), described in
 
 On the DBF/CSV path the question does not arise today: `DbfSqlGenerationStrategy` calls the generator
 with an **empty** column-type map, so every cell is treated as `Character` and is quoted and escaped
-whatever it contains. That also means the per-type table below describes a mapping nothing currently
+whatever it contains. That also means the per-type table above describes a mapping nothing currently
 supplies — see issue #263. The quoting rule is on the generator's contract for the day a caller
 passes real types, not a fix for an observed case.
 

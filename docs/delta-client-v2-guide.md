@@ -1152,16 +1152,24 @@ can carry. A `double` key needs no exception either: PostgreSQL compares `NaN` e
 **The declared type is what decides on the Parquet side, and the wire case is what decides here** —
 so one combination still disagrees, and it is the combination the schema contract already forbids. A
 client that declares a column `numeric`/`decimal` and nevertheless sends `double_value` (see
-[Type mapping](#schema-json--type-mapping): *never send these as `double_value`*) has its cell
+[Value typing](#value-typing): *never send these as `double_value`*) has its cell
 written NULL by every Parquet writer — `toBigDecimal` cannot render a non-finite into a DECIMAL,
 whatever Java type it arrived as, and it is counted on
 `delta.parquet.unrepresentable-decimals{reason=non_finite}` — while the SQL stream renders
 `'NaN'`. If that cell is a **key**, the record is not skipped either, because
-`hasUnrepresentableKey` reads the wire case: the statement addresses `col = 'NaN'` against a
-baseline row whose key cell is NULL. Both were true before issue #233 as well, except that the SQL
-was invalid and cost the client the whole file, so nothing here is a new loss — but teaching the SQL
-path the destination type is a decision of its own and belongs to issue #240, which owns that
+the **key** is guarded: quoting the literal would have turned a loud failure into a silent one —
+before #233 the bare `NaN` was invalid SQL that Bit BI rejected, whereas `col = 'NaN'` applies
+cleanly against a baseline row whose key cell is NULL and matches nothing — so such a record is
+skipped, on the same WARN and `sql.generation.delta.records.skipped.unrepresentable_key` as the
+`decimal_value` case. The **data** cells of that combination still differ (NULL in Parquet,
+`'NaN'` in SQL), as they did before with the SQL merely invalid on top; teaching the SQL path the
+destination type for those is a decision of its own and belongs to issue #240, which owns the
 question for both sides.
+
+A *bare* `numeric` is not in this at all: it maps to Avro STRING to carry the token losslessly, so
+nothing is degraded and nothing is skipped. The guard asks
+`ParquetSchemaMapper.rendersAsParquetDecimal`, i.e. the field the writers actually build, rather
+than reading the type name a second time.
 
 **Comparison caveat.** `'Infinity'` and `1e400` are not the same cell: the wire value is an IEEE
 double, so a magnitude the source held in a `numeric` and cast to `double precision` may already be

@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.ParquetSchemaMapper;
 import com.bitbi.dfm.delta.application.ValueMapper;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
@@ -137,15 +138,16 @@ public class DeltaSqlGenerationStrategy {
     private JsonlChangeRecord mapRecord(ChangeRecord record, TableSchema schema, String tableName) {
         int lineNumber = (int) Math.min(record.getSeq(), Integer.MAX_VALUE);
         reportUnrepresentableDecimals(record, tableName);
-        if (hasUnrepresentableKey(record)) {
+        if (hasUnrepresentableKey(record, schema)) {
             // A key column this pipeline cannot represent addresses no row: rendered as SQL the
             // WHERE clause becomes `col = NULL`, which is never true, so an UPDATE or DELETE would
             // be emitted, applied, match nothing, and leave the Bit BI mirror silently diverged
             // (issue #215, review round 1). Skipping is lossy in the same way -- but loudly, and
             // without writing a statement that claims to have done something.
-            log.warn("Table '{}' seq {}: {} record skipped -- a key column holds a decimal this "
-                            + "pipeline cannot represent (NaN, +/-Infinity or a malformed token), so "
-                            + "its SQL would match no row",
+            log.warn("Table '{}' seq {}: {} record skipped -- a key column holds a value the "
+                            + "checkpoint cannot represent (NaN, +/-Infinity or a malformed token in "
+                            + "a column that materialises as a Parquet DECIMAL), so its SQL would "
+                            + "match no row",
                     tableName, record.getSeq(), record.getOp());
             meterRegistry.counter("sql.generation.delta.records.skipped.unrepresentable_key").increment();
             return null;
@@ -203,13 +205,39 @@ public class DeltaSqlGenerationStrategy {
      * change: the rate lives on {@code delta.parquet.unrepresentable-decimals}, and the Parquet writers
      * log the per-table summary.
      */
-    private boolean hasUnrepresentableKey(ChangeRecord record) {
-        for (com.bitbi.dfm.delta.grpc.v2.Value cell : record.getKeyMap().values()) {
-            if (ValueMapper.isUnrepresentable(cell)) {
+    private boolean hasUnrepresentableKey(ChangeRecord record, TableSchema schema) {
+        for (Map.Entry<String, com.bitbi.dfm.delta.grpc.v2.Value> cell : record.getKeyMap().entrySet()) {
+            if (ValueMapper.isUnrepresentable(cell.getValue())
+                    || isNonFiniteDoubleInDecimalColumn(cell.getKey(), cell.getValue(), schema)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * The second way a key cell can address no row, and the one issue #233 had to add rather than
+     * inherit: the value is a non-finite {@code double_value} — which this pipeline renders in SQL
+     * as a quoted {@code 'NaN'} literal and does not lose — while the column it names is
+     * <em>declared</em> {@code numeric(p,s)}, so every Parquet artifact writes that key cell NULL.
+     * The statement would then be valid PostgreSQL addressing a baseline row whose key is NULL:
+     * applied, matching nothing, leaving the mirror silently diverged.
+     *
+     * <p>Before #233 that combination emitted a bare {@code NaN}, which Bit BI rejected as invalid
+     * SQL — loud, and therefore harmless to the mirror. Quoting the literal is what would have
+     * turned it silent, so the skip is part of that change rather than a separate improvement.</p>
+     *
+     * <p>It is a contract violation to begin with (a {@code numeric} column must be sent as
+     * {@code decimal_value}) and nothing rejects it at ingest; deciding what the <em>data</em> cells
+     * of such a row should render as is destination-awareness, which issue #240 owns for both
+     * consumers. This guard is deliberately only about the key.</p>
+     */
+    private boolean isNonFiniteDoubleInDecimalColumn(String column, com.bitbi.dfm.delta.grpc.v2.Value cell,
+                                                     TableSchema schema) {
+        return ValueMapper.isNonFiniteDouble(cell)
+                && schema.findColumn(column)
+                        .map(definition -> ParquetSchemaMapper.rendersAsParquetDecimal(definition.type()))
+                        .orElse(false);
     }
 
     /**
