@@ -599,18 +599,17 @@ pages/{feature}/            # Route pages
   value at all, so nulling keeps the Parquet artifacts and the SQL stream saying the same thing about
   that cell. Parquet DOUBLE holds it natively, so here NULL would *create* that disagreement — the
   checkpoint baseline keeping a value the delta stream dropped — and would discard a value both
-  consumers can carry. The same property removes any need for a key exception: PostgreSQL compares
-  `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row, and
-  `DeltaSqlGenerationStrategy.hasUnrepresentableKey` is therefore correct to match `DECIMAL_VALUE`
-  alone for the values it *can* store.
-  **One combination disagrees, and review round 3 found that quoting turned its worst case from loud
-  to silent**: the rule keys on the wire case while the Parquet writers key on the **declared** type,
-  so a column declared `numeric(p,s)` whose value arrives as `double_value` — which the wire contract
-  forbids and nothing rejects at ingest — is NULL in every Parquet artifact and `'NaN'` in the SQL.
-  As a *key* that used to be harmless precisely because the SQL was invalid and Bit BI rejected the
-  file; `WHERE k = 'NaN'` applies cleanly against a baseline row whose key cell is NULL, matches
-  nothing and diverges the mirror silently — the outcome `hasUnrepresentableKey` exists to prevent.
-  So that guard now also skips a non-finite `double_value` **whose declared column materialises as a
+  consumers can carry. The same property normally removes any need for a key exception: PostgreSQL
+  compares `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row.
+  **One combination is the exception, and review round 3 found that quoting turned its worst case
+  from loud to silent**: the rendering keys on the wire case while the Parquet writers key on the
+  **declared** type, so a column declared `numeric(p,s)` whose value arrives as `double_value` —
+  which the wire contract forbids and nothing rejects at ingest — is NULL in every Parquet artifact
+  and `'NaN'` in the SQL. As a *key* that used to be harmless precisely because the SQL was invalid
+  and Bit BI rejected the file; `WHERE k = 'NaN'` applies cleanly against a baseline row whose key
+  cell is NULL, matches nothing and diverges the mirror silently — the outcome the key guard exists
+  to prevent. So `hasUnrepresentableKey` becomes `unaddressableKeyReason` (it now returns *why*, so
+  the WARN can name the column and the reason) and also skips a non-finite `double_value` **whose declared column materialises as a
   Parquet DECIMAL**, asking `ParquetSchemaMapper.rendersAsParquetDecimal` — the field the writers
   actually build — rather than parsing the type name a second time, which would have got a **bare**
   `numeric` wrong (Avro STRING, carries the token losslessly, nothing to skip); a declaration Avro
@@ -621,7 +620,16 @@ pages/{feature}/            # Route pages
   entry's earlier claim that "a string is quoted anyway" settled it: quoting settles SQL *validity*,
   not which row the statement *addresses*. An unparseable string needs no guard for the mirror
   reason — its SQL fails loudly at apply time — and an `INSERT` is skipped with the rest, since a row
-  whose key this stream will always skip is one it could create and never address again. The counter and WARN
+  whose key this stream will always skip is one it could create and never address again.
+  **The counter deliberately stays one series.** `sql.generation.delta.records.skipped.unrepresentable_key`
+  is unchanged and untagged: the two reasons have different remedies (fix the source data / fix the
+  client's `SubmitSchema` or its wire encoding) and the WARN names which, but the *alert* is the same
+  one either way — a client is sending keys this pipeline cannot address — and a tag added to an
+  existing untagged series is a contract change that breaks the dashboards reading it. The **data**
+  cells of the forbidden combination are also newly silent rather than loud (`SET price = 'NaN'`
+  applies where `SET price = NaN` was rejected), and that half is **not** guarded here: nulling them
+  is coercion, which is #240's subject and the thing PR #232 reverted three times. Recorded there
+  rather than argued in a commit message. The counter and WARN
   are the existing ones. The **data** cells of that combination still differ; that is coercion, which
   is #240's subject on both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
   already written**: `/sql-changes` returns the stored objects, so a pre-fix batch comes back

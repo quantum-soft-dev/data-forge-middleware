@@ -195,9 +195,15 @@ public class DeltaSqlGenerationStrategy {
     }
 
     /**
-     * Why this record's key addresses no row, or {@code null} when it addresses one — the operator's
-     * half of the skip, since the two reasons send them to different places: a client emitting a
-     * value nothing can store, or a client contradicting its own declared schema.
+     * Why this record's key addresses no row, or {@code null} when it addresses one.
+     *
+     * <p>The two reasons have different remedies — a client emitting a value nothing can store, or a
+     * client contradicting its own declared schema — which is why the reason travels into the WARN
+     * instead of being implied by it. The <em>counter</em> deliberately does not distinguish them:
+     * {@code sql.generation.delta.records.skipped.unrepresentable_key} stays one untagged series
+     * because the alert is the same either way (a client is sending keys this pipeline cannot
+     * address), and tagging a series that already exists untagged breaks the dashboards reading
+     * it.</p>
      *
      * @return a phrase naming the column and the reason, or {@code null} if the key is fine
      */
