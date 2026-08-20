@@ -24,10 +24,31 @@ declare module 'axios' {
  * - 500 Server Error: Show generic server error
  * - Network Error: Show network error
  *
- * Note: 401 errors are NOT shown as toasts here because the response interceptor
- * handles them with automatic token refresh. If refresh fails, logout is triggered.
+ * Note: 401 is *meant* to be left to the response interceptor in interceptors.ts,
+ * which attempts a token refresh first. This handler does not currently stay out
+ * of its way, by four routes — all of them known open defects rather than the
+ * design, and all recorded as a side finding of issue #225:
  *
- * Usage: Call setupErrorHandler() in App.tsx
+ *   1. The switch below has no `case 401`, so a 401 that interceptor rejects
+ *      without refreshing (already retried, or refresh not initialized) reaches
+ *      `default:`.
+ *   2. A *failed* refresh rejects with the Auth0 error rather than the original
+ *      response. It carries no `.response`, so it reads here as a network error —
+ *      including on the expired-refresh-token branch, where interceptors.ts stays
+ *      deliberately silent so the logout redirect is quiet.
+ *   3. That same Auth0 error carries no `.config` either, so `suppressErrorToast`
+ *      is lost and a caller that opted out of the global toast gets one anyway.
+ *   4. A refresh that *succeeds* retries via `apiClient.request(...)`, which
+ *      re-enters this whole chain: if the retry fails too, the inner request
+ *      toasts and the outer rejection toasts again — two toasts for one failure,
+ *      which no amount of registration hygiene changes.
+ *
+ * Not fixed with #225, whose subject is how many times this interceptor is
+ * registered: what a failed refresh should say is a behaviour decision of its own.
+ *
+ * Usage: Call setupErrorHandler() in App.tsx. Calling it again replaces the
+ * previous registration, so however often the caller's effect re-runs, repeated
+ * registrations cannot multiply the toasts for one failure (issue #225).
  */
 
 /**
@@ -57,8 +78,39 @@ export function getServerErrorStatus(error: unknown): number | undefined {
   return (error as AxiosError).response?.status
 }
 
+/**
+ * Id of the interceptor this module has registered, or null before the first
+ * call. App.tsx sets the handler up from an effect keyed on the Auth0 state,
+ * which re-runs as `isLoading` and `isAuthenticated` settle, so a second call
+ * has to replace the first interceptor — axios keeps every registration it is
+ * given, and each one would toast the same failure again. Same shape as
+ * setupInterceptors/setupResponseInterceptor in interceptors.ts.
+ */
+let errorInterceptorId: number | null = null
+
+/**
+ * Eject this module's interceptor and forget its id.
+ *
+ * The counterpart of clearResponseInterceptor() in interceptors.ts, and there
+ * for the same reason: ejecting by a remembered index is only safe while nobody
+ * resets `apiClient.interceptors.response`. A teardown that calls `.clear()`
+ * restarts the ids at 0, after which a remembered id points at whatever now
+ * occupies that slot — so a test that clears the chain resets this module too,
+ * rather than leaving it holding an index into an array it no longer knows.
+ */
+export function clearErrorHandler(): void {
+  if (errorInterceptorId !== null) {
+    apiClient.interceptors.response.eject(errorInterceptorId)
+    errorInterceptorId = null
+  }
+}
+
 export function setupErrorHandler() {
-  apiClient.interceptors.response.use(
+  if (errorInterceptorId !== null) {
+    apiClient.interceptors.response.eject(errorInterceptorId)
+  }
+
+  errorInterceptorId = apiClient.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
       if (error.config?.suppressErrorToast) {
@@ -74,8 +126,10 @@ export function setupErrorHandler() {
       const { status } = error.response
 
       switch (status) {
-        // Note: 401 is handled by setupResponseInterceptor() in interceptors.ts
-        // which attempts token refresh before showing any error
+        // 401 has no case of its own and therefore reaches `default:`.
+        // setupResponseInterceptor() in interceptors.ts refreshes the token
+        // first but does not stop the rejection reaching this handler — see
+        // the file docblock, a known open defect rather than the intent.
 
         case 403:
           // Forbidden - wrong token type or insufficient permissions
