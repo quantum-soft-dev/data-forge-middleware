@@ -266,21 +266,24 @@ plugin:
     # Absolute URL prefix for one-time download links; empty = derive from the request
     base-url: ${PLUGIN_PARQUET_EXPORT_BASE_URL:}
   sql-generation:
-    # The three keys below are validated in the SqlGenerationService constructor and an
-    # out-of-range value FAILS STARTUP (issue #185, owner decision: fail fast, not a WARN).
-    # A rolling update keeps old replicas serving while the rollout goes red, which is exactly
-    # the visibility a config typo needs; the alternatives fail silently — 800 for the heap
-    # threshold disables the guard, a negative value refuses every generation for ever.
-    # Maximum concurrent SQL generation operations (semaphore permits); must be >= 1
-    # (0 deadlocks the semaphore outright)
+    # Every key in this block is validated in its consuming bean's constructor and an
+    # out-of-range value FAILS STARTUP (issue #185, fail fast by owner decision — the reasoning
+    # is in docs/020-sql-generation-optimization.md). The refusal names the key and the value
+    # for a well-formed integer; a value Spring cannot convert at all (an env var present but
+    # empty — ${VAR:default} does not default for "" — or "80%") fails earlier, during @Value
+    # conversion, naming the constructor parameter rather than the key.
+    # Maximum concurrent SQL generation operations (semaphore permits); >= 1 — with no permits
+    # every generation times out after semaphore-timeout-seconds and is retried for ever
     max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}
-    # Timeout in seconds waiting for a semaphore permit before aborting; must be >= 1
+    # Timeout in seconds waiting for a semaphore permit before aborting; >= 1
     semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
     # JVM heap usage percentage threshold; generation aborts when usage is strictly above it.
-    # Must be within 0..100; 100 disables the check outright (heap usage can never exceed
-    # 100%) — issue #174.
+    # 1..100: 100 disables the check outright (heap usage can never exceed 100%) — issue #174 —
+    # while 0 is refused rather than being a second off-switch, because the ceiling-rounded
+    # reading of a live JVM is never 0, so a threshold of 0 refuses every generation.
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
-    # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size and fallback sweep interval
+    # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size (>= 1) and fallback sweep
+    # interval (>= 1 ms), both validated in DeltaSqlSweepWorker (#185)
     delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}
     delta-sweep-ms: ${PLUGIN_SQL_GENERATION_DELTA_SWEEP_MS:60000}
 

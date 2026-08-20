@@ -387,24 +387,42 @@ therefore produces one refused attempt, one WARN line and one audit row per comp
 which is the intended visibility but is repetitive; the floor is the sweep tick, not the ceiling.
 
 **One caveat on "unbounded retry is safe": it assumes the threshold is configured sanely.**
-Since **#185** the whole `plugin.sql-generation.*` block is validated in the
-`SqlGenerationService` constructor and an out-of-range value **fails the application context at
-startup**: `heap-threshold-percent` must be within `0..100` (100 stays the documented off-switch
-of #174 — the strict comparison and the clamp are untouched), `max-concurrent` must be >= 1 (0
-deadlocks the semaphore outright) and `semaphore-timeout-seconds` must be >= 1. None of the three
-was scoped out. **Fail fast rather than a startup WARN is an owner decision recorded on the
+Since **#185** the whole `plugin.sql-generation.*` block is validated — each key in its consuming
+bean's constructor — and an out-of-range value **fails the application context at startup**:
+
+| Key | Range | Validated in |
+|---|---|---|
+| `heap-threshold-percent` | `1..100` | `SqlGenerationService` |
+| `max-concurrent` | `>= 1` | `SqlGenerationService` |
+| `semaphore-timeout-seconds` | `>= 1` | `SqlGenerationService` |
+| `delta-max-concurrent` | `>= 1` | `DeltaSqlSweepWorker` |
+| `delta-sweep-ms` | `>= 1` | `DeltaSqlSweepWorker` |
+
+None of the five was scoped out. 100 stays the documented off-switch of #174 (the strict
+comparison and the clamp are untouched), and the heap floor is **1, not 0**: the ceiling-rounded
+reading of a live JVM is never 0, so a threshold of 0 refuses every generation exactly like a
+negative value — and this deployment's "0 disables" convention elsewhere
+(`delta.parquet.max-scratch-bytes`, `delta.checkpoint.max-fold-bytes`) would have made 0 read as a
+second off-switch. **Fail fast rather than a startup WARN is an owner decision recorded on the
 ticket**, for three reasons: the deployment is a GKE rolling update, so a pod that refuses to
 start does not take the service down — old replicas keep serving and the rollout goes red
 immediately, which is exactly the visibility a config typo needs; a WARN is the channel already
 proven unread — the "memory-pressure abort disabled" startup line exists since #174 and would
 have stopped nobody; and the failure costs are asymmetric — `800` silently disables the heap
 guard, a negative value turns the whole deployment into an endless retry loop that per #212 ends
-in silent data loss once retention passes over the pending segments. A failed rollout is strictly
-cheaper than either. What validation does **not** bound is a value that is in range and still
-wrong for the pod — a threshold of `8` is legal and makes the check true for nearly every
-generation, stalling the delta-SQL queue (segments accumulate with `plugin_sql_at` unset and
-`/sql-changes` goes quiet) — so the paragraph below about the retry horizon still applies to any
-persistently refusing configuration.
+in silent data loss once retention passes over the pending segments, `delta-max-concurrent: 0`
+used to crash-loop through `ArrayBlockingQueue`'s message-less `IllegalArgumentException` (naming
+neither key nor value), and `delta-sweep-ms: 0` was accepted by Spring and busy-looped the
+fallback sweep on a green rollout. A failed rollout that names the key is strictly cheaper than
+any of them. **Two limits of the promise are stated rather than implied.** The refusal names the
+key and the value for a *well-formed integer* out of range; a value Spring cannot convert at all
+(an env var present but empty — `${VAR:80}` does not default for `""` — or `"80%"`) fails
+earlier, during `@Value` conversion, with a message naming the constructor parameter rather than
+the key. And validation does not bound a value that is in range and still wrong for the pod — a
+threshold of `8` is legal and makes the check true for nearly every generation, stalling the
+delta-SQL queue (segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet) —
+so the paragraph below about the retry horizon still applies to any persistently refusing
+configuration.
 
 **And "recoverable" has a horizon**: `ChangelogRetentionService.prune` deletes below-checkpoint
 segments past `delta.retention.audit-window-segments` (20) without regard for `plugin_sql_at IS
@@ -557,12 +575,13 @@ plugin:
     max-concurrent: 2           # Max concurrent SQL generations (semaphore permits); >= 1
     semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out; >= 1
     heap-threshold-percent: 80  # Abort generation when heap usage is strictly above this %;
-                                # 0..100, and 100 disables the check (usage can never exceed 100%)
+                                # 1..100, and 100 disables the check (usage can never exceed 100%)
 ```
 
-An out-of-range value in any of the three keys **fails startup** (validated in the
-`SqlGenerationService` constructor, issue #185) — see "One caveat on 'unbounded retry is safe'"
-above for the fail-fast reasoning.
+An out-of-range value in any `plugin.sql-generation.*` key **fails startup** (issue #185): the
+three above are validated in the `SqlGenerationService` constructor, and the block's other two —
+`delta-max-concurrent` and `delta-sweep-ms` (026) — in `DeltaSqlSweepWorker`. See "One caveat on
+'unbounded retry is safe'" above for the ranges and the fail-fast reasoning.
 
 ---
 

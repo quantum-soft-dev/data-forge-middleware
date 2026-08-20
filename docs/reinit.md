@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `/reinit` endpoint allows users to reinitialize their plugin SQL state by clearing all existing SQL generation history and regenerating from the most recent completed batch. Unlike clearing history, reinit preserves the API key and plugin configuration.
+The `/reinit` endpoint allows users to reinitialize their plugin SQL state by clearing all existing SQL generation history and re-baselining on the most recent completed batch (the client re-downloads that baseline via the files endpoint; for V2 sites the per-table delta SQL baselines are recaptured, 026). Unlike clearing history, reinit preserves the API key and plugin configuration. Reinit no longer triggers SQL generation — the async regeneration this endpoint originally performed (feature 015) was removed, and `sqlGenerationTriggered` is always `false` (kept for API compatibility).
 
 ## Endpoint
 
@@ -46,9 +46,9 @@ None.
   "deletedGenerations": 15,
   "deletedS3Files": 15,
   "totalBytesFreed": 524288,
-  "sqlGenerationTriggered": true,
+  "sqlGenerationTriggered": false,
   "batchId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "message": "Plugin reinitialized. SQL generation running asynchronously.",
+  "message": "Plugin reinitialized. New baseline batch set. Client should download CSV files via /sites/{siteId}/files endpoint.",
   "s3DeleteWarnings": []
 }
 ```
@@ -61,8 +61,8 @@ None.
 | `deletedGenerations` | Long | Number of SQL generation records deleted from database |
 | `deletedS3Files` | Long | Number of S3 files successfully deleted |
 | `totalBytesFreed` | Long | Total storage freed in bytes |
-| `sqlGenerationTriggered` | Boolean | Whether SQL generation was triggered (false if no batches exist) |
-| `batchId` | UUID | ID of the batch used for SQL generation (null if no batches) |
+| `sqlGenerationTriggered` | Boolean | Always `false` — reinit no longer triggers SQL generation (field kept for API compatibility) |
+| `batchId` | UUID | ID of the batch set as the new baseline (null if no completed batches) |
 | `message` | String | Human-readable status message |
 | `s3DeleteWarnings` | Array | List of S3 keys that failed to delete (best-effort deletion) |
 
@@ -78,7 +78,7 @@ If no completed batches exist for the account:
   "totalBytesFreed": 102400,
   "sqlGenerationTriggered": false,
   "batchId": null,
-  "message": "Plugin reinitialized. No completed batches found for SQL generation.",
+  "message": "Plugin reinitialized. No completed batches found. First future batch will become baseline.",
   "s3DeleteWarnings": []
 }
 ```
@@ -88,7 +88,7 @@ If no completed batches exist for the account:
 1. **Validation**: Verifies the plugin is active for the account
 2. **S3 Deletion**: Deletes all SQL files from S3 (best-effort, continues on failure)
 3. **Database Cleanup**: Removes all SQL generation records from the database
-4. **SQL Regeneration**: Triggers async SQL generation from the latest completed batch
+4. **Re-baseline**: Sets the latest completed batch as the new baseline (or clears it when none exists, so the first future batch becomes the baseline); for V2 sites, recaptures the per-table delta SQL baselines from current checkpoints and re-enqueues the segments above them (026). No SQL generation is triggered.
 5. **Audit Logging**: Records the reinit operation in the audit trail
 
 ## Key Differences from Clear History
@@ -97,7 +97,7 @@ If no completed batches exist for the account:
 |--------|--------|---------------|
 | **API Key** | Preserved | Lost (plugin deactivated) |
 | **Plugin Status** | Remains active | Deactivated |
-| **SQL Regeneration** | Automatic | None |
+| **SQL Regeneration** | None (re-baseline only; the removed 015 flow used to regenerate) | None |
 | **Use Case** | Refresh data | Complete reset |
 
 ## Error Responses
@@ -177,7 +177,7 @@ if (response.status === 429) {
 } else {
   const data = await response.json();
   console.log(`Deleted ${data.deletedGenerations} generations`);
-  console.log(`SQL generation triggered: ${data.sqlGenerationTriggered}`);
+  console.log(`New baseline batch: ${data.batchId}`);
 }
 ```
 

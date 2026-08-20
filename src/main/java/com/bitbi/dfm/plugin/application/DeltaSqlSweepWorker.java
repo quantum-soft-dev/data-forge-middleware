@@ -35,8 +35,22 @@ public class DeltaSqlSweepWorker {
     private final ThreadPoolExecutor pool;
 
     public DeltaSqlSweepWorker(DeltaSqlQueueService queueService,
-                               @Value("${plugin.sql-generation.delta-max-concurrent:2}") int maxConcurrent) {
+                               @Value("${plugin.sql-generation.delta-max-concurrent:2}") int maxConcurrent,
+                               @Value("${plugin.sql-generation.delta-sweep-ms:60000}") long sweepMillis) {
         this.queueService = queueService;
+        // Out of range fails startup (issue #185, fail fast by owner decision — reasoning in
+        // docs/020-sql-generation-optimization.md). Without the first check, 0 crash-looped
+        // through ArrayBlockingQueue's message-less IllegalArgumentException — naming neither key
+        // nor value; without the second, Spring accepted 0 and busy-looped the fallback sweep on
+        // a green rollout. sweepMillis is read here only to be validated: the interval that runs
+        // is the one @Scheduled on sweep() resolves from the same key.
+        PluginConfigValidation.requireAtLeast(
+                "plugin.sql-generation.delta-max-concurrent", maxConcurrent, 1,
+                "this pool is what drains the delta-SQL queue, and with no threads every "
+                        + "segment would stay pending for ever");
+        PluginConfigValidation.requireAtLeast(
+                "plugin.sql-generation.delta-sweep-ms", sweepMillis, 1L,
+                "a non-positive interval busy-loops the fallback sweep");
         AtomicInteger threadNumber = new AtomicInteger();
         this.pool = new ThreadPoolExecutor(maxConcurrent, maxConcurrent, 60L, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(maxConcurrent),

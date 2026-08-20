@@ -47,8 +47,7 @@ public class SqlGenerationService {
     private static final Logger log = LoggerFactory.getLogger(SqlGenerationService.class);
 
     /**
-     * Maximum number of files allowed per batch for SQL generation.
-     * Prevents memory exhaustion from processing too many files.
+     * The plugin this service generates for: its audit entries and activations are keyed by it.
      */
     private static final String PLUGIN_ID = "bit-bi";
 
@@ -92,48 +91,24 @@ public class SqlGenerationService {
         this.siteSchemaService = siteSchemaService;
         this.deltaStrategy = deltaStrategy;
         this.pluginDeltaBaselineRepository = pluginDeltaBaselineRepository;
-        this.maxConcurrent = requireAtLeast("plugin.sql-generation.max-concurrent", maxConcurrent, 1,
-                "0 permits deadlock the SQL generation semaphore outright");
-        this.semaphoreTimeoutSeconds = requireAtLeast("plugin.sql-generation.semaphore-timeout-seconds",
-                semaphoreTimeoutSeconds, 1, "a non-positive timeout makes every semaphore wait impossible");
-        this.heapThresholdPercent = requireInRange("plugin.sql-generation.heap-threshold-percent",
-                heapThresholdPercent, 0, 100,
-                "above 100 the memory-pressure abort is silently disabled (100 itself is the documented "
-                        + "off-switch, issue #174), and below 0 every SQL generation is refused for ever");
-    }
-
-    /**
-     * Fails fast on an out-of-range {@code plugin.sql-generation.*} value: the constructor throws,
-     * so the Spring context refuses to start (issue #185).
-     *
-     * <p>Fail fast rather than a startup WARN, an owner decision recorded on the ticket: the
-     * deployment is a rolling update, so a pod that refuses to start does not take the service
-     * down — old replicas keep serving and the rollout goes red immediately, which is exactly the
-     * visibility a config typo needs. A WARN is the channel already proven unread (the
-     * "memory-pressure abort disabled" line exists since #174 and stopped nobody), and the failure
-     * costs are asymmetric: {@code heap-threshold-percent: 800} silently disables the heap guard,
-     * a negative value turns the whole deployment into an endless retry loop that ends in silent
-     * data loss once retention passes over the pending segments (#181, #212). A failed rollout is
-     * strictly cheaper than either. The message names the key: the crash-loop log line is the
-     * whole of what an operator gets to diagnose a failed rollout with.</p>
-     */
-    private static int requireInRange(String key, int value, int min, int max, String consequence) {
-        if (value < min || value > max) {
-            throw new IllegalArgumentException(key + " must be between " + min + " and " + max
-                    + ", but was " + value + ". Refusing to start: " + consequence + " (issue #185).");
-        }
-        return value;
-    }
-
-    /**
-     * The one-sided form of {@link #requireInRange(String, int, int, int, String)}.
-     */
-    private static int requireAtLeast(String key, int value, int min, String consequence) {
-        if (value < min) {
-            throw new IllegalArgumentException(key + " must be at least " + min + ", but was "
-                    + value + ". Refusing to start: " + consequence + " (issue #185).");
-        }
-        return value;
+        // Out of range fails startup (issue #185, fail fast by owner decision — reasoning in
+        // docs/020-sql-generation-optimization.md). The heap floor is 1, not 0: the reading is
+        // ceiling-rounded and a live JVM never reports 0, so a strict "> 0" refuses every
+        // generation exactly like a negative value — and 0-as-off would collide with this
+        // deployment's own "0 disables" convention while 100 is already the documented off-switch.
+        this.maxConcurrent = PluginConfigValidation.requireAtLeast(
+                "plugin.sql-generation.max-concurrent", maxConcurrent, 1,
+                "with no permits every generation times out after the semaphore timeout "
+                        + "and the delta-SQL queue retries it for ever");
+        this.semaphoreTimeoutSeconds = PluginConfigValidation.requireAtLeast(
+                "plugin.sql-generation.semaphore-timeout-seconds", semaphoreTimeoutSeconds, 1,
+                "a non-positive timeout waits for a busy semaphore not at all, so any "
+                        + "concurrency fails immediately");
+        this.heapThresholdPercent = PluginConfigValidation.requireInRange(
+                "plugin.sql-generation.heap-threshold-percent", heapThresholdPercent, 1, 100,
+                "above 100 the memory-pressure abort is silently disabled (100 itself is the "
+                        + "documented off-switch, issue #174), and at or below 0 every SQL "
+                        + "generation is refused for ever");
     }
 
     /**

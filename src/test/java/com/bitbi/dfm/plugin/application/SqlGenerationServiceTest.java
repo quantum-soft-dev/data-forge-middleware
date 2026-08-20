@@ -18,6 +18,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -31,10 +34,12 @@ import java.io.ByteArrayInputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -114,23 +119,34 @@ class SqlGenerationServiceTest {
         dbfStrategy = new DbfSqlGenerationStrategy(
                 csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
 
-        service = new SqlGenerationService(
+        service = newService(meterRegistry, dbfStrategy, 2, 120, 80);
+        service.init();
+    }
+
+    /**
+     * The one construction of {@link SqlGenerationService} in this file. The dependencies that
+     * vary between tests (the registry, because {@code Timer.start(mockRegistry)} NPEs and some
+     * tests need a real {@link SimpleMeterRegistry}; the DBF strategy, which follows the
+     * registry) are parameters; everything else is the class's shared mocks.
+     */
+    private SqlGenerationService newService(MeterRegistry registry, DbfSqlGenerationStrategy dbf,
+                                            int maxConcurrent, int semaphoreTimeoutSeconds,
+                                            int heapThresholdPercent) {
+        return new SqlGenerationService(
                 accountPluginRepository,
                 new SqlGenerationPersistence(batchRepository, siteRepository,
                         sqlGenerationRepository, changelogSegmentRepository),
                 s3SqlFileStorageService,
-                meterRegistry,
+                registry,
                 pluginAuditService,
-                dbfStrategy,
+                dbf,
                 cdcStrategy,
                 siteSchemaService,
                 deltaStrategy,
                 pluginDeltaBaselineRepository,
-                2,
-                120,
-                80
-        );
-        service.init();
+                maxConcurrent,
+                semaphoreTimeoutSeconds,
+                heapThresholdPercent);
     }
 
     @Nested
@@ -242,20 +258,8 @@ class SqlGenerationServiceTest {
             SimpleMeterRegistry realRegistry = new SimpleMeterRegistry();
             DbfSqlGenerationStrategy realDbfStrategy = new DbfSqlGenerationStrategy(
                     csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, realRegistry);
-            SqlGenerationService serviceWithRealMetrics = new SqlGenerationService(
-                    accountPluginRepository,
-                    new SqlGenerationPersistence(batchRepository, siteRepository,
-                            sqlGenerationRepository, changelogSegmentRepository),
-                    s3SqlFileStorageService,
-                    realRegistry,
-                    pluginAuditService,
-                    realDbfStrategy,
-                    cdcStrategy,
-                    siteSchemaService,
-                    deltaStrategy,
-                    pluginDeltaBaselineRepository,
-                    2,
-                    120,
+            SqlGenerationService serviceWithRealMetrics = newService(realRegistry, realDbfStrategy,
+                    2, 120,
                     100  // disables the memory-pressure abort: it needs heap usage strictly
                          // above the threshold, and 100% is unreachable (#174)
             );
@@ -364,22 +368,7 @@ class SqlGenerationServiceTest {
 
         @BeforeEach
         void setUpDelta() {
-            deltaService = new SqlGenerationService(
-                    accountPluginRepository,
-                    new SqlGenerationPersistence(batchRepository, siteRepository,
-                            sqlGenerationRepository, changelogSegmentRepository),
-                    s3SqlFileStorageService,
-                    new SimpleMeterRegistry(),
-                    pluginAuditService,
-                    dbfStrategy,
-                    cdcStrategy,
-                    siteSchemaService,
-                    deltaStrategy,
-                    pluginDeltaBaselineRepository,
-                    2,
-                    120,
-                    100
-            );
+            deltaService = newService(new SimpleMeterRegistry(), dbfStrategy, 2, 120, 100);
             deltaService.init();
 
             batch = mock(Batch.class);
@@ -477,120 +466,73 @@ class SqlGenerationServiceTest {
     }
 
     /**
-     * The {@code plugin.sql-generation.*} block fails fast (issue #185): an out-of-range value
-     * refuses to construct the service, which fails the Spring context at startup. Both ways of
-     * getting a key wrong used to fail silently — {@code heap-threshold-percent: 800} disabled
-     * the heap guard, a negative value refused every generation for ever (an unbounded queue
-     * stall since #181, silent data loss once retention passes over the pending segments, #212).
+     * The three keys this service consumes fail fast (issue #185): an out-of-range value refuses
+     * to construct the service, which fails the Spring context at startup. Both ways of getting a
+     * key wrong used to fail silently — {@code heap-threshold-percent: 800} disabled the heap
+     * guard, a non-positive value refused every generation for ever (an unbounded queue stall
+     * since #181, silent data loss once retention passes over the pending segments, #212).
      *
-     * <p>Each test pins one boundary of the agreed ranges: {@code heap-threshold-percent}
-     * ∈ [0..100] (100 stays the documented off-switch of #174 — that behaviour is pinned by
+     * <p>The cases pin both boundaries of each agreed range: {@code heap-threshold-percent}
+     * ∈ [1..100] — 0 is refused because the ceiling-rounded reading of a live JVM is never 0, so
+     * a strict {@code > 0} refuses every generation exactly like the negative it neighbours,
+     * while 100 stays the documented off-switch of #174 (pinned by
      * {@code SqlGenerationStreamingTest}, "should not abort at a threshold of 100 even when the
-     * heap reports full"), {@code max-concurrent} >= 1, {@code semaphore-timeout-seconds} >= 1.
-     * The refusal message must name the configuration key: the crash-loop log line is the whole
-     * of what an operator gets to diagnose a failed rollout with.</p>
+     * heap reports full") — {@code max-concurrent} >= 1, {@code semaphore-timeout-seconds} >= 1.
+     * The refusal must name the key <em>and the value</em> ("but was N"): the crash-loop log line
+     * is the whole of what an operator gets to diagnose a failed rollout with, and asserting the
+     * value through the shared "but was" prefix keeps the assertion from being satisfied by a
+     * digit in the static text. The promise is scoped to well-formed integers: a malformed value
+     * ({@code "80%"}, or an env var present but empty — {@code ${VAR:80}} does not default for
+     * {@code ""}) dies earlier, in {@code @Value} conversion, naming the constructor parameter
+     * rather than the key.</p>
+     *
+     * <p>The sibling keys {@code delta-max-concurrent} / {@code delta-sweep-ms} are validated the
+     * same way by their own consumer — see {@code DeltaSqlSweepWorkerTest}.</p>
      */
     @Nested
     @DisplayName("Configuration validation (issue #185)")
     class ConfigurationValidation {
 
-        private SqlGenerationService buildService(int maxConcurrent, int semaphoreTimeoutSeconds,
-                                                  int heapThresholdPercent) {
-            return new SqlGenerationService(
-                    accountPluginRepository,
-                    new SqlGenerationPersistence(batchRepository, siteRepository,
-                            sqlGenerationRepository, changelogSegmentRepository),
-                    s3SqlFileStorageService,
-                    meterRegistry,
-                    pluginAuditService,
-                    dbfStrategy,
-                    cdcStrategy,
-                    siteSchemaService,
-                    deltaStrategy,
-                    pluginDeltaBaselineRepository,
-                    maxConcurrent,
-                    semaphoreTimeoutSeconds,
-                    heapThresholdPercent);
+        static Stream<Arguments> outOfRangeConfigurations() {
+            return Stream.of(
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, -1, -1),
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, 0, 0),
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, 101, 101),
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, 800, 800),
+                    arguments("plugin.sql-generation.max-concurrent", 0, 120, 80, 0),
+                    arguments("plugin.sql-generation.max-concurrent", -1, 120, 80, -1),
+                    arguments("plugin.sql-generation.semaphore-timeout-seconds", 2, 0, 80, 0),
+                    arguments("plugin.sql-generation.semaphore-timeout-seconds", 2, -5, 80, -5));
         }
 
-        @Test
-        @DisplayName("should refuse a heap threshold above 100, naming the key")
-        void shouldRefuseHeapThresholdAbove100() {
-            assertThatThrownBy(() -> buildService(2, 120, 101))
+        @ParameterizedTest(name = "should refuse {0} = {4} at startup, naming the key and the value")
+        @MethodSource("outOfRangeConfigurations")
+        void shouldRefuseOutOfRangeValue(String key, int maxConcurrent, int semaphoreTimeoutSeconds,
+                                         int heapThresholdPercent, int offendingValue) {
+            assertThatThrownBy(() ->
+                    newService(meterRegistry, dbfStrategy,
+                            maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.heap-threshold-percent")
-                    .hasMessageContaining("101");
+                    .hasMessageContaining(key)
+                    .hasMessageContaining("but was " + offendingValue);
         }
 
-        @Test
-        @DisplayName("should refuse the plausible unit typo 800 rather than silently disabling the guard")
-        void shouldRefuseHeapThresholdUnitTypo() {
-            assertThatThrownBy(() -> buildService(2, 120, 800))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.heap-threshold-percent")
-                    .hasMessageContaining("800");
+        static Stream<Arguments> acceptedBoundaries() {
+            return Stream.of(
+                    arguments("heap-threshold-percent floor", 2, 120, 1),
+                    arguments("heap-threshold-percent off-switch (#174)", 2, 120, 100),
+                    arguments("max-concurrent floor", 1, 120, 80),
+                    arguments("semaphore-timeout-seconds floor", 2, 1, 80));
         }
 
-        @Test
-        @DisplayName("should refuse a negative heap threshold, naming the key")
-        void shouldRefuseNegativeHeapThreshold() {
-            assertThatThrownBy(() -> buildService(2, 120, -1))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.heap-threshold-percent")
-                    .hasMessageContaining("-1");
-        }
-
-        @Test
-        @DisplayName("should accept both boundaries of the heap threshold range: 0 and the off-switch 100")
-        void shouldAcceptHeapThresholdBoundaries() {
-            assertThatCode(() -> buildService(2, 120, 0)).doesNotThrowAnyException();
-            assertThatCode(() -> buildService(2, 120, 100)).doesNotThrowAnyException();
-        }
-
-        @Test
-        @DisplayName("should refuse a max-concurrent of 0, which deadlocks the semaphore outright")
-        void shouldRefuseZeroMaxConcurrent() {
-            assertThatThrownBy(() -> buildService(0, 120, 80))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.max-concurrent")
-                    .hasMessageContaining("0");
-        }
-
-        @Test
-        @DisplayName("should refuse a negative max-concurrent")
-        void shouldRefuseNegativeMaxConcurrent() {
-            assertThatThrownBy(() -> buildService(-1, 120, 80))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.max-concurrent");
-        }
-
-        @Test
-        @DisplayName("should accept the max-concurrent floor of 1")
-        void shouldAcceptMaxConcurrentFloor() {
-            assertThatCode(() -> buildService(1, 120, 80)).doesNotThrowAnyException();
-        }
-
-        @Test
-        @DisplayName("should refuse a semaphore timeout of 0, which makes every wait impossible")
-        void shouldRefuseZeroSemaphoreTimeout() {
-            assertThatThrownBy(() -> buildService(2, 0, 80))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.semaphore-timeout-seconds")
-                    .hasMessageContaining("0");
-        }
-
-        @Test
-        @DisplayName("should refuse a negative semaphore timeout")
-        void shouldRefuseNegativeSemaphoreTimeout() {
-            assertThatThrownBy(() -> buildService(2, -5, 80))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("plugin.sql-generation.semaphore-timeout-seconds");
-        }
-
-        @Test
-        @DisplayName("should accept the semaphore timeout floor of 1")
-        void shouldAcceptSemaphoreTimeoutFloor() {
-            assertThatCode(() -> buildService(2, 1, 80)).doesNotThrowAnyException();
+        @ParameterizedTest(name = "should accept the {0}")
+        @MethodSource("acceptedBoundaries")
+        void shouldAcceptBoundary(String boundary, int maxConcurrent, int semaphoreTimeoutSeconds,
+                                  int heapThresholdPercent) {
+            assertThatCode(() ->
+                    newService(meterRegistry, dbfStrategy,
+                            maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent))
+                    .doesNotThrowAnyException();
         }
     }
 }
