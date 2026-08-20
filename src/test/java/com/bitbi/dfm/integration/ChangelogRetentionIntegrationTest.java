@@ -138,6 +138,37 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         assertFalse(segmentStorage.exists(pendingKey), "segment S3 object pruned");
     }
 
+    /**
+     * Review round 2, R2-2 — the conditional DELETE's marker predicate, exercised against the
+     * real statement. It is the A2 fix's last line of defense (a reinit re-pending the row between
+     * retention's read and its delete), and SQL inside {@code @Query} is a contract neither the
+     * compiler nor CI catches: with the predicate dropped the whole suite stayed green, because
+     * the unit tests stub the return value and the hold-back tests never reach the delete.
+     */
+    @Test
+    void theConditionalDeleteRefusesAPendingRowAtTheSqlLevel() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        ChangelogSegment segment = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
+        String key = segment.getS3Key();
+
+        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId()),
+                "both markers NULL: the predicate must refuse");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent());
+
+        segment.markPluginSqlProcessed(); // egress still owed — the OR must still refuse
+        segmentRepository.save(segment);
+        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId()),
+                "one marker NULL: the predicate must still refuse");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent());
+
+        markSegmentsProcessed(SITE);
+        assertEquals(1, segmentRepository.deleteByIdIfProcessed(segment.getId()),
+                "both markers set: the row is deleted");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty());
+        segmentStorage.delete(key); // the statement deletes rows only; keep the shared bucket clean
+    }
+
     private double heldBack(String reason) {
         return meterRegistry.get("delta.retention.segments.held-back")
                 .tag("reason", reason).counter().count();

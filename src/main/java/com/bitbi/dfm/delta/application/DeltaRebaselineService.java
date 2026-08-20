@@ -6,7 +6,7 @@ import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
-import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -43,16 +43,16 @@ public class DeltaRebaselineService {
     private static final Logger log = LoggerFactory.getLogger(DeltaRebaselineService.class);
 
     private final ChangelogSegmentRepository segmentRepository;
-    private final S3ChangelogSegmentStorage segmentStorage;
+    private final S3FileStorageService objectDeleter;
     private final CheckpointRepository checkpointRepository;
     private final SiteSyncStateRepository syncStateRepository;
 
     public DeltaRebaselineService(ChangelogSegmentRepository segmentRepository,
-                                  S3ChangelogSegmentStorage segmentStorage,
+                                  S3FileStorageService objectDeleter,
                                   CheckpointRepository checkpointRepository,
                                   SiteSyncStateRepository syncStateRepository) {
         this.segmentRepository = segmentRepository;
-        this.segmentStorage = segmentStorage;
+        this.objectDeleter = objectDeleter;
         this.checkpointRepository = checkpointRepository;
         this.syncStateRepository = syncStateRepository;
     }
@@ -95,8 +95,15 @@ public class DeltaRebaselineService {
         // One projection query and one bulk DELETE, not a row-by-row loop (issue #212 review):
         // the backlog this discards is unbounded — held-back pending segments included — and it
         // runs inside the SessionEnd commit under the site_sync_state row lock taken above.
-        List<String> s3Keys = segmentRepository.findCommittedS3KeysBySiteId(siteId);
-        int segments = segmentRepository.deleteCommittedBySiteId(siteId);
+        // The DELETE takes exactly the ids whose keys were collected (round 2, R2-8): a blanket
+        // site-wide DELETE could take a row committed between the two statements, whose key was
+        // never collected — an orphan object until the #158 sweep.
+        List<ChangelogSegmentRepository.CommittedSegmentRef> refs =
+                segmentRepository.findCommittedRefsBySiteId(siteId);
+        List<String> s3Keys = refs.stream()
+                .map(ChangelogSegmentRepository.CommittedSegmentRef::getS3Key).toList();
+        int segments = refs.isEmpty() ? 0 : segmentRepository.deleteByIdIn(
+                refs.stream().map(ChangelogSegmentRepository.CommittedSegmentRef::getId).toList());
 
         int checkpoints = 0;
         for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
@@ -180,11 +187,34 @@ public class DeltaRebaselineService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    s3Keys.forEach(segmentStorage::delete);
+                    deleteObjectsBestEffort(s3Keys);
                 }
             });
         } else {
-            s3Keys.forEach(segmentStorage::delete);
+            deleteObjectsBestEffort(s3Keys);
+        }
+    }
+
+    /**
+     * Batched 1000-key {@code DeleteObjects} instead of one round trip per key (issue #212 review
+     * round 2): the backlog a re-baseline discards is unbounded, and this runs on the SessionEnd
+     * commit thread. Best-effort — the rows are gone, so anything left behind is the unreferenced
+     * litter the #158 sweep reclaims.
+     */
+    private void deleteObjectsBestEffort(List<String> s3Keys) {
+        try {
+            S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(s3Keys);
+            if (!result.errors().isEmpty()) {
+                log.warn("Discarded {} old segment row(s) but {} object delete(s) failed — the "
+                                + "objects are unreferenced and the S3 orphan sweep reclaims them "
+                                + "(issue #158)",
+                        s3Keys.size(), result.errors().size());
+            }
+        } catch (RuntimeException e) {
+            log.warn("Discarded {} old segment row(s) but the object delete failed mid-way — the "
+                            + "undeleted objects are unreferenced and the S3 orphan sweep reclaims "
+                            + "them (issue #158)",
+                    s3Keys.size(), e);
         }
     }
 }

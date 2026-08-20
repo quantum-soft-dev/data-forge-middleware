@@ -657,7 +657,8 @@ ceiling is raised or the site is re-baselined. Two things follow, and both are h
   that are *not* on it are the ones that pass: an unreadable scratch directory and an S3 refusal on
   the frame cost one tick, and a build discarded because the site's history was replaced under it
   (#136, #142) is a normal outcome of an operator action. Since #212 `lossy_refold` has one bounded
-  sub-case: a frame-gone site whose remaining segments all sit at or below the pointer drains like
+  sub-case, scoped to the state #212 created: a frame-gone site whose remaining segments all sit at
+  or below the pointer **and at least one is held back pending queue work** drains like
   `history_gone` — one increment per night while the retryable rows last, then quiet, with
   `delta.checkpoint.tables.given-up` standing — see "Retention does not delete unprocessed work".
 
@@ -774,11 +775,14 @@ answers pull in opposite directions.
   it is the operator asserting the cause is dealt with, and the documented recovery must not be the
   fastest way to exhaust the retry it restores. Recovery proper is a re-baseline or a history wipe.
   `reason=lossy_refold` keeps its meaning for a site whose segments survive — data that still
-  exists — with one #212 refinement: while segments still arrive *above* the pointer the alarm
-  must keep shouting and spends nothing, but a site whose every remaining segment sits at or below
-  the pointer (a state a held-back pending segment can hold open for ever) takes the same bounded
-  drain as `history_gone`, because everything those segments hold is already inside the lost
-  frame's fold and no new work will change the verdict.
+  exists — with one #212 refinement, scoped tightly: only a site whose every remaining segment
+  sits at or below the pointer **and** whose below-pointer set still contains a held-back pending
+  segment (the row retention can never remove, so the state can stay open for ever) takes the same
+  bounded drain as `history_gone` — everything those segments hold is already inside the lost
+  frame's fold, and no new work will change the verdict. Segments arriving above the pointer, and
+  a below-pointer window that is all *processed* (the ordinary quiet-site state, which retention
+  never emptied even before #212), keep the never-quiets contract: that alarm is a real,
+  rebuild-recoverable data-loss condition.
 
   **`history_gone` means gone, not unreadable (issue #157).** When #149 shipped, an S3 HEAD denial
   read as absence, so a bucket-policy or IAM read outage made every segment-less site look
@@ -2091,13 +2095,20 @@ decided by **contiguity from seq 1** over the committed seq coverage, not by the
 alone — the hold-back can retain an older pending segment while younger processed neighbours are
 pruned, so a head at seq 1 stopped proving completeness, and a frame-gone site would otherwise
 have silently refolded a gapped history into a truncated checkpoint and advanced the pointer over
-the loss. And a frame-gone site whose remaining segments all sit **at or below** the pointer — a
-state a held-back segment can hold open for ever, where retention used to empty it into
-`history_gone` — now takes #149's bounded drain under the unchanged `lossy_refold` tag: one
+the loss. And a frame-gone site whose remaining segments all sit **at or below** the pointer **with at
+least one held back pending queue work** — the state #212 created, which nothing can close while
+the queue is stuck — now takes #149's bounded drain under the unchanged `lossy_refold` tag: one
 attempt per retryable row per scheduled night, a re-arm on a forced rebuild, and a quiet visit
 once every row has given up, with `delta.checkpoint.tables.given-up` as the standing signal.
-Segments still arriving above the pointer keep the original contract: the alarm never quiets on
-its own.
+Everything else keeps the original never-quiets contract — segments still arriving above the
+pointer, and a below-pointer window that is all processed (the ordinary quiet-site state, which
+retention never emptied even before #212: with the default window of 20 there were always
+below-checkpoint segments on record, so that alarm has always been permanent and stays so). The
+build also re-verifies contiguity against the entity list it actually folds on the frameless
+path: the coverage read and the entity load are two transactions with an S3 probe between them,
+and a deleter that bumps no epoch — batch retention's horizon, a sibling replica's prune — could
+otherwise have the fold publish a silently gapped history (refused without counting; the next
+tick re-reads and classifies).
 
 The queues' retry contract (`DeltaSqlQueueService` Javadoc) states the horizon out loud: no longer
 silently bounded by changelog retention — bounded by the endings above, of which batch retention

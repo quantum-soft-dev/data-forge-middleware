@@ -12,7 +12,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -109,19 +108,10 @@ public class ChangelogRetentionService {
 
         int pruneCount = Math.max(0, belowCheckpoint.size() - auditWindowSegments);
         List<String> prunedKeys = new ArrayList<>();
-        int heldBack = 0;
-        int pendingPluginSql = 0;
-        int pendingEgress = 0;
+        HeldBackTally heldBack = new HeldBackTally();
         for (int i = 0; i < pruneCount; i++) {
             PrunableSegmentView segment = belowCheckpoint.get(i);
-            if (segment.isPendingPluginSql() || segment.isPendingEgress()) {
-                heldBack++;
-                if (segment.isPendingPluginSql()) {
-                    pendingPluginSql++;
-                }
-                if (segment.isPendingEgress()) {
-                    pendingEgress++;
-                }
+            if (heldBack.countIfPending(segment.isPendingPluginSql(), segment.isPendingEgress())) {
                 continue;
             }
             if (segmentRepository.deleteByIdIfProcessed(segment.getId()) == 1) {
@@ -134,17 +124,8 @@ public class ChangelogRetentionService {
             // The row read as processed above but the conditional delete refused it: a reinit
             // committed in between and re-pended it (or another deleter took it). Re-read and
             // count it by what the row says now; a row that vanished counts nowhere.
-            Optional<ChangelogSegment> rePended = segmentRepository.findById(segment.getId());
-            if (rePended.isPresent()
-                    && (rePended.get().isPendingPluginSql() || rePended.get().isPendingEgress())) {
-                heldBack++;
-                if (rePended.get().isPendingPluginSql()) {
-                    pendingPluginSql++;
-                }
-                if (rePended.get().isPendingEgress()) {
-                    pendingEgress++;
-                }
-            }
+            segmentRepository.findById(segment.getId()).ifPresent(rePended ->
+                    heldBack.countIfPending(rePended.isPendingPluginSql(), rePended.isPendingEgress()));
         }
 
         if (!prunedKeys.isEmpty()) {
@@ -173,18 +154,41 @@ public class ChangelogRetentionService {
             }
         }
 
-        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, pendingPluginSql);
-        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, pendingEgress);
-        if (heldBack > 0) {
+        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
+        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
+        if (heldBack.segments > 0) {
             log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
                             + "{} awaiting plugin SQL, {} awaiting egress; retention does not delete "
                             + "unprocessed queue work (issue #212)",
-                    heldBack, siteId, pendingPluginSql, pendingEgress);
+                    heldBack.segments, siteId, heldBack.pendingPluginSql, heldBack.pendingEgress);
         }
         if (!prunedKeys.isEmpty()) {
             log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
                     prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
         }
         return prunedKeys.size();
+    }
+
+    /** The hold-back census of one pass — the same counting for the view and the re-read (R2-9). */
+    private static final class HeldBackTally {
+
+        private int segments;
+        private int pendingPluginSql;
+        private int pendingEgress;
+
+        /** @return {@code true} when the segment was pending (and has now been counted) */
+        private boolean countIfPending(boolean pluginSqlPending, boolean egressPending) {
+            if (!pluginSqlPending && !egressPending) {
+                return false;
+            }
+            segments++;
+            if (pluginSqlPending) {
+                pendingPluginSql++;
+            }
+            if (egressPending) {
+                pendingEgress++;
+            }
+            return true;
+        }
     }
 }

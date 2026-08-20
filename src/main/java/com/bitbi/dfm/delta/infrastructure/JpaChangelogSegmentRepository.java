@@ -189,16 +189,17 @@ public interface JpaChangelogSegmentRepository
     PendingQueueWork countPendingQueueWorkByBatchId(UUID batchId);
 
     @Override
-    @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false")
-    java.util.List<String> findCommittedS3KeysBySiteId(UUID siteId);
+    @Query("SELECT s.id AS id, s.s3Key AS s3Key FROM ChangelogSegment s "
+            + "WHERE s.siteId = :siteId AND s.provisional = false")
+    java.util.List<CommittedSegmentRef> findCommittedRefsBySiteId(UUID siteId);
 
     // No clearAutomatically, like deleteBySiteId above: the re-baseline reset keeps its locked
     // SiteSyncState managed across the whole sequence of deletes and mutates it at the end.
     @Override
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
-    @Query("DELETE FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false")
-    int deleteCommittedBySiteId(UUID siteId);
+    @Query("DELETE FROM ChangelogSegment s WHERE s.id IN :ids")
+    int deleteByIdIn(java.util.List<UUID> ids);
 
     // No clearAutomatically: the wipe keeps its locked SiteSyncState managed across the whole
     // sequence of bulk deletes and mutates it at the end.

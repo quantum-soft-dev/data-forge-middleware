@@ -22,9 +22,17 @@ public interface ChangelogSegmentRepository {
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
 
     /**
-     * A site's committed segments in sequence order — the checkpoint fold's input and the set a
-     * re-baseline discards. Excludes provisional segments (033): a snapshot still streaming must not
-     * be folded on top of the baseline it is about to replace.
+     * A site's committed segments in sequence order, as full entities. Excludes provisional
+     * segments (033).
+     *
+     * <p><b>Test support only since issue #212</b> (review round 2): every production reader moved
+     * to a bounded projection — the checkpoint build decides from
+     * {@link #findSeqRangesBySiteIdOrderByFirstSeq} and folds
+     * {@link #findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq}, retention reads
+     * {@link #findBelowCheckpointBySiteId}, the re-baseline reset reads
+     * {@link #findCommittedRefsBySiteId} — because the committed set is unbounded now that pending
+     * segments are held back. Do not re-adopt this whole-site entity hydration on a production
+     * path; reach for (or add) a projection instead.</p>
      */
     List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
 
@@ -184,24 +192,35 @@ public interface ChangelogSegmentRepository {
     int deleteBySiteId(UUID siteId);
 
     /**
-     * The S3 keys of a site's <b>committed</b> segments only — the set a re-baseline discards
-     * (033: never the provisional snapshot replacing it). The projection twin of
-     * {@link #findBySiteIdOrderByFirstSeq}, for a caller that needs keys and nothing else.
+     * Row id and object key of a site's <b>committed</b> segments — the set a re-baseline discards
+     * (033: never the provisional snapshot replacing it), read as one light projection so the
+     * reset can delete exactly the rows whose keys it collected (issue #212 review round 2: a
+     * blanket site-wide DELETE after a separate key read could take a row committed in between,
+     * whose key was never collected — an orphan object until the #158 sweep).
      *
      * @param siteId site identifier
-     * @return object keys of the site's committed segments
+     * @return id + object key of the site's committed segments
      */
-    List<String> findCommittedS3KeysBySiteId(UUID siteId);
+    List<CommittedSegmentRef> findCommittedRefsBySiteId(UUID siteId);
 
     /**
-     * Bulk-delete a site's committed segments, sparing provisional ones (issue #212 review: the
-     * re-baseline reset used to delete an unbounded backlog row by row inside the
-     * {@code SessionEnd} commit, under the {@code site_sync_state} row lock).
+     * Bulk-delete segments by id (issue #212 review: the re-baseline reset used to delete an
+     * unbounded backlog row by row inside the {@code SessionEnd} commit, under the
+     * {@code site_sync_state} row lock). The caller passes the ids whose keys it collected, so
+     * rows and objects keep their identity.
      *
-     * @param siteId site identifier
+     * @param ids segment ids to delete; must not be empty
      * @return number of segments deleted
      */
-    int deleteCommittedBySiteId(UUID siteId);
+    int deleteByIdIn(List<UUID> ids);
+
+    /** One committed segment's row id and object key (issue #212 review round 2). */
+    interface CommittedSegmentRef {
+
+        UUID getId();
+
+        String getS3Key();
+    }
 
     /**
      * A light projection of a site's committed below-checkpoint segments, in sequence order —

@@ -582,6 +582,35 @@ pages/{feature}/            # Route pages
   new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
   delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
   `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
+  **Round 2 reviewed what round 1 introduced, and three of its findings cut into round 1's own
+  fixes.** The A3 drain was silencing far more than its justification named: with the default
+  window of 20, retention never emptied a quiet site's below-checkpoint list even before #212, so
+  a frame-gone site holding an ordinary *processed* window — a real, rebuild-recoverable data-loss
+  state #212 did not create — would have gone quiet after five nights; the drain is now scoped to
+  a held-back **pending** segment actually existing below the pointer
+  (`existsCommittedPendingBelowCheckpoint`), the processed-only population keeps the never-quiets
+  contract, and the false convergence claim in the Javadoc is rewritten (mutation-proven). The
+  split of the old single segment read into a coverage read and an entity load opened a window the
+  single read never had — a deleter that bumps no epoch (batch retention's horizon, a sibling
+  replica's prune) removing rows between them would have had the frameless refold fold a silently
+  gapped history — so contiguity is re-verified against the list actually folded, thrown without
+  counting (the read-denial rule: transient, one tick). And the drain message was pass-aware-false:
+  #186 shows it verbatim as `lastRebuildMessage`, and on the forced pass `settleSiteWide` re-arms —
+  the text now says which happened. The rest: a stray diff3 marker the develop sync left in both
+  journal files (deleted); the conditional DELETE's marker predicate — A2's whole fix — was pinned
+  by nothing that reached the real SQL (an integration test now drives the real statement over a
+  pending, half-pending and processed row); `SdkClientException` escaping `deleteObjects` would
+  have rolled the row deletes back *after* earlier chunks' objects were destroyed — rows restored,
+  objects gone, in bulk (caught now, the #158-round-2 gap); `deleted-pending` counted before
+  anything was deleted, inflating the "permanently unproducible" series with phantom losses on
+  every failing night (counted after the segment delete returns; pinned); the re-baseline reset's
+  blanket site-wide DELETE could take a row committed between the key read and the delete
+  (`deleteByIdIn` over exactly the collected refs now) and its afterCommit object deletes went one
+  round trip per key (batched); `findBySiteIdOrderByFirstSeq` — now with zero production callers —
+  carries a do-not-re-adopt Javadoc; the hold-back census counting lives once
+  (`HeldBackTally`); and the informed-override's real surface is stated honestly (a server-side
+  WARN; the delete's HTTP response carries no pending count — a REST change was deliberately
+  avoided, a UI confirmation is its own decision if wanted).
 - retire-sql-regeneration: The SQL regeneration path is gone, because it had never worked end to
   end and repairing it would have repaired a path that can serve no live batch (issue #190,
   folding #200 — the two were one piece of work: #190's transaction refusal fired first and #200's

@@ -330,14 +330,16 @@ public class DeltaMetrics {
      * have spent {@code delta.checkpoint.max-materialize-attempts} —
      * {@code delta.checkpoint.tables.given-up} is where it is visible afterwards.</p>
      *
-     * <p>{@code lossy_refold} has the same bounded sub-case since issue #212: a frame-gone site
-     * whose remaining segments all sit <b>at or below</b> the pointer. Everything they hold is
-     * already inside the lost frame's fold, so no new work will ever change the verdict — and a
-     * held-back pending segment (#212) can keep that state open for ever, where retention used to
-     * empty it into {@code history_gone}. It drains exactly as {@code history_gone} does: one
-     * increment per night while the retryable rows last, then quiet, with the given-up gauge as
-     * the standing signal. Segments <em>above</em> the pointer keep the original contract — live
-     * data, no attempt spent, the alarm never quiets on its own.</p>
+     * <p>{@code lossy_refold} has one bounded sub-case since issue #212, scoped exactly to the
+     * state #212 created: a frame-gone site whose remaining segments all sit <b>at or below</b>
+     * the pointer <b>and at least one of them is held back pending queue work</b> — the row
+     * retention can never remove, so the state can stay open for ever. It drains exactly as
+     * {@code history_gone} does: one increment per night while the retryable rows last, then
+     * quiet, with the given-up gauge as the standing signal. Everything else keeps the original
+     * never-quiets contract — segments above the pointer (live data), and a below-pointer set
+     * that is all <em>processed</em>: that is the ordinary audit window of a quiet site, which
+     * retention never emptied even before #212, and its alarm is a real, rebuild-recoverable
+     * data-loss condition that must not self-silence (review round 2 of #212's PR).</p>
      *
      * <p>{@code fold_too_large} is the fourth, and it is about heap rather than disk or S3 (issue
      * #152): the site's folded state grew past {@code delta.checkpoint.max-fold-bytes}, the ceiling
