@@ -251,6 +251,56 @@ old one and the fixing commit) or a stale observation (the fix is already in `de
 needed). Only if nothing matched, file the issue (described, labelled, milestoned, `Backlog` on
 the board) — and do not start work on it in the current cycle.
 
+**Every follow-up says what it will touch.** A keyword search finds a *duplicate*; it does not find
+a *collision* unless somebody runs it: #190 and #200 were one piece of work, doable in neither order
+alone — #200 a unique constraint, #190 a transaction annotation — and they were untangled only
+because a backlog pass read every open ticket at once, which nothing in this process asks for. What
+they shared was the files, and a file list makes that check mechanical instead of a thing somebody
+has to think to do.
+So every follow-up — from a review, or seen in passing mid-work, which is the commoner case —
+states three things, in the body, before it is filed:
+
+- **the files it expects to touch** — enough for an overlap check, not a plan;
+- **whether it needs a Flyway migration, and whether it needs a `specs/NNN-*` directory** — the two
+  collisions a file list cannot catch, since both sides add differently-named files and merge
+  cleanly, one breaking startup and the other putting two features on one number, so "neither" is
+  worth writing down (a `delta-ingestion.proto` field-number clash is invisible to git too, but both
+  tickets must name the same file, so the line above already has it);
+- **which open tickets live in those same files** — named, and "none found" is a valid answer.
+
+**The third line needs a method, and the method is not what the first draft of this rule claimed.**
+That draft said a keyword search cannot find these tickets; against this repository it can —
+`gh issue list --state all --search "SqlGenerationService"` returns #185, #190, #200 and #210,
+because GitHub indexes bodies and all four name the class. #190 and #200 are not invisible to each
+other either: both titles begin *"SQL regeneration"*. The real failure was simpler and worse —
+**nothing in the process asked anyone to run the check at all**, and the four colliding pairs #216
+found surfaced only because somebody read every open ticket in one sitting, which no step requires.
+
+So the line is cheap to answer and must actually be answered. One query per name you expect to
+touch, printing the tickets rather than a yes/no:
+
+```bash
+gh issue list --state open --limit 200 \
+  --json number,title,body \
+  --jq '.[] | select((.title + .body) | test("SqlGenerationService";"i")) | "\(.number) \(.title)"'
+```
+
+`--jq` rather than a pipe into `grep`: `gh` emits the whole backlog as **one line** of compact JSON,
+so a grep answers "something matched" while printing fifty thousand characters and naming nothing —
+and the rule above asks for the tickets to be *named*. Keep `--limit` well above the open count;
+the default sort is newest-first, so a low limit drops the oldest tickets, which are exactly the
+pre-rule ones with no file list of their own. The argument to `test()` is a **regular expression**,
+not a literal: escape `.`, `(` and `[` when the name carries them — an unbalanced bracket aborts
+the query outright, and an unescaped `.` quietly widens the match (over-matching, so it fails safe).
+
+The answer is written as **"none found"** rather than "none": a ticket filed before this rule
+declares nothing, so the check is only ever as good as its prose, and the dispatcher re-checks
+rather than trusting it.
+
+`/github-issue-runner` computes the same overlap at step 2b, and when the ticket says it outright
+that inference becomes a read — the dispatcher sees the clash before it puts two tickets in one
+window rather than two hours into an executor's session.
+
 ### Running several issues at once
 
 `/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
@@ -453,6 +503,49 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- followup-declares-its-files: A follow-up ticket states what it will touch, so a collision is read
+  rather than inferred (issue #216, filed from the backlog pass that untangled #190/#200). **A
+  keyword search finds a duplicate and finds a collision only if somebody runs it**: #200 was a
+  unique constraint and #190 a transaction annotation, one piece of work doable in neither order
+  alone, and they were untangled only because a backlog pass read every open ticket at once — which
+  no step of this process asks for. What they shared was the files, and a declared file list turns
+  that check from something someone has to think to do into something mechanical. (Review round 2
+  disproved the first draft's sharper claim that search *cannot* find such pairs: against this
+  repository `--search "SqlGenerationService"` returns #185, #190, #200 and #210, and #190/#200 both
+  open with the words "SQL regeneration". The rule survives the correction; its justification had to
+  change.) The same pass found three more such pairs (#185/#210 in `SqlGenerationService`,
+  #193/#213 in `CheckpointService`/`CheckpointScheduler`, #213/#215 suspected in the egress render
+  path — that last one later **disproved** by #213's own investigation, which is a fair illustration
+  of how little a suspicion is worth without the file list). Every follow-up now carries three lines
+  in its body: the files it expects to touch, whether it needs a Flyway migration **or a
+  `specs/NNN-*` directory** — the two collisions a file list cannot catch, since both sides add
+  differently-named files and merge cleanly, one breaking startup and the other putting two features
+  on one number — and which open tickets live in those same files.
+  **Review corrected four things about the rule and one claim about the repository.** The third line
+  had **no method**, and the only search this file prescribes is the keyword one the rule's own
+  thesis declares insufficient: an executor greps `SqlGenerationService`, finds neither #185
+  ("threshold validation") nor #210 ("dead async method"), writes "none", and the dispatcher
+  schedules exactly the pair the rule exists to separate — a false negative that reads as a verified
+  answer. So the rule now prescribes reading bodies rather than the index
+  (`gh issue list --state open --json number,title,body --jq …`, one query per name) and says
+  **"none found"**, since
+  pre-rule tickets carry no file line and the answer is only ever as good as their prose. The
+  **consumer** was never updated either: `CLAUDE.md` promised the dispatcher's inference "becomes a
+  read" while step 2b still described inference only, so 2b now reads the lines when present,
+  **re-checks by grep anyway** (a declared list ages while the code moves) and falls back to
+  inference when absent — a ticket's silence never means "no overlap". The requirement sat in
+  `/github-issue`'s **search** step while every other body requirement lives in the filing step, the
+  natural place to read as the spec for an issue body; it is in both now. And the lead sentence
+  scoped it to "a ticket filed from a review" three lines above "every follow-up states three
+  things" — the mid-work finding is the commoner case, so the narrower reading would have skipped it.
+  **The claim about `AGENTS.md` was simply false**: the PR argued against touching it because adding
+  a rule there "would be worse than the pointer that already exists", and `grep -c 'CLAUDE.md'
+  AGENTS.md` was **0** — no pointer, no follow-up rule, while that file declares itself "the single
+  source of dev rules". An agent whose harness loads only `AGENTS.md` would have filed tickets
+  without the three lines, degrading the dispatcher's promised read to inference for exactly those.
+  It now carries the condensed rule and the pointer.
+  Documentation and command files only — no production code, test, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or frontend change.
 - non-finite-decimal-null: A `NaN` or `+/-Infinity` arriving in a `numeric` column is written as
   NULL and reported, instead of costing the table its delta file, its checkpoint snapshot and its
   Bit BI SQL (issue #215, from the PDE soak on the live stand). PostgreSQL `numeric` holds all three
