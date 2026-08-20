@@ -584,6 +584,35 @@ pages/{feature}/            # Route pages
 - Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
 
 ## Recent Changes
+- retention-no-s3-in-transaction: The changelog retention pass no longer holds a HikariCP
+  connection across its object deletes (issue #234). `ChangelogRetentionService.prune` was
+  `@Transactional` around everything, so the batched `DeleteObjects` round trip ran with the pass's
+  transaction — and every row lock it had taken — still open, on the nightly `CheckpointScheduler`
+  tick, per site, serially, for a hold proportional to the site's backlog; the pool's floor
+  arithmetic (#161) assumes background work releases between statements, and every neighbour on this
+  path already states the invariant (#147 the ingestion commit, #164 both queue workers, #176 the
+  Parquet Export listing). Retention was simply never named by those tickets. **The #164 shape,
+  nothing more**: the wrapping `@Transactional` is gone, the below-checkpoint projection read and
+  each conditional row delete (`deleteByIdIfProcessed`, already a single statement with its own
+  `@Transactional` on the repository) are short transactions of their own, and the S3 half runs with
+  nothing open — with a `refuseInsideTransaction()` guard checked before anything is read, because a
+  caller that wrapped the pass would restore the hold while every assertion about what is pruned
+  still passed. The other two DoD items were **already delivered by #212's review round 1** and are
+  unchanged here: the delete is one batched 1000-key `DeleteObjects` (not one round trip per
+  segment), and the ordering is row first, object after the delete reported success, so a crash in
+  between leaves an unreferenced object the #158 orphan sweep reclaims rather than a row pointing at
+  nothing. **The one behaviour change is stated rather than implied**: partial progress now stands
+  where it used to roll back — a pass interrupted after fifty rows has pruned fifty segments — which
+  is the intended direction (a pruned row is durable work, not a step of one atomic pass) and is
+  also why the failed-object-delete catch stays: the rows are already gone, and a throw would report
+  a healthy prune to `CheckpointScheduler` as this site's failure. Tests were written first and are
+  red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
+  annotation, the refusal and the row-before-object order, while the wired half lives in
+  `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own
+  proxied short transactions have actually committed by the time the objects go, so a
+  `@MockitoSpyBean` records `isActualTransactionActive()` at the real `deleteObjects`. No REST,
+  gRPC, proto, DTO, migration (V55 is the last applied, V56 free), configuration-key, metric, S3-key
+  or frontend change. See `docs/delta-client-v2-guide.md` ("No S3 inside the retention pass").
 - poison-segment-backoff: One deterministically failing segment no longer stalls every other site's
   queue work, and the egress queue has an error counter for the first time (issue #243, filed by
   review round 1 of PR #235 and sequenced after #212 and #185). Both segment queues claim the

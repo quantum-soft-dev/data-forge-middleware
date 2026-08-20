@@ -8,7 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -57,6 +57,18 @@ import java.util.UUID;
  * retired batch's segments regardless of their markers, counting and WARNing when they still carried
  * pending work. That horizon is also what bounds the storage a permanently stuck segment can pin.</p>
  *
+ * <p><b>The pass opens no transaction of its own (issue #234).</b> It used to be
+ * {@code @Transactional} around everything, so the batched {@code DeleteObjects} round trip ran
+ * with the pass's transaction — and every row lock it had taken — still open, on a scheduler
+ * thread, per site, serially, for a hold proportional to the backlog. Instead the projection read
+ * and each conditional row delete are the repository's own short transactions (so a connection is
+ * released between statements, which is what makes a pool smaller than its callers safe — #161),
+ * and the objects go afterwards with nothing open. The ordering is the same one #158 documented and
+ * is what makes a crash mid-pass converge: the row first, its object only after the delete reported
+ * success, so the worst outcome is an unreferenced object the orphan sweep reclaims — never a row
+ * pointing at an object that is gone. Partial progress now stands where it used to roll back, which
+ * is the intended direction: a pruned row is durable work, not a step of one atomic pass.</p>
+ *
  * <p>This pass runs only after a <em>successful</em> checkpoint build ({@code CheckpointScheduler}),
  * so the held-back series has a blind spot its readers must know: a site whose build aborts nightly
  * shows zero here while its backlog accumulates — {@code delta.checkpoint.builds.aborted} is the
@@ -94,9 +106,10 @@ public class ChangelogRetentionService {
      *
      * @param siteId site identifier
      * @return number of segments pruned (held-back segments are not pruned and not counted here)
+     * @throws IllegalStateException if a transaction is already open (issue #234)
      */
-    @Transactional
     public int prune(UUID siteId) {
+        refuseInsideTransaction();
         long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
         if (checkpointSeq <= 0) {
             return 0;
@@ -130,15 +143,13 @@ public class ChangelogRetentionService {
         }
 
         if (!prunedKeys.isEmpty()) {
-            // One DeleteObjects round trip per 1000 keys instead of one per object. Errors are
-            // summarized, not thrown: the rows are gone, so a failed object delete leaves the same
-            // unreferenced litter the #158 sweep reclaims — while a throw here would roll the row
-            // deletes back and report a healthy prune as a failure. deleteObjects catches
-            // S3Exception per chunk but not SdkClientException (the gap #158 round 2 documented),
-            // so the catch below is what actually holds the row-first invariant: a network failure
-            // after chunk 1 would otherwise destroy 1000 objects and then roll every row delete
-            // back — rows restored, objects gone, in bulk. Moving the S3 call out of this
-            // transaction entirely is #234.
+            // One DeleteObjects round trip per 1000 keys instead of one per object, and since #234
+            // with no transaction open. Errors are summarized, not thrown: the rows are gone, so a
+            // failed object delete leaves the same unreferenced litter the #158 sweep reclaims,
+            // while a throw would end the whole pass and report a healthy prune to
+            // CheckpointScheduler as this site's failure. deleteObjects catches S3Exception per
+            // chunk but not SdkClientException (the gap #158 round 2 documented), which is why the
+            // catch below is broader than the summarized errors.
             try {
                 S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
                 if (!result.errors().isEmpty()) {
@@ -168,6 +179,24 @@ public class ChangelogRetentionService {
                     prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
         }
         return prunedKeys.size();
+    }
+
+    /**
+     * Refuse to prune inside a caller's transaction (issue #234).
+     *
+     * <p>The guard is what keeps the property from regressing silently: a caller that wrapped this
+     * pass in a transaction would restore the connection hold across the object deletes while every
+     * assertion about what is pruned still passed. Checked before anything is read, so the failure
+     * names the wiring rather than one site's data (the {@code DeltaEgressService} /
+     * {@code DeltaSqlQueueService} shape of #164).</p>
+     */
+    private void refuseInsideTransaction() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "Refusing to prune changelog segments inside an active transaction: the batched "
+                            + "object delete would hold that transaction's connection and row locks "
+                            + "for the length of a network call (issue #234).");
+        }
     }
 
     /** The hold-back census of one pass — the same counting for the view and the re-read (R2-9). */

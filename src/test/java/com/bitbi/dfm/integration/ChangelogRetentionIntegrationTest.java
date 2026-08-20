@@ -11,11 +11,15 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +28,8 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
 
 /**
  * T3.5b — changelog retention prunes segments at/below the durable checkpoint (DB row + S3 object),
@@ -63,6 +69,9 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private MeterRegistry meterRegistry;
+
+    @MockitoSpyBean
+    private S3FileStorageService objectDeleter;
 
     @Test
     void prunesBelowCheckpointSegmentsAndKeepsReconstructionCorrect() {
@@ -167,6 +176,38 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
                 "both markers set: the row is deleted");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty());
         segmentStorage.delete(key); // the statement deletes rows only; keep the shared bucket clean
+    }
+
+    /**
+     * Issue #234 — the batched {@code DeleteObjects} must run with no transaction open.
+     *
+     * <p>The unit tests pin the annotation and the call order; only the wired application can show
+     * that the repository's own short transactions — the projection read and each conditional row
+     * delete, each started by a Spring proxy a unit test does not have — really have committed by
+     * the time the objects go. The spy records
+     * {@link TransactionSynchronizationManager#isActualTransactionActive()} at the delete and then
+     * performs the real one.</p>
+     */
+    @Test
+    void theObjectDeleteRunsWithNoTransactionOpen() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        checkpointService.buildCheckpoint(SITE);
+        String prunedKey = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow().getS3Key();
+        markSegmentsProcessed(SITE);
+
+        List<Boolean> insideTransaction = new ArrayList<>();
+        doAnswer(invocation -> {
+            insideTransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
+            return invocation.callRealMethod();
+        }).when(objectDeleter).deleteObjects(anyList());
+
+        assertEquals(1, retentionService.prune(SITE));
+
+        assertEquals(List.of(false), insideTransaction,
+                "the pruned objects must not be deleted inside a transaction (issue #234)");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
+        assertFalse(segmentStorage.exists(prunedKey), "segment S3 object pruned");
     }
 
     private double heldBack(String reason) {

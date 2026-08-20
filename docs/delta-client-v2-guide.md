@@ -2019,6 +2019,24 @@ proxy boundary (they were `protected` self-invocations). `ParquetExportFileServi
 queries the catalog through `ParquetExportCatalogQuery` and only then probes S3; a row is still
 dropped only on a known absence (issue **#157**) and dropped candidates still advance the cursor.
 
+### No S3 inside the retention pass (issue #234)
+
+The same rule, one tick over. `ChangelogRetentionService.prune` was `@Transactional` around the
+whole pass, so its object deletes ran with that transaction — and every row lock it had taken —
+still open: on the nightly `CheckpointScheduler` tick, per site, serially, for a hold proportional
+to the site's backlog. It opens **no** transaction of its own now. The below-checkpoint projection
+read and each conditional row delete (`deleteByIdIfProcessed`) are the repository's own short
+transactions, and the batched 1000-key `DeleteObjects` runs with nothing open; `prune` throws if a
+transaction is already active, so the hold cannot be reintroduced silently.
+
+Two consequences worth knowing. The ordering is unchanged and is what makes a crash mid-pass
+converge — the row first, its object only after the delete reported success — so the worst outcome
+is an unreferenced object the #158 orphan sweep reclaims, never a row whose object is gone. And
+partial progress now **stands** where it used to roll back: a pass interrupted after fifty rows has
+pruned fifty segments rather than none. That is the intended direction (a pruned row is durable
+work, not a step of one atomic pass), and it is also why a failed object delete is still summarized
+rather than thrown — the rows are already gone.
+
 ### No S3 inside the ingestion commit (issue #147)
 
 The commit of a session — the tail segment's row, the watermark advance, the batch completion, and
