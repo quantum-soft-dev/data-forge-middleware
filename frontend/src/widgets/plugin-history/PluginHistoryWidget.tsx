@@ -15,7 +15,6 @@ import {
   GenerationListTable,
   SqlContentViewer,
   ClearHistoryDialog,
-  RegenerateDialog,
   useGenerationsQuery,
   useDownloadSqlFile,
 } from '@/features/plugin-history'
@@ -36,8 +35,6 @@ export function PluginHistoryWidget({
 
   // Modal state
   const [viewingGeneration, setViewingGeneration] =
-    useState<SqlGenerationSummary | null>(null)
-  const [regeneratingGeneration, setRegeneratingGeneration] =
     useState<SqlGenerationSummary | null>(null)
   const [isClearDialogOpen, setIsClearDialogOpen] = useState(false)
 
@@ -74,19 +71,11 @@ export function PluginHistoryWidget({
     [downloadMutation, pluginId, accountId]
   )
 
-  const handleRegenerate = useCallback((generation: SqlGenerationSummary) => {
-    setRegeneratingGeneration(generation)
-  }, [])
-
   const handlePageChange = useCallback((newPage: number) => {
     setPage(newPage)
   }, [])
 
   const handleCleared = useCallback(() => {
-    refetch()
-  }, [refetch])
-
-  const handleRegenerated = useCallback(() => {
     refetch()
   }, [refetch])
 
@@ -150,7 +139,6 @@ export function PluginHistoryWidget({
         isLoading={isLoading}
         onViewContent={handleViewContent}
         onDownload={handleDownload}
-        onRegenerate={handleRegenerate}
         onPageChange={handlePageChange}
       />
 
@@ -161,16 +149,6 @@ export function PluginHistoryWidget({
         generation={viewingGeneration}
         isOpen={viewingGeneration !== null}
         onClose={() => setViewingGeneration(null)}
-      />
-
-      {/* Regenerate Dialog */}
-      <RegenerateDialog
-        pluginId={pluginId}
-        accountId={accountId}
-        generation={regeneratingGeneration}
-        isOpen={regeneratingGeneration !== null}
-        onClose={() => setRegeneratingGeneration(null)}
-        onRegenerated={handleRegenerated}
       />
 
       {/* Clear History Dialog */}

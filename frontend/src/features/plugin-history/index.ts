@@ -15,7 +15,6 @@ export {
   downloadSqlFile,
   fetchHistorySummary,
   clearHistory,
-  regenerateSql,
 } from './api/plugin-history.api'
 
 // Query exports
@@ -27,14 +26,12 @@ export {
   useHistorySummaryQuery,
   useDownloadSqlFile,
   useClearHistoryMutation,
-  useRegenerateSqlMutation,
 } from './api/plugin-history.queries'
 
 // UI component exports
 export { GenerationListTable } from './ui/GenerationListTable'
 export { SqlContentViewer } from './ui/SqlContentViewer'
 export { ClearHistoryDialog } from './ui/ClearHistoryDialog'
-export { RegenerateDialog } from './ui/RegenerateDialog'
 
 // Type exports
 export type {
@@ -43,7 +40,6 @@ export type {
   SqlContentPage,
   HistoryClearSummary,
   HistoryClearResult,
-  RegenerateResult,
   GenerationListFilters,
   SqlContentParams,
 } from './model/types'

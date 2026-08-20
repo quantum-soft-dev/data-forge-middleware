@@ -118,8 +118,6 @@ export const ACCOUNT_PLUGIN_GENERATION_CONTENT = (pluginId: string, generationId
   `${ACCOUNT_PLUGIN_GENERATION(pluginId, generationId)}/content`;
 export const ACCOUNT_PLUGIN_GENERATION_DOWNLOAD = (pluginId: string, generationId: string) =>
   `${ACCOUNT_PLUGIN_GENERATION(pluginId, generationId)}/download`;
-export const ACCOUNT_PLUGIN_GENERATION_REGENERATE = (pluginId: string, generationId: string) =>
-  `${ACCOUNT_PLUGIN_GENERATION(pluginId, generationId)}/regenerate`;
 
 // Plugin Activation
 export const PLUGINS = `${ADMIN_API_BASE}/plugins`;
@@ -139,8 +137,6 @@ export const ADMIN_PLUGIN_GENERATION_CONTENT = (pluginId: string, accountId: str
   `${ADMIN_PLUGIN_GENERATION(pluginId, accountId, generationId)}/content`;
 export const ADMIN_PLUGIN_GENERATION_DOWNLOAD = (pluginId: string, accountId: string, generationId: string) =>
   `${ADMIN_PLUGIN_GENERATION(pluginId, accountId, generationId)}/download`;
-export const ADMIN_PLUGIN_GENERATION_REGENERATE = (pluginId: string, accountId: string, generationId: string) =>
-  `${ADMIN_PLUGIN_GENERATION(pluginId, accountId, generationId)}/regenerate`;
 export const ADMIN_PLUGIN_HISTORY = (pluginId: string, accountId: string) =>
   `${ADMIN_PLUGINS}/${pluginId}/accounts/${accountId}/history`;
 export const ADMIN_PLUGIN_HISTORY_SUMMARY = (pluginId: string, accountId: string) =>

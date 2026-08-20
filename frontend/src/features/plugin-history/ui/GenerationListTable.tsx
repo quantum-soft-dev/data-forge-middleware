@@ -21,7 +21,6 @@ import {
   ChevronRight,
   Download,
   Eye,
-  RefreshCw,
   FileText,
 } from 'lucide-react'
 import type { SqlGenerationSummary, SqlGenerationListResponse } from '../model/types'
@@ -31,7 +30,6 @@ interface GenerationListTableProps {
   isLoading: boolean
   onViewContent: (generation: SqlGenerationSummary) => void
   onDownload: (generation: SqlGenerationSummary) => void
-  onRegenerate: (generation: SqlGenerationSummary) => void
   onPageChange: (page: number) => void
 }
 
@@ -64,7 +62,6 @@ export function GenerationListTable({
   isLoading,
   onViewContent,
   onDownload,
-  onRegenerate,
   onPageChange,
 }: GenerationListTableProps) {
   if (isLoading) {
@@ -159,16 +156,6 @@ export function GenerationListTable({
                   >
                     <Download className="h-4 w-4" />
                   </Button>
-                  {!generation.superseded && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => onRegenerate(generation)}
-                      title="Regenerate SQL"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                    </Button>
-                  )}
                 </div>
               </TableCell>
             </TableRow>

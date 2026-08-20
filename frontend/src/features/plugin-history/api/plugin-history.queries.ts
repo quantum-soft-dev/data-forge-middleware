@@ -12,7 +12,6 @@ import {
   downloadSqlFile,
   fetchHistorySummary,
   clearHistory,
-  regenerateSql,
 } from './plugin-history.api'
 import type {
   GenerationListFilters,
@@ -142,35 +141,6 @@ export function useClearHistoryMutation() {
       })
       queryClient.invalidateQueries({
         queryKey: pluginHistoryKeys.historySummary(variables.pluginId, variables.accountId),
-      })
-    },
-  })
-}
-
-/**
- * Mutation hook to regenerate SQL.
- */
-export function useRegenerateSqlMutation() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({
-      pluginId,
-      accountId,
-      generationId,
-    }: {
-      pluginId: string
-      accountId: string
-      generationId: string
-    }) => regenerateSql(pluginId, accountId, generationId),
-    onSuccess: (_, variables) => {
-      // Invalidate generation list to show new entry
-      queryClient.invalidateQueries({
-        queryKey: pluginHistoryKeys.generations(variables.pluginId, variables.accountId),
-      })
-      // Invalidate the original generation (now superseded)
-      queryClient.invalidateQueries({
-        queryKey: pluginHistoryKeys.generation(variables.pluginId, variables.accountId, variables.generationId),
       })
     },
   })

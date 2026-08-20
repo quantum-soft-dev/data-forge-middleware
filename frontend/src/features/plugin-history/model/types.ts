@@ -75,20 +75,6 @@ export interface HistoryClearResult {
 }
 
 /**
- * Result after regenerating SQL.
- */
-export interface RegenerateResult {
-  originalGenerationId: string
-  newGenerationId: string
-  statementCount: number
-  insertCount: number
-  updateCount: number
-  deleteCount: number
-  generationDurationMs: number
-  regeneratedAt: string
-}
-
-/**
  * Filter parameters for listing generations.
  */
 export interface GenerationListFilters {

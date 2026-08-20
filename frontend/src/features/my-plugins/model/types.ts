@@ -361,20 +361,6 @@ export interface GenerateSqlResult {
 }
 
 /**
- * Result of regenerating SQL.
- */
-export interface RegenerateSqlResult {
-  originalGenerationId: string
-  newGenerationId: string
-  statementCount: number
-  insertCount: number
-  updateCount: number
-  deleteCount: number
-  generationDurationMs: number
-  regeneratedAt: string
-}
-
-/**
  * Result of deleting SQL generation.
  */
 export interface DeleteGenerationResult {

@@ -12,7 +12,6 @@ import {
   fetchGenerations,
   fetchSqlContent,
   downloadSqlFile,
-  regenerateSql,
   deleteGeneration,
 } from './batchSqlApi'
 import type {
@@ -86,29 +85,6 @@ export function useGenerateSqlMutation() {
       queryClient.invalidateQueries({ queryKey: pluginKeys.batchSql(pluginId) })
       queryClient.invalidateQueries({ queryKey: pluginKeys.userGenerations(pluginId) })
       // Also invalidate logs as SQL generation creates log entries
-      queryClient.invalidateQueries({ queryKey: pluginKeys.pluginLogs(pluginId) })
-    },
-  })
-}
-
-/**
- * Hook to regenerate SQL for a generation.
- */
-export function useRegenerateSqlMutation() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({
-      pluginId,
-      generationId,
-    }: {
-      pluginId: string
-      generationId: string
-    }) => regenerateSql(pluginId, generationId),
-    onSuccess: (_, { pluginId }) => {
-      // Invalidate all related queries
-      queryClient.invalidateQueries({ queryKey: pluginKeys.batchSql(pluginId) })
-      queryClient.invalidateQueries({ queryKey: pluginKeys.userGenerations(pluginId) })
       queryClient.invalidateQueries({ queryKey: pluginKeys.pluginLogs(pluginId) })
     },
   })
