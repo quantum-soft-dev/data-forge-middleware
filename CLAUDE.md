@@ -251,7 +251,12 @@ ticket grows into one larger, run-sized problem instead of a sibling appearing. 
 is **never reopened**: almost always the observation is simply stale (the fix is already in
 `develop`, your worktree is older — nothing needed, say so and move on), and only a true
 regression, reproducing on current `origin/develop`, gets a new issue linking the old one and
-the fixing commit. Only when the theme has no
+the fixing commit. **A closed match carrying `duplicate` is the exception to "stale"** — it was
+closed by another ticket's work rather than by its own PR, and that other ticket may still be
+open (three of the seventeen labelled closes are today: #192 under #193, #218 under #205, #241
+under #239), so read it as a pointer: take the
+absorber from its closing comment and look at *its* state. Ask the search for labels, not just
+titles (`--json number,title,state,labels,body`). Only when the theme has no
 ticket yet, file one — framed as the **theme** (root cause / subsystem), not a one-symptom
 note, so later findings have a place to land; described, labelled, milestoned, `Backlog` on
 the board, sized so one run fixes it whole. Work on a finding never starts in the current
@@ -306,6 +311,70 @@ rather than trusting it.
 `/github-issue-runner` computes the same overlap at step 2b, and when the ticket says it outright
 that inference becomes a read — the dispatcher sees the clash before it puts two tickets in one
 window rather than two hours into an executor's session.
+
+**A ticket closed as absorbed carries `duplicate`, because `Done` cannot say it.** Folding one
+ticket into another (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item
+closed`** workflow then sets its `Status` to `Done` — so `Done` mixes two different things: a
+ticket closed by **its own** PR, and a ticket closed by **somebody else's**. The backlog pass of
+2026-08-19 read **eight** of the second kind — not all of them, as the census below found — with
+nothing telling them from the first, and for four of the eight the absorber was still open — the sharpest being **#200** (`priority: high`, SQL
+regeneration unfixed in production) sitting in `Done` while #190 was open and `status: blocked`;
+#210 under an open #185, #192 under an open #193, #218 under an open #205. The other four — #143,
+#162, #204, #214 — were absorbed by #142, #149, #186 and #213, whose work *did* land. A person
+reading the board treats all eight as shipped, and for four of them that is false.
+
+The marker is the **`duplicate` label, and it is mandatory** — the decision taken for #230. All
+three options are recorded, the two rejected ones first:
+
+- **A separate column loses to the automation.** The project's workflows are readable, and
+  `Item closed` is enabled:
+
+  ```bash
+  gh api graphql -f query='query{node(id:"PVT_kwDOB7LEnM4BeGrE"){... on ProjectV2{
+    workflows(first:20){nodes{name enabled}}}}}'
+  ```
+
+  It fires on the close event, so a `Duplicate` column would be overwritten by every close and
+  restored only by a manual move nothing enforces — the board would lie exactly as it does now, and
+  lie *invisibly*, a rule appearing to exist. `Auto-close issue` is enabled too, so the column set
+  is load-bearing in the other direction as well; and the columns are anyway the **state machine**
+  this file walks in order, where an outcome is not a state.
+- **"Leave them in `Done`, that is accepted" is what the board already does**, and the eight rows
+  above are what it costs.
+- **The label rides beside the automation instead of fighting it.** It survives the auto-move,
+  `gh issue list --state closed --label duplicate` is the whole query, and it was already the
+  de-facto marker: triage had applied it by hand to #218 and #229 before any rule said so, so this
+  generalizes an existing practice rather than inventing one.
+
+**What the label means is the part that had to be decided, and it is the durable fact:** *this
+ticket was closed by another ticket's work, not by its own PR.* It is **not** "the work is still
+unfixed" — that reading is unimplementable, because the person closing the ticket cannot know it
+and it changes underneath them. #200 is the proof, inside ten days: it was labelled on 2026-08-19
+with a comment saying the work was not done, and #190 merged the day after, so a label meaning
+"still unfixed" was already stale and nobody was going to come back and strip it. So every
+absorbed close is labelled, whatever the absorber's fate, and the live answer to "is it fixed?"
+comes from the absorber — which is why **the closing comment is required beside the label** and
+must name the absorber and say whether it is still open. The label narrows the question; the
+comment answers it.
+
+The **label's own description carries that meaning** — it reads "Closed by another ticket's work,
+not by its own PR — the closing comment names the absorber", replacing GitHub's default "This issue
+or pull request already exists", which states the rejected reading to anyone hovering it in the UI.
+
+So: **whoever closes a ticket as absorbed applies `duplicate` and leaves that comment.** The card
+stays in `Done` — that is the automation's answer and this rule does not fight it. What the label
+buys is that **`Done` minus `duplicate` is the work that closed on its own merits**, and that the
+absorbed set is one query rather than a re-reading of the backlog. **That invariant is only as good
+as the backfill, so the backfill is a census rather than the issue's own list**: #230 named eight,
+and review round 2 found six older folds carrying no label at all — #114 into #112, #123 and #124
+into #122, #160 into #158, #163 into #159, #176 into #164 — plus #241, a duplicate of the **still
+open** #239. Seventeen closes carry the label now (the eight, those seven, and #220/#229 which
+triage had already marked), found by scanning the last comments of every closed issue for the
+folding phrasings this repository uses, since no single wording is standard. A fold from before
+that scan is the one thing the search rule cannot see, which is why the scan was worth doing once. The rule binds all three
+closing sites — `/github-issue` (a finding that absorbs an open ticket), `/merge` (a PR whose issue
+folds another) and `/github-issue-runner` (the dispatcher merging duplicates inside a run) — and
+says nothing about *which* ticket survives, which stays a judgement about where the work is.
 
 ### Running several issues at once
 
@@ -376,6 +445,10 @@ columns in order — jumping is not allowed:
 `Backlog` → `Ready` (`status: ready`) → `In Progress` (`status: in progress`) → `In Review`
 (`status: in review`, then `status: ready to merge` while awaiting the human) → `Done`.
 `Blocked` (`status: blocked`) is the side exit at any point.
+
+`Done` is an outcome-blind column: the built-in `Item closed` workflow puts every closed issue
+there, shipped or absorbed alike. The `duplicate` label is what separates the two — see "A ticket
+closed as absorbed carries `duplicate`" above.
 
 Moving the board needs the `project` token scope — if `gh project` fails with
 `INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
@@ -511,6 +584,78 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- absorbed-duplicates-marker: A ticket closed as absorbed carries the **`duplicate`** label, so the
+  board stops reading an unfixed defect as shipped (issue #230, filed from the same backlog pass as
+  #216 and deliberately not folded into it — that ticket is about what a follow-up states *before*
+  filing, this one about what the board shows *after* closing). Folding one ticket into another
+  (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item closed`** workflow
+  then sets its `Status` to `Done` — so `Done` mixes a ticket closed by its own PR with one closed
+  by somebody else's. Eight such closes existed on 2026-08-19; for four of them the absorber was
+  still open, the sharpest being **#200** (`priority: high`, SQL regeneration unfixed in
+  production) sitting in `Done` while #190 was open and `status: blocked`, and the board could not
+  tell them from #143, #162, #204 and #214, whose work really had landed with #142, #149, #186 and
+  #213. **The two rejected options are recorded with the chosen one.** A separate column loses to
+  the automation, and this was checked rather than assumed — the project's workflows are readable
+  (`gh api graphql … ProjectV2{workflows(first:20){nodes{name enabled}}}`) and `Item closed` is
+  enabled, so a `Duplicate` column would be overwritten by every close and restored only by a manual
+  move nothing enforces, i.e. the board would lie exactly as it does now but *invisibly*, a rule
+  appearing to exist; `Auto-close issue` is enabled as well, and the columns are anyway the state
+  machine this file walks in order, where an outcome is not a state. "Leave them in `Done`, that is
+  accepted" is what the board already does. The label rides beside the automation instead of
+  fighting it, survives the auto-move, is one query
+  (`gh issue list --state closed --label duplicate`), and was already triage's de-facto marker on
+  #218 and #229 — so this generalizes an existing practice rather than inventing one.
+  **The part that had to be decided is what the label means, and it is the durable fact** — *closed
+  by another ticket's work, not by its own PR* — rather than "still unfixed". The second reading is
+  unimplementable: the person closing cannot know it, and it changes underneath them. #200 proves
+  that inside ten days, having been labelled on 2026-08-19 with a comment saying the work was not
+  done and #190 merging the day after, leaving a label nobody was going to come back and strip. So
+  every absorbed close is labelled whatever the absorber's fate, and the live answer to "is it
+  fixed?" comes from the absorber — which is why the **closing comment is required beside the
+  label** and must name the absorber and say whether it is still open. The label narrows the
+  question; the comment answers it. Backfilled on all eight closes so the label has one meaning:
+  #192, #200, #210, #218 (#220 and #229 already carried it) **and** #143, #162, #204, #214 — the
+  counter-set was left unlabelled by the 2026-08-19 pass under the "still unfixed" reading, and
+  labelling it is the consequence of choosing the other one. `Done` minus `duplicate` is now the
+  work that closed on its own merits. The rule binds all three closing sites — `/github-issue`,
+  `/merge` and `/github-issue-runner` — and says nothing about *which* ticket survives, which stays
+  a judgement about where the work is. The `duplicate` label's **description** was rewritten to
+  carry the same meaning ("Closed by another ticket's work, not by its own PR — the closing comment
+  names the absorber"): GitHub's default text, "This issue or pull request already exists", states
+  the rejected reading to anyone hovering it in the UI. **Review round 1 found the rule's own
+  misreading one step upstream** and that is the finding worth keeping: the follow-ups search rule
+  still told an agent that a *closed* match "almost always" means the fix is already in `develop`,
+  so a `duplicate`-closed #192 or #218 — whose absorbers #193 and #205 are open — would have been
+  read as shipped at the search step, which is #230's defect moved off the board and into
+  `/github-issue`; the closed-match branch now names `duplicate` as the exception and the searches
+  ask for labels. Three more from the same round: the absorbed close strips `status: *` like any
+  other close (a ticket closed in `Done` still carrying `status: blocked` was literally #200); the
+  "do not move the card" instruction was narrowed to "do not move it to another column, but check
+  it reached `Done` and move it there by hand otherwise", since assuming the workflow fired
+  contradicts this file's own "a command that exited 0 is not proof"; and the dispatcher rule had
+  been extended to closes that are **not** absorbed at all — an issue merged by its own PR in the
+  same run, and a finding already fixed in `develop` — which would have broken the very invariant
+  the label buys. **Review round 2 found the invariant itself false at merge time and one prescribed
+  command broken.** The backfill had followed #230's own list, and that list was an August census —
+  six older folds carried no label (#114 into #112, #123 and #124 into #122, #160 into #158, #163
+  into #159, #176 into #164), plus #241, a duplicate of the **still open** #239, so
+  `gh issue list --state closed --label duplicate` was not "the absorbed set" and the new
+  closed-match rule would have misread all seven as stale. Fixed by scanning the last comments of
+  every closed issue for the folding phrasings this repository uses — there is no standard one — and
+  labelling what it found: seventeen closes carry the label now, three of them with the absorber
+  still open. The broken command was round 1's own fix: the label-aware search interpolated
+  `join(\",\")`, a jq parse error, so an agent would have fallen back to the label-blind search —
+  the defect the fix exists to close, shipped as a rule that fails every time. Three more:
+  `/merge`'s trigger keyed on the literal `folds #NNN`, which appears nowhere in this repository
+  (PR #236 says "folding #200"), so the step could never have fired; the absorb-and-close step had
+  no guard against closing a ticket somebody is currently working — a real hazard while the
+  dispatcher keeps three in flight, since closing an issue silently destroys the window of a PR
+  carrying `Closes #<n>` — and no obligation to report the close, the heaviest of the three
+  follow-up actions being the only one leaving no trace; and the dispatcher exclusion was one case
+  too wide, since a deferred review finding fixed by somebody else's PR *is* an absorbed close.
+  Documentation and command files only: no production code, test, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or frontend change (the label description and the
+  backfill are repository metadata, not files).
 - signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
   identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
   by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings
