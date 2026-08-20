@@ -262,8 +262,10 @@ states three things, in the body, before it is filed:
 
 - **the files it expects to touch** — enough for an overlap check, not a plan;
 - **whether it needs a Flyway migration, and whether it needs a `specs/NNN-*` directory** — the two
-  collisions that merge cleanly and are invisible to git, one breaking startup and the other
-  putting two features on one number, so "neither" is worth writing down;
+  collisions a file list cannot catch, since both sides add differently-named files and merge
+  cleanly, one breaking startup and the other putting two features on one number, so "neither" is
+  worth writing down (a `delta-ingestion.proto` field-number clash is invisible to git too, but both
+  tickets must name the same file, so the line above already has it);
 - **which open tickets live in those same files** — named, and "none found" is a valid answer.
 
 **The third line needs a method, and the method is not what the first draft of this rule claimed.**
@@ -287,7 +289,9 @@ gh issue list --state open --limit 200 \
 so a grep answers "something matched" while printing fifty thousand characters and naming nothing —
 and the rule above asks for the tickets to be *named*. Keep `--limit` well above the open count;
 the default sort is newest-first, so a low limit drops the oldest tickets, which are exactly the
-pre-rule ones with no file list of their own.
+pre-rule ones with no file list of their own. The argument to `test()` is a **regular expression**,
+not a literal: escape `.`, `(` and `[` when the name carries them — an unbalanced bracket aborts
+the query outright, and an unescaped `.` quietly widens the match (over-matching, so it fails safe).
 
 The answer is written as **"none found"** rather than "none": a ticket filed before this rule
 declares nothing, so the check is only ever as good as its prose, and the dispatcher re-checks
@@ -514,16 +518,17 @@ pages/{feature}/            # Route pages
   path — that last one later **disproved** by #213's own investigation, which is a fair illustration
   of how little a suspicion is worth without the file list). Every follow-up now carries three lines
   in its body: the files it expects to touch, whether it needs a Flyway migration **or a
-  `specs/NNN-*` directory** — the two collisions that merge cleanly and are invisible to git, one
-  breaking startup and the other putting two features on one number — and which open tickets live in
-  those same files.
+  `specs/NNN-*` directory** — the two collisions a file list cannot catch, since both sides add
+  differently-named files and merge cleanly, one breaking startup and the other putting two features
+  on one number — and which open tickets live in those same files.
   **Review corrected four things about the rule and one claim about the repository.** The third line
   had **no method**, and the only search this file prescribes is the keyword one the rule's own
   thesis declares insufficient: an executor greps `SqlGenerationService`, finds neither #185
   ("threshold validation") nor #210 ("dead async method"), writes "none", and the dispatcher
   schedules exactly the pair the rule exists to separate — a false negative that reads as a verified
   answer. So the rule now prescribes reading bodies rather than the index
-  (`gh issue list --state open --json number,title,body | grep …`) and says **"none found"**, since
+  (`gh issue list --state open --json number,title,body --jq …`, one query per name) and says
+  **"none found"**, since
   pre-rule tickets carry no file line and the answer is only ever as good as their prose. The
   **consumer** was never updated either: `CLAUDE.md` promised the dispatcher's inference "becomes a
   read" while step 2b still described inference only, so 2b now reads the lines when present,
