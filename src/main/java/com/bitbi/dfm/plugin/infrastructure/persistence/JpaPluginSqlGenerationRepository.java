@@ -104,12 +104,6 @@ public interface JpaPluginSqlGenerationRepository extends JpaRepository<PluginSq
     void deleteByAccountPluginId(@Param("accountPluginId") Long accountPluginId);
 
     /**
-     * Finds the active (non-superseded) generation for a source batch.
-     */
-    @Query("SELECT g FROM PluginSqlGeneration g WHERE g.sourceBatchId = :sourceBatchId AND g.superseded = false")
-    Optional<PluginSqlGeneration> findActiveBySourceBatchId(@Param("sourceBatchId") UUID sourceBatchId);
-
-    /**
      * Counts generations for an account-plugin.
      */
     @Query("SELECT COUNT(g) FROM PluginSqlGeneration g WHERE g.accountPluginId = :accountPluginId")

@@ -110,15 +110,6 @@ public interface PluginSqlGenerationRepository {
     void deleteByAccountPluginId(Long accountPluginId);
 
     /**
-     * Finds the active (non-superseded) generation for a source batch.
-     * Used for regeneration to find the generation to supersede.
-     *
-     * @param sourceBatchId the source batch ID
-     * @return Optional containing the active generation if found
-     */
-    Optional<PluginSqlGeneration> findActiveBySourceBatchId(UUID sourceBatchId);
-
-    /**
      * Counts generations for an account-plugin.
      * Used for admin listing to show generation counts.
      *

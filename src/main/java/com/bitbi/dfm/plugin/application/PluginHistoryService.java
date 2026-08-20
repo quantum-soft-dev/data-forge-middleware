@@ -19,9 +19,14 @@ import java.util.stream.Collectors;
 
 /**
  * Service for plugin history management operations.
- * Provides view, clear, and regenerate functionality for SQL generation history.
+ * Provides view, clear, delete and reinit functionality for SQL generation history.
  *
- * <p>Feature 014: Plugin History Management</p>
+ * <p>Feature 014: Plugin History Management. Feature 014's third user story — regenerating one
+ * batch's SQL in place — was retired by issue #190: it never worked end to end (the V11 unique on
+ * {@code source_batch_id} forbids the second row it needed, and since #164 the transaction refusal
+ * fired first), and it could not serve any segment-backed batch. Recovery is
+ * {@code deleteGeneration} + manual generate-SQL, or a reinit for a batch the client has already
+ * fetched.</p>
  */
 @Service
 public class PluginHistoryService {
@@ -59,7 +64,6 @@ public class PluginHistoryService {
     private final BatchRepository batchRepository;
     private final S3SqlFileStorageService s3StorageService;
     private final PluginAuditService auditService;
-    private final SqlGenerationService sqlGenerationService;
     private final PluginDeltaBaselineService pluginDeltaBaselineService;
 
     public PluginHistoryService(
@@ -69,7 +73,6 @@ public class PluginHistoryService {
             BatchRepository batchRepository,
             S3SqlFileStorageService s3StorageService,
             PluginAuditService auditService,
-            SqlGenerationService sqlGenerationService,
             PluginDeltaBaselineService pluginDeltaBaselineService
     ) {
         this.sqlGenerationRepository = sqlGenerationRepository;
@@ -78,7 +81,6 @@ public class PluginHistoryService {
         this.batchRepository = batchRepository;
         this.s3StorageService = s3StorageService;
         this.auditService = auditService;
-        this.sqlGenerationService = sqlGenerationService;
         this.pluginDeltaBaselineService = pluginDeltaBaselineService;
     }
 
@@ -382,47 +384,6 @@ public class PluginHistoryService {
                 batchId,
                 failedKeys
         );
-    }
-
-    // ==================== User Story 3: Regenerate ====================
-
-    /**
-     * Regenerates SQL for a batch.
-     * Marks the original generation as superseded and creates a new one.
-     *
-     * @param pluginId the plugin identifier
-     * @param accountId the account ID
-     * @param generationId the generation ID to regenerate
-     * @return result of the regeneration
-     */
-    @Transactional
-    public RegenerateResultDto regenerateSql(String pluginId, UUID accountId, UUID generationId) {
-        log.info("Regenerating SQL: pluginId={}, accountId={}, generationId={}",
-                pluginId, accountId, generationId);
-
-        AccountPlugin accountPlugin = findAccountPlugin(accountId, pluginId);
-        PluginSqlGeneration original = findGeneration(generationId, accountPlugin.getId());
-
-        // Validate not already superseded
-        if (original.isSuperseded()) {
-            throw new IllegalStateException("Generation is already superseded: " + generationId);
-        }
-
-        // Get the batch ID from the original generation
-        UUID batchId = original.getSourceBatchId();
-
-        // Generate new SQL
-        PluginSqlGeneration newGeneration = sqlGenerationService.regenerateForBatch(
-                batchId, accountPlugin.getId());
-
-        // Mark original as superseded
-        original.markAsSuperseded(newGeneration.getId());
-        sqlGenerationRepository.save(original);
-
-        log.info("Regeneration completed: original={}, new={}",
-                generationId, newGeneration.getId());
-
-        return RegenerateResultDto.fromEntity(original.getId(), newGeneration);
     }
 
     // ==================== User Story: Delete Single Generation ====================

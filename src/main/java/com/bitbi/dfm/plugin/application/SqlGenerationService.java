@@ -383,11 +383,10 @@ public class SqlGenerationService {
      *
      * <p>It <em>throws</em> rather than returning "no changes" (issue #181): a null result is the
      * answer for an empty diff, and no caller could tell the two apart — the delta-SQL queue
-     * marked the segment processed and dropped the batch's SQL for good, while a regeneration
-     * wrote an empty artifact over a good one and its caller then superseded the original.
-     * Throwing puts the refusal on the failure path every caller already handles: the segment
-     * stays pending for the sweep, the regeneration never reaches {@code markAsSuperseded}, and
-     * the audit entry names the batch.</p>
+     * marked the segment processed and dropped the batch's SQL for good (and the regeneration
+     * path, retired by #190, wrote an empty artifact over a good one). Throwing puts the refusal
+     * on the failure path every caller already handles: the segment stays pending for the sweep,
+     * and the audit entry names the batch.</p>
      *
      * <p>The reading is taken once, so the value logged is the value that tripped the check. The
      * numbers stay in this log line and deliberately not in the exception message, which reaches
@@ -522,154 +521,6 @@ public class SqlGenerationService {
     }
 
     /**
-     * Regenerates SQL for a batch, creating a new generation record.
-     * Used when admin wants to re-run SQL generation for a specific batch.
-     * <p>
-     * Unlike {@link #generateSqlForBatch}, this method:
-     * <ul>
-     *   <li>Does not check for existing generation (allows regeneration)</li>
-     *   <li>Returns the new generation (caller handles marking original as superseded)</li>
-     * </ul>
-     * </p>
-     * <p>
-     * Note: CDC batch regeneration is not yet supported.
-     * </p>
-     *
-     * @param batchId The batch ID to regenerate SQL for
-     * @param accountPluginId The ID of the active account plugin
-     * @return The new generation record
-     * @throws IllegalArgumentException if batch not found or has no processable files
-     * @throws SqlGenerationException if generation fails
-     */
-    public PluginSqlGeneration regenerateForBatch(UUID batchId, Long accountPluginId) {
-        refuseIfTransactionActive();
-        acquireSemaphore(batchId);
-        try {
-            return doRegenerateForBatch(batchId, accountPluginId);
-        } finally {
-            sqlGenerationSemaphore.release();
-        }
-    }
-
-    private PluginSqlGeneration doRegenerateForBatch(UUID batchId, Long accountPluginId) {
-        Timer.Sample timer = Timer.start(meterRegistry);
-        String s3Key = null;
-        SqlGenerationPersistence.BatchData batchData = null;
-        long startTimeMs = System.currentTimeMillis();
-
-        try {
-            // Load batch data (without checking for existing generation)
-            batchData = persistence.loadBatchDataForRegeneration(batchId);
-            if (batchData == null) {
-                throw new IllegalArgumentException("Cannot regenerate: no processable files in batch " + batchId);
-            }
-
-            MDC.put("batchId", batchId.toString());
-            MDC.put("siteId", batchData.batch().getSiteId().toString());
-            MDC.put("accountId", batchData.batch().getAccountId().toString());
-
-            refuseUnderMemoryPressure(batchId);
-
-            log.info("Starting SQL regeneration for batch: batchId={}", batchId);
-
-            // Audit: Log regeneration started
-            pluginAuditService.logSqlRegenerationStarted(
-                    PLUGIN_ID,
-                    batchData.batch().getAccountId(),
-                    batchId,
-                    null  // Original generation ID is tracked by caller
-            );
-
-            // Generate SQL content
-            SqlGenerationResult result = generateSqlContent(batchData);
-            if (result == null) {
-                log.info("No changes detected during regeneration, creating empty generation record");
-                // For regeneration, we still create a record even if no changes
-                result = new SqlGenerationResult("-- No changes detected\n",
-                        new SqlGenerationStats(0, 0, 0, 0));
-            }
-
-            // Store SQL file in S3
-            s3Key = s3SqlFileStorageService.storeSqlFile(
-                    batchData.batch().getAccountId(),
-                    batchData.site().getId(),
-                    result.sqlContent()
-            );
-            long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
-
-            // Save generation record
-            long durationMs = timer.stop(meterRegistry.timer("sql.regeneration.duration"));
-            PluginSqlGeneration generation = persistence.saveGenerationRecord(
-                    accountPluginId,
-                    batchData,
-                    s3Key,
-                    fileSize,
-                    result.stats(),
-                    durationMs
-            );
-
-            log.info("SQL regeneration completed: batchId={}, statements={}, duration={}ms",
-                    batchId, result.stats().total(), durationMs / 1_000_000);
-
-            // Audit: Log regeneration completed
-            pluginAuditService.logSqlRegenerationCompleted(
-                    PLUGIN_ID,
-                    batchData.batch().getAccountId(),
-                    batchId,
-                    null,  // originalGenerationId - tracked by caller
-                    generation.getId(),
-                    result.stats(),
-                    durationMs / 1_000_000
-            );
-
-            return generation;
-
-        } catch (IOException e) {
-            log.error("SQL regeneration failed for batch (I/O error): batchId={}", batchId, e);
-            meterRegistry.counter("sql.regeneration.errors").increment();
-            cleanupOrphanedS3File(s3Key);
-
-            if (batchData != null) {
-                long durationMs = System.currentTimeMillis() - startTimeMs;
-                pluginAuditService.logSqlRegenerationFailed(
-                        PLUGIN_ID,
-                        batchData.batch().getAccountId(),
-                        batchId,
-                        null,
-                        "I/O error: " + e.getMessage(),
-                        durationMs
-                );
-            }
-
-            throw new SqlGenerationException("Failed to regenerate SQL for batch", e);
-        } catch (RuntimeException e) {
-            if (!(e instanceof MemoryPressureAbortedException)) {
-                // See the generation path: self-repairing, already logged and counted on its own
-                // meter. It still audits, below.
-                log.error("SQL regeneration failed for batch: batchId={}", batchId, e);
-                meterRegistry.counter("sql.regeneration.errors").increment();
-            }
-            cleanupOrphanedS3File(s3Key);
-
-            if (batchData != null) {
-                long durationMs = System.currentTimeMillis() - startTimeMs;
-                pluginAuditService.logSqlRegenerationFailed(
-                        PLUGIN_ID,
-                        batchData.batch().getAccountId(),
-                        batchId,
-                        null,
-                        e.getMessage(),
-                        durationMs
-                );
-            }
-
-            throw e;
-        } finally {
-            MDC.clear();
-        }
-    }
-
-    /**
      * Persist the generation, or adopt the row another worker already wrote for this batch.
      * The unique on {@code source_batch_id} is the durable claim now that the queue no longer
      * holds {@code SKIP LOCKED} across S3 (issue #164).
@@ -750,10 +601,10 @@ public class SqlGenerationService {
      * unlike the deterministic Parquet size ceilings, whose refusal repeats for ever.</p>
      *
      * <p>A subclass of {@link SqlGenerationException} so it lands on the failure paths that
-     * already exist: a {@code SQL_GENERATION_FAILED} (or {@code SQL_REGENERATION_FAILED}) audit
-     * entry naming the batch, and a 500 from the two manual generation endpoints rather than a 200
-     * reporting "no changes detected". It is kept off {@code sql.generation.errors} /
-     * {@code sql.regeneration.errors} — it has a counter of its own and it repairs itself.</p>
+     * already exist: a {@code SQL_GENERATION_FAILED} audit entry naming the batch, and a 500 from
+     * the two manual generation endpoints rather than a 200 reporting "no changes detected". It is
+     * kept off {@code sql.generation.errors} — it has a counter of its own and it repairs
+     * itself.</p>
      *
      * <p>The message is written for the reader it reaches: the owner endpoint copies it into a 500
      * body and the audit entry into an account-visible {@code errorMessage}, so it names neither
@@ -768,8 +619,7 @@ public class SqlGenerationService {
          */
         public MemoryPressureAbortedException(UUID batchId) {
             // No promise of a retry: it is true for a segment claimed by the delta-SQL queue and
-            // false for a manual generation or regeneration, and this type cannot tell which
-            // caller raised it.
+            // false for a manual generation, and this type cannot tell which caller raised it.
             super("Generating SQL for batch " + batchId + " was refused because the server is under "
                     + "memory pressure. No SQL was produced for this batch and its records are intact.");
         }

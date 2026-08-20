@@ -511,50 +511,6 @@ public class PluginAdminController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * Regenerates SQL for a specific generation.
-     */
-    @PostMapping("/{pluginId}/accounts/{accountId}/generations/{generationId}/regenerate")
-    @Operation(
-            summary = "Regenerate SQL for a batch",
-            description = "Triggers regeneration of SQL for the batch. Original is marked as superseded."
-    )
-    @ApiResponses({
-            @ApiResponse(
-                    responseCode = "200",
-                    description = "Regeneration completed successfully",
-                    content = @Content(schema = @Schema(implementation = RegenerateResultDto.class))
-            ),
-            @ApiResponse(responseCode = "400", description = "Source CSV files not available"),
-            @ApiResponse(responseCode = "401", description = "Not authenticated"),
-            @ApiResponse(responseCode = "403", description = "Not authorized"),
-            @ApiResponse(responseCode = "404", description = "Generation not found"),
-            @ApiResponse(responseCode = "409", description = "Generation already superseded")
-    })
-    public ResponseEntity<?> regenerateSql(
-            @PathVariable String pluginId,
-            @PathVariable UUID accountId,
-            @PathVariable UUID generationId) {
-
-        log.debug("Admin request: regenerate SQL plugin={}, account={}, generation={}",
-                pluginId, accountId, generationId);
-
-        try {
-            RegenerateResultDto result = pluginHistoryService.regenerateSql(pluginId, accountId, generationId);
-
-            log.info("SQL regenerated: plugin={}, account={}, original={}, new={}",
-                    pluginId, accountId, generationId, result.newGenerationId());
-
-            return ResponseEntity.ok(result);
-        } catch (IllegalStateException e) {
-            return ResponseEntity.status(409)
-                    .body(java.util.Map.of(
-                            "error", "CONFLICT",
-                            "message", e.getMessage()
-                    ));
-        }
-    }
-
     // ==================== Manual SQL Generation (Admin Tool) ====================
 
     /**
@@ -815,8 +771,13 @@ public class PluginAdminController {
 
                     Use this when:
                     - SQL was incorrectly generated
-                    - Need to regenerate SQL from scratch for a batch
+                    - Regenerating a batch's SQL from scratch: delete, then POST generate-sql
                     - Cleaning up old generation records
+
+                    **Delete + generate re-delivers to lagging cursors only.** The new row gets a
+                    new created_at, so a /sql-changes client whose `since` cursor already passed
+                    the batch receives its SQL a second time — and the generated SQL is not
+                    idempotent. For a batch the client has already fetched, use reinit instead.
 
                     **Requires confirmation:** Set confirm=true to proceed with deletion.
                     """

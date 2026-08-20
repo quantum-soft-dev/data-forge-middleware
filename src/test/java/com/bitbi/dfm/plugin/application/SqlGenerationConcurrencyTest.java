@@ -534,56 +534,6 @@ class SqlGenerationConcurrencyTest {
     }
 
     @Nested
-    @DisplayName("regenerateForBatch Concurrency")
-    class RegenerateForBatchConcurrency {
-
-        @Test
-        @DisplayName("should also protect regenerateForBatch with semaphore")
-        void shouldProtectRegenerateForBatchWithSemaphore() throws Exception {
-            // Long timeout: this test asserts that regenerateForBatch queues on the
-            // same semaphore, not that a 1s clock expires (issue #119).
-            SqlGenerationService service = createService(1, 120);
-
-            CountDownLatch holdPermit = new CountDownLatch(1);
-            CountDownLatch firstHoldsPermit = new CountDownLatch(1);
-
-            UUID batchId1 = UUID.randomUUID();
-            UUID batchId2 = UUID.randomUUID();
-            Long pluginId1 = 1L;
-            Long pluginId2 = 2L;
-
-            // Block at the first statement after acquireSemaphore so the permit is
-            // held without depending on S3 / CSV work ever running.
-            when(accountPluginRepository.findById(pluginId1)).thenAnswer(invocation -> {
-                firstHoldsPermit.countDown();
-                if (!holdPermit.await(10, TimeUnit.SECONDS)) {
-                    throw new IllegalStateException("first holder was not released");
-                }
-                return Optional.of(mock(AccountPlugin.class));
-            });
-
-            ExecutorService executor = Executors.newFixedThreadPool(2);
-            try {
-                Future<?> first = executor.submit(() -> service.generateSqlForBatch(batchId1, pluginId1));
-                assertThat(firstHoldsPermit.await(5, TimeUnit.SECONDS))
-                        .as("first generateSqlForBatch should hold the semaphore").isTrue();
-
-                Future<?> regenerate = executor.submit(() -> service.regenerateForBatch(batchId2, pluginId2));
-                awaitSemaphoreQueueSize(1);
-
-                assertThat(regenerate.isDone())
-                        .as("regenerateForBatch should still be waiting on the semaphore").isFalse();
-
-                holdPermit.countDown();
-                first.get(5, TimeUnit.SECONDS);
-            } finally {
-                holdPermit.countDown();
-                executor.shutdownNow();
-            }
-        }
-    }
-
-    @Nested
     @DisplayName("Semaphore Metrics")
     class SemaphoreMetrics {
 

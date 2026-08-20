@@ -472,16 +472,5 @@ class SqlGenerationServiceTest {
             assertThat(result).isEmpty();
             verify(deltaStrategy, never()).generate(any(), any(), any(), any(), any());
         }
-
-        @Test
-        @DisplayName("should reject regeneration for segment-backed batches")
-        void shouldRejectRegenerateForSegmentBackedBatch() {
-            org.assertj.core.api.Assertions.assertThatThrownBy(
-                            () -> deltaService.regenerateForBatch(batchId, accountPluginId))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("segment-backed");
-            verify(changelogSegmentRepository).existsByBatchId(batchId);
-            verify(changelogSegmentRepository, never()).findByBatchId(batchId);
-        }
     }
 }

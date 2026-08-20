@@ -39,7 +39,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>GET /api/v1/admin/plugins/{pluginId}/accounts/{accountId}/generations/{id}/download - Download SQL file</li>
  *   <li>GET /api/v1/admin/plugins/{pluginId}/accounts/{accountId}/history/summary - Get clear summary</li>
  *   <li>DELETE /api/v1/admin/plugins/{pluginId}/accounts/{accountId}/history - Clear history</li>
- *   <li>POST /api/v1/admin/plugins/{pluginId}/accounts/{accountId}/generations/{id}/regenerate - Regenerate SQL</li>
  * </ul>
  *
  * <p>Requires ROLE_ADMIN for all operations.</p>
@@ -306,54 +305,4 @@ class PluginHistoryAdminControllerTest extends BaseIntegrationTest {
         }
     }
 
-    // ==================== User Story 3: Regenerate ====================
-
-    @Nested
-    @DisplayName("POST /generations/{id}/regenerate - Regenerate SQL")
-    class RegenerateSql {
-
-        @Test
-        @DisplayName("T044: Should return 200 with regenerate result")
-        void shouldReturn200WithRegenerateResult() throws Exception {
-            // Given
-            UUID newGenerationId = UUID.randomUUID();
-            RegenerateResultDto dto = new RegenerateResultDto(
-                    TEST_GENERATION_ID,
-                    newGenerationId,
-                    155,
-                    105,
-                    30,
-                    20,
-                    234L,
-                    LocalDateTime.now()
-            );
-
-            when(pluginHistoryService.regenerateSql(eq(PLUGIN_ID), eq(TEST_ACCOUNT_ID), eq(TEST_GENERATION_ID)))
-                    .thenReturn(dto);
-
-            // When / Then
-            mockMvc.perform(post(BASE_URL + "/generations/{generationId}/regenerate", PLUGIN_ID, TEST_ACCOUNT_ID, TEST_GENERATION_ID)
-                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
-                            .contentType(MediaType.APPLICATION_JSON))
-                    .andDo(print())
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.originalGenerationId").value(TEST_GENERATION_ID.toString()))
-                    .andExpect(jsonPath("$.newGenerationId").value(newGenerationId.toString()))
-                    .andExpect(jsonPath("$.statementCount").value(155));
-        }
-
-        @Test
-        @DisplayName("Should return 409 when already superseded")
-        void shouldReturn409WhenAlreadySuperseded() throws Exception {
-            // Given
-            when(pluginHistoryService.regenerateSql(any(), any(), any()))
-                    .thenThrow(new IllegalStateException("Generation is already superseded"));
-
-            // When / Then
-            mockMvc.perform(post(BASE_URL + "/generations/{generationId}/regenerate", PLUGIN_ID, TEST_ACCOUNT_ID, TEST_GENERATION_ID)
-                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
-                            .contentType(MediaType.APPLICATION_JSON))
-                    .andExpect(status().isConflict());
-        }
-    }
 }

@@ -800,44 +800,6 @@ public class AccountPluginsController {
     }
 
     /**
-     * Regenerates SQL for a generation.
-     */
-    @PostMapping("/{pluginId}/generations/{generationId}/regenerate")
-    @Operation(
-        summary = "Regenerate SQL",
-        description = "Regenerates SQL for a batch. Original generation is marked as superseded."
-    )
-    @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Regeneration completed"),
-        @ApiResponse(responseCode = "401", description = "Not authenticated"),
-        @ApiResponse(responseCode = "404", description = "Generation not found"),
-        @ApiResponse(responseCode = "409", description = "Generation already superseded")
-    })
-    public ResponseEntity<?> regenerateSql(
-            @PathVariable String pluginId,
-            @PathVariable UUID generationId) {
-
-        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
-        if (accountIdOpt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-
-        UUID accountId = accountIdOpt.get();
-        log.info("Regenerate SQL requested: plugin={}, account={}, generation={}", pluginId, accountId, generationId);
-
-        try {
-            RegenerateResultDto result = pluginHistoryService.regenerateSql(pluginId, accountId, generationId);
-            log.info("SQL regenerated: original={}, new={}", generationId, result.newGenerationId());
-            return ResponseEntity.ok(result);
-        } catch (IllegalStateException e) {
-            return ResponseEntity.status(409)
-                    .body(java.util.Map.of("error", "CONFLICT", "message", e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
-        }
-    }
-
-    /**
      * Deletes a SQL generation.
      */
     @DeleteMapping("/{pluginId}/generations/{generationId}")
