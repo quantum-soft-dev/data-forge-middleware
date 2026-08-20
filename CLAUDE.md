@@ -511,6 +511,35 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
+  identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
+  by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings
+  computed an **unsigned** form and then tested NaN against the **signed** one, so the two signed
+  spellings fell through every non-finite branch. The cost was not the fall-through but where it
+  landed: `isNonFiniteDecimal("-NaN")` was false, `BigDecimal` cannot parse the token, so
+  `isMalformedDecimal` was **true** and the cell was counted
+  `delta.parquet.unrepresentable-decimals{reason=malformed}` — a series `ValueMapper`'s own Javadoc
+  defines as "a client defect somebody has to fix", where the whole point of splitting it from
+  `non_finite` (#215, review round 1) was that the two want opposite responses from an operator. A
+  signed NaN therefore paged someone to chase a bug that does not exist, which is the outcome the
+  split was added to prevent. The second consequence is `ChangelogFold.normalizeDecimal`, which
+  canonicalises `nan`/`NaN` to `"NaN"` so one source row does not fold into two identities — its own
+  comment says so — and returned `trimmed` for the signed spelling, defeating that. PostgreSQL emits
+  `NaN` unsigned, so a faithful `numeric` round trip never reaches this; it is reachable because the
+  token is whatever the client chose to send, which is the premise `isNonFiniteToken`'s own comment
+  states and the reason it strips the sign for infinity in the first place. The fix is one word in
+  each of two places — the NaN spelling is tested against `unsigned`, and PostgreSQL has a single
+  NaN whose sign carries no meaning, so `-NaN` canonicalises to `"NaN"` rather than to `"-NaN"`.
+  **Deliberately not widened**: this is token classification only, not the destination-awareness
+  #240 defers with three rounds of history as its warning — the same coercion path where each round's
+  fix opened a hole in the next place. Both tests were red first
+  (`ValueMapperTest.nonFiniteDecimalDegradesToNullInsteadOfThrowing` and
+  `aSignedNanIsNonFiniteRatherThanMalformed`, `ChangelogFoldTest.nonFiniteKeySpellingsFoldToOneIdentity`),
+  and the metric assertion is the one that pins the ticket's actual cost rather than the predicate.
+  No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend
+  change; `delta.parquet.unrepresentable-decimals` keeps both tag values and simply stops
+  misclassifying between them. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
+  hold").
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three

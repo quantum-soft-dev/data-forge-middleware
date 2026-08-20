@@ -259,7 +259,9 @@ public final class ChangelogFold {
             }
             String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
                     ? trimmed.substring(1) : trimmed;
-            if (trimmed.equalsIgnoreCase("nan")) {
+            if (unsigned.equalsIgnoreCase("nan")) {
+                // PostgreSQL has a single NaN and the sign carries no meaning, so "+NaN" and "-NaN"
+                // canonicalise to the same identity as "NaN" (issue #238).
                 return "NaN";
             }
             if (unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf")) {

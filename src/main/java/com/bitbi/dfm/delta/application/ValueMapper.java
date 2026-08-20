@@ -73,18 +73,19 @@ public final class ValueMapper {
     }
 
     /**
-     * PostgreSQL accepts these case-insensitively and with an optional sign on infinity, and emits
-     * them as {@code NaN} / {@code Infinity} / {@code -Infinity}. Both spellings are matched, since
-     * the token reaching us is whatever the client chose to send.
+     * PostgreSQL accepts these case-insensitively and with an optional sign, and emits them as
+     * {@code NaN} / {@code Infinity} / {@code -Infinity}. Every spelling is matched, since the token
+     * reaching us is whatever the client chose to send — the sign is stripped before the NaN test
+     * too, because {@code -NaN} used to fall through to {@link #isMalformedDecimal(Value)} and be
+     * counted as a client defect that does not exist (issue #238).
      */
     private static boolean isNonFiniteToken(String token) {
         String trimmed = token.trim();
-        if (trimmed.equalsIgnoreCase("nan")) {
-            return true;
-        }
         String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
                 ? trimmed.substring(1) : trimmed;
-        return unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf");
+        return unsigned.equalsIgnoreCase("nan")
+                || unsigned.equalsIgnoreCase("infinity")
+                || unsigned.equalsIgnoreCase("inf");
     }
 
     /**
