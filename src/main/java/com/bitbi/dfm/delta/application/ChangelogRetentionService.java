@@ -159,10 +159,13 @@ public class ChangelogRetentionService {
                         // between a row's commit and the end of the loop strands its object, and
                         // the sweep that would reclaim it ships dry-run, so the exposure is bounded
                         // at one chunk. No extra round trip: deleteObjects chunks at 1000 too.
-                        // A copy, because the buffer is cleared on the next line: deleteObjects
-                        // builds subList views over what it is handed (review round 6).
-                        deletePrunedObjects(siteId, List.copyOf(pendingObjectDeletes));
+                        // Taken out of the buffer before the delete, not after (review round 8):
+                        // an Error escaping the flush would otherwise leave the keys in the buffer
+                        // for the finally to delete a second time. The copy is needed regardless —
+                        // deleteObjects builds subList views over what it is handed.
+                        List<String> chunk = List.copyOf(pendingObjectDeletes);
                         pendingObjectDeletes.clear();
+                        deletePrunedObjects(siteId, chunk);
                     }
                     continue;
                 }
@@ -188,8 +191,13 @@ public class ChangelogRetentionService {
                 swallowing(() -> deletePrunedObjects(siteId, pendingObjectDeletes));
                 swallowing(() -> reportPass(siteId, checkpointSeq, prunedRowsSoFar, heldBack));
             } else {
-                deletePrunedObjects(siteId, pendingObjectDeletes);
-                reportPass(siteId, checkpointSeq, prunedRows, heldBack);
+                // Symmetric protection for the one class neither method absorbs: a LinkageError
+                // from the SDK or Micrometer during teardown would escape prune past
+                // CheckpointScheduler's catch (RuntimeException) and end the remaining sites of
+                // the tick (review round 8). Here there is no in-flight exception to protect, so
+                // it is logged rather than swallowed.
+                withoutEndingTheTick(siteId, () -> deletePrunedObjects(siteId, pendingObjectDeletes));
+                withoutEndingTheTick(siteId, () -> reportPass(siteId, checkpointSeq, prunedRowsSoFar, heldBack));
             }
         }
 
@@ -313,6 +321,28 @@ public class ChangelogRetentionService {
             // down under it, which would both replace the loop's exception and escape
             // CheckpointScheduler's catch (RuntimeException) — ending the whole nightly tick
             // instead of costing this one site.
+        }
+    }
+
+    /**
+     * Run a {@code finally} step on the successful path: it may fail, but it may not end the tick
+     * (review round 8).
+     *
+     * @param siteId the site being pruned, for the log line
+     * @param step   the reporting or cleanup step to attempt
+     */
+    private static void withoutEndingTheTick(UUID siteId, Runnable step) {
+        try {
+            step.run();
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (RuntimeException e) {
+            // Both steps already handle their own RuntimeExceptions; this is the belt.
+            log.warn("Finishing the retention pass for site {} failed after the pruning itself "
+                    + "succeeded", siteId, e);
+        } catch (Throwable e) {
+            log.warn("Finishing the retention pass for site {} failed after the pruning itself "
+                    + "succeeded", siteId, e);
         }
     }
 

@@ -679,7 +679,11 @@ pages/{feature}/            # Route pages
   over what it is given. A last round tightened the swallow to `Throwable` (bar `VirtualMachineError`):
   during context teardown the finally path can raise a `NoClassDefFoundError` from an SDK being torn
   down under it, which would both replace the loop's exception and escape `CheckpointScheduler`'s
-  `catch (RuntimeException)` — ending the whole nightly tick instead of costing one site. Tests were written first and are
+  `catch (RuntimeException)` — ending the whole nightly tick instead of costing one site. The **successful** path got the
+  symmetric treatment a round later — there is no in-flight exception to protect there, so the same
+  class is logged rather than swallowed — and the mid-loop flush now takes its chunk out of the
+  buffer before deleting it, so an `Error` escaping the flush cannot leave those keys for the
+  `finally` to delete a second time. Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own
