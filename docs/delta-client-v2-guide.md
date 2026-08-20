@@ -2045,6 +2045,16 @@ describe work that is now durable, so an aborted pass says what it did instead o
 "nothing happened" behind `CheckpointScheduler`'s per-site failure line — and
 `delta.retention.segments.held-back` does not read zero for a pass that did observe a backlog.
 
+**What the pass buys and what it pays.** The hold drops — that is the term the pool's floor
+arithmetic (#161) is written in — but the *number* of transactions rises: one `begin`/`commit` and
+one pool acquisition per pruned segment, where the pass used to take one of each. For a site whose
+below-checkpoint set is large (the first prune after a long checkpoint outage; the set is unbounded
+since #212), the nightly tick therefore spends longer on that site in wall-clock terms, and each
+acquisition is independently subject to `spring.datasource.hikari.connection-timeout` (30 s) under
+saturation. That is the deliberate trade of this shape everywhere it is used here (#147, #164): a
+connection released between statements is available to everything else in the pod, where one held
+across a network round trip is not.
+
 ### No S3 inside the ingestion commit (issue #147)
 
 The commit of a session — the tail segment's row, the watermark advance, the batch completion, and

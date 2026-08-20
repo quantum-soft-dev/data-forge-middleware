@@ -629,7 +629,20 @@ pages/{feature}/            # Route pages
   `@Transactional` included), so it is gone and the method is named for what it does pin, the
   row-before-object order; and the mid-pass test left `deleteObjects` unstubbed, so its `verify`
   passed through an NPE swallowed by the delete's own catch — the success branch it documents was
-  never taken. Tests were written first and are
+  never taken.
+  **Round 3** closed the same masking hazard one statement further and named the cost. The
+  reporting tail was unguarded inside the `finally`, so a meter or a log appender failing during a
+  rollout would have replaced the exception the loop was unwinding with — and `CheckpointScheduler`
+  logs the message alone, so the lock timeout that actually ended the pass would have been gone;
+  `reportPass` swallows its own failure deliberately, there being nowhere left to report it. The
+  integration spy's *stub registration* was still racing (the round-1 fix guarded the result list
+  only), which is the `UnfinishedStubbingException` flake class of #119/#159/#226 wearing this
+  ticket's name: it is installed in `@BeforeEach`, records unconditionally and lets the assertion
+  filter. And the cost is now written down beside the benefit rather than only the benefit: the
+  hold drops, the *number* of transactions rises to one per pruned segment, so a large-backlog
+  site's nightly visit takes longer in wall-clock terms with each acquisition independently subject
+  to the 30 s `connection-timeout` — the deliberate trade of this shape everywhere it is used
+  (#147, #164). Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own

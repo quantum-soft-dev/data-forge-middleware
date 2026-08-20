@@ -155,18 +155,7 @@ public class ChangelogRetentionService {
             // make an aborted pass read as "nothing happened" — and the #212 stuck-backlog alarm
             // would read zero for a pass that did observe held-back segments.
             deletePrunedObjects(siteId, prunedKeys);
-            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
-            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
-            if (heldBack.segments > 0) {
-                log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
-                                + "{} awaiting plugin SQL, {} awaiting egress; retention does not "
-                                + "delete unprocessed queue work (issue #212)",
-                        heldBack.segments, siteId, heldBack.pendingPluginSql, heldBack.pendingEgress);
-            }
-            if (!prunedKeys.isEmpty()) {
-                log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
-                        prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
-            }
+            reportPass(siteId, checkpointSeq, prunedKeys.size(), heldBack);
         }
 
         return prunedKeys.size();
@@ -203,6 +192,35 @@ public class ChangelogRetentionService {
                             + "failed mid-way — the undeleted objects are unreferenced and the "
                             + "S3 orphan sweep reclaims them (issue #158)",
                     prunedKeys.size(), siteId, e);
+        }
+    }
+
+    /**
+     * Report what the pass did — the #212 counters and the two lines (issue #234, review round 3).
+     *
+     * <p>Called from the {@code finally}, so like the object delete it must not replace an
+     * exception the loop is already unwinding with: a meter or a log appender failing during a
+     * rollout would otherwise reach {@code CheckpointScheduler}'s catch, which logs the message
+     * alone, and the lock timeout that actually ended the pass would be gone. There is nowhere left
+     * to report a failure of the reporting itself, so it is swallowed deliberately rather than
+     * logged from inside its own broken path.</p>
+     */
+    private void reportPass(UUID siteId, long checkpointSeq, int prunedCount, HeldBackTally heldBack) {
+        try {
+            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
+            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
+            if (heldBack.segments > 0) {
+                log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
+                                + "{} awaiting plugin SQL, {} awaiting egress; retention does not "
+                                + "delete unprocessed queue work (issue #212)",
+                        heldBack.segments, siteId, heldBack.pendingPluginSql, heldBack.pendingEgress);
+            }
+            if (prunedCount > 0) {
+                log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
+                        prunedCount, checkpointSeq, siteId, auditWindowSegments);
+            }
+        } catch (RuntimeException ignored) {
+            // Deliberately swallowed: see above.
         }
     }
 

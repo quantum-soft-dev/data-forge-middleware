@@ -13,6 +13,7 @@ import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
@@ -73,6 +74,29 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
 
     @MockitoSpyBean
     private S3FileStorageService objectDeleter;
+
+    /** Every observed {@code deleteObjects}: was a transaction open, and which keys did it carry. */
+    private record ObjectDelete(boolean insideTransaction, List<String> keys) {
+    }
+
+    private final List<ObjectDelete> objectDeletes = Collections.synchronizedList(new ArrayList<>());
+
+    /**
+     * Installed before the test body runs (issue #234, review round 3): the spy is a context-wide
+     * bean, and stubbing it while a background caller — batch retention's cron pass, a wipe in
+     * flight — is invoking it is the {@code UnfinishedStubbingException} flake class this suite has
+     * already paid for in #119 / #159 / #226. Recording is unconditional; the assertion filters.
+     */
+    @BeforeEach
+    void recordTransactionStateAtObjectDelete() {
+        objectDeletes.clear();
+        doAnswer(invocation -> {
+            List<String> keys = List.copyOf(invocation.getArgument(0));
+            objectDeletes.add(new ObjectDelete(
+                    TransactionSynchronizationManager.isActualTransactionActive(), keys));
+            return invocation.callRealMethod();
+        }).when(objectDeleter).deleteObjects(anyList());
+    }
 
     @Test
     void prunesBelowCheckpointSegmentsAndKeepsReconstructionCorrect() {
@@ -197,21 +221,17 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         String prunedKey = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow().getS3Key();
         markSegmentsProcessed(SITE);
 
-        // Scoped to the deletion of this test's own key, and thread-safe: the spy is a
-        // context-wide bean, so batch retention's cron pass or a wipe left in flight would
-        // otherwise add an entry from another thread and fail this test with a message blaming
-        // issue #234 (review round 1).
-        List<Boolean> insideTransaction = Collections.synchronizedList(new ArrayList<>());
-        doAnswer(invocation -> {
-            List<?> keys = invocation.getArgument(0);
-            if (keys.contains(prunedKey)) {
-                insideTransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
-            }
-            return invocation.callRealMethod();
-        }).when(objectDeleter).deleteObjects(anyList());
-
         assertEquals(1, retentionService.prune(SITE));
 
+        // Scoped to the deletion of this test's own key: a concurrent caller's round trip in the
+        // same context is not this assertion's business (review round 1).
+        List<Boolean> insideTransaction;
+        synchronized (objectDeletes) {
+            insideTransaction = objectDeletes.stream()
+                    .filter(delete -> delete.keys().contains(prunedKey))
+                    .map(ObjectDelete::insideTransaction)
+                    .toList();
+        }
         assertEquals(List.of(false), insideTransaction,
                 "the pruned object must be deleted exactly once, with no transaction open (issue #234)");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
