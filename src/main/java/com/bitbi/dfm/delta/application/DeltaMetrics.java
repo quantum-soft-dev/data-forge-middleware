@@ -330,6 +330,15 @@ public class DeltaMetrics {
      * have spent {@code delta.checkpoint.max-materialize-attempts} —
      * {@code delta.checkpoint.tables.given-up} is where it is visible afterwards.</p>
      *
+     * <p>{@code lossy_refold} has the same bounded sub-case since issue #212: a frame-gone site
+     * whose remaining segments all sit <b>at or below</b> the pointer. Everything they hold is
+     * already inside the lost frame's fold, so no new work will ever change the verdict — and a
+     * held-back pending segment (#212) can keep that state open for ever, where retention used to
+     * empty it into {@code history_gone}. It drains exactly as {@code history_gone} does: one
+     * increment per night while the retryable rows last, then quiet, with the given-up gauge as
+     * the standing signal. Segments <em>above</em> the pointer keep the original contract — live
+     * data, no attempt spent, the alarm never quiets on its own.</p>
+     *
      * <p>{@code fold_too_large} is the fourth, and it is about heap rather than disk or S3 (issue
      * #152): the site's folded state grew past {@code delta.checkpoint.max-fold-bytes}, the ceiling
      * that exists so a site too large to fold is refused instead of taking the whole pod down with

@@ -504,55 +504,84 @@ pages/{feature}/            # Route pages
 
 ## Recent Changes
 - retention-holds-pending-work: Changelog retention no longer deletes a segment whose plugin SQL
-  or egress was never generated — pending work is not prunable, and the hold-back is visible
-  (issue #212, found reviewing #181/PR #209, which it silently bounded). A changelog segment is
-  also the durable entry of two work queues: `plugin_sql_at IS NULL` means the Bit BI delta-SQL
-  queue still owes it, `egress_at IS NULL` the delta-Parquet egress — and both queues retry
-  precisely by leaving the row pending ("a throw leaves the segment pending for the sweep").
-  `ChangelogRetentionService.prune` deleted such a row like any other once the checkpoint subsumed
-  it and `delta.retention.audit-window-segments` (20) younger below-checkpoint segments
-  accumulated, so the batch's SQL was lost permanently, silently, with no audit row marking the
-  moment of loss — on a busy site a short window, and it capped the retry guarantee #181 had just
-  established (the abort left the segment pending *for retention to erase*). **The owner fixed the
-  hybrid of the ticket's first two shapes**: the prune skips a below-checkpoint segment with either
-  marker `NULL`, and the hold-back is counted and logged rather than silent in the other direction.
-  **The predicate cannot pin a segment forever by design elsewhere, verified in code rather than
-  assumed**: every segment is egressed whatever the plugin state (schema-less tables are skipped
-  but the segment is still marked egressed), `DeltaSqlQueueService` stamps `plugin_sql_at` without
-  generating for accounts with no active bit-bi activation and for `FULL_SNAPSHOT` baselines, and
-  provisional parking (033) sets both markers to a sentinel until publication resets them to
-  `NULL`. **The audit window keeps its meaning** — "the most recent N below-checkpoint segments" —
-  held-back segments still count toward it and are retained on top of it, so a pending segment does
-  not shield an older processed one from the window (pinned by
-  `pendingSegmentsStillCountTowardTheAuditWindow`). New counter
-  **`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`**, registered at
-  zero so an alert can predate the first occurrence (the `delta.checkpoint.builds.aborted`
-  treatment), counting only segments the window would actually have pruned — a pending segment
-  inside the window is retained by the window, not the predicate. Read each `reason` series
-  independently ("is this queue stalling retention"): a segment owing both moves both, so the sum
-  over reasons can exceed the held-back segment count (#215's per-consumer honesty). And read it as
-  a **census, not an arrival rate** (#158's `candidates` caveat): the same held-back segment is
-  counted again every pass until its queue drains it. One WARN per site per pass names both counts
-  — the one-line-per-prefix discipline of the other sweeps. **Deliberately no age or count bound on
-  the hold-back**: the main permanent-stall scenario (a mistyped
-  `plugin.sql-generation.heap-threshold-percent` refusing every generation for ever) is closed at
-  source by #185's fail-fast validation, and a deterministic poison batch is already loud through
-  `sql.generation.errors` and the #181 audit entries — if storage pinning ever becomes real, a
-  bound is its own decision with its own ticket. The queue's retry contract
-  (`DeltaSqlQueueService` class Javadoc) states its horizon out loud: unbounded in time, ended only
-  by the segment being processed or an operator deleting it — no longer silently bounded by
-  retention. Tests pin both directions and were **proven by mutation** (the predicate disabled
-  fails four methods of `ChangelogRetentionServiceTest`); the integration test holds a genuinely
-  pending segment through a real prune (row + object survive, counters move as deltas — the #175
-  registry discipline) and prunes the same segment once processed, and the pre-existing retention
-  test marks its segments processed first, since the fixture path leaves both markers `NULL` by
-  construction. `docs/cr-bitbi-delta-sql.md`'s residual risk 4 ("retention could purge a
-  backlogged queue") is struck through as closed, and
-  `docs/020-sql-generation-optimization.md`'s "recoverable has a horizon" paragraph is rewritten —
-  both stated the pre-#212 behaviour as current. No REST, gRPC, proto, DTO, migration (V54 still
-  current, V55 free), configuration-key, S3-key or frontend change; the meter name is new, nothing
-  existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not delete unprocessed
-  work", Metrics).
+  or egress was never generated — pending work is not prunable, and both the hold-back and the one
+  horizon that remains are visible (issue #212, found reviewing #181/PR #209, which it silently
+  bounded). A changelog segment is also the durable entry of two work queues: `plugin_sql_at IS
+  NULL` means the Bit BI delta-SQL queue still owes it, `egress_at IS NULL` the delta-Parquet
+  egress — and both queues retry precisely by leaving the row pending ("a throw leaves the segment
+  pending for the sweep"). `ChangelogRetentionService.prune` deleted such a row like any other once
+  the checkpoint subsumed it and `delta.retention.audit-window-segments` (20) younger
+  below-checkpoint segments accumulated, so the batch's SQL was lost permanently, silently, with no
+  audit row marking the moment of loss — capping the retry guarantee #181 had just established.
+  **The owner fixed the hybrid of the ticket's first two shapes**: the prune skips a
+  below-checkpoint segment with either marker `NULL`
+  (`ChangelogSegment.isPendingPluginSql()`/`isPendingEgress()` own the semantics; the queues' SQL
+  and the prune's mirror them), and the hold-back is counted on
+  **`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`** (registered at
+  zero; only segments the window would actually have pruned; a segment owing both moves both
+  series; a census, not an arrival rate — with the blind spot stated: the prune runs only after a
+  successful build, so a site whose build aborts nightly shows zero here while accumulating, and a
+  reinit re-pends the audit window by design, a benign one-pass spike) plus one WARN per site per
+  pass. The audit window keeps its meaning — held-back segments count toward it and are retained on
+  top of it (pinned by `pendingSegmentsStillCountTowardTheAuditWindow`).
+  **Review round 1 (ten lenses) then reshaped half of it, and its owner addendum moved the
+  contract.** The addendum: "unbounded in time" was never true — `BatchRetentionService` is a
+  second scheduled deleter of segments (rows and S3, per-site `retentionDays`, default 45 days, no
+  marker check), so it is recognized as **the deliberate outer horizon** of the queues' retry, made
+  observable rather than closed: **`delta.retention.segments.deleted-pending{reason=...}`**
+  (registered at zero — a non-zero rate means work sat in a queue for the whole retention window)
+  plus a WARN per batch; the explicit admin batch delete logs the pending count it destroys
+  (informed override, deliberately off the meter); and every contract surface names the endings —
+  queue drains, operator deletes segment or batch, re-baseline/wipe, batch retention. #185 is
+  written in the **future** tense everywhere ("will be closed at source; still open"), since that
+  fail-fast is the no-bound stance's load-bearing justification and it does not exist yet.
+  **Three correctness findings were the round's core, all fixed in-PR.** (A1) The hold-back broke
+  the contiguity proxy `historyPruned` rested on — prune deleted oldest-first unconditionally, so
+  "head at seq 1" proved a lossless refold was possible; retaining an older pending segment while
+  younger processed neighbours are pruned puts a gap *behind* a retained head (a reinit re-pends
+  interleaved segments out of queue order — the concrete route), and a frame-gone site would have
+  silently refolded the gapped history into a truncated checkpoint and advanced the pointer over
+  the loss: `hasSeqGap` now requires contiguity from seq 1 (overlaps tolerated, only strictly
+  uncovered sequences refuse), mutation-proven. (A2) The prune was check-then-act across
+  statements while `clearPluginSqlBySiteId` re-`NULL`s `plugin_sql_at` site-wide, so a reinit
+  committing between the read and the delete had its freshly-pending row deleted — object first:
+  the row delete is now a **single conditional statement** (`deleteByIdIfProcessed`, the marker
+  predicate travels with the DELETE), the object goes only after the row delete reported success
+  (row-first, so a crash leaves an unreferenced object for the #158 sweep), and a refused delete
+  re-reads and counts the row by what it says now. (A3) The hold-back defeated #149's bounded
+  drain — a frame-gone site with one held-back below-pointer segment kept `segments` non-empty for
+  ever, took `lossy_refold` nightly and spent no attempt: a site whose remaining segments all sit
+  at or below the pointer (everything they hold is already inside the lost frame's fold) now takes
+  the #149 drain under the unchanged `lossy_refold` tag — one attempt per retryable row per
+  scheduled night, re-arm on the forced pass, then a **quiet** visit with
+  `delta.checkpoint.tables.given-up` standing — while segments above the pointer keep the
+  never-quiets contract; mutation-proven both ways.
+  **The efficiency findings all trace to the same fact — the below-checkpoint set is unbounded
+  now**: the prune reads a four-column projection instead of hydrating every entity (JSONB stats
+  included), deletes objects in batched 1000-key `DeleteObjects` round trips instead of one per
+  object (#234 keeps only the transaction-boundary half); the checkpoint build reads **seq
+  coverage** (two longs per segment) and hydrates entities only above the fold's seed, so the idle
+  visit — the nightly steady state of a site pinned to the work list by held-back segments, whose
+  per-tick cost the guide now itemizes — loads no entity at all; and the re-baseline reset
+  discards the old baseline with one projection and one bulk DELETE instead of a row-by-row loop
+  under the `site_sync_state` row lock.
+  **Bucket C stayed out by the follow-ups rule**: #243 (one poison segment stalls the whole global
+  delta-SQL queue, and egress equivalently with no error counter — pre-existing, but #212 changed
+  its ending from "self-heals by losing one batch" to "permanent until an operator acts, bounded
+  by batch retention", so per-segment bounds are now their own decision), #244 (the
+  completed-batch Parquet replay is a third durable consumer of raw segments no retention
+  predicate consults — the guide scopes the hold-back guarantee to the two queue markers and names
+  it), #245 (the two queue markers can clobber each other back to NULL — whole-entity saves, no
+  `@Version` — self-healing before, but #212 builds a durability guarantee on those columns).
+  Tests pin both directions and every review fix (mutation-proven: predicate disabled — 4 red;
+  gap check removed — 1 red; drain branch removed — 2 red); the hold-back integration test's
+  assertion messages re-read the markers so an improbable steal of the global queue head diagnoses
+  itself; fixtures whose subject needs pruning mark their segments through one
+  `BaseIntegrationTest.markSegmentsProcessed` helper. No REST, gRPC, proto, DTO, migration (V54
+  still current, V55 free), configuration-key, S3-key or frontend change; both meter names are
+  new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
+  delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
+  `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
 - followup-declares-its-files: A follow-up ticket states what it will touch, so a collision is read
   rather than inferred (issue #216, filed from the backlog pass that untangled #190/#200). **A
   keyword search finds a duplicate and finds a collision only if somebody runs it**: #200 was a

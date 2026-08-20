@@ -110,12 +110,15 @@ Metrics added: `sql.generation.delta.segments.processed`, `.records.skipped.no_s
    signal).
 3. The queue claim transaction holds a DB connection across S3 I/O — same accepted trade-off as
    parquet egress, capped at `delta-max-concurrent` (2).
-4. ~~If retention ever outpaces a fully-backlogged queue, unprocessed segments could be purged;
-   sweep cadence (60 s) vs retention (days) makes this negligible.~~ Closed by issue #212:
-   `ChangelogRetentionService.prune` holds back any below-checkpoint segment whose
-   `plugin_sql_at` (or `egress_at`) is still `NULL`, counts it on
-   `delta.retention.segments.held-back{reason=...}` and WARNs per site per pass — see
-   `docs/delta-client-v2-guide.md` ("Retention does not delete unprocessed work").
+4. If retention ever outpaces a fully-backlogged queue, unprocessed segments could be purged.
+   Narrowed by issue #212: **changelog** retention now holds a pending below-checkpoint segment
+   back (those the audit window would have pruned are counted on
+   `delta.retention.segments.held-back{reason=...}`, with one WARN per site per pass; a pending
+   segment still inside the window is retained by the window and not counted). The horizon that
+   remains is **batch retention** (per-site `retentionDays`, default 45 days), which deletes a
+   retired batch's segments regardless of markers — deliberately, as the outer bound of the
+   queues' retry — counted on `delta.retention.segments.deleted-pending` and WARNed per batch.
+   See `docs/delta-client-v2-guide.md` ("Retention does not delete unprocessed work").
 
 ## Verification
 
