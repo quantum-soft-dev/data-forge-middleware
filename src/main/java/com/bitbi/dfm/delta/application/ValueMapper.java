@@ -64,8 +64,13 @@ public final class ValueMapper {
      * responses from an operator — nothing to do, nothing to do, and a client sending nonsense —
      * so a counter keyed on this must not conflate them.</p>
      *
+     * <p>The three <em>values</em> are matched through more spellings than PostgreSQL itself emits,
+     * because the token is whatever the client chose to format: any casing, {@code inf} as well as
+     * {@code infinity}, and an optional sign on both — see {@link #isNonFiniteToken(String)}.</p>
+     *
      * @param value the wire value
-     * @return {@code true} for {@code NaN}, {@code Infinity} or {@code -Infinity} in any casing
+     * @return {@code true} for {@code NaN}, {@code Infinity} or {@code -Infinity} in any spelling
+     *         this pipeline recognises, the signed {@code NaN} included (issue #238)
      */
     public static boolean isNonFiniteDecimal(Value value) {
         return value.getVCase() == Value.VCase.DECIMAL_VALUE
