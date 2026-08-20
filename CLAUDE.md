@@ -656,7 +656,21 @@ pages/{feature}/            # Route pages
   prune after an outage can starve the later sites of that tick — a chunked conditional delete
   (`DELETE ... IN (...) ... RETURNING id`) needs a new repository method and native SQL, a wider
   decision than "take the S3 call out of the transaction", and the blast radius belongs with
-  **#193**, which is exactly that theme and now carries the evidence. Tests were written first and are
+  **#193**, which is exactly that theme and now carries the evidence.
+  **Round 5 settled the reporting question that rounds 3 and 4 had pushed back and forth**, and the
+  synthesis is worth keeping because both earlier positions were half right: swallowing silently
+  leaves the #212 alarm half-emitted with no error anywhere (round 4's point), while rethrowing
+  reaches `CheckpointScheduler`'s catch, which logs "Checkpoint build/retention failed" for a site
+  whose checkpoint was built and whose rows were pruned — an operator sent to a healthy site
+  (round 5's). A reporting failure is now logged **as a reporting failure** and the pass returns
+  what it did. The masking route the round-3 comment claimed to have closed was still open in two
+  places, both reached from the `finally`: the `log.debug` in `reportPass`'s catch and the WARN in
+  `deletePrunedObjects`'s, either of which would replace the exception on its way out if the
+  appender were the thrower — while unwinding, both now run through one `swallowing(Runnable)`
+  helper instead. And the object-delete lines counted **this chunk** while reading "Pruned N
+  changelog segment row(s)", so a 2500-row pass whose first chunk reported errors told an operator
+  it had pruned 1000 — misreporting exactly the large backlogs this ticket is about; the wording is
+  chunk-accurate now. Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own

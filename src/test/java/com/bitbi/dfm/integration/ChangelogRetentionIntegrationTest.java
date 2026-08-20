@@ -82,10 +82,14 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
     private final List<ObjectDelete> objectDeletes = Collections.synchronizedList(new ArrayList<>());
 
     /**
-     * Installed before the test body runs (issue #234, review round 3): the spy is a context-wide
-     * bean, and stubbing it while a background caller — batch retention's cron pass, a wipe in
-     * flight — is invoking it is the {@code UnfinishedStubbingException} flake class this suite has
-     * already paid for in #119 / #159 / #226. Recording is unconditional; the assertion filters.
+     * Installed before the test body runs (issue #234, review round 3), and what that does and does
+     * not buy is worth stating precisely (review round 5). It removes the window in which
+     * <em>this</em> test's own work — the persist, the checkpoint build — could invoke the spy
+     * while it is being stubbed. It does <b>not</b> quiesce a background caller of this
+     * context-wide bean (batch retention's cron pass, a wipe in flight); the test profile keeps
+     * those sweeps at an hour (#159 / #167), which is what makes the residual improbable, exactly
+     * as #175 argued for its counter. Recording is unconditional and thread-safe; the assertion
+     * filters by this test's own key, so another caller's round trip is not its business.
      */
     @BeforeEach
     void recordTransactionStateAtObjectDelete() {

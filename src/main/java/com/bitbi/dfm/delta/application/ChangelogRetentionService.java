@@ -164,13 +164,23 @@ public class ChangelogRetentionService {
             }
             unwinding = false;
         } finally {
+            final int prunedRowsSoFar = prunedRows;
             // Everything this pass did is reported from the finally, because everything it did is
             // durable (issue #234, review round 2): a throw mid-loop leaves rows deleted and their
             // objects deleted with them, so leaving the counters and the lines past the throw would
             // make an aborted pass read as "nothing happened" — and the #212 stuck-backlog alarm
             // would read zero for a pass that did observe held-back segments.
-            deletePrunedObjects(siteId, pendingObjectDeletes);
-            reportPass(siteId, checkpointSeq, prunedRows, heldBack, unwinding);
+            if (unwinding) {
+                // Nothing that runs here may replace the exception on its way out — the logging
+                // inside these two methods included, which is the one masking route the previous
+                // round's comment claimed to have closed and had not (review round 5). There is
+                // nowhere left to report a failure of the reporting itself.
+                swallowing(() -> deletePrunedObjects(siteId, pendingObjectDeletes));
+                swallowing(() -> reportPass(siteId, checkpointSeq, prunedRowsSoFar, heldBack));
+            } else {
+                deletePrunedObjects(siteId, pendingObjectDeletes);
+                reportPass(siteId, checkpointSeq, prunedRows, heldBack);
+            }
         }
 
         return prunedRows;
@@ -187,8 +197,11 @@ public class ChangelogRetentionService {
      * (the gap #158 round 2 documented), which is why the catch here is broader than the summarized
      * errors — and why it must not mask an exception the loop is already unwinding with.</p>
      *
+     * <p>Called once per full 1000-key chunk during the pass and once for the remainder, so its
+     * count is <b>this chunk's</b>, not the pass's — the lines say so (review round 5).</p>
+     *
      * @param siteId     the site being pruned, for the log line
-     * @param prunedKeys keys whose row delete reported success; may be empty
+     * @param prunedKeys this chunk's keys, whose row delete reported success; may be empty
      */
     private void deletePrunedObjects(UUID siteId, List<String> prunedKeys) {
         if (prunedKeys.isEmpty()) {
@@ -197,13 +210,13 @@ public class ChangelogRetentionService {
         try {
             S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
             if (!result.errors().isEmpty()) {
-                log.warn("Pruned {} changelog segment row(s) for site {} but {} object delete(s) "
-                                + "failed — the objects are unreferenced and the S3 orphan sweep "
-                                + "reclaims them (issue #158)",
+                log.warn("Deleting the objects of {} pruned changelog segment row(s) for site {} "
+                                + "reported {} failure(s) — those objects are unreferenced and the "
+                                + "S3 orphan sweep reclaims them (issue #158)",
                         prunedKeys.size(), siteId, result.errors().size());
             }
         } catch (RuntimeException e) {
-            log.warn("Pruned {} changelog segment row(s) for site {} but the object delete "
+            log.warn("Deleting the objects of {} pruned changelog segment row(s) for site {} "
                             + "failed mid-way — the undeleted objects are unreferenced and the "
                             + "S3 orphan sweep reclaims them (issue #158)",
                     prunedKeys.size(), siteId, e);
@@ -213,18 +226,16 @@ public class ChangelogRetentionService {
     /**
      * Report what the pass did — the #212 counters and the two lines (issue #234, review round 3).
      *
-     * <p>Called from the {@code finally}, so like the object delete it must not replace an
-     * exception the loop is already unwinding with: a meter or a log appender failing during a
-     * rollout would otherwise reach {@code CheckpointScheduler}'s catch, which logs the message
-     * alone, and the lock timeout that actually ended the pass would be gone. There is nowhere left
-     * to report a failure of the reporting itself, so it is swallowed deliberately rather than
-     * logged from inside its own broken path. On a pass that <em>succeeded</em> nothing is in
-     * flight to protect, so the failure is this pass's own and is thrown (review round 4).</p>
-     *
-     * @param unwinding whether the loop is already ending on an exception
+     * <p>A failure of the reporting itself — a Micrometer name/tag conflict, a failing appender
+     * during a rollout — is a reporting failure and is logged as one. It is deliberately neither
+     * silent (half an emitted alarm with no error anywhere is worse than a loud one, review round 4)
+     * nor rethrown (that reached {@code CheckpointScheduler}'s catch, which logs "Checkpoint
+     * build/retention failed" for a site whose checkpoint was built and whose rows were pruned,
+     * review round 5). While the loop is unwinding the caller runs this through
+     * {@link #swallowing(Runnable)} instead, because there the only thing left to lose is the
+     * exception on its way out.</p>
      */
-    private void reportPass(UUID siteId, long checkpointSeq, int prunedCount, HeldBackTally heldBack,
-                            boolean unwinding) {
+    private void reportPass(UUID siteId, long checkpointSeq, int prunedCount, HeldBackTally heldBack) {
         try {
             metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
             metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
@@ -239,15 +250,26 @@ public class ChangelogRetentionService {
                         prunedCount, checkpointSeq, siteId, auditWindowSegments);
             }
         } catch (RuntimeException e) {
-            if (!unwinding) {
-                // Nothing is in flight to protect, so a broken meter or appender is this pass's
-                // failure and must not be silent (review round 4): swallowing it here would leave
-                // the #212 alarm half-emitted with no error anywhere.
-                throw e;
-            }
-            // Deliberately swallowed: see above.
-            log.debug("Reporting the retention pass for site {} failed while it was already "
-                    + "unwinding", siteId, e);
+            // Not silent (review round 4: half an alarm with no error anywhere is worse than a
+            // loud one) and not this site's retention failure either (review round 5: rethrowing
+            // reached CheckpointScheduler's catch, which logs "Checkpoint build/retention failed"
+            // for a pass that built the checkpoint and pruned its rows). A broken meter or
+            // appender is a reporting failure and says so.
+            log.warn("Reporting the retention pass for site {} failed; the pass itself completed "
+                    + "and pruned {} segment(s)", siteId, prunedCount, e);
+        }
+    }
+
+    /**
+     * Run a {@code finally} step that must not throw, whatever it does (review round 5).
+     *
+     * @param step the reporting or cleanup step to attempt
+     */
+    private static void swallowing(Runnable step) {
+        try {
+            step.run();
+        } catch (RuntimeException ignored) {
+            // Deliberate: the caller is already unwinding and this would replace its exception.
         }
     }
 

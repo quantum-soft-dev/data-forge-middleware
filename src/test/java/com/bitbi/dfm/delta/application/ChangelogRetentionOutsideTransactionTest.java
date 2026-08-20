@@ -183,10 +183,13 @@ class ChangelogRetentionOutsideTransactionTest {
     }
 
     @Test
-    void aBrokenMeterOnASuccessfulPassIsThisPassesFailure() {
-        // Review round 4: the swallow exists so the reporting cannot replace an exception the loop
-        // is unwinding with. On a pass that succeeded there is nothing to protect, and swallowing
-        // would leave the #212 alarm half-emitted with no error anywhere.
+    void aBrokenMeterOnASuccessfulPassIsReportedWithoutFailingThePass() {
+        // The decision moved across two rounds and the final shape is the synthesis. Round 4:
+        // swallowing silently leaves the #212 alarm half-emitted with no error anywhere. Round 5:
+        // rethrowing reaches CheckpointScheduler's catch, which logs "Checkpoint build/retention
+        // failed" for a site whose checkpoint was built and whose rows were pruned — an operator
+        // sent to a healthy site. So a reporting failure is logged as a reporting failure, and the
+        // pass still returns what it did.
         DeltaMetrics brokenMetrics = mock(DeltaMetrics.class);
         doThrow(new IllegalStateException("meter conflict"))
                 .when(brokenMetrics).retentionSegmentsHeldBack(any(), org.mockito.ArgumentMatchers.anyLong());
@@ -194,9 +197,15 @@ class ChangelogRetentionOutsideTransactionTest {
                 segmentRepository, objectDeleter, syncStateService, brokenMetrics, 0);
         when(syncStateService.getSyncState(SITE))
                 .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
-        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of());
+        View processed = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
+        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(processed));
+        when(segmentRepository.deleteByIdIfProcessed(processed.id())).thenReturn(1);
+        when(objectDeleter.deleteObjects(anyList()))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
 
-        assertThrows(IllegalStateException.class, () -> withBrokenMetrics.prune(SITE));
+        assertEquals(1, withBrokenMetrics.prune(SITE),
+                "a broken meter is not this site's retention failure");
+        verify(objectDeleter).deleteObjects(List.of(processed.key()));
     }
 
     @Test
