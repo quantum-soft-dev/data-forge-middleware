@@ -608,10 +608,9 @@ public class DeltaMetrics {
         Counter counter = Counter.builder("delta.parquet.unrepresentable-decimals")
                 .description("Decimal cells written as NULL because the value has no Parquet DECIMAL "
                         + "representation: non_finite = NaN or +/-Infinity, legal in PostgreSQL and "
-                        + "nothing to repair here -- except the signed NaN spelling, which "
-                        + "PostgreSQL rejects and which therefore says the client formats "
-                        + "non-faithfully (issue #238); malformed = a token BigDecimal cannot parse "
-                        + "at all, a client defect (issue #215)")
+                        + "nothing to repair here; the signed NaN spelling PostgreSQL rejects also "
+                        + "lands here and is deliberately not separated (issue #238); malformed = a "
+                        + "token BigDecimal cannot parse at all, a client defect (issue #215)")
                 .tag("reason", reason)
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         counter.increment(0.0);
@@ -628,11 +627,13 @@ public class DeltaMetrics {
      * source and simply has no DECIMAL encoding — nothing to repair here — while {@code malformed}
      * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix.</p>
      *
-     * <p>One spelling on {@code non_finite} is worth a second look rather than none: PostgreSQL
-     * rejects {@code '-NaN'::numeric}, so a signed NaN cannot come from a faithful {@code numeric}
-     * round trip and says the <em>client</em> formats non-faithfully. It stays on this series
-     * because the value itself is still one this pipeline cannot store rather than nonsense
-     * (issue #238); it is a client to ask about, not an artifact to repair.</p>
+     * <p>One spelling is on this series without being separable on it, deliberately: PostgreSQL
+     * rejects {@code '-NaN'::numeric}, so a signed NaN can only come from a client that formats
+     * non-faithfully — but the loss it causes is the ordinary one, a cell this pipeline cannot
+     * store, so it is counted as {@code non_finite} and nothing distinguishes it (issue #238).
+     * Neither series moves differently for it and no log line prints the token: a signal of its own
+     * would page an operator about a formatting quirk that costs nothing beyond the degradation
+     * already reported here.</p>
      *
      * <p>Read it as <b>cells</b>, not rows or files: one row with two such columns counts twice,
      * and the same source cell is counted again by each <em>Parquet</em> consumer that renders it

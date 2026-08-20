@@ -546,6 +546,21 @@ pages/{feature}/            # Route pages
   `parseDecimal` is handed it raw, so a padded *finite* token (`" 1.5 "`, a shape
   `ChangelogFold.normalizeDecimal` already carries a review-round-3 comment about) is written NULL
   and counted `malformed` — silent loss of a legal number, and out of scope for a classification fix.
+  **Round 3 removed the duplication that was the defect** rather than only its instance: the
+  vocabulary now lives once, as package-private `ValueMapper.canonicalNonFinite`, with `ChangelogFold`
+  calling it — two copies with nothing asserting they agree is exactly how the identical
+  sign-handling slip came to exist in both, and the next spelling added to one would have left the
+  other returning the raw token as a fold identity for a value the first calls non-finite.
+  `ChangelogFoldTest.everySpellingValueMapperCallsNonFiniteFoldsUnderItsCanonicalIdentity` pins the
+  agreement (proven by mutation: restoring a private copy missing `inf` fails it) and pins that the
+  two infinities stay apart, which the shared canonicalisation must not collapse the way it
+  deliberately collapses the NaN sign. Round 3 also caught this entry's own surfaces contradicting
+  themselves: the guide said a signed NaN "says the client formats non-faithfully" and is "a client
+  to ask about" while **nothing** would tell an operator so — `malformed` no longer moves for it,
+  `non_finite` is documented as "nothing to repair", and no log line prints the token. The
+  invisibility is deliberate and is now stated as such in both the guide and the counter's HELP: the
+  loss is the ordinary one, so a signal of its own would page about a formatting quirk that costs
+  nothing beyond the degradation already reported.
   No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend
   change; `delta.parquet.unrepresentable-decimals` keeps both tag values and simply stops
   misclassifying between them. See `docs/delta-client-v2-guide.md` ("A value the column type cannot

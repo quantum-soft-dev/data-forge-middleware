@@ -88,12 +88,35 @@ public final class ValueMapper {
      * (issue #238).
      */
     private static boolean isNonFiniteToken(String token) {
+        return canonicalNonFinite(token) != null;
+    }
+
+    /**
+     * The canonical spelling of a non-finite token, or {@code null} when the token is not one.
+     *
+     * <p>Package-private because {@link ChangelogFold} needs the same vocabulary to canonicalise a
+     * decimal key's fold identity, and a second copy of it is what issue #238 was: the identical
+     * sign-handling slip existed in both, and nothing made them agree. A future spelling added
+     * here — or a change to the trim or sign rule — would otherwise leave the fold returning the raw
+     * token as identity for a value this class calls non-finite, folding one source row into two.</p>
+     *
+     * <p>PostgreSQL has a single NaN and rejects the signed input, so the sign is dropped rather
+     * than preserved; for the infinities it decides the answer.</p>
+     *
+     * @param token the wire token
+     * @return {@code "NaN"}, {@code "Infinity"} or {@code "-Infinity"}, or {@code null}
+     */
+    static String canonicalNonFinite(String token) {
         String trimmed = token.trim();
-        String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
-                ? trimmed.substring(1) : trimmed;
-        return unsigned.equalsIgnoreCase("nan")
-                || unsigned.equalsIgnoreCase("infinity")
-                || unsigned.equalsIgnoreCase("inf");
+        boolean negative = trimmed.startsWith("-");
+        String unsigned = negative || trimmed.startsWith("+") ? trimmed.substring(1) : trimmed;
+        if (unsigned.equalsIgnoreCase("nan")) {
+            return "NaN";
+        }
+        if (unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf")) {
+            return negative ? "-Infinity" : "Infinity";
+        }
+        return null;
     }
 
     /**

@@ -1141,9 +1141,14 @@ many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the
   The classifier accepts every spelling case-insensitively, `inf` as well as `infinity`, and with an
   optional sign on **both** — `-NaN` included, which until issue #238 landed on `malformed` and
   paged someone to chase a client defect that does not exist. PostgreSQL itself is narrower: it
-  emits `NaN` unsigned and rejects `'-NaN'::numeric` outright, so a signed NaN says the *client*
-  formats non-faithfully, not that the source held one. That is a client to ask about, not a value
-  to repair here — which is why it still counts as `non_finite` rather than as a defect.
+  emits `NaN` unsigned and rejects `'-NaN'::numeric` outright, so a signed NaN can only come from a
+  client that formats non-faithfully. **That spelling is deliberately invisible on the metrics**, and
+  it is worth saying so rather than leaving it implied: it lands on `non_finite` like every other
+  spelling, `malformed` does not move for it, and no log line prints the token. The reason is that
+  the *loss* is identical — one cell the pipeline cannot store, degraded to NULL and counted — so a
+  signal of its own would page an operator about a formatting quirk that costs nothing beyond the
+  degradation already reported. A client emitting `-NaN` is therefore something you find in the
+  client, not something these series will tell you about.
 - **`malformed`** — a token `BigDecimal` cannot parse at all. A client defect somebody has to fix.
   Before this change it threw and was therefore loud, so it keeps a signal of its own rather than
   disappearing into the same NULL as the legal case.
