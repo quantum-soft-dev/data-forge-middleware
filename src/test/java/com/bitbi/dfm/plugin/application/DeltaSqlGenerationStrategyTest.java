@@ -67,6 +67,10 @@ class DeltaSqlGenerationStrategyTest {
         return Value.newBuilder().setIntValue(v).build();
     }
 
+    private static Value dbl(double v) {
+        return Value.newBuilder().setDoubleValue(v).build();
+    }
+
     private static ChangeRecord record(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
         ChangeRecord.Builder builder = ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq);
         if (key != null) builder.putAllKey(key);
@@ -239,5 +243,33 @@ class DeltaSqlGenerationStrategyTest {
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")), schemas, Map.of());
 
         assertThat(result).isNull();
+    }
+
+    /**
+     * The {@code double_value} sibling of the decimal case above, and it settles the opposite way
+     * (issue #233). PostgreSQL {@code real} / {@code double precision} hold {@code NaN} and
+     * {@code +/-Infinity}, Parquet DOUBLE carries them natively, and PostgreSQL compares
+     * {@code NaN} equal to itself — so the value is representable end to end and the record is
+     * rendered rather than skipped. What it needs is the quoting: bare, {@code NaN} is an
+     * identifier and the whole SQL file fails when Bit BI applies it.
+     */
+    @Test
+    @DisplayName("should render a non-finite double as a quoted literal instead of skipping it")
+    void shouldRenderNonFiniteDoubleAsQuotedLiteral() throws IOException {
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("orders", Op.UPDATE, 1, Map.of("id", intVal(1)),
+                        Map.of("total", dbl(Double.NaN))),
+                record("orders", Op.DELETE, 2,
+                        Map.of("id", dbl(Double.NEGATIVE_INFINITY)), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 2, "DELTA")),
+                schemas, Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .contains("UPDATE orders SET total = 'NaN' WHERE id = 1")
+                .contains("DELETE FROM orders WHERE id = '-Infinity'");
+        assertThat(result.stats().updates()).isEqualTo(1);
+        assertThat(result.stats().deletes()).isEqualTo(1);
     }
 }

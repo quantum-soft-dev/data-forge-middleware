@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.delta.application.ValueMapper;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
 import com.bitbi.dfm.plugin.domain.JsonlChangeRecord;
@@ -165,6 +166,15 @@ public class SqlStatementGenerator {
     /**
      * Formats a value for SQL based on its DBF type.
      * Handles NULL for empty values, quoting for strings, no quotes for numbers.
+     *
+     * <p>A non-finite token in a numeric column is quoted, for the reason
+     * {@link #formatJsonValue(Object)} explains: unquoted, {@code NaN} is an identifier to
+     * PostgreSQL, not a literal. It is guarded here rather than argued away because the claim that
+     * a DBF file cannot carry one is a claim about a client this repository cannot see: DBF stores
+     * {@code N}/{@code F} fields as fixed-width ASCII digits, so the extractor has nothing to read
+     * a non-finite value <em>from</em>, and since 032 retired HTTP ingestion no new CSV snapshot
+     * arrives on this path at all — but the whole cost of not relying on that is one comparison
+     * against a vocabulary that already exists (issue #233).</p>
      */
     private String formatValue(String value, DbfColumnType type) {
         // Handle empty values
@@ -176,9 +186,10 @@ public class SqlStatementGenerator {
             }
         }
 
-        // Numeric types - no quotes
+        // Numeric types - no quotes, unless the token is one PostgreSQL only accepts quoted
         if (isNumericType(type)) {
-            return value;
+            String nonFinite = ValueMapper.canonicalNonFinite(value);
+            return nonFinite != null ? "'" + nonFinite + "'" : value;
         }
 
         // String types - escape and quote
@@ -314,6 +325,23 @@ public class SqlStatementGenerator {
     /**
      * Formats a typed value for use in a SQL statement.
      * Handles null, numbers (BigDecimal without scientific notation), booleans, bytea and strings.
+     *
+     * <p>A non-finite {@code double} is the one number that must be <em>quoted</em>: PostgreSQL
+     * {@code real} / {@code double precision} hold {@code NaN} and {@code +/-Infinity}, but only as
+     * a string literal it coerces to the column type — bare, {@code NaN} parses as a column name
+     * ({@code ERROR: column "nan" does not exist}), so the statement was written and uploaded
+     * successfully and failed only when Bit BI applied the file, taking the rest of the file with it
+     * if it applies one transactionally (issue #233).</p>
+     *
+     * <p>Quoted rather than degraded to NULL, which is what the {@code numeric} path does for the
+     * same three values (#215). The trade-off runs the other way here: Parquet DECIMAL cannot hold
+     * a non-finite value, so NULL keeps the Parquet artifacts and the SQL stream agreeing about that
+     * cell, whereas Parquet DOUBLE holds it natively — nulling it in SQL alone would be the
+     * disagreement #215 avoided, and this pipeline would be dropping a value both of its consumers
+     * can carry. The same property makes such a value usable as a key: PostgreSQL compares
+     * {@code NaN} equal to itself, so {@code col = 'NaN'} addresses the row, which is why
+     * {@code DeltaSqlGenerationStrategy} skips a record only for an unrepresentable
+     * <em>decimal</em> key.</p>
      */
     private String formatJsonValue(Object value) {
         if (value == null) {
@@ -321,6 +349,12 @@ public class SqlStatementGenerator {
         }
         if (value instanceof java.math.BigDecimal decimal) {
             return decimal.toPlainString();
+        }
+        if (value instanceof Double || value instanceof Float) {
+            String nonFinite = nonFiniteLiteral(((Number) value).doubleValue());
+            if (nonFinite != null) {
+                return "'" + nonFinite + "'";
+            }
         }
         if (value instanceof Number) {
             return value.toString();
@@ -332,6 +366,30 @@ public class SqlStatementGenerator {
             return formatBytea(bytes);
         }
         return "'" + escapeString(value.toString()) + "'";
+    }
+
+    /**
+     * PostgreSQL's own spelling of a non-finite floating point value, or {@code null} when the
+     * value is finite and therefore renders as an ordinary unquoted number.
+     *
+     * <p>Java and PostgreSQL agree on all three spellings, so this is {@code Double.toString} for
+     * the non-finite cases spelled out — written out rather than called so that the three literals
+     * this pipeline emits are visible at the place that decides to emit them.</p>
+     *
+     * @param value the numeric value
+     * @return {@code "NaN"}, {@code "Infinity"}, {@code "-Infinity"}, or {@code null}
+     */
+    private static String nonFiniteLiteral(double value) {
+        if (Double.isNaN(value)) {
+            return "NaN";
+        }
+        if (value == Double.POSITIVE_INFINITY) {
+            return "Infinity";
+        }
+        if (value == Double.NEGATIVE_INFINITY) {
+            return "-Infinity";
+        }
+        return null;
     }
 
     /**

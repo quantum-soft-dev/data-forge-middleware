@@ -94,11 +94,14 @@ public final class ValueMapper {
     /**
      * The canonical spelling of a non-finite token, or {@code null} when the token is not one.
      *
-     * <p>Package-private because {@link ChangelogFold} needs the same vocabulary to canonicalise a
-     * decimal key's fold identity, and a second copy of it is what issue #238 was: the identical
-     * sign-handling slip existed in both, and nothing made them agree. A future spelling added
-     * here — or a change to the trim or sign rule — would otherwise leave the fold returning the raw
-     * token as identity for a value this class calls non-finite, folding one source row into two.</p>
+     * <p>Shared rather than copied, because a second copy of it is what issue #238 was: the
+     * identical sign-handling slip existed in both this class and {@link ChangelogFold}, and nothing
+     * made them agree. A future spelling added here — or a change to the trim or sign rule — would
+     * otherwise leave the fold returning the raw token as identity for a value this class calls
+     * non-finite, folding one source row into two. {@link ChangelogFold} canonicalises a decimal
+     * key's fold identity with it; {@code SqlStatementGenerator} decides with it whether a DBF
+     * numeric token has to be quoted to be a PostgreSQL literal at all (issue #233), which is what
+     * widened it from package-private.</p>
      *
      * <p>PostgreSQL has a single NaN and rejects the signed input, so the sign is dropped rather
      * than preserved; for the infinities it decides the answer.</p>
@@ -106,7 +109,7 @@ public final class ValueMapper {
      * @param token the wire token
      * @return {@code "NaN"}, {@code "Infinity"} or {@code "-Infinity"}, or {@code null}
      */
-    static String canonicalNonFinite(String token) {
+    public static String canonicalNonFinite(String token) {
         String trimmed = token.trim();
         boolean negative = trimmed.startsWith("-");
         String unsigned = negative || trimmed.startsWith("+") ? trimmed.substring(1) : trimmed;

@@ -707,4 +707,87 @@ class SqlStatementGeneratorTest {
             assertThat(sql).contains("VALUES (42, 1.5, true, 'o''brien', NULL)");
         }
     }
+
+    /**
+     * PostgreSQL {@code real} / {@code double precision} hold {@code NaN}, {@code Infinity} and
+     * {@code -Infinity}, and the extractor sends them as {@code double_value} — a real IEEE double,
+     * which Parquet DOUBLE carries natively, so unlike the {@code numeric} case of issue #215 no
+     * consumer has to lose the value. What broke was the rendering alone: {@code Number.toString()}
+     * put the token into SQL <em>unquoted</em>, and to PostgreSQL a bare {@code NaN} is a column
+     * name — {@code ERROR: column "nan" does not exist} — so the statement was written, uploaded and
+     * marked processed, and failed only when Bit BI applied the file (issue #233).
+     */
+    @Nested
+    @DisplayName("Non-finite floating point literals (issue #233)")
+    class NonFiniteFloatingPointLiterals {
+
+        private String insertSql(Object value) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("id", 1L);
+            data.put("payload", value);
+            return generator.generateFromJsonl(
+                    new JsonlChangeRecord(JsonlChangeRecord.OP_INSERT, null, data, 1), "docs");
+        }
+
+        @Test
+        @DisplayName("should render a double NaN as a quoted 'NaN' literal")
+        void shouldQuoteDoubleNaN() {
+            assertThat(insertSql(Double.NaN)).contains("VALUES (1, 'NaN')");
+        }
+
+        @Test
+        @DisplayName("should render +/-Infinity as PostgreSQL's own quoted spellings")
+        void shouldQuoteInfinities() {
+            assertThat(insertSql(Double.POSITIVE_INFINITY)).contains("VALUES (1, 'Infinity')");
+            assertThat(insertSql(Double.NEGATIVE_INFINITY)).contains("VALUES (1, '-Infinity')");
+        }
+
+        @Test
+        @DisplayName("should quote a non-finite Float the same way")
+        void shouldQuoteFloatNaN() {
+            assertThat(insertSql(Float.NaN)).contains("VALUES (1, 'NaN')");
+            assertThat(insertSql(Float.NEGATIVE_INFINITY)).contains("VALUES (1, '-Infinity')");
+        }
+
+        @Test
+        @DisplayName("should leave a finite double unquoted")
+        void shouldLeaveFiniteDoubleUnquoted() {
+            assertThat(insertSql(1.5d)).contains("VALUES (1, 1.5)");
+        }
+
+        /**
+         * The quoted form is what makes a non-finite key usable rather than skippable: PostgreSQL
+         * compares {@code NaN} equal to itself, so {@code col = 'NaN'} addresses the row — where
+         * the {@code col = NULL} that the {@code numeric} degradation would produce matches none.
+         */
+        @Test
+        @DisplayName("should address a NaN key in the WHERE clause")
+        void shouldRenderNonFiniteKeyInWhereClause() {
+            Map<String, Object> key = new LinkedHashMap<>();
+            key.put("reading", Double.NaN);
+            String sql = generator.generateFromJsonl(
+                    new JsonlChangeRecord(JsonlChangeRecord.OP_DELETE, key, null, 7), "samples");
+
+            assertThat(sql).contains("DELETE FROM samples WHERE reading = 'NaN'");
+        }
+
+        @Test
+        @DisplayName("should quote a non-finite token in a DBF numeric column")
+        void shouldQuoteNonFiniteDbfNumericToken() {
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            values.put("reading", "NaN");
+            values.put("drift", "-inf");
+            values.put("total", "12.50");
+            CsvRowDiff diff = CsvRowDiff.added(1, values);
+
+            String sql = generator.generate(diff, "samples", Map.of(
+                    "id", DbfColumnType.INTEGER,
+                    "reading", DbfColumnType.FLOAT,
+                    "drift", DbfColumnType.FLOAT,
+                    "total", DbfColumnType.NUMERIC));
+
+            assertThat(sql).contains("VALUES (1, 'NaN', '-Infinity', 12.50)");
+        }
+    }
 }
