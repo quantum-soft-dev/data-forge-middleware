@@ -41,9 +41,19 @@ public final class RunOwnedScratch {
      */
     public static final String SCRATCH_ROOT_PROPERTY = "dfm.test.parquet-scratch-root";
 
-    /** Resolves {@code ${key:default}} the way the Spring {@code Environment} would. */
+    /**
+     * Resolves {@code ${key:default}} the way the Spring {@code Environment} would.
+     *
+     * <p>The 5-arg constructor is the form not marked for removal (issue #220 / #228). The 4-arg
+     * {@code (prefix, suffix, separator, ignoreUnresolvable)} is {@code @Deprecated(since = "6.2",
+     * forRemoval = true)} and only exists as a delegate that passes {@code null} for the escape
+     * character; calling the 5-arg form with {@code null} keeps the same four semantics (prefix,
+     * suffix, value separator, do not ignore an unresolvable placeholder) without a
+     * {@code compileTestJava} {@code [removal]} warning that would become an error on the Boot
+     * bump that drops the constructor.</p>
+     */
     private static final PropertyPlaceholderHelper PLACEHOLDERS =
-            new PropertyPlaceholderHelper("${", "}", ":", false);
+            new PropertyPlaceholderHelper("${", "}", ":", null, false);
 
     private RunOwnedScratch() {
     }
