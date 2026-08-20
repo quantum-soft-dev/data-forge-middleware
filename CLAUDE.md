@@ -687,6 +687,73 @@ pages/{feature}/            # Route pages
   `@MockitoSpyBean` records `isActualTransactionActive()` at the real `deleteObjects`. No REST,
   gRPC, proto, DTO, migration (V55 is the last applied, V56 free), configuration-key, metric, S3-key
   or frontend change. See `docs/delta-client-v2-guide.md` ("No S3 inside the retention pass").
+||||||| 8cf800a2
+- double-nan-sql-literal: A non-finite `double` reaches Bit BI as a quoted literal, so the SQL it is
+  handed is valid PostgreSQL (issue #233). `SqlStatementGenerator.formatJsonValue` rendered every
+  `Number` through `toString()`, and PostgreSQL `real`/`double precision` legitimately hold `NaN` and
+  `±Infinity` — which the extractor sends as `double_value`, a real IEEE double — so the statement
+  read `SET price = NaN`, where a bare `NaN` is an **identifier**, not a literal:
+  `ERROR: column "nan" does not exist`. **The failure was invisible on this side**, which is what
+  separates it from #215: generation succeeded, the file went to S3, the batch was marked processed,
+  and the error surfaced only when Bit BI applied the file — taking the rest of it with it wherever a
+  file is applied as one transaction. The three values are emitted as `'NaN'`, `'Infinity'`,
+  `'-Infinity'`, which PostgreSQL coerces to the column's own type.
+  **Quoted rather than NULLed, and the asymmetry with #215 is the decision worth keeping.** For a
+  `numeric` column NULL is right because Parquet DECIMAL is a scaled integer and cannot hold the
+  value at all, so nulling keeps the Parquet artifacts and the SQL stream saying the same thing about
+  that cell. Parquet DOUBLE holds it natively, so here NULL would *create* that disagreement — the
+  checkpoint baseline keeping a value the delta stream dropped — and would discard a value both
+  consumers can carry. The same property normally removes any need for a key exception: PostgreSQL
+  compares `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row.
+  **One combination is the exception, and review round 3 found that quoting turned its worst case
+  from loud to silent**: the rendering keys on the wire case while the Parquet writers key on the
+  **declared** type, so a column declared `numeric(p,s)` whose value arrives as `double_value` —
+  which the wire contract forbids and nothing rejects at ingest — is NULL in every Parquet artifact
+  and `'NaN'` in the SQL. As a *key* that used to be harmless precisely because the SQL was invalid
+  and Bit BI rejected the file; `WHERE k = 'NaN'` applies cleanly against a baseline row whose key
+  cell is NULL, matches nothing and diverges the mirror silently — the outcome the key guard exists
+  to prevent. So `hasUnrepresentableKey` becomes `unaddressableKeyReason` (it now returns *why*, so
+  the WARN can name the column and the reason) and also skips a non-finite `double_value` **whose declared column materialises as a
+  Parquet DECIMAL**, asking `ParquetSchemaMapper.rendersAsParquetDecimal` — the field the writers
+  actually build — rather than parsing the type name a second time, which would have got a **bare**
+  `numeric` wrong (Avro STRING, carries the token losslessly, nothing to skip); a declaration Avro
+  refuses though PostgreSQL accepts it (`numeric(2,5)`, `numeric(5,-2)`, `numeric(0)`) answers *no*
+  rather than throwing, since that table has already lost its Parquet and a throw here would fail the
+  whole batch's SQL. **Round 4 then widened the same guard to `string_value`** — the identical silent
+  divergence one wire case over, and this half was never loud even before #233, which corrects this
+  entry's earlier claim that "a string is quoted anyway" settled it: quoting settles SQL *validity*,
+  not which row the statement *addresses*. An unparseable string needs no guard for the mirror
+  reason — its SQL fails loudly at apply time — and an `INSERT` is skipped with the rest, since a row
+  whose key this stream will always skip is one it could create and never address again.
+  **The counter deliberately stays one series.** `sql.generation.delta.records.skipped.unrepresentable_key`
+  is unchanged and untagged: the two reasons have different remedies (fix the source data / fix the
+  client's `SubmitSchema` or its wire encoding) and the WARN names which, but the *alert* is the same
+  one either way — a client is sending keys this pipeline cannot address — and a tag added to an
+  existing untagged series is a contract change that breaks the dashboards reading it. The **data**
+  cells of the forbidden combination are also newly silent rather than loud (`SET price = 'NaN'`
+  applies where `SET price = NaN` was rejected), and that half is **not** guarded here: nulling them
+  is coercion, which is #240's subject and the thing PR #232 reverted three times. Recorded there
+  rather than argued in a commit message. The counter and WARN
+  are the existing ones. The **data** cells of that combination still differ; that is coercion, which
+  is #240's subject on both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
+  already written**: `/sql-changes` returns the stored objects, so a pre-fix batch comes back
+  byte-identical — the recoveries are delete + generate (with its documented re-delivery caveat) or
+  `reinit`, which is what the guide now says instead of the "just re-fetch" this entry first
+  claimed. **The DBF path's `formatValue` had the same shape of hole** for a numeric
+  token and is guarded too, through `ValueMapper.canonicalNonFinite` — widened from package-private
+  rather than copied, since a second copy of that vocabulary is exactly what #238 was. That guard is
+  belt-and-braces, and review round 2 found the sharper reason: that branch is **unreachable through
+  the only production caller** — `DbfSqlGenerationStrategy` passes an *empty* `columnTypes` map, so
+  every cell falls back to `CHARACTER` and is quoted and escaped already, `NaN` included. The guard
+  is on the method's contract rather than on an observed defect, and the empty map is a finding of
+  its own (**#263**): it also makes the documented per-type NULL/`0` handling dead, and leaves a
+  non-numeric token in a numeric column returned raw — unquoted and unescaped — latent only because
+  nothing supplies the map. Proven by mutation: with
+  both branches removed six methods fail across `SqlStatementGeneratorTest` and
+  `DeltaSqlGenerationStrategyTest`. No new metric — the value is not degraded, so there is nothing to
+  count. No REST, gRPC, proto, DTO, migration, configuration-key,
+  metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A non-finite `double` is
+  kept, and quoted"), `docs/bitbi-integration.md`.
 - poison-segment-backoff: One deterministically failing segment no longer stalls every other site's
   queue work, and the egress queue has an error counter for the first time (issue #243, filed by
   review round 1 of PR #235 and sequenced after #212 and #185). Both segment queues claim the
