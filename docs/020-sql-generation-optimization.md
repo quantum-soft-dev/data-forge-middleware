@@ -343,7 +343,10 @@ It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass 
 original superseded. #190 then retired the whole regeneration path, so that consumer no longer
 exists; the history stays in the bullet list above.)
 
-(`generateSqlForBatchAsync` is not in the table: it has no callers — see #210.)
+(`generateSqlForBatchAsync` — feature 015's async reinit generator, an `@Async("pluginExecutor")`
+method whose Javadoc described a reinit flow that had been removed — never appears in the table:
+it had no callers, and #185 (folding #210) deleted it. `PluginHistoryService`'s "SQL generation no
+longer triggered for reinit" comment is the remaining record of that flow.)
 
 The regeneration hazard was closed for good by #190 itself: rather than moving the generation out
 of the caller's transaction, #190 retired the regeneration path entirely (it could not serve any
@@ -384,19 +387,63 @@ therefore produces one refused attempt, one WARN line and one audit row per comp
 which is the intended visibility but is repetitive; the floor is the sweep tick, not the ceiling.
 
 **One caveat on "unbounded retry is safe": it assumes the threshold is configured sanely.**
-`plugin.sql-generation.heap-threshold-percent` is still accepted unvalidated (**#185**), so a
-mistyped `8` makes the check true for every generation for ever. Before this change that
-misconfiguration silently dropped every batch's SQL; now it stalls the delta-SQL queue instead —
-segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet — which is louder and
-leaves the work recoverable, but it is a stall with no bound of its own. Validating the key is
-#185's job.
+Since **#185** the whole `plugin.sql-generation.*` block is validated — each key in its consuming
+bean's constructor — and an out-of-range value **fails the application context at startup**:
 
-**And "recoverable" has a horizon**: `ChangelogRetentionService.prune` deletes below-checkpoint
-segments past `delta.retention.audit-window-segments` (20) without regard for `plugin_sql_at IS
-NULL`, so a segment left pending long enough is eventually deleted with its S3 object and the
-batch's SQL is lost after all — silently, and without the audit row that marks a refusal. That is
-not introduced here (it applies to any generation that keeps failing, which is what "stays pending
-for the sweep" has always meant) but it bounds the retry window, and it is **#212**.
+| Key | Range | Validated in |
+|---|---|---|
+| `heap-threshold-percent` | `1..100` | `SqlGenerationService` |
+| `max-concurrent` | `>= 1` | `SqlGenerationService` |
+| `semaphore-timeout-seconds` | `>= 1` | `SqlGenerationService` |
+| `delta-max-concurrent` | `>= 1` | `DeltaSqlSweepWorker` |
+| `delta-sweep-ms` | `>= 1` | `DeltaSqlSweepWorker` |
+
+None of the five was scoped out. 100 stays the documented off-switch of #174 (the strict
+comparison and the clamp are untouched), and the heap floor is **1, not 0**: the ceiling-rounded
+reading of a live JVM is never 0, so a threshold of 0 refuses every generation exactly like a
+negative value — and this deployment's "0 disables" convention elsewhere
+(`delta.parquet.max-scratch-bytes`, `delta.checkpoint.max-fold-bytes`) would have made 0 read as a
+second off-switch. **Fail fast rather than a startup WARN is an owner decision recorded on the
+ticket**, for three reasons: the deployment is a GKE rolling update, so a pod that refuses to
+start does not take the service down — old replicas keep serving and the rollout goes red
+immediately, which is exactly the visibility a config typo needs; a WARN is the channel already
+proven unread — the "memory-pressure abort disabled" startup line exists since #174 and would
+have stopped nobody; and the failure costs are asymmetric — `800` silently disables the heap
+guard, a negative value turns the whole deployment into an endless retry loop that per #212 ends
+in silent data loss once retention passes over the pending segments, `delta-max-concurrent: 0`
+used to crash-loop through `ArrayBlockingQueue`'s message-less `IllegalArgumentException` (naming
+neither key nor value), and `delta-sweep-ms: 0` was accepted by Spring and busy-looped the
+fallback sweep on a green rollout. A failed rollout that names the key is strictly cheaper than
+any of them. **Two limits of the promise are stated rather than implied.** The refusal names the
+key and the value for a *well-formed integer* out of range; a value Spring cannot convert at all
+(an env var present but empty — `${VAR:80}` does not default for `""` — or `"80%"`) fails
+earlier, during `@Value` conversion, with a message naming the constructor parameter rather than
+the key. And validation does not bound a value that is in range and still wrong for the pod — a
+threshold of `8` is legal and makes the check true for nearly every generation, stalling the
+delta-SQL queue (segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet) —
+so the paragraph below about the retry horizon still applies to any persistently refusing
+configuration. One grammar narrowing is deliberate: reading `delta-sweep-ms` into a `long` for
+validation rejects the duration-string form (`PT5M`) that a bare `fixedDelayString` used to
+accept — such a value now dies in `@Value` conversion at startup (no deployment, profile or test
+ever used one). The Boot-native alternative was weighed and not taken:
+`@ConfigurationProperties` + `@Validated` with jakarta constraints (the `ParquetExportProperties`
+shape) would name key, value *and* property origin, and would catch malformed values too — the
+per-consumer-constructor check is the recorded owner decision for this block, five keys across
+two beans did not justify a properties class per consumer, and the two limits above are the
+accepted cost.
+
+**And "recoverable" no longer has a silent horizon (#212)**: `ChangelogRetentionService.prune`
+used to delete below-checkpoint segments past `delta.retention.audit-window-segments` (20) without
+regard for `plugin_sql_at IS NULL`, so a segment left pending long enough was deleted with its S3
+object and the batch's SQL was lost after all — silently, and without the audit row that marks a
+refusal. Changelog retention now **holds a pending segment back** (pending egress alike), counts it
+on `delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}` and WARNs once
+per site per pass. The horizon that remains is deliberate and loud: the retry ends when the segment
+is processed, when an operator deletes it or its batch, when a re-baseline or wipe replaces the
+site's history — or at **batch retention** (per-site `retentionDays`, default 45 days), which
+deletes a retired batch's segments regardless of markers and counts what it destroys on
+`delta.retention.segments.deleted-pending`. See `docs/delta-client-v2-guide.md` ("Retention does
+not delete unprocessed work").
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
@@ -539,11 +586,16 @@ JDK_JAVA_OPTIONS=-Xmx2560m -Xms512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200
 # application.yml (or application-prod.yml)
 plugin:
   sql-generation:
-    max-concurrent: 2           # Max concurrent SQL generations (semaphore permits)
-    semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out
+    max-concurrent: 2           # Max concurrent SQL generations (semaphore permits); >= 1
+    semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out; >= 1
     heap-threshold-percent: 80  # Abort generation when heap usage is strictly above this %;
-                                # 100 disables the check (usage can never exceed 100%)
+                                # 1..100, and 100 disables the check (usage can never exceed 100%)
 ```
+
+An out-of-range value in any `plugin.sql-generation.*` key **fails startup** (issue #185): the
+three above are validated in the `SqlGenerationService` constructor, and the block's other two —
+`delta-max-concurrent` and `delta-sweep-ms` (026) — in `DeltaSqlSweepWorker`. See "One caveat on
+'unbounded retry is safe'" above for the ranges and the fail-fast reasoning.
 
 ---
 

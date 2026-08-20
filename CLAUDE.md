@@ -565,6 +565,159 @@ pages/{feature}/            # Route pages
   change; `delta.parquet.unrepresentable-decimals` keeps both tag values and simply stops
   misclassifying between them. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
   hold").
+- retention-holds-pending-work: Changelog retention no longer deletes a segment whose plugin SQL
+  or egress was never generated — pending work is not prunable, and both the hold-back and the one
+  horizon that remains are visible (issue #212, found reviewing #181/PR #209, which it silently
+  bounded). A changelog segment is also the durable entry of two work queues: `plugin_sql_at IS
+  NULL` means the Bit BI delta-SQL queue still owes it, `egress_at IS NULL` the delta-Parquet
+  egress — and both queues retry precisely by leaving the row pending ("a throw leaves the segment
+  pending for the sweep"). `ChangelogRetentionService.prune` deleted such a row like any other once
+  the checkpoint subsumed it and `delta.retention.audit-window-segments` (20) younger
+  below-checkpoint segments accumulated, so the batch's SQL was lost permanently, silently, with no
+  audit row marking the moment of loss — capping the retry guarantee #181 had just established.
+  **The owner fixed the hybrid of the ticket's first two shapes**: the prune skips a
+  below-checkpoint segment with either marker `NULL`
+  (`ChangelogSegment.isPendingPluginSql()`/`isPendingEgress()` own the semantics; the queues' SQL
+  and the prune's mirror them), and the hold-back is counted on
+  **`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`** (registered at
+  zero; only segments the window would actually have pruned; a segment owing both moves both
+  series; a census, not an arrival rate — with the blind spot stated: the prune runs only after a
+  successful build, so a site whose build aborts nightly shows zero here while accumulating, and a
+  reinit re-pends the audit window by design, a benign one-pass spike) plus one WARN per site per
+  pass. The audit window keeps its meaning — held-back segments count toward it and are retained on
+  top of it (pinned by `pendingSegmentsStillCountTowardTheAuditWindow`).
+  **Review round 1 (ten lenses) then reshaped half of it, and its owner addendum moved the
+  contract.** The addendum: "unbounded in time" was never true — `BatchRetentionService` is a
+  second scheduled deleter of segments (rows and S3, per-site `retentionDays`, default 45 days, no
+  marker check), so it is recognized as **the deliberate outer horizon** of the queues' retry, made
+  observable rather than closed: **`delta.retention.segments.deleted-pending{reason=...}`**
+  (registered at zero — a non-zero rate means work sat in a queue for the whole retention window)
+  plus a WARN per batch; the explicit admin batch delete logs the pending count it destroys
+  (informed override, deliberately off the meter); and every contract surface names the endings —
+  queue drains, operator deletes segment or batch, re-baseline/wipe, batch retention. #185 is
+  written in the **future** tense everywhere ("will be closed at source; still open"), since that
+  fail-fast is the no-bound stance's load-bearing justification and it does not exist yet.
+  **Three correctness findings were the round's core, all fixed in-PR.** (A1) The hold-back broke
+  the contiguity proxy `historyPruned` rested on — prune deleted oldest-first unconditionally, so
+  "head at seq 1" proved a lossless refold was possible; retaining an older pending segment while
+  younger processed neighbours are pruned puts a gap *behind* a retained head (a reinit re-pends
+  interleaved segments out of queue order — the concrete route), and a frame-gone site would have
+  silently refolded the gapped history into a truncated checkpoint and advanced the pointer over
+  the loss: `hasSeqGap` now requires contiguity from seq 1 (overlaps tolerated, only strictly
+  uncovered sequences refuse), mutation-proven. (A2) The prune was check-then-act across
+  statements while `clearPluginSqlBySiteId` re-`NULL`s `plugin_sql_at` site-wide, so a reinit
+  committing between the read and the delete had its freshly-pending row deleted — object first:
+  the row delete is now a **single conditional statement** (`deleteByIdIfProcessed`, the marker
+  predicate travels with the DELETE), the object goes only after the row delete reported success
+  (row-first, so a crash leaves an unreferenced object for the #158 sweep), and a refused delete
+  re-reads and counts the row by what it says now. (A3) The hold-back defeated #149's bounded
+  drain — a frame-gone site with one held-back below-pointer segment kept `segments` non-empty for
+  ever, took `lossy_refold` nightly and spent no attempt: a site whose remaining segments all sit
+  at or below the pointer (everything they hold is already inside the lost frame's fold) now takes
+  the #149 drain under the unchanged `lossy_refold` tag — one attempt per retryable row per
+  scheduled night, re-arm on the forced pass, then a **quiet** visit with
+  `delta.checkpoint.tables.given-up` standing — while segments above the pointer keep the
+  never-quiets contract; mutation-proven both ways.
+  **The efficiency findings all trace to the same fact — the below-checkpoint set is unbounded
+  now**: the prune reads a four-column projection instead of hydrating every entity (JSONB stats
+  included), deletes objects in batched 1000-key `DeleteObjects` round trips instead of one per
+  object (#234 keeps only the transaction-boundary half); the checkpoint build reads **seq
+  coverage** (two longs per segment) and hydrates entities only above the fold's seed, so the idle
+  visit — the nightly steady state of a site pinned to the work list by held-back segments, whose
+  per-tick cost the guide now itemizes — loads no entity at all; and the re-baseline reset
+  discards the old baseline with one projection and one bulk DELETE instead of a row-by-row loop
+  under the `site_sync_state` row lock.
+  **Bucket C stayed out by the follow-ups rule**: #243 (one poison segment stalls the whole global
+  delta-SQL queue, and egress equivalently with no error counter — pre-existing, but #212 changed
+  its ending from "self-heals by losing one batch" to "permanent until an operator acts, bounded
+  by batch retention", so per-segment bounds are now their own decision), #244 (the
+  completed-batch Parquet replay is a third durable consumer of raw segments no retention
+  predicate consults — the guide scopes the hold-back guarantee to the two queue markers and names
+  it), #245 (the two queue markers can clobber each other back to NULL — whole-entity saves, no
+  `@Version` — self-healing before, but #212 builds a durability guarantee on those columns).
+  Tests pin both directions and every review fix (mutation-proven: predicate disabled — 4 red;
+  gap check removed — 1 red; drain branch removed — 2 red); the hold-back integration test's
+  assertion messages re-read the markers so an improbable steal of the global queue head diagnoses
+  itself; fixtures whose subject needs pruning mark their segments through one
+  `BaseIntegrationTest.markSegmentsProcessed` helper. No REST, gRPC, proto, DTO, migration (V54
+  still current, V55 free), configuration-key, S3-key or frontend change; both meter names are
+  new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
+  delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
+  `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
+  **Round 2 reviewed what round 1 introduced, and three of its findings cut into round 1's own
+  fixes.** The A3 drain was silencing far more than its justification named: with the default
+  window of 20, retention never emptied a quiet site's below-checkpoint list even before #212, so
+  a frame-gone site holding an ordinary *processed* window — a real, rebuild-recoverable data-loss
+  state #212 did not create — would have gone quiet after five nights; the drain is now scoped to
+  a held-back **pending** segment actually existing below the pointer
+  (`existsCommittedPendingBelowCheckpoint`), the processed-only population keeps the never-quiets
+  contract, and the false convergence claim in the Javadoc is rewritten (mutation-proven). The
+  split of the old single segment read into a coverage read and an entity load opened a window the
+  single read never had — a deleter that bumps no epoch (batch retention's horizon, a sibling
+  replica's prune) removing rows between them would have had the frameless refold fold a silently
+  gapped history — so contiguity is re-verified against the list actually folded, thrown without
+  counting (the read-denial rule: transient, one tick). And the drain message was pass-aware-false:
+  #186 shows it verbatim as `lastRebuildMessage`, and on the forced pass `settleSiteWide` re-arms —
+  the text now says which happened. The rest: a stray diff3 marker the develop sync left in both
+  journal files (deleted); the conditional DELETE's marker predicate — A2's whole fix — was pinned
+  by nothing that reached the real SQL (an integration test now drives the real statement over a
+  pending, half-pending and processed row); `SdkClientException` escaping `deleteObjects` would
+  have rolled the row deletes back *after* earlier chunks' objects were destroyed — rows restored,
+  objects gone, in bulk (caught now, the #158-round-2 gap); `deleted-pending` counted before
+  anything was deleted, inflating the "permanently unproducible" series with phantom losses on
+  every failing night (counted after the segment delete returns; pinned); the re-baseline reset's
+  blanket site-wide DELETE could take a row committed between the key read and the delete
+  (`deleteByIdIn` over exactly the collected refs now) and its afterCommit object deletes went one
+  round trip per key (batched); `findBySiteIdOrderByFirstSeq` — now with zero production callers —
+  carries a do-not-re-adopt Javadoc; the hold-back census counting lives once
+  (`HeldBackTally`); and the informed-override's real surface is stated honestly (a server-side
+  WARN; the delete's HTTP response carries no pending count — a REST change was deliberately
+  avoided, a UI confirmation is its own decision if wanted).
+- sql-generation-config-fail-fast: An out-of-range value anywhere in the `plugin.sql-generation.*`
+  block fails the application context at startup, and the dead async generator is gone (issue #185,
+  folding **#210** — both hygiene in `SqlGenerationService`, sequenced after #190). **Fail fast over
+  a startup WARN is an owner decision recorded on the ticket**; the argued form lives in one place —
+  `docs/020-sql-generation-optimization.md`, "One caveat on 'unbounded retry is safe'" — and in
+  short: a GKE rolling update keeps old replicas serving while the rollout goes red, the WARN
+  channel is proven unread (#174's "abort disabled" line), and the silent failures are the
+  expensive ones (`800` disables the heap guard, a negative value is an endless retry loop, #181,
+  ending in silent data loss once retention passes the pending segments, #212; clamping was ruled
+  out by the ticket). **All five keys, two consuming constructors** — review round 1 caught the
+  first cut validating three keys while the docs claimed the block: `SqlGenerationService` holds
+  `heap-threshold-percent` ∈ [1..100], `max-concurrent` >= 1, `semaphore-timeout-seconds` >= 1, and
+  `DeltaSqlSweepWorker` holds `delta-max-concurrent` >= 1 (0 used to crash-loop through
+  `ArrayBlockingQueue`'s message-less `IllegalArgumentException`, the exact anonymous failure
+  fail-fast replaces) and `delta-sweep-ms` >= 1 (0 was *accepted* by Spring and busy-looped the
+  fallback sweep), through shared package-private `PluginConfigValidation` — deliberately not
+  shared wider: the delta packages keep their own constructor checks. **The heap floor is 1, not
+  the 0 first shipped** (round 1's F1): a live JVM's ceiling-rounded reading is never 0, so a
+  strict `> 0` refuses every generation exactly like the `-1` beside it — a pathological value
+  blessed by validation one unit above the cut, and a collision with this deployment's own
+  "0 disables" convention (`delta.parquet.max-scratch-bytes`); 100 stays #174's documented
+  off-switch, still pinned by `SqlGenerationStreamingTest`. Round 1 also killed the consequence
+  text "0 permits deadlock the semaphore outright", which had been copied into five surfaces and
+  was wrong in kind — `acquireSemaphore` uses a bounded `tryAcquire`, so the real signature is
+  120-second timeouts retried for ever, a different incident to chase. The refusal names the key
+  **and the value** ("but was N" — pinned literally, after round 1 showed `hasMessageContaining("0")`
+  satisfied by static text), and the promise is scoped: it holds for a well-formed integer, while a
+  value Spring cannot convert (`"80%"`, or an env var present but empty — `${VAR:80}` does not
+  default for `""`) dies earlier in `@Value` conversion naming the constructor parameter, said in
+  the yaml comment and docs/020 rather than closed with String-parsing constructors. Tests pin both
+  boundaries of every range as `@ParameterizedTest`s in the two consumers' test classes.
+  **Part 2**: `generateSqlForBatchAsync` is deleted — one grep hit in `src/`, the declaration; its
+  Javadoc described the reinit flow that was removed (`PluginHistoryService`'s "SQL generation no
+  longer triggered for reinit" comment stays as the record); as a correctly-qualified `@Async` site
+  the #195 guard kept it alive while readers of the #161 inventory counted it as a `pluginExecutor`
+  consumer. Round 1 then swept the prose the deletion left stale: `docs/reinit.md` documented the
+  async regeneration as live down to a `sqlGenerationTriggered: true` example (it is always
+  `false`), `AccountPluginsController`'s 202 comment promised background generation,
+  `BackgroundConnectionDemandTest` still classified the deleted entry point,
+  `AsyncExecutorQualifierTest`'s failure message counted 15-of-18 `@Async` sites (13 of 15 now),
+  `PluginHistoryServiceTest`'s T017 display name asserted the deleted behaviour, and `PLUGIN_ID`
+  carried the Javadoc of a max-files constant deleted long ago. No migration (**V55 stays free**),
+  no REST, gRPC, proto, DTO, metric, S3-key, configuration-key-**name** or frontend change; key
+  names and defaults are untouched — only an out-of-range value's fate changes.
+  See `docs/020-sql-generation-optimization.md`.
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three

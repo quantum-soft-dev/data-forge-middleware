@@ -6,7 +6,7 @@ import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
-import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -28,19 +28,37 @@ class DeltaRebaselineServiceTest {
     private static final UUID BATCH = UUID.randomUUID();
 
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
-    private final S3ChangelogSegmentStorage segmentStorage = mock(S3ChangelogSegmentStorage.class);
+    private final S3FileStorageService objectDeleter = mock(S3FileStorageService.class);
     private final CheckpointRepository checkpointRepository = mock(CheckpointRepository.class);
     private final SiteSyncStateRepository syncStateRepository = mock(SiteSyncStateRepository.class);
     private final DeltaRebaselineService service = new DeltaRebaselineService(
-            segmentRepository, segmentStorage, checkpointRepository, syncStateRepository);
+            segmentRepository, objectDeleter, checkpointRepository, syncStateRepository);
+
+    {
+        when(objectDeleter.deleteObjects(org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
+    }
+
+    private static ChangelogSegmentRepository.CommittedSegmentRef ref(UUID id, String key) {
+        return new ChangelogSegmentRepository.CommittedSegmentRef() {
+            @Override
+            public UUID getId() {
+                return id;
+            }
+
+            @Override
+            public String getS3Key() {
+                return key;
+            }
+        };
+    }
 
     @Test
     void resetClearsSegmentsCheckpointsAndResetsWatermarkKeepingSchema() {
-        UUID segId = UUID.randomUUID();
-        ChangelogSegment segment = mock(ChangelogSegment.class);
-        when(segment.getId()).thenReturn(segId);
-        when(segment.getS3Key()).thenReturn("delta/site/segments/old.pb.gz");
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
+        UUID oldSegId = UUID.randomUUID();
+        when(segmentRepository.findCommittedRefsBySiteId(SITE))
+                .thenReturn(List.of(ref(oldSegId, "delta/site/segments/old.pb.gz")));
+        when(segmentRepository.deleteByIdIn(List.of(oldSegId))).thenReturn(1);
 
         UUID cpId = UUID.randomUUID();
         Checkpoint checkpoint = mock(Checkpoint.class);
@@ -55,8 +73,11 @@ class DeltaRebaselineServiceTest {
 
         service.reset(SITE, 200L);
 
-        verify(segmentStorage).delete("delta/site/segments/old.pb.gz");
-        verify(segmentRepository).deleteById(segId);
+        // One batched DeleteObjects, not one round trip per key (R2-8) — and one bulk row DELETE
+        // over exactly the ids whose keys were collected, so rows and objects keep their identity.
+        verify(objectDeleter).deleteObjects(List.of("delta/site/segments/old.pb.gz"));
+        verify(segmentRepository).deleteByIdIn(List.of(oldSegId));
+        verify(segmentRepository, never()).deleteById(any());
         verify(checkpointRepository).deleteById(cpId);
 
         ArgumentCaptor<SiteSyncState> saved = ArgumentCaptor.forClass(SiteSyncState.class);
@@ -79,7 +100,7 @@ class DeltaRebaselineServiceTest {
         // as a plain read leaves it — a guarded write can slip between the checkpoint deletes and
         // the epoch bump and outlive the reset.
         InOrder order = inOrder(syncStateRepository, checkpointRepository, segmentRepository);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(segmentRepository.findCommittedRefsBySiteId(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
         when(syncStateRepository.findBySiteIdForUpdate(SITE))
                 .thenReturn(Optional.of(SiteSyncState.initial(SITE)));
@@ -87,7 +108,7 @@ class DeltaRebaselineServiceTest {
         service.reset(SITE, 10L);
 
         order.verify(syncStateRepository).findBySiteIdForUpdate(SITE);
-        order.verify(segmentRepository).findBySiteIdOrderByFirstSeq(SITE);
+        order.verify(segmentRepository).findCommittedRefsBySiteId(SITE);
         order.verify(checkpointRepository).findBySiteId(SITE);
         verify(syncStateRepository, never()).findBySiteId(SITE);
     }
@@ -97,13 +118,16 @@ class DeltaRebaselineServiceTest {
         // 033: a large re-baseline seals its own segments before SessionEnd calls reset. Those are
         // provisional, and reset must source its delete set from the committed-only query — sweeping
         // them too would destroy the very snapshot that is replacing the baseline.
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(segmentRepository.findCommittedRefsBySiteId(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
         when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
 
         service.reset(SITE, 10L);
 
-        verify(segmentRepository).findBySiteIdOrderByFirstSeq(SITE);
+        verify(segmentRepository).findCommittedRefsBySiteId(SITE);
+        // An empty committed set issues no DELETE at all — 'WHERE id IN ()' is not a statement.
+        verify(segmentRepository, never()).deleteByIdIn(any());
+        verify(segmentRepository, never()).deleteBySiteId(any());
         verify(segmentRepository, never()).findProvisionalBySiteId(any());
     }
 
@@ -121,7 +145,7 @@ class DeltaRebaselineServiceTest {
 
         assertEquals(1, deleted);
         verify(segmentRepository).deleteById(orphanId);
-        verify(segmentStorage).delete("delta/site/segments/orphan.pb.gz");
+        verify(objectDeleter).deleteObjects(List.of("delta/site/segments/orphan.pb.gz"));
         verify(syncStateRepository, never()).save(any());
         verify(checkpointRepository, never()).deleteById(any());
     }
@@ -133,6 +157,6 @@ class DeltaRebaselineServiceTest {
         assertEquals(0, service.deleteProvisionalByBatch(BATCH));
 
         verify(segmentRepository, never()).deleteById(any());
-        verifyNoInteractions(segmentStorage);
+        verifyNoInteractions(objectDeleter);
     }
 }

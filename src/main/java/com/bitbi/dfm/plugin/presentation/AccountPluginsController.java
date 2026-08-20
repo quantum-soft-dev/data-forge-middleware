@@ -452,8 +452,10 @@ public class AccountPluginsController {
         log.info("Reinit initiated for plugin {} account {}: deleted={}, sqlGenerationTriggered={}",
                 pluginId, accountId, result.deletedGenerations(), result.sqlGenerationTriggered());
 
-        // Return 202 Accepted - SQL generation continues asynchronously in background
-        // Client can poll /sql-changes to check when generation completes
+        // Return 202 Accepted — kept for API compatibility with the original 015 contract, whose
+        // async SQL generation was since removed: reinit now only re-baselines and re-enqueues
+        // the V2 segments (026), and the delta-SQL queue renders them on its own schedule.
+        // Client can poll /sql-changes for the regenerated deltas.
         return ResponseEntity.accepted().body(result);
     }
 
