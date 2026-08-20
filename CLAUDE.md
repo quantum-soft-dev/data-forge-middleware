@@ -511,6 +511,57 @@ pages/{feature}/            # Route pages
 - Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
 
 ## Recent Changes
+- poison-segment-backoff: One deterministically failing segment no longer stalls every other site's
+  queue work, and the egress queue has an error counter for the first time (issue #243, filed by
+  review round 1 of PR #235 and sequenced after #212 and #185). Both segment queues claim the
+  **globally** oldest per-site head with `LIMIT 1` (`findNextPendingPluginSql`,
+  `findNextPendingEgress`), and the drain ended on the first `RuntimeException` — so a segment whose
+  work always throws was offered first on every wake and nothing else in the fleet was produced.
+  #212 changed that stall's ending rather than its mechanism: pending segments are no longer pruned,
+  so what used to self-heal in days by silently losing one batch became permanent, bounded only by
+  batch retention. **V55** adds `plugin_sql_attempts`/`plugin_sql_retry_at` and
+  `egress_attempts`/`egress_retry_at`; a failed attempt records a deferral and the drain moves on to
+  another site. The backoff filter applies to the **candidate row only** — the head-of-line
+  `NOT EXISTS` is deliberately untouched, so the failing segment still blocks *its own* site, which
+  is the per-site seq contract `/sql-changes` and the per-table delta files depend on. The delay
+  starts at 60 s and doubles per attempt to 64x, the `delta.batch-parquet.retry-delay-seconds`
+  shape.
+  **The DoD's poison-skip was weighed and rejected, and that is the decision to review.** A skip
+  (stamp the marker, move on) discards that batch's SQL or delta file permanently — a segment is
+  the durable queue entry and nothing re-drives it once the marker is stamped — while the usual
+  causes are operator-repairable: a declared schema that does not fit the data, an unreadable
+  object, a ceiling set too low, all fixable, after which the retry succeeds. Skipping would turn a
+  repairable stall into exactly the silent, unrecoverable loss #212 had just stopped. So the attempt
+  count escalates **reporting** instead of taking a verdict, and the one bounded ending stays batch
+  retention (`delta.retention.segments.deleted-pending`, #212's owner decision).
+  **Loudness, since a skip is not what bounds it**: every failed attempt increments
+  `sql.generation.delta.segments.deferred` or **`delta.egress.errors`** (the DoD's second item — the
+  `sql.generation.errors` twin the egress side never had) with a WARN; past
+  `*-poison-after-attempts` (7 ≈ an hour with the doubling, so a passing outage never reaches it)
+  the line becomes an ERROR naming segment, site, seq range and next retry, and
+  `delta.egress.segments.poisoned` / `sql.generation.delta.segments.poisoned` move. Those two are a
+  **census, not an arrival rate** — the same segment counts again on every retry, once an hour past
+  the cap — the `delta.retention.segments.held-back` caveat verbatim. All four series registered at
+  zero.
+  **The memory-pressure refusal is exempt** and still ends the drain: `MemoryPressureAbortedException`
+  (#181) reads the *pod's* heap before any work, so every segment claimed during an episode would
+  meet it — deferring it would walk healthy segments towards the poisoned report and let a transient
+  overload become a verdict on the data, the rule #150/#162/#178 already hold. Pinned in
+  `DeltaSqlQueueMemoryPressureTest`: no `deferPluginSql`, no counter movement.
+  **Two smaller decisions.** The deferral is a **targeted UPDATE** carrying the marker predicate
+  (`deferPluginSql`/`deferEgress`), not a save of the claimed entity: since #164 the claim lock is
+  released before the work, so two replicas can attempt one segment and the increment has to happen
+  in the database, and a segment whose work landed (or which a reinit re-enqueued) must not be
+  pushed into a cooldown by a straggler — which also means these columns do not widen #245's
+  whole-entity clobber on the write path that matters. And `clearPluginSqlBySiteId` resets the retry
+  state with the marker: a reinit is the operator saying the cause is gone. New keys
+  `delta.egress.{retry-delay-seconds,poison-after-attempts}` and
+  `plugin.sql-generation.delta-{retry-delay-seconds,poison-after-attempts}`, validated in their
+  consuming beans and named in the refusal (#185's rule, one shared `QueueRetryBackoff`). Proven by
+  mutation: with the deferral put back to a rethrow, four unit tests fail across the two queues. No
+  REST, gRPC, proto, DTO, configuration-key **rename**, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("One failing segment does not stall the other sites", Metrics),
+  `docs/020-sql-generation-optimization.md`.
 - signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
   identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
   by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings

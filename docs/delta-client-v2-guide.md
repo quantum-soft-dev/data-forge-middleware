@@ -2109,10 +2109,8 @@ explain, not routine.
 permanent-stall scenario — a mistyped `plugin.sql-generation.heap-threshold-percent` making every
 generation refuse forever — is closed at source by #185's fail-fast validation (an out-of-range
 value in the `plugin.sql-generation.*` block fails the context at startup), and a deterministic
-poison batch is already loud through `sql.generation.errors` and the
-#181 audit entries (the egress queue has no error counter yet — #243 tracks per-segment retry
-bounds and poison-skip for both queues, which is where a sharper bound would live if one is ever
-wanted).
+poison batch is loud through `sql.generation.errors`, the #181 audit entries and, since #243,
+`delta.egress.errors` plus the two poisoned counters below.
 
 **What the hold-back guarantee covers, exactly**: the two queue markers. A third durable consumer
 of raw segments exists — the completed-batch Parquet replay (`batch_parquet_artifacts`, 036/038
@@ -2149,6 +2147,58 @@ tick re-reads and classifies).
 The queues' retry contract (`DeltaSqlQueueService` Javadoc) states the horizon out loud: no longer
 silently bounded by changelog retention — bounded by the endings above, of which batch retention
 is the scheduled one.
+
+### One failing segment does not stall the other sites (issue #243)
+
+Both segment queues claim work the same way: `findNextPendingPluginSql` and `findNextPendingEgress`
+return the **globally** oldest per-site head with `LIMIT 1`. So a segment whose work throws
+deterministically — an object the bucket will not return, data the declared schema cannot render,
+a ceiling set below what the segment needs — used to be offered first on every wake, the drain
+ended on it, and *no other site's* SQL or delta Parquet was produced until an operator noticed.
+Before #212 that ended by itself, badly: retention eventually deleted the pending segment and the
+work was silently lost. With retention holding it back, the stall became permanent.
+
+A failed attempt now **defers that one segment**: `changelog_segments` carries
+`plugin_sql_attempts` / `plugin_sql_retry_at` and `egress_attempts` / `egress_retry_at` (V55), the
+claim query skips a segment inside its cooldown, and the drain continues with another site. The
+cooldown starts at `delta.egress.retry-delay-seconds` /
+`plugin.sql-generation.delta-retry-delay-seconds` (60 s) and doubles per attempt to 64x, the shape
+`delta.batch-parquet.retry-delay-seconds` already uses.
+
+**The deferral is per segment, not per site.** The backoff applies to the candidate row only; the
+head-of-line rule is untouched, so the failing segment still blocks *its own* site's later
+segments. That is deliberate — a site's SQL generations and delta files publish in `first_seq`
+order, and skipping past a failing head would break the contract `/sql-changes` and the per-table
+delta files depend on.
+
+**Nothing is discarded, and that is the decision worth arguing.** The ticket allowed a poison-skip
+(stamp the marker, move on) and it is not what shipped: a segment is the durable queue entry, no
+route re-drives it once its marker is stamped, and the usual causes are operator-repairable — fix
+the declared schema, restore the object, raise the ceiling, reinit the plugin. A skip would turn a
+repairable stall into permanent, unrecoverable loss of that batch's SQL, which is exactly what
+#212 had just stopped. The attempt count therefore escalates **reporting** instead of taking a
+verdict, and the one bounded ending stays batch retention (`delta.retention.segments.deleted-pending`).
+
+**What the escalation looks like.** Every failed attempt increments
+`sql.generation.delta.segments.deferred` (SQL) or `delta.egress.errors` (egress — the
+`sql.generation.errors` twin that side never had) and logs a WARN. Once a segment has failed
+`delta.egress.poison-after-attempts` / `plugin.sql-generation.delta-poison-after-attempts` times
+(7, roughly an hour with the doubling, so a passing outage does not reach it) the line becomes an
+ERROR naming the segment, its site, its seq range and its next retry, and
+`delta.egress.segments.poisoned` / `sql.generation.delta.segments.poisoned` moves. Read those two
+as a **census, not an arrival rate**: the same segment counts again on every retry — past the cap
+once an hour — until the cause is fixed or the batch is deleted. All four series are registered at
+zero, so an alert can predate the first failure.
+
+**The memory-pressure refusal is exempt** and still ends the drain. `MemoryPressureAbortedException`
+(#181) is a reading of the *pod's* heap taken before any work, so every segment claimed while it
+lasts would meet it: it spends no attempt, moves neither counter, and the next wake starts over.
+Deferring it would walk healthy segments towards the poisoned report and let a transient overload
+become a verdict on the data — the rule #150, #162 and #178 already hold elsewhere.
+
+**A plugin reinit clears the retry state** along with the marker (`clearPluginSqlBySiteId`): the
+operator is saying the cause is gone, so the site's segments are claimable at once rather than
+sitting out the cooldown their old failures earned.
 
 ### Objects no row references are reclaimed (issue #158)
 
@@ -2428,6 +2478,8 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`,
 `delta.retention.segments.deleted-pending{reason=pending_plugin_sql|pending_egress}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
+`delta.egress.errors`, `delta.egress.segments.poisoned`,
+`sql.generation.delta.segments.deferred`, `sql.generation.delta.segments.poisoned`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
 
@@ -2464,6 +2516,10 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.reconciliation.failures` | `delta_reconciliation_failures_total` |
 | `delta.egress.segments` | `delta_egress_segments_total` |
 | `delta.egress.pending` | `delta_egress_pending` |
+| `delta.egress.errors` | `delta_egress_errors_total` |
+| `delta.egress.segments.poisoned` | `delta_egress_segments_poisoned_total` |
+| `sql.generation.delta.segments.deferred` | `sql_generation_delta_segments_deferred_total` |
+| `sql.generation.delta.segments.poisoned` | `sql_generation_delta_segments_poisoned_total` |
 | `delta.egress.duration{phase=...}` (timer) | `delta_egress_duration_seconds_count` / `_sum` / `_max` |
 | `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
 | `delta.batch-parquet.duration{phase=...}` (timer) | `delta_batch_parquet_duration_seconds_count` / `_sum` / `_max` |

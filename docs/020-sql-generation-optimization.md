@@ -379,8 +379,8 @@ on a later attempt; nothing about it is deterministically too large. The determi
 size ceilings are the opposite case — they repeat identically for ever — and are bounded by
 attempt counters (#149) or settled as `ABANDONED` (036) instead.
 
-**What sets the retry rate is the wake, not the sweep.** A throw ends the whole
-`DeltaSqlSweepWorker` drain, so there is exactly one refused attempt per wake — but the pool is
+**What sets the retry rate is the wake, not the sweep.** The memory-pressure refusal ends the
+whole `DeltaSqlSweepWorker` drain, so there is exactly one refused attempt per wake — but the pool is
 woken by `BitBiPlugin.execute` on **every** `BATCH_COMPLETED` and by a plugin reinit, not only by
 the `plugin.sql-generation.delta-sweep-ms` tick (60 s). On a busy fleet a pressure episode
 therefore produces one refused attempt, one WARN line and one audit row per completed batch,
@@ -397,8 +397,10 @@ bean's constructor — and an out-of-range value **fails the application context
 | `semaphore-timeout-seconds` | `>= 1` | `SqlGenerationService` |
 | `delta-max-concurrent` | `>= 1` | `DeltaSqlSweepWorker` |
 | `delta-sweep-ms` | `>= 1` | `DeltaSqlSweepWorker` |
+| `delta-retry-delay-seconds` | `>= 1` | `DeltaSqlQueueService` (#243) |
+| `delta-poison-after-attempts` | `>= 1` | `DeltaSqlQueueService` (#243) |
 
-None of the five was scoped out. 100 stays the documented off-switch of #174 (the strict
+None of the five #185 covered was scoped out, and the two keys #243 added carry the same rule. 100 stays the documented off-switch of #174 (the strict
 comparison and the clamp are untouched), and the heap floor is **1, not 0**: the ceiling-rounded
 reading of a live JVM is never 0, so a threshold of 0 refuses every generation exactly like a
 negative value — and this deployment's "0 disables" convention elsewhere
@@ -444,6 +446,21 @@ site's history — or at **batch retention** (per-site `retentionDays`, default 
 deletes a retired batch's segments regardless of markers and counts what it destroys on
 `delta.retention.segments.deleted-pending`. See `docs/delta-client-v2-guide.md` ("Retention does
 not delete unprocessed work").
+
+**A per-segment failure no longer ends the drain at all (#243).** Everything above describes the
+memory-pressure refusal, which is systemic and deliberately keeps that behaviour. Any *other*
+failure of a claimed segment — an unreadable object, data the declared schema cannot render — is
+now recorded as a durable deferral (`changelog_segments.plugin_sql_attempts` /
+`plugin_sql_retry_at`, V55) and `processNextPending` returns normally, so the drain moves on to
+another site. Before that, since the claim is the globally oldest per-site head with `LIMIT 1`,
+one poison batch meant no site anywhere had SQL generated. The cooldown starts at
+`plugin.sql-generation.delta-retry-delay-seconds` and doubles per attempt to 64x; past
+`plugin.sql-generation.delta-poison-after-attempts` the WARN becomes an ERROR naming the segment
+and `sql.generation.delta.segments.poisoned` moves. **No attempt ceiling discards the work** — a
+skip would lose that batch's SQL permanently, with no route to re-drive it, which is what #212
+had just stopped — so the horizon stays the one described above. A plugin reinit clears the retry
+state with the marker. See `docs/delta-client-v2-guide.md` ("One failing segment does not stall
+the other sites").
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
