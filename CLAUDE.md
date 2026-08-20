@@ -503,6 +503,44 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- sql-generation-config-fail-fast: An out-of-range value in the `plugin.sql-generation.*` block
+  fails the application context at startup, and the dead async generator is gone (issue #185,
+  folding **#210** — both hygiene in the same file, `SqlGenerationService`, sequenced after #190
+  which retired the regeneration paths this validation would otherwise have interacted with).
+  **Fail fast over a startup WARN is an owner decision recorded on the ticket**, with three
+  reasons worth keeping: the deployment is a GKE rolling update, so a pod that refuses to start
+  does not take the service down — old replicas keep serving and the rollout goes red
+  immediately, which is exactly the visibility a config typo needs; a WARN is the channel already
+  proven unread — the "memory-pressure abort disabled" startup line exists since #174 and would
+  have stopped nobody; and the failure costs are asymmetric — `800` (a plausible unit typo)
+  silently disables the heap guard, while a negative value turns the whole deployment into an
+  endless retry loop (#181 made the abort a throw, so the segment stays pending and the queue
+  retries) that per #212 ends in silent data loss once retention passes over the pending
+  segments. A failed rollout is strictly cheaper than either. The ticket had already ruled out
+  clamping: `800` clamps to `100` and still disables the guard, `-5` clamps to `0` and still
+  refuses nearly everything. The ranges, applied to **all three** keys (none scoped out):
+  `heap-threshold-percent` ∈ [0..100] — 100 stays the documented off-switch of #174, whose strict
+  comparison and clamp are untouched and stay pinned by `SqlGenerationStreamingTest` — with
+  `max-concurrent` >= 1 (0 deadlocks the semaphore outright) and `semaphore-timeout-seconds`
+  >= 1. Validation lives in the `SqlGenerationService` **constructor**
+  (`requireInRange`/`requireAtLeast`), so a bad value surfaces as a `BeanCreationException` whose
+  cause **names the configuration key and the value** — the crash-loop log line is the whole of
+  what an operator gets to diagnose a failed rollout with. **What validation does not bound is
+  stated rather than implied**: a value that is in range and still wrong for the pod — a
+  threshold of `8` is legal — still makes the check true for nearly every generation and stalls
+  the delta-SQL queue; the retry horizon of #212 is unchanged, and `docs/020`'s caveat now says
+  exactly that. Tests pin **both boundaries of each range** (seven refusal tests written first
+  and red, three acceptance tests beside them; the refusal message's key name is asserted too).
+  **Part 2**: `generateSqlForBatchAsync` is deleted — `grep -rn` found one hit, the declaration;
+  its Javadoc described the reinit flow that was removed (`PluginHistoryService`'s "SQL
+  generation no longer triggered for reinit" comment stays as the remaining record); and it was
+  one of the few `@Async` sites in the application, so a reader of the #161 pool inventory
+  counting `pluginExecutor` consumers counted it — the #195 guard kept it alive rather than
+  flagging it, because it named its executor correctly. The `docs/020` caller-table note records
+  the deletion instead of merely omitting the method. No migration (**V55 stays free**), no REST,
+  gRPC, proto, DTO, metric, S3-key, configuration-key-**name** or frontend change; the three
+  keys' names and defaults are untouched — only an out-of-range value's fate changes.
+  See `docs/020-sql-generation-optimization.md`.
 - retire-sql-regeneration: The SQL regeneration path is gone, because it had never worked end to
   end and repairing it would have repaired a path that can serve no live batch (issue #190,
   folding #200 — the two were one piece of work: #190's transaction refusal fired first and #200's
