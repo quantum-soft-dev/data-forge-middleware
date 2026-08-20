@@ -488,9 +488,9 @@ gh api graphql \
 > [!NOTE]
 > Красный CI — повод перепрогнать и сверить с `develop`, если тот же тест падает на чистом
 > дереве. Это не повод объявить красный прогон «известной флакухой», не проверив, какой
-> именно тест упал. Тесты `SqlGenerationService` / `regenerateForBatch` и CONFIG-fallback
-> расписания ретенции больше не флакухи — их изолировали в #119; `SqlGenerationIntegrationTest`
-> и `BitBiDeltaSqlIntegrationTest` — в #159.
+> именно тест упал. Тесты `SqlGenerationService` и CONFIG-fallback расписания ретенции больше
+> не флакухи — их изолировали в #119 (`regenerateForBatch` вместе со своими тестами удалён
+> в #190); `SqlGenerationIntegrationTest` и `BitBiDeltaSqlIntegrationTest` — в #159.
 
 **«Ready to merge» — все четыре условия разом:**
 

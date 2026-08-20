@@ -534,14 +534,17 @@ class SqlGenerationConcurrencyTest {
     }
 
     @Nested
-    @DisplayName("regenerateForBatch Concurrency")
-    class RegenerateForBatchConcurrency {
+    @DisplayName("Semaphore Queueing")
+    class SemaphoreQueueing {
 
         @Test
-        @DisplayName("should also protect regenerateForBatch with semaphore")
-        void shouldProtectRegenerateForBatchWithSemaphore() throws Exception {
-            // Long timeout: this test asserts that regenerateForBatch queues on the
-            // same semaphore, not that a 1s clock expires (issue #119).
+        @DisplayName("a second caller waits on the semaphore and the queue gauge reads it")
+        void shouldQueueSecondCallerOnTheSemaphore() throws Exception {
+            // The non-zero pin for sql.generation.semaphore.queue.size. It used to live on the
+            // retired regenerateForBatch path (#190 deleted that test with the method); the
+            // property — a caller that cannot get a permit is visible on the gauge while it
+            // waits — belongs to generateSqlForBatch just the same. Long timeout: this asserts
+            // queueing, not that a clock expires (issue #119).
             SqlGenerationService service = createService(1, 120);
 
             CountDownLatch holdPermit = new CountDownLatch(1);
@@ -568,11 +571,11 @@ class SqlGenerationConcurrencyTest {
                 assertThat(firstHoldsPermit.await(5, TimeUnit.SECONDS))
                         .as("first generateSqlForBatch should hold the semaphore").isTrue();
 
-                Future<?> regenerate = executor.submit(() -> service.regenerateForBatch(batchId2, pluginId2));
+                Future<?> second = executor.submit(() -> service.generateSqlForBatch(batchId2, pluginId2));
                 awaitSemaphoreQueueSize(1);
 
-                assertThat(regenerate.isDone())
-                        .as("regenerateForBatch should still be waiting on the semaphore").isFalse();
+                assertThat(second.isDone())
+                        .as("second generateSqlForBatch should still be waiting on the semaphore").isFalse();
 
                 holdPermit.countDown();
                 first.get(5, TimeUnit.SECONDS);

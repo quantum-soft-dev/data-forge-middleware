@@ -14,7 +14,6 @@ import type {
   SqlContentPage,
   HistoryClearSummary,
   HistoryClearResult,
-  RegenerateResult,
   GenerationListFilters,
   SqlContentParams,
 } from '../model/types'
@@ -121,19 +120,6 @@ export async function clearHistory(
   return response.data
 }
 
-/**
- * Regenerates SQL for a specific generation.
- */
-export async function regenerateSql(
-  pluginId: string,
-  accountId: string,
-  generationId: string
-): Promise<RegenerateResult> {
-  const url = `${buildGenerationUrl(pluginId, accountId, generationId)}/regenerate`
-  const response = await apiClient.post<RegenerateResult>(url)
-  return response.data
-}
-
 export const pluginHistoryApi = {
   fetchGenerations,
   fetchGeneration,
@@ -141,5 +127,4 @@ export const pluginHistoryApi = {
   downloadSqlFile,
   fetchHistorySummary,
   clearHistory,
-  regenerateSql,
 }

@@ -402,34 +402,5 @@ class SqlGenerationStreamingTest {
                     .isEqualTo(1.0);
         }
 
-        @Test
-        @DisplayName("regeneration: should not persist an empty artifact over a good generation")
-        void shouldNotPersistAnEmptyRegenerationOnMemoryPressure() {
-            // Given - the abort during an admin regeneration used to be read as "no changes",
-            // stored as a `-- No changes detected` artifact, and the original generation then
-            // marked superseded by PluginHistoryService — an operator recovering from one dropped
-            // batch destroyed another (issue #181).
-            SqlGenerationService service = spy(createService(80));
-            doReturn(81).when(service).getHeapUsagePercent();
-            Long accountPluginId = 1L;
-            UUID batchId = arrangeSingleFileDbfBatch(accountPluginId);
-
-            // When / Then
-            assertThatThrownBy(() -> service.regenerateForBatch(batchId, accountPluginId))
-                    .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
-                    .hasMessageContaining(batchId.toString());
-
-            // Nothing was written, so the caller never reaches markAsSuperseded
-            verify(s3SqlFileStorageService, never()).storeSqlFile(any(), any(), anyString());
-            verify(sqlGenerationRepository, never()).save(any());
-            verify(pluginAuditService).logSqlRegenerationFailed(
-                    eq("bit-bi"), any(), eq(batchId), any(), contains("memory pressure"), anyLong());
-            verify(pluginAuditService, never()).logSqlRegenerationStarted(any(), any(), any(), any());
-            // The refusal has a counter of its own and repairs itself, so it stays off the series
-            // that means "generation is broken". Absent rather than zero: init() registers only
-            // sql.generation.aborted.memory_pressure, so this series exists at all only once
-            // something increments it.
-            assertThat(meterRegistry.find("sql.regeneration.errors").counter()).isNull();
-        }
     }
 }

@@ -144,27 +144,13 @@ public class PluginSqlGeneration {
     }
 
     /**
-     * Returns true if this generation has been superseded by a regeneration.
+     * Returns true if this generation was superseded by the retired regeneration path.
+     *
+     * <p>Historical since #190: the mutator died with that path, so nothing sets the flag any
+     * more. The getter stays so historical rows remain readable — the same reasoning that keeps
+     * the {@code superseded}/{@code superseded_by} columns.</p>
      */
     public boolean isSuperseded() {
         return Boolean.TRUE.equals(superseded);
-    }
-
-    /**
-     * Marks this generation as superseded by a new generation.
-     * Used when regenerating SQL for a batch.
-     *
-     * @param newGenerationId The ID of the new generation that supersedes this one
-     * @throws IllegalStateException if this generation is already superseded
-     */
-    public void markAsSuperseded(UUID newGenerationId) {
-        if (this.superseded) {
-            throw new IllegalStateException("Generation is already superseded: " + this.id);
-        }
-        if (newGenerationId == null) {
-            throw new IllegalArgumentException("New generation ID cannot be null");
-        }
-        this.superseded = true;
-        this.supersededBy = newGenerationId;
     }
 }

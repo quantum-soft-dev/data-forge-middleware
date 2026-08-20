@@ -337,22 +337,24 @@ It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass 
 | Caller | Before | Now |
 |---|---|---|
 | `DeltaSqlQueueService.processNextPending` | segment marked processed, SQL lost | throws before the mark, so the segment stays pending and the next drain offers it again |
-| `SqlGenerationService.doRegenerateForBatch` | empty artifact stored, original superseded | nothing stored, `markAsSuperseded` never reached |
 | `POST /api/v1/account/plugins/{pluginId}/generate-sql` (owner) and `POST /api/v1/plugins/{pluginId}/accounts/{accountId}/generate-sql` (admin) | `200` "SQL generation skipped" | `500 INTERNAL_ERROR` quoting the refusal |
+
+(A third row used to name `SqlGenerationService.doRegenerateForBatch` — empty artifact stored,
+original superseded. #190 then retired the whole regeneration path, so that consumer no longer
+exists; the history stays in the bullet list above.)
 
 (`generateSqlForBatchAsync` is not in the table: it has no callers — see #210.)
 
-The regeneration row is a fix for a path that is **not reachable today**: the only production
-caller, `PluginHistoryService.regenerateSql`, is `@Transactional`, so `refuseIfTransactionActive()`
-throws before `doRegenerateForBatch` is entered (that is #190, still open). The hazard it removes
-becomes live again the moment #190 lands, which is why it is fixed here rather than left for that
-ticket.
+The regeneration hazard was closed for good by #190 itself: rather than moving the generation out
+of the caller's transaction, #190 retired the regeneration path entirely (it could not serve any
+segment-backed batch, and the V11 unique on `source_batch_id` forbade the second row it needed).
+Recovery is delete + manual generate-SQL, or a reinit for a batch the client already fetched.
 
 `null` keeps its one remaining meaning — the diff really was empty — and the batch that was refused
 is now named durably: the existing `catch (RuntimeException)` writes a `SQL_GENERATION_FAILED`
-entry (`SQL_REGENERATION_FAILED` on the regeneration path), visible to the account on
+entry, visible to the account on
 `GET /api/v1/account/plugins/{pluginId}/logs`. The refusal is **kept off** `sql.generation.errors`
-/ `sql.regeneration.errors` and logged as a single **WARN** at the point it is raised (carrying the
+and logged as a single **WARN** at the point it is raised (carrying the
 reading and the threshold), not as an ERROR: those series and an ERROR-rate alert both mean
 "generation is broken", and this condition repairs itself when the heap does — the rule #162
 applied to `delta.checkpoint.builds.aborted`. It is also refused *before* the

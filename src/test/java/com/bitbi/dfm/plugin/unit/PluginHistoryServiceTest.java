@@ -3,14 +3,12 @@ package com.bitbi.dfm.plugin.unit;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
-import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.plugin.presentation.dto.*;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -61,9 +59,6 @@ class PluginHistoryServiceTest {
 
     @Mock
     private PluginAuditService auditService;
-
-    @Mock
-    private SqlGenerationService sqlGenerationService;
 
     @Mock
     private com.bitbi.dfm.plugin.application.PluginDeltaBaselineService pluginDeltaBaselineService;
@@ -605,8 +600,8 @@ class PluginHistoryServiceTest {
             verify(mockAccountPlugin).setBaselineBatchId(BATCH_ID);
             verify(accountPluginRepository).save(mockAccountPlugin);
 
-            // SQL generation is no longer triggered on reinit
-            verifyNoInteractions(sqlGenerationService);
+            // SQL generation is no longer triggered on reinit — structurally guaranteed since
+            // #190: PluginHistoryService no longer depends on SqlGenerationService at all.
         }
 
         @Test
@@ -638,41 +633,6 @@ class PluginHistoryServiceTest {
             assertThat(result.success()).isTrue();
             assertThat(result.deletedS3Files()).isEqualTo(2L); // Only 2 succeeded
             assertThat(result.s3DeleteWarnings()).containsExactly("key2.sql");
-        }
-    }
-
-    // ==================== User Story 3: Regenerate ====================
-
-    @Nested
-    @DisplayName("regenerateSql")
-    class RegenerateSql {
-
-        @Test
-        @DisplayName("T045: Should throw when generation already superseded")
-        void shouldThrowWhenGenerationAlreadySuperseded() {
-            // Given
-            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
-                    .thenReturn(Optional.of(mockAccountPlugin));
-
-            PluginSqlGeneration supersededGeneration = mock(PluginSqlGeneration.class);
-            when(supersededGeneration.getAccountPluginId()).thenReturn(ACCOUNT_PLUGIN_ID);
-            when(supersededGeneration.isSuperseded()).thenReturn(true);
-            when(sqlGenerationRepository.findById(GENERATION_ID))
-                    .thenReturn(Optional.of(supersededGeneration));
-
-            // When / Then
-            assertThatThrownBy(() -> pluginHistoryService.regenerateSql(PLUGIN_ID, ACCOUNT_ID, GENERATION_ID))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("already superseded");
-        }
-
-        @Test
-        @DisplayName("T046: Should successfully regenerate SQL for active generation")
-        @Disabled("Requires full SqlGenerationService mock setup - tested via integration tests")
-        void shouldSuccessfullyRegenerateSql() {
-            // This test requires proper SqlGenerationService mock setup which would
-            // need a @Mock for SqlGenerationService and proper wiring.
-            // The regeneration flow is better tested via integration tests.
         }
     }
 

@@ -13,7 +13,6 @@ import {
   ACCOUNT_PLUGIN_GENERATION,
   ACCOUNT_PLUGIN_GENERATION_CONTENT,
   ACCOUNT_PLUGIN_GENERATION_DOWNLOAD,
-  ACCOUNT_PLUGIN_GENERATION_REGENERATE,
 } from '@/shared/api/apiRoutes'
 import type {
   BatchSqlStatusPageResponse,
@@ -23,7 +22,6 @@ import type {
   SqlGenerationListResponse,
   SqlContentPage,
   SqlContentParams,
-  RegenerateSqlResult,
   DeleteGenerationResult,
 } from '../model/types'
 
@@ -121,18 +119,6 @@ export async function downloadSqlFile(
 }
 
 /**
- * Regenerate SQL for a generation (delete and create new).
- */
-export async function regenerateSql(
-  pluginId: string,
-  generationId: string
-): Promise<RegenerateSqlResult> {
-  const url = ACCOUNT_PLUGIN_GENERATION_REGENERATE(pluginId, generationId)
-  const response = await apiClient.post<RegenerateSqlResult>(url)
-  return response.data
-}
-
-/**
  * Delete a SQL generation.
  */
 export async function deleteGeneration(
@@ -150,6 +136,5 @@ export const batchSqlApi = {
   fetchGenerations,
   fetchSqlContent,
   downloadSqlFile,
-  regenerateSql,
   deleteGeneration,
 }

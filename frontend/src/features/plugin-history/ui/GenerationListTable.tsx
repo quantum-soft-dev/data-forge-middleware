@@ -14,14 +14,12 @@ import {
 } from '@/shared/ui/ui/table'
 import { Button } from '@/shared/ui/ui/button'
 import { severityTokens } from '@/shared/ui/tokens';
-import { Badge } from '@/shared/ui/ui/badge'
 import { Skeleton } from '@/shared/ui/ui/skeleton'
 import {
   ChevronLeft,
   ChevronRight,
   Download,
   Eye,
-  RefreshCw,
   FileText,
 } from 'lucide-react'
 import type { SqlGenerationSummary, SqlGenerationListResponse } from '../model/types'
@@ -31,7 +29,6 @@ interface GenerationListTableProps {
   isLoading: boolean
   onViewContent: (generation: SqlGenerationSummary) => void
   onDownload: (generation: SqlGenerationSummary) => void
-  onRegenerate: (generation: SqlGenerationSummary) => void
   onPageChange: (page: number) => void
 }
 
@@ -64,7 +61,6 @@ export function GenerationListTable({
   isLoading,
   onViewContent,
   onDownload,
-  onRegenerate,
   onPageChange,
 }: GenerationListTableProps) {
   if (isLoading) {
@@ -100,7 +96,6 @@ export function GenerationListTable({
             <TableHead className="text-right">INS/UPD/DEL</TableHead>
             <TableHead className="text-right">Size</TableHead>
             <TableHead className="text-right">Duration</TableHead>
-            <TableHead>Status</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -134,13 +129,6 @@ export function GenerationListTable({
               <TableCell className="text-right">
                 {formatDuration(generation.generationDurationMs)}
               </TableCell>
-              <TableCell>
-                {generation.superseded ? (
-                  <Badge variant="neutral">Superseded</Badge>
-                ) : (
-                  <Badge variant="success" dot>Active</Badge>
-                )}
-              </TableCell>
               <TableCell className="text-right">
                 <div className="flex justify-end gap-1">
                   <Button
@@ -159,16 +147,6 @@ export function GenerationListTable({
                   >
                     <Download className="h-4 w-4" />
                   </Button>
-                  {!generation.superseded && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => onRegenerate(generation)}
-                      title="Regenerate SQL"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                    </Button>
-                  )}
                 </div>
               </TableCell>
             </TableRow>
