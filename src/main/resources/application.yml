@@ -267,11 +267,9 @@ plugin:
     base-url: ${PLUGIN_PARQUET_EXPORT_BASE_URL:}
   sql-generation:
     # Every key in this block is validated in its consuming bean's constructor and an
-    # out-of-range value FAILS STARTUP (issue #185, fail fast by owner decision — the reasoning
-    # is in docs/020-sql-generation-optimization.md). The refusal names the key and the value
-    # for a well-formed integer; a value Spring cannot convert at all (an env var present but
-    # empty — ${VAR:default} does not default for "" — or "80%") fails earlier, during @Value
-    # conversion, naming the constructor parameter rather than the key.
+    # out-of-range value FAILS STARTUP, with the refusal naming the key and the value
+    # (issue #185; the fail-fast reasoning and the limits of that promise are in
+    # docs/020-sql-generation-optimization.md).
     # Maximum concurrent SQL generation operations (semaphore permits); >= 1 — with no permits
     # every generation times out after semaphore-timeout-seconds and is retried for ever
     max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}

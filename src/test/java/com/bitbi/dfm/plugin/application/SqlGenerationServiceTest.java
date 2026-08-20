@@ -126,8 +126,8 @@ class SqlGenerationServiceTest {
     /**
      * The one construction of {@link SqlGenerationService} in this file. The dependencies that
      * vary between tests (the registry, because {@code Timer.start(mockRegistry)} NPEs and some
-     * tests need a real {@link SimpleMeterRegistry}; the DBF strategy, which follows the
-     * registry) are parameters; everything else is the class's shared mocks.
+     * tests need a real {@link SimpleMeterRegistry}; the DBF strategy) are parameters; everything
+     * else is the class's shared mocks.
      */
     private SqlGenerationService newService(MeterRegistry registry, DbfSqlGenerationStrategy dbf,
                                             int maxConcurrent, int semaphoreTimeoutSeconds,
@@ -481,10 +481,10 @@ class SqlGenerationServiceTest {
      * The refusal must name the key <em>and the value</em> ("but was N"): the crash-loop log line
      * is the whole of what an operator gets to diagnose a failed rollout with, and asserting the
      * value through the shared "but was" prefix keeps the assertion from being satisfied by a
-     * digit in the static text. The promise is scoped to well-formed integers: a malformed value
-     * ({@code "80%"}, or an env var present but empty — {@code ${VAR:80}} does not default for
-     * {@code ""}) dies earlier, in {@code @Value} conversion, naming the constructor parameter
-     * rather than the key.</p>
+     * digit in the static text. The key strings are deliberately literals rather than the
+     * {@code *_KEY} constants: the key name is a published contract, and a test that read it
+     * through the constant would certify whatever the constant drifted to. The limits of the
+     * named-key promise live in {@code docs/020-sql-generation-optimization.md}.</p>
      *
      * <p>The sibling keys {@code delta-max-concurrent} / {@code delta-sweep-ms} are validated the
      * same way by their own consumer — see {@code DeltaSqlSweepWorkerTest}.</p>

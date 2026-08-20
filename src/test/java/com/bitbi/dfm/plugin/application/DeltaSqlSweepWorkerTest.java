@@ -41,10 +41,14 @@ class DeltaSqlSweepWorkerTest {
         });
 
         DeltaSqlSweepWorker worker = new DeltaSqlSweepWorker(queueService, 1, 60_000L);
-        worker.wake();
+        try {
+            worker.wake();
 
-        assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
-        assertThat(calls.get()).isEqualTo(3);
+            assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(calls.get()).isEqualTo(3);
+        } finally {
+            worker.shutdown(); // do not leak the core pool thread into the shared test JVM
+        }
     }
 
     @Test
@@ -58,11 +62,15 @@ class DeltaSqlSweepWorkerTest {
         });
 
         DeltaSqlSweepWorker worker = new DeltaSqlSweepWorker(queueService, 1, 60_000L);
-        worker.wake();
+        try {
+            worker.wake();
 
-        assertThat(called.await(5, TimeUnit.SECONDS)).isTrue();
-        // no exception escapes the pool thread; a subsequent wake still works
-        worker.wake();
+            assertThat(called.await(5, TimeUnit.SECONDS)).isTrue();
+            // no exception escapes the pool thread; a subsequent wake still works
+            worker.wake();
+        } finally {
+            worker.shutdown(); // do not leak the core pool thread into the shared test JVM
+        }
     }
 
     /**

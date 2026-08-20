@@ -51,6 +51,19 @@ public class SqlGenerationService {
      */
     private static final String PLUGIN_ID = "bit-bi";
 
+    /**
+     * Keys and defaults of the three {@code plugin.sql-generation.*} values this service
+     * consumes — one home each, used by the {@code @Value} placeholders and the validator
+     * messages alike, so a rename or a default retune cannot edit one copy and miss the other
+     * (issue #185).
+     */
+    public static final String MAX_CONCURRENT_KEY = "plugin.sql-generation.max-concurrent";
+    public static final String DEFAULT_MAX_CONCURRENT = "2";
+    public static final String SEMAPHORE_TIMEOUT_SECONDS_KEY = "plugin.sql-generation.semaphore-timeout-seconds";
+    public static final String DEFAULT_SEMAPHORE_TIMEOUT_SECONDS = "120";
+    public static final String HEAP_THRESHOLD_PERCENT_KEY = "plugin.sql-generation.heap-threshold-percent";
+    public static final String DEFAULT_HEAP_THRESHOLD_PERCENT = "80";
+
     private final AccountPluginRepository accountPluginRepository;
     private final SqlGenerationPersistence persistence;
     private final S3SqlFileStorageService s3SqlFileStorageService;
@@ -78,9 +91,12 @@ public class SqlGenerationService {
             SiteSchemaService siteSchemaService,
             DeltaSqlGenerationStrategy deltaStrategy,
             PluginDeltaBaselineRepository pluginDeltaBaselineRepository,
-            @Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
-            @Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
-            @Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
+            @Value("${" + MAX_CONCURRENT_KEY + ":" + DEFAULT_MAX_CONCURRENT + "}")
+            int maxConcurrent,
+            @Value("${" + SEMAPHORE_TIMEOUT_SECONDS_KEY + ":" + DEFAULT_SEMAPHORE_TIMEOUT_SECONDS + "}")
+            int semaphoreTimeoutSeconds,
+            @Value("${" + HEAP_THRESHOLD_PERCENT_KEY + ":" + DEFAULT_HEAP_THRESHOLD_PERCENT + "}")
+            int heapThresholdPercent) {
         this.accountPluginRepository = accountPluginRepository;
         this.persistence = persistence;
         this.s3SqlFileStorageService = s3SqlFileStorageService;
@@ -97,15 +113,15 @@ public class SqlGenerationService {
         // generation exactly like a negative value — and 0-as-off would collide with this
         // deployment's own "0 disables" convention while 100 is already the documented off-switch.
         this.maxConcurrent = PluginConfigValidation.requireAtLeast(
-                "plugin.sql-generation.max-concurrent", maxConcurrent, 1,
+                MAX_CONCURRENT_KEY, maxConcurrent, 1,
                 "with no permits every generation times out after the semaphore timeout "
                         + "and the delta-SQL queue retries it for ever");
         this.semaphoreTimeoutSeconds = PluginConfigValidation.requireAtLeast(
-                "plugin.sql-generation.semaphore-timeout-seconds", semaphoreTimeoutSeconds, 1,
+                SEMAPHORE_TIMEOUT_SECONDS_KEY, semaphoreTimeoutSeconds, 1,
                 "a non-positive timeout waits for a busy semaphore not at all, so any "
                         + "concurrency fails immediately");
         this.heapThresholdPercent = PluginConfigValidation.requireInRange(
-                "plugin.sql-generation.heap-threshold-percent", heapThresholdPercent, 1, 100,
+                HEAP_THRESHOLD_PERCENT_KEY, heapThresholdPercent, 1, 100,
                 "above 100 the memory-pressure abort is silently disabled (100 itself is the "
                         + "documented off-switch, issue #174), and at or below 0 every SQL "
                         + "generation is refused for ever");

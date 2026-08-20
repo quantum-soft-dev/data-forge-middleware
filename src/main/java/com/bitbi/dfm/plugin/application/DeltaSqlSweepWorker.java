@@ -31,12 +31,29 @@ public class DeltaSqlSweepWorker {
 
     private static final Logger log = LoggerFactory.getLogger(DeltaSqlSweepWorker.class);
 
+    /**
+     * Key and default for the worker pool size — the one home for both, used by the
+     * {@code @Value} placeholder and the validator message alike (issue #185).
+     */
+    public static final String DELTA_MAX_CONCURRENT_KEY = "plugin.sql-generation.delta-max-concurrent";
+    public static final String DEFAULT_DELTA_MAX_CONCURRENT = "2";
+
+    /**
+     * Key and default for the fallback sweep interval — shared by the constructor's
+     * {@code @Value} (which only validates) and the {@code @Scheduled} on {@link #sweep()}
+     * (which is the interval that actually runs), so the two cannot drift apart (issue #185).
+     */
+    public static final String DELTA_SWEEP_MS_KEY = "plugin.sql-generation.delta-sweep-ms";
+    public static final String DEFAULT_DELTA_SWEEP_MS = "60000";
+
     private final DeltaSqlQueueService queueService;
     private final ThreadPoolExecutor pool;
 
     public DeltaSqlSweepWorker(DeltaSqlQueueService queueService,
-                               @Value("${plugin.sql-generation.delta-max-concurrent:2}") int maxConcurrent,
-                               @Value("${plugin.sql-generation.delta-sweep-ms:60000}") long sweepMillis) {
+                               @Value("${" + DELTA_MAX_CONCURRENT_KEY + ":" + DEFAULT_DELTA_MAX_CONCURRENT + "}")
+                               int maxConcurrent,
+                               @Value("${" + DELTA_SWEEP_MS_KEY + ":" + DEFAULT_DELTA_SWEEP_MS + "}")
+                               long sweepMillis) {
         this.queueService = queueService;
         // Out of range fails startup (issue #185, fail fast by owner decision — reasoning in
         // docs/020-sql-generation-optimization.md). Without the first check, 0 crash-looped
@@ -45,11 +62,11 @@ public class DeltaSqlSweepWorker {
         // a green rollout. sweepMillis is read here only to be validated: the interval that runs
         // is the one @Scheduled on sweep() resolves from the same key.
         PluginConfigValidation.requireAtLeast(
-                "plugin.sql-generation.delta-max-concurrent", maxConcurrent, 1,
+                DELTA_MAX_CONCURRENT_KEY, maxConcurrent, 1,
                 "this pool is what drains the delta-SQL queue, and with no threads every "
                         + "segment would stay pending for ever");
         PluginConfigValidation.requireAtLeast(
-                "plugin.sql-generation.delta-sweep-ms", sweepMillis, 1L,
+                DELTA_SWEEP_MS_KEY, sweepMillis, 1L,
                 "a non-positive interval busy-loops the fallback sweep");
         AtomicInteger threadNumber = new AtomicInteger();
         this.pool = new ThreadPoolExecutor(maxConcurrent, maxConcurrent, 60L, TimeUnit.SECONDS,
@@ -73,7 +90,7 @@ public class DeltaSqlSweepWorker {
      * Fallback sweep: picks up segments missed by the event-time wake (instance crash mid-drain,
      * failed generation, or a plugin reinit re-enqueueing a site's segments).
      */
-    @Scheduled(fixedDelayString = "${plugin.sql-generation.delta-sweep-ms:60000}")
+    @Scheduled(fixedDelayString = "${" + DELTA_SWEEP_MS_KEY + ":" + DEFAULT_DELTA_SWEEP_MS + "}")
     public void sweep() {
         wake();
     }

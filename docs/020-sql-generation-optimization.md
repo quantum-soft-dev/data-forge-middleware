@@ -422,7 +422,15 @@ the key. And validation does not bound a value that is in range and still wrong 
 threshold of `8` is legal and makes the check true for nearly every generation, stalling the
 delta-SQL queue (segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet) —
 so the paragraph below about the retry horizon still applies to any persistently refusing
-configuration.
+configuration. One grammar narrowing is deliberate: reading `delta-sweep-ms` into a `long` for
+validation rejects the duration-string form (`PT5M`) that a bare `fixedDelayString` used to
+accept — such a value now dies in `@Value` conversion at startup (no deployment, profile or test
+ever used one). The Boot-native alternative was weighed and not taken:
+`@ConfigurationProperties` + `@Validated` with jakarta constraints (the `ParquetExportProperties`
+shape) would name key, value *and* property origin, and would catch malformed values too — the
+per-consumer-constructor check is the recorded owner decision for this block, five keys across
+two beans did not justify a properties class per consumer, and the two limits above are the
+accepted cost.
 
 **And "recoverable" has a horizon**: `ChangelogRetentionService.prune` deletes below-checkpoint
 segments past `delta.retention.audit-window-segments` (20) without regard for `plugin_sql_at IS

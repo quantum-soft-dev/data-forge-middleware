@@ -38,7 +38,7 @@ None.
 
 ## Response
 
-### Success Response (200 OK)
+### Success Response (202 Accepted)
 
 ```json
 {
@@ -87,9 +87,11 @@ If no completed batches exist for the account:
 
 1. **Validation**: Verifies the plugin is active for the account
 2. **S3 Deletion**: Deletes all SQL files from S3 (best-effort, continues on failure)
-3. **Database Cleanup**: Removes all SQL generation records from the database
-4. **Re-baseline**: Sets the latest completed batch as the new baseline (or clears it when none exists, so the first future batch becomes the baseline); for V2 sites, recaptures the per-table delta SQL baselines from current checkpoints and re-enqueues the segments above them (026). No SQL generation is triggered.
-5. **Audit Logging**: Records the reinit operation in the audit trail
+3. **Audit Logging**: Records the reinit operation — deliberately *before* the remaining database
+   work, not last: the S3 deletions above outlive a rollback, so if any later step fails the
+   audit entry is what keeps that divergence on record
+4. **Database Cleanup**: Removes all SQL generation records from the database
+5. **Re-baseline**: Sets the latest completed batch as the new baseline (or clears it when none exists, so the first future batch becomes the baseline); for V2 sites, recaptures the per-table delta SQL baselines from current checkpoints and re-enqueues the segments above them (026). No SQL generation is triggered.
 
 ## Key Differences from Clear History
 
@@ -141,7 +143,7 @@ Retry-After: 30
 
 ## Rate Limiting
 
-This endpoint is rate-limited to **1 request per 30 seconds** per account due to its resource-intensive nature (S3 deletions, SQL generation). When exceeded, a `429 Too Many Requests` response is returned with a `Retry-After` header.
+This endpoint is rate-limited to **1 request per 30 seconds** per account due to its resource-intensive nature (bulk S3 deletions, baseline recapture and re-enqueueing a site's segments for the delta-SQL queue). When exceeded, a `429 Too Many Requests` response is returned with a `Retry-After` header.
 
 ## Use Cases
 
@@ -194,7 +196,7 @@ response = requests.post(
 if response.status_code == 429:
     retry_after = response.headers.get('Retry-After')
     print(f"Rate limited. Retry after {retry_after} seconds")
-elif response.status_code == 200:
+elif response.status_code == 202:
     data = response.json()
     print(f"Deleted {data['deletedGenerations']} generations")
     print(f"Freed {data['totalBytesFreed']} bytes")
