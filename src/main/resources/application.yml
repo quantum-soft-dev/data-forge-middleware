@@ -266,12 +266,19 @@ plugin:
     # Absolute URL prefix for one-time download links; empty = derive from the request
     base-url: ${PLUGIN_PARQUET_EXPORT_BASE_URL:}
   sql-generation:
-    # Maximum concurrent SQL generation operations (semaphore permits)
+    # The three keys below are validated in the SqlGenerationService constructor and an
+    # out-of-range value FAILS STARTUP (issue #185, owner decision: fail fast, not a WARN).
+    # A rolling update keeps old replicas serving while the rollout goes red, which is exactly
+    # the visibility a config typo needs; the alternatives fail silently — 800 for the heap
+    # threshold disables the guard, a negative value refuses every generation for ever.
+    # Maximum concurrent SQL generation operations (semaphore permits); must be >= 1
+    # (0 deadlocks the semaphore outright)
     max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}
-    # Timeout in seconds waiting for a semaphore permit before aborting
+    # Timeout in seconds waiting for a semaphore permit before aborting; must be >= 1
     semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
     # JVM heap usage percentage threshold; generation aborts when usage is strictly above it.
-    # 100 disables the check outright (heap usage can never exceed 100%) — issue #174.
+    # Must be within 0..100; 100 disables the check outright (heap usage can never exceed
+    # 100%) — issue #174.
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
     # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size and fallback sweep interval
     delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}

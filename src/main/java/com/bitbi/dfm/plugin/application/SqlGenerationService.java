@@ -93,9 +93,48 @@ public class SqlGenerationService {
         this.siteSchemaService = siteSchemaService;
         this.deltaStrategy = deltaStrategy;
         this.pluginDeltaBaselineRepository = pluginDeltaBaselineRepository;
-        this.maxConcurrent = maxConcurrent;
-        this.semaphoreTimeoutSeconds = semaphoreTimeoutSeconds;
-        this.heapThresholdPercent = heapThresholdPercent;
+        this.maxConcurrent = requireAtLeast("plugin.sql-generation.max-concurrent", maxConcurrent, 1,
+                "0 permits deadlock the SQL generation semaphore outright");
+        this.semaphoreTimeoutSeconds = requireAtLeast("plugin.sql-generation.semaphore-timeout-seconds",
+                semaphoreTimeoutSeconds, 1, "a non-positive timeout makes every semaphore wait impossible");
+        this.heapThresholdPercent = requireInRange("plugin.sql-generation.heap-threshold-percent",
+                heapThresholdPercent, 0, 100,
+                "above 100 the memory-pressure abort is silently disabled (100 itself is the documented "
+                        + "off-switch, issue #174), and below 0 every SQL generation is refused for ever");
+    }
+
+    /**
+     * Fails fast on an out-of-range {@code plugin.sql-generation.*} value: the constructor throws,
+     * so the Spring context refuses to start (issue #185).
+     *
+     * <p>Fail fast rather than a startup WARN, an owner decision recorded on the ticket: the
+     * deployment is a rolling update, so a pod that refuses to start does not take the service
+     * down — old replicas keep serving and the rollout goes red immediately, which is exactly the
+     * visibility a config typo needs. A WARN is the channel already proven unread (the
+     * "memory-pressure abort disabled" line exists since #174 and stopped nobody), and the failure
+     * costs are asymmetric: {@code heap-threshold-percent: 800} silently disables the heap guard,
+     * a negative value turns the whole deployment into an endless retry loop that ends in silent
+     * data loss once retention passes over the pending segments (#181, #212). A failed rollout is
+     * strictly cheaper than either. The message names the key: the crash-loop log line is the
+     * whole of what an operator gets to diagnose a failed rollout with.</p>
+     */
+    private static int requireInRange(String key, int value, int min, int max, String consequence) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(key + " must be between " + min + " and " + max
+                    + ", but was " + value + ". Refusing to start: " + consequence + " (issue #185).");
+        }
+        return value;
+    }
+
+    /**
+     * The one-sided form of {@link #requireInRange(String, int, int, int, String)}.
+     */
+    private static int requireAtLeast(String key, int value, int min, String consequence) {
+        if (value < min) {
+            throw new IllegalArgumentException(key + " must be at least " + min + ", but was "
+                    + value + ". Refusing to start: " + consequence + " (issue #185).");
+        }
+        return value;
     }
 
     /**

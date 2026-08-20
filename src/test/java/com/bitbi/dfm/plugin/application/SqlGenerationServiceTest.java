@@ -33,6 +33,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -471,6 +473,124 @@ class SqlGenerationServiceTest {
 
             assertThat(result).isEmpty();
             verify(deltaStrategy, never()).generate(any(), any(), any(), any(), any());
+        }
+    }
+
+    /**
+     * The {@code plugin.sql-generation.*} block fails fast (issue #185): an out-of-range value
+     * refuses to construct the service, which fails the Spring context at startup. Both ways of
+     * getting a key wrong used to fail silently — {@code heap-threshold-percent: 800} disabled
+     * the heap guard, a negative value refused every generation for ever (an unbounded queue
+     * stall since #181, silent data loss once retention passes over the pending segments, #212).
+     *
+     * <p>Each test pins one boundary of the agreed ranges: {@code heap-threshold-percent}
+     * ∈ [0..100] (100 stays the documented off-switch of #174 — that behaviour is pinned by
+     * {@code SqlGenerationStreamingTest}, "should not abort at a threshold of 100 even when the
+     * heap reports full"), {@code max-concurrent} >= 1, {@code semaphore-timeout-seconds} >= 1.
+     * The refusal message must name the configuration key: the crash-loop log line is the whole
+     * of what an operator gets to diagnose a failed rollout with.</p>
+     */
+    @Nested
+    @DisplayName("Configuration validation (issue #185)")
+    class ConfigurationValidation {
+
+        private SqlGenerationService buildService(int maxConcurrent, int semaphoreTimeoutSeconds,
+                                                  int heapThresholdPercent) {
+            return new SqlGenerationService(
+                    accountPluginRepository,
+                    new SqlGenerationPersistence(batchRepository, siteRepository,
+                            sqlGenerationRepository, changelogSegmentRepository),
+                    s3SqlFileStorageService,
+                    meterRegistry,
+                    pluginAuditService,
+                    dbfStrategy,
+                    cdcStrategy,
+                    siteSchemaService,
+                    deltaStrategy,
+                    pluginDeltaBaselineRepository,
+                    maxConcurrent,
+                    semaphoreTimeoutSeconds,
+                    heapThresholdPercent);
+        }
+
+        @Test
+        @DisplayName("should refuse a heap threshold above 100, naming the key")
+        void shouldRefuseHeapThresholdAbove100() {
+            assertThatThrownBy(() -> buildService(2, 120, 101))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.heap-threshold-percent")
+                    .hasMessageContaining("101");
+        }
+
+        @Test
+        @DisplayName("should refuse the plausible unit typo 800 rather than silently disabling the guard")
+        void shouldRefuseHeapThresholdUnitTypo() {
+            assertThatThrownBy(() -> buildService(2, 120, 800))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.heap-threshold-percent")
+                    .hasMessageContaining("800");
+        }
+
+        @Test
+        @DisplayName("should refuse a negative heap threshold, naming the key")
+        void shouldRefuseNegativeHeapThreshold() {
+            assertThatThrownBy(() -> buildService(2, 120, -1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.heap-threshold-percent")
+                    .hasMessageContaining("-1");
+        }
+
+        @Test
+        @DisplayName("should accept both boundaries of the heap threshold range: 0 and the off-switch 100")
+        void shouldAcceptHeapThresholdBoundaries() {
+            assertThatCode(() -> buildService(2, 120, 0)).doesNotThrowAnyException();
+            assertThatCode(() -> buildService(2, 120, 100)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("should refuse a max-concurrent of 0, which deadlocks the semaphore outright")
+        void shouldRefuseZeroMaxConcurrent() {
+            assertThatThrownBy(() -> buildService(0, 120, 80))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.max-concurrent")
+                    .hasMessageContaining("0");
+        }
+
+        @Test
+        @DisplayName("should refuse a negative max-concurrent")
+        void shouldRefuseNegativeMaxConcurrent() {
+            assertThatThrownBy(() -> buildService(-1, 120, 80))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.max-concurrent");
+        }
+
+        @Test
+        @DisplayName("should accept the max-concurrent floor of 1")
+        void shouldAcceptMaxConcurrentFloor() {
+            assertThatCode(() -> buildService(1, 120, 80)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("should refuse a semaphore timeout of 0, which makes every wait impossible")
+        void shouldRefuseZeroSemaphoreTimeout() {
+            assertThatThrownBy(() -> buildService(2, 0, 80))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.semaphore-timeout-seconds")
+                    .hasMessageContaining("0");
+        }
+
+        @Test
+        @DisplayName("should refuse a negative semaphore timeout")
+        void shouldRefuseNegativeSemaphoreTimeout() {
+            assertThatThrownBy(() -> buildService(2, -5, 80))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plugin.sql-generation.semaphore-timeout-seconds");
+        }
+
+        @Test
+        @DisplayName("should accept the semaphore timeout floor of 1")
+        void shouldAcceptSemaphoreTimeoutFloor() {
+            assertThatCode(() -> buildService(2, 1, 80)).doesNotThrowAnyException();
         }
     }
 }
