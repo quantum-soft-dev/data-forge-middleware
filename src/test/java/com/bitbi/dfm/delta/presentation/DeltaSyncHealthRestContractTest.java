@@ -57,6 +57,24 @@ class DeltaSyncHealthRestContractTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("carries a scheduled-build abort so the site-list pill can stop painting a wait (#224)")
+    void shouldReturnAScheduledBuildAbort() throws Exception {
+        jdbc.update("""
+                INSERT INTO site_sync_state
+                    (site_id, last_applied_seq, last_checkpoint_seq, schema_version, updated_at,
+                     last_checkpoint_build_abort)
+                VALUES (?, 1155, 0, 3, '2026-07-05 12:00:00', 'FOLD_TOO_LARGE')
+                """, V2_SITE);
+
+        mockMvc.perform(get(USER_URL)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.siteId == '" + V2_SITE + "')].lastCheckpointSeq", hasItem(0)))
+                .andExpect(jsonPath("$[?(@.siteId == '" + V2_SITE + "')].lastCheckpointBuildAbort",
+                        hasItem("FOLD_TOO_LARGE")));
+    }
+
+    @Test
     @DisplayName("marks sites whose client never connected with hasSyncState=false")
     void shouldMarkNeverConnectedSites() throws Exception {
         mockMvc.perform(get(USER_URL)

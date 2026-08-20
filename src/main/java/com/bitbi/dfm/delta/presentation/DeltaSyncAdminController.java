@@ -109,7 +109,9 @@ public class DeltaSyncAdminController {
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
                     + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
                     + "and lastRebuildOutcome/At/Message describing how the most recent finished forced rebuild ended, "
-                    + "plus nextCheckpointBuildAt naming when the scheduled checkpoint build next runs — "
+                    + "plus nextCheckpointBuildAt naming when the scheduled checkpoint build next runs and "
+                    + "lastCheckpointBuildAbort/At/Message naming why a scheduled visit of a site that still has no "
+                    + "checkpoint produced nothing (issue #224) — "
                     + "lastCheckpointSeq 0 means no checkpoint has been built yet rather than a backlog. "
                     + "404 when the Delta client has never connected (no sync state row)."
     )

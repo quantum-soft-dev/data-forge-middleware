@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.presentation.dto;
 
+import com.bitbi.dfm.delta.domain.CheckpointBuildAbort;
 import com.bitbi.dfm.delta.domain.CheckpointRebuildOutcome;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 
@@ -32,6 +33,14 @@ import java.time.ZoneOffset;
  *                            by that one cron and by an operator-forced rebuild, so a site with
  *                            {@code lastCheckpointSeq == 0} is not behind — it is waiting for this
  *                            moment, and a surface without it can only render the wait as a backlog
+ * @param lastCheckpointBuildAbort why the last scheduled visit of a site that still has no
+ *                            checkpoint produced nothing (issue #224), or null when none has
+ *                            aborted on record. Distinguishes "not due yet" from "already tried
+ *                            and failed"; a healthy build does not write this
+ * @param lastCheckpointBuildAbortAt when that abort was recorded
+ * @param lastCheckpointBuildMessage explanation of the abort, <b>admin projection only</b>; the
+ *                            owner gets the reason and its time, the same split as
+ *                            {@code lastRebuildMessage}
  */
 public record DeltaSyncStateResponseDto(
         long lastAppliedSeq,
@@ -45,7 +54,10 @@ public record DeltaSyncStateResponseDto(
         CheckpointRebuildOutcome lastRebuildOutcome,
         Instant lastRebuildOutcomeAt,
         String lastRebuildMessage,
-        Instant nextCheckpointBuildAt
+        Instant nextCheckpointBuildAt,
+        CheckpointBuildAbort lastCheckpointBuildAbort,
+        Instant lastCheckpointBuildAbortAt,
+        String lastCheckpointBuildMessage
 ) {
 
     /**
@@ -60,23 +72,26 @@ public record DeltaSyncStateResponseDto(
      */
     public static DeltaSyncStateResponseDto forAdmin(SiteSyncState state, boolean snapshotInProgress,
                                                      Instant nextCheckpointBuildAt) {
-        return build(state, snapshotInProgress, state.getLastRebuildMessage(), nextCheckpointBuildAt);
+        return build(state, snapshotInProgress, state.getLastRebuildMessage(),
+                state.getLastCheckpointBuildMessage(), nextCheckpointBuildAt);
     }
 
     /**
      * Convert the SiteSyncState entity to the <b>owner</b> REST projection.
      *
-     * <p>Identical but for {@code lastRebuildMessage}, which is withheld. For a {@code FAILED}
-     * verdict that string is the exception's own text — a {@code PSQLException} naming a constraint
-     * or a column, an S3 error naming the bucket and endpoint — and this endpoint is the one place
-     * a tenant user could read it. The account owner cannot request a rebuild in the first place
-     * (the route is ROLE_ADMIN), so the outcome and its time are the whole of what the projection
-     * owes them; the same rule keeps storage keys and claim tokens off the segment and artifact
-     * projections.</p>
+     * <p>Identical but for {@code lastRebuildMessage} and {@code lastCheckpointBuildMessage}, which
+     * are withheld. For a {@code FAILED} verdict those strings are the exception's own text — a
+     * {@code PSQLException} naming a constraint or a column, an S3 error naming the bucket and
+     * endpoint — and this endpoint is the one place a tenant user could read it. The account owner
+     * cannot request a rebuild in the first place (the route is ROLE_ADMIN), so the outcome and its
+     * time are the whole of what the projection owes them for a forced rebuild; the same rule keeps
+     * storage keys and claim tokens off the segment and artifact projections.</p>
      *
-     * <p>{@code nextCheckpointBuildAt} is <em>not</em> withheld: it is the deployment's schedule,
-     * says nothing about the failure of anything, and the owner is precisely the user staring at a
-     * site whose first checkpoint has not been built yet.</p>
+     * <p>{@code nextCheckpointBuildAt} and {@code lastCheckpointBuildAbort} are <em>not</em>
+     * withheld: the schedule says nothing about a failure, and the abort reason is exactly what
+     * lets the owner tell "the first build is not due yet" from "it already ran and produced
+     * nothing" (issue #224). The diagnosis string stays admin-only, the same split as
+     * {@code lastRebuildMessage}.</p>
      *
      * @param state                 the sync state entity
      * @param snapshotInProgress    whether the site's open session is a FULL_SNAPSHOT
@@ -85,11 +100,12 @@ public record DeltaSyncStateResponseDto(
      */
     public static DeltaSyncStateResponseDto forOwner(SiteSyncState state, boolean snapshotInProgress,
                                                      Instant nextCheckpointBuildAt) {
-        return build(state, snapshotInProgress, null, nextCheckpointBuildAt);
+        return build(state, snapshotInProgress, null, null, nextCheckpointBuildAt);
     }
 
     private static DeltaSyncStateResponseDto build(SiteSyncState state, boolean snapshotInProgress,
                                                    String lastRebuildMessage,
+                                                   String lastCheckpointBuildMessage,
                                                    Instant nextCheckpointBuildAt) {
         return new DeltaSyncStateResponseDto(
                 state.getLastAppliedSeq(),
@@ -104,7 +120,11 @@ public record DeltaSyncStateResponseDto(
                 state.getLastRebuildOutcomeAt() == null
                         ? null : state.getLastRebuildOutcomeAt().toInstant(ZoneOffset.UTC),
                 lastRebuildMessage,
-                nextCheckpointBuildAt
+                nextCheckpointBuildAt,
+                state.getLastCheckpointBuildAbort(),
+                state.getLastCheckpointBuildAbortAt() == null
+                        ? null : state.getLastCheckpointBuildAbortAt().toInstant(ZoneOffset.UTC),
+                lastCheckpointBuildMessage
         );
     }
 }
