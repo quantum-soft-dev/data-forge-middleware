@@ -253,7 +253,8 @@ is **never reopened**: almost always the observation is simply stale (the fix is
 regression, reproducing on current `origin/develop`, gets a new issue linking the old one and
 the fixing commit. **A closed match carrying `duplicate` is the exception to "stale"** — it was
 closed by another ticket's work rather than by its own PR, and that other ticket may still be
-open (four of the eight such closes were, on 2026-08-19), so read it as a pointer: take the
+open (three of the seventeen labelled closes are today: #192 under #193, #218 under #205, #241
+under #239), so read it as a pointer: take the
 absorber from its closing comment and look at *its* state. Ask the search for labels, not just
 titles (`--json number,title,state,labels,body`). Only when the theme has no
 ticket yet, file one — framed as the **theme** (root cause / subsystem), not a one-symptom
@@ -314,16 +315,16 @@ window rather than two hours into an executor's session.
 **A ticket closed as absorbed carries `duplicate`, because `Done` cannot say it.** Folding one
 ticket into another (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item
 closed`** workflow then sets its `Status` to `Done` — so `Done` mixes two different things: a
-ticket closed by **its own** PR, and a ticket closed by **somebody else's**. Read on 2026-08-19 the
-board carried **eight** of the second kind with nothing telling them from the first, and for four
-of the eight the absorber was still open — the sharpest being **#200** (`priority: high`, SQL
+ticket closed by **its own** PR, and a ticket closed by **somebody else's**. The backlog pass of
+2026-08-19 read **eight** of the second kind — not all of them, as the census below found — with
+nothing telling them from the first, and for four of the eight the absorber was still open — the sharpest being **#200** (`priority: high`, SQL
 regeneration unfixed in production) sitting in `Done` while #190 was open and `status: blocked`;
 #210 under an open #185, #192 under an open #193, #218 under an open #205. The other four — #143,
 #162, #204, #214 — were absorbed by #142, #149, #186 and #213, whose work *did* land. A person
 reading the board treats all eight as shipped, and for four of them that is false.
 
-The marker is the **`duplicate` label, and it is mandatory** — the decision taken for #230. The two
-rejected options are worth recording:
+The marker is the **`duplicate` label, and it is mandatory** — the decision taken for #230. All
+three options are recorded, the two rejected ones first:
 
 - **A separate column loses to the automation.** The project's workflows are readable, and
   `Item closed` is enabled:
@@ -363,9 +364,14 @@ or pull request already exists", which states the rejected reading to anyone hov
 So: **whoever closes a ticket as absorbed applies `duplicate` and leaves that comment.** The card
 stays in `Done` — that is the automation's answer and this rule does not fight it. What the label
 buys is that **`Done` minus `duplicate` is the work that closed on its own merits**, and that the
-absorbed set is one query rather than a re-reading of the backlog. Backfilled on all eight closes
-above (#220 and #229 already carried it) so the label has a single meaning across the board; the
-four whose work shipped are labelled too, and their comments say so. The rule binds all three
+absorbed set is one query rather than a re-reading of the backlog. **That invariant is only as good
+as the backfill, so the backfill is a census rather than the issue's own list**: #230 named eight,
+and review round 2 found six older folds carrying no label at all — #114 into #112, #123 and #124
+into #122, #160 into #158, #163 into #159, #176 into #164 — plus #241, a duplicate of the **still
+open** #239. Seventeen closes carry the label now (the eight, those seven, and #220/#229 which
+triage had already marked), found by scanning the last comments of every closed issue for the
+folding phrasings this repository uses, since no single wording is standard. A fold from before
+that scan is the one thing the search rule cannot see, which is why the scan was worth doing once. The rule binds all three
 closing sites — `/github-issue` (a finding that absorbs an open ticket), `/merge` (a PR whose issue
 folds another) and `/github-issue-runner` (the dispatcher merging duplicates inside a run) — and
 says nothing about *which* ticket survives, which stays a judgement about where the work is.
@@ -629,9 +635,27 @@ pages/{feature}/            # Route pages
   contradicts this file's own "a command that exited 0 is not proof"; and the dispatcher rule had
   been extended to closes that are **not** absorbed at all — an issue merged by its own PR in the
   same run, and a finding already fixed in `develop` — which would have broken the very invariant
-  the label buys. Documentation and command files only: no production code, test, REST, gRPC,
-  proto, DTO, migration, configuration-key, metric, S3-key or frontend change (the label
-  description is repository metadata, not a file).
+  the label buys. **Review round 2 found the invariant itself false at merge time and one prescribed
+  command broken.** The backfill had followed #230's own list, and that list was an August census —
+  six older folds carried no label (#114 into #112, #123 and #124 into #122, #160 into #158, #163
+  into #159, #176 into #164), plus #241, a duplicate of the **still open** #239, so
+  `gh issue list --state closed --label duplicate` was not "the absorbed set" and the new
+  closed-match rule would have misread all seven as stale. Fixed by scanning the last comments of
+  every closed issue for the folding phrasings this repository uses — there is no standard one — and
+  labelling what it found: seventeen closes carry the label now, three of them with the absorber
+  still open. The broken command was round 1's own fix: the label-aware search interpolated
+  `join(\",\")`, a jq parse error, so an agent would have fallen back to the label-blind search —
+  the defect the fix exists to close, shipped as a rule that fails every time. Three more:
+  `/merge`'s trigger keyed on the literal `folds #NNN`, which appears nowhere in this repository
+  (PR #236 says "folding #200"), so the step could never have fired; the absorb-and-close step had
+  no guard against closing a ticket somebody is currently working — a real hazard while the
+  dispatcher keeps three in flight, since closing an issue silently destroys the window of a PR
+  carrying `Closes #<n>` — and no obligation to report the close, the heaviest of the three
+  follow-up actions being the only one leaving no trace; and the dispatcher exclusion was one case
+  too wide, since a deferred review finding fixed by somebody else's PR *is* an absorbed close.
+  Documentation and command files only: no production code, test, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or frontend change (the label description and the
+  backfill are repository metadata, not files).
 - retention-holds-pending-work: Changelog retention no longer deletes a segment whose plugin SQL
   or egress was never generated — pending work is not prunable, and both the hold-back and the one
   horizon that remains are visible (issue #212, found reviewing #181/PR #209, which it silently
