@@ -8,6 +8,8 @@ import com.bitbi.dfm.delta.grpc.v2.Op;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -48,10 +50,10 @@ class ChangelogSegmentProvisionalIntegrationTest extends BaseIntegrationTest {
         assertFalse(repository.findBySiteIdOrderByFirstSeq(SITE).stream()
                         .anyMatch(s -> s.getId().equals(provisional.getId())),
                 "the checkpoint fold must not see a snapshot that is still streaming");
-        assertFalse(repository.findNextPendingEgress(50).stream()
+        assertFalse(repository.findNextPendingEgress(50, LocalDateTime.now(ZoneOffset.UTC)).stream()
                         .anyMatch(s -> s.getId().equals(provisional.getId())),
                 "a provisional segment must not be published as delta Parquet");
-        assertFalse(repository.findNextPendingPluginSql(50).stream()
+        assertFalse(repository.findNextPendingPluginSql(50, LocalDateTime.now(ZoneOffset.UTC)).stream()
                         .anyMatch(s -> s.getId().equals(provisional.getId())),
                 "a provisional segment must not enter the Bit BI SQL queue");
     }
@@ -69,7 +71,7 @@ class ChangelogSegmentProvisionalIntegrationTest extends BaseIntegrationTest {
         assertTrue(visible.contains(first.getId()));
         assertTrue(visible.contains(second.getId()));
 
-        assertTrue(repository.findNextPendingEgress(50).stream()
+        assertTrue(repository.findNextPendingEgress(50, LocalDateTime.now(ZoneOffset.UTC)).stream()
                         .anyMatch(s -> s.getId().equals(first.getId())),
                 "once flipped the snapshot enters the egress queue at its head");
     }

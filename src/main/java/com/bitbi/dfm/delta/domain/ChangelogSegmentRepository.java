@@ -151,10 +151,14 @@ public interface ChangelogSegmentRepository {
      * {@code FOR UPDATE SKIP LOCKED} so concurrent workers (or instances) never double-process.
      * Must run inside a transaction.
      *
+     * <p>A segment whose last attempt failed is held out until its {@code egress_retry_at}
+     * (issue #243) — its own site still queues behind it, every other site drains.</p>
+     *
      * @param limit maximum segments to claim
+     * @param now   the claiming instant (UTC); segments in backoff past it are not offered
      * @return per-site head pending segments, oldest first
      */
-    List<ChangelogSegment> findNextPendingEgress(int limit);
+    List<ChangelogSegment> findNextPendingEgress(int limit, LocalDateTime now);
 
     /**
      * Segments still waiting for delta-Parquet egress ({@code egress_at IS NULL}), including any
@@ -168,10 +172,33 @@ public interface ChangelogSegmentRepository {
      * created in seq order per site — locked with {@code FOR UPDATE SKIP LOCKED} so concurrent
      * workers never double-process. Must run inside a transaction.
      *
+     * <p>Backoff applies exactly as in {@link #findNextPendingEgress} (issue #243).</p>
+     *
      * @param limit maximum segments to claim
+     * @param now   the claiming instant (UTC); segments in backoff past it are not offered
      * @return per-site head pending segments, oldest first
      */
-    List<ChangelogSegment> findNextPendingPluginSql(int limit);
+    List<ChangelogSegment> findNextPendingPluginSql(int limit, LocalDateTime now);
+
+    /**
+     * Record a failed delta-SQL attempt and hold the segment out of the queue until {@code retryAt}
+     * (issue #243). Increments the attempt count in the database rather than from the caller's
+     * claimed snapshot, and does nothing when the segment is no longer pending.
+     *
+     * @param id      segment identifier
+     * @param retryAt when the segment may be claimed again (UTC)
+     * @return 1 if the segment was deferred, 0 if its work had already landed
+     */
+    int deferPluginSql(UUID id, LocalDateTime retryAt);
+
+    /**
+     * The egress twin of {@link #deferPluginSql(UUID, LocalDateTime)} (issue #243).
+     *
+     * @param id      segment identifier
+     * @param retryAt when the segment may be claimed again (UTC)
+     * @return 1 if the segment was deferred, 0 if it had already been egressed
+     */
+    int deferEgress(UUID id, LocalDateTime retryAt);
 
     /**
      * Every S3 object of a site's changelog, published and provisional alike — the collection step
@@ -332,6 +359,10 @@ public interface ChangelogSegmentRepository {
     /**
      * Re-enqueue all of a site's segments for plugin SQL generation (plugin reinit: the
      * checkpoint-lag gap is regenerated under freshly captured baselines).
+     *
+     * <p>Clears the retry state too (issue #243): a reinit is the operator saying the cause is
+     * gone, so a segment that had accumulated attempts starts from a clean count and is claimable
+     * at once instead of sitting out the cooldown its old failures earned.</p>
      *
      * @param siteId site identifier
      * @return number of segments re-enqueued

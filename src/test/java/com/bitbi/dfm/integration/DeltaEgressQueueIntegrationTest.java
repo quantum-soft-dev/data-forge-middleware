@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -45,7 +47,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         segment(SITE_A, BATCH_A, 6L, 9L);
         segment(SITE_B, BATCH_B, 1L, 3L);
 
-        List<ChangelogSegment> pending = repository.findNextPendingEgress(10);
+        List<ChangelogSegment> pending = repository.findNextPendingEgress(10, LocalDateTime.now(ZoneOffset.UTC));
 
         Set<String> heads = pending.stream()
                 .map(s -> s.getSiteId() + "@" + s.getFirstSeq())
@@ -61,7 +63,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         head.markEgressed();
         repository.save(head);
 
-        List<ChangelogSegment> pending = repository.findNextPendingEgress(10);
+        List<ChangelogSegment> pending = repository.findNextPendingEgress(10, LocalDateTime.now(ZoneOffset.UTC));
 
         assertEquals(1, pending.size());
         assertEquals(6L, pending.get(0).getFirstSeq());
@@ -74,7 +76,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         only.markEgressed();
         repository.save(only);
 
-        assertTrue(repository.findNextPendingEgress(10).isEmpty());
+        assertTrue(repository.findNextPendingEgress(10, LocalDateTime.now(ZoneOffset.UTC)).isEmpty());
     }
 
     @Test
@@ -82,6 +84,45 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         segment(SITE_A, BATCH_A, 1L, 5L);
         segment(SITE_B, BATCH_B, 1L, 3L);
 
-        assertEquals(1, repository.findNextPendingEgress(1).size());
+        assertEquals(1, repository.findNextPendingEgress(1, LocalDateTime.now(ZoneOffset.UTC)).size());
+    }
+
+    /**
+     * Issue #243: a deferred head must keep its own site's order (nothing behind it may jump the
+     * queue) while every other site drains — the whole point of the deferral being that one poison
+     * segment cannot stall the global queue.
+     */
+    @Test
+    void deferredHeadIsHeldOutOfTheQueueWithoutStallingOtherSites() {
+        ChangelogSegment poison = segment(SITE_A, BATCH_A, 1L, 5L);
+        segment(SITE_A, BATCH_A, 6L, 9L);
+        segment(SITE_B, BATCH_B, 1L, 3L);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5)));
+
+        List<ChangelogSegment> pending = repository.findNextPendingEgress(10, now);
+        assertEquals(Set.of(SITE_B + "@1"),
+                pending.stream().map(s -> s.getSiteId() + "@" + s.getFirstSeq()).collect(Collectors.toSet()),
+                "site A waits behind its own deferred head; site B drains");
+
+        assertEquals(Set.of(SITE_A + "@1", SITE_B + "@1"),
+                repository.findNextPendingEgress(10, now.plusMinutes(6)).stream()
+                        .map(s -> s.getSiteId() + "@" + s.getFirstSeq()).collect(Collectors.toSet()),
+                "the cooldown ends and the segment is offered again — nothing is discarded");
+
+        ChangelogSegment reloaded = repository.findById(poison.getId()).orElseThrow();
+        assertEquals(1, reloaded.getEgressAttempts());
+    }
+
+    /** A deferral is refused once the work landed (issue #243, the #212 marker-predicate shape). */
+    @Test
+    void doesNotDeferASegmentThatIsAlreadyEgressed() {
+        ChangelogSegment done = segment(SITE_A, BATCH_A, 1L, 5L);
+        done.markEgressed();
+        repository.save(done);
+
+        assertEquals(0, repository.deferEgress(done.getId(), LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5)));
+        assertEquals(0, repository.findById(done.getId()).orElseThrow().getEgressAttempts());
     }
 }

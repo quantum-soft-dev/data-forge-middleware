@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -67,7 +68,7 @@ class DeltaSqlQueueOutsideTransactionTest {
                 .thenReturn(Optional.of(activation));
 
         segment = ChangelogSegment.create(SITE_ID, BATCH_ID, 1L, 1L, 1L, "hash", "delta/x", "DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
     }
 
     @AfterEach

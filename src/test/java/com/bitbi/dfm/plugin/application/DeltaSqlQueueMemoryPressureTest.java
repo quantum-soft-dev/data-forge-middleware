@@ -128,7 +128,7 @@ class DeltaSqlQueueMemoryPressureTest {
         when(batch.getAccountId()).thenReturn(ACCOUNT_ID);
 
         segment = ChangelogSegment.create(SITE_ID, BATCH_ID, 1L, 9L, 9L, "hash", "delta/x", "DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         when(persistence.existsByBatchId(BATCH_ID)).thenReturn(true);
         when(persistence.loadBatchData(eq(BATCH_ID), anyBoolean())).thenReturn(

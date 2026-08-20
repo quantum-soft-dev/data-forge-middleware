@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -72,7 +74,8 @@ public class DeltaEgressService {
      * @return {@code true} if a segment was processed, {@code false} when the queue is empty
      */
     public boolean egressNextPending() {
-        List<ChangelogSegment> next = segmentRepository.findNextPendingEgress(1);
+        List<ChangelogSegment> next = segmentRepository.findNextPendingEgress(
+                1, LocalDateTime.now(ZoneOffset.UTC));
         if (next.isEmpty()) {
             return false;
         }

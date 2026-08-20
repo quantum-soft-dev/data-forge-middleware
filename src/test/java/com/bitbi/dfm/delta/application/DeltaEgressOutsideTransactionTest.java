@@ -89,7 +89,7 @@ class DeltaEgressOutsideTransactionTest {
 
     @Test
     void egressNextPendingDownloadsAndUploadsBeforeMarkingTheRow() {
-        when(segmentRepository.findNextPendingEgress(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
         when(changelogSegmentService.readRecords("changelog/key")).thenReturn(List.of(
                 ChangeRecord.newBuilder().setTable("orders").setOp(Op.INSERT).setSeq(1L)
                         .putAllKey(Map.of("id", Value.newBuilder().setIntValue(1).build()))
@@ -102,7 +102,7 @@ class DeltaEgressOutsideTransactionTest {
         assertTrue(service.egressNextPending());
 
         var order = inOrder(changelogSegmentService, storage, segmentRepository);
-        order.verify(segmentRepository).findNextPendingEgress(1);
+        order.verify(segmentRepository).findNextPendingEgress(eq(1), any());
         order.verify(changelogSegmentService).readRecords("changelog/key");
         order.verify(storage).uploadDelta(eq(SITE), eq("orders"), eq(1L), eq(1L), any(byte[].class));
         order.verify(segmentRepository).save(segment);
@@ -111,7 +111,7 @@ class DeltaEgressOutsideTransactionTest {
 
     @Test
     void emptyQueueTouchesNoStorage() {
-        when(segmentRepository.findNextPendingEgress(1)).thenReturn(List.of());
+        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of());
 
         assertFalse(service.egressNextPending());
         verifyNoInteractions(changelogSegmentService);

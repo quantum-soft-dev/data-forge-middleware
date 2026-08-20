@@ -113,10 +113,15 @@ public interface JpaChangelogSegmentRepository
             """, nativeQuery = true)
     java.util.List<ChangelogSegment> findRecentBySiteId(UUID siteId, int limit);
 
+    // The backoff filter (issue #243) applies to the candidate row only; the head-of-line
+    // NOT EXISTS deliberately ignores it, so a deferred segment still blocks its own site — a
+    // site's delta files publish in seq order, and skipping past a failing head would break that.
+    // Every other site drains meanwhile, which is the whole point of the deferral.
     @Override
     @Query(value = """
             SELECT * FROM changelog_segments s
             WHERE s.egress_at IS NULL
+              AND (s.egress_retry_at IS NULL OR s.egress_retry_at <= CAST(:now AS timestamp))
               AND NOT EXISTS (SELECT 1 FROM changelog_segments e
                               WHERE e.site_id = s.site_id
                                 AND e.egress_at IS NULL
@@ -125,16 +130,18 @@ public interface JpaChangelogSegmentRepository
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
-    java.util.List<ChangelogSegment> findNextPendingEgress(int limit);
+    java.util.List<ChangelogSegment> findNextPendingEgress(int limit, java.time.LocalDateTime now);
 
     @Override
     @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.egressAt IS NULL")
     long countPendingEgress();
 
+    // Same backoff filter and same head-of-line rule as findNextPendingEgress (issue #243).
     @Override
     @Query(value = """
             SELECT * FROM changelog_segments s
             WHERE s.plugin_sql_at IS NULL
+              AND (s.plugin_sql_retry_at IS NULL OR s.plugin_sql_retry_at <= CAST(:now AS timestamp))
               AND NOT EXISTS (SELECT 1 FROM changelog_segments p
                               WHERE p.site_id = s.site_id
                                 AND p.plugin_sql_at IS NULL
@@ -143,7 +150,26 @@ public interface JpaChangelogSegmentRepository
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
-    java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit);
+    java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit, java.time.LocalDateTime now);
+
+    // Targeted UPDATEs, not a save of the claimed entity: the claim lock is released before the
+    // work (#164), so two replicas can attempt one segment at once and the increment has to happen
+    // in the database. The marker predicate travels with the statement for the #212 reason — a
+    // segment whose work landed (or which a reinit re-enqueued) must not be pushed into a cooldown
+    // by a straggler's failure.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAttempts = s.pluginSqlAttempts + 1, "
+            + "s.pluginSqlRetryAt = :retryAt WHERE s.id = :id AND s.pluginSqlAt IS NULL")
+    int deferPluginSql(UUID id, java.time.LocalDateTime retryAt);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.egressAttempts = s.egressAttempts + 1, "
+            + "s.egressRetryAt = :retryAt WHERE s.id = :id AND s.egressAt IS NULL")
+    int deferEgress(UUID id, java.time.LocalDateTime retryAt);
 
     @Override
     @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId")
@@ -226,7 +252,8 @@ public interface JpaChangelogSegmentRepository
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
-    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL "
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL, s.pluginSqlAttempts = 0, "
+            + "s.pluginSqlRetryAt = NULL "
             + "WHERE s.siteId = :siteId AND s.provisional = false AND s.mode <> 'FULL_SNAPSHOT'")
     int clearPluginSqlBySiteId(UUID siteId);
 }

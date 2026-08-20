@@ -94,7 +94,7 @@ class DeltaSqlQueueServiceTest {
     @DisplayName("should generate SQL and mark the claimed segment processed")
     void shouldGenerateAndMark() {
         ChangelogSegment segment = segment("DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         boolean processed = queueService.processNextPending();
 
@@ -107,7 +107,7 @@ class DeltaSqlQueueServiceTest {
     @Test
     @DisplayName("should return false when the queue is empty")
     void shouldReturnFalseWhenQueueEmpty() {
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of());
 
         assertThat(queueService.processNextPending()).isFalse();
         verifyNoInteractions(sqlGenerationService);
@@ -119,7 +119,7 @@ class DeltaSqlQueueServiceTest {
         when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, "bit-bi"))
                 .thenReturn(Optional.empty());
         ChangelogSegment segment = segment("DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         boolean processed = queueService.processNextPending();
 
@@ -134,7 +134,7 @@ class DeltaSqlQueueServiceTest {
     void shouldSuspendOnFullSnapshot() {
         ChangelogSegment segment = segment("FULL_SNAPSHOT",
                 Map.of("customers", new TableChangeStats(10, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         PluginDeltaBaseline existing = PluginDeltaBaseline.create(ACTIVATION_ID, SITE_ID, "orders", 3L);
         when(baselineRepository.findByAccountPluginIdAndSiteId(ACTIVATION_ID, SITE_ID))
@@ -168,11 +168,11 @@ class DeltaSqlQueueServiceTest {
                 .thenReturn(List.of(existing));
 
         ChangelogSegment first = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(10, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(first));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(first));
         assertThat(queueService.processNextPending()).isTrue();
 
         ChangelogSegment second = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(7, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(second));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(second));
         assertThat(queueService.processNextPending()).isTrue();
 
         assertThat(existing.getBaselineSeq()).isEqualTo(Long.MAX_VALUE);
@@ -193,11 +193,11 @@ class DeltaSqlQueueServiceTest {
                 .thenReturn(List.of());
 
         ChangelogSegment first = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(10, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(first));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(first));
         queueService.processNextPending();
 
         ChangelogSegment second = segment("FULL_SNAPSHOT", Map.of("orders", new TableChangeStats(4, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(second));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(second));
         queueService.processNextPending();
 
         ArgumentCaptor<PluginDeltaBaseline> captor = ArgumentCaptor.forClass(PluginDeltaBaseline.class);
@@ -210,7 +210,7 @@ class DeltaSqlQueueServiceTest {
     @DisplayName("should leave the segment pending when generation fails")
     void shouldLeavePendingOnFailure() {
         ChangelogSegment segment = segment("DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
 

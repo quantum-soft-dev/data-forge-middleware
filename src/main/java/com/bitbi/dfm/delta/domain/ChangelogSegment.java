@@ -75,6 +75,30 @@ public class ChangelogSegment {
     private LocalDateTime egressAt;
 
     /**
+     * Consecutive failed delta-Parquet egress attempts (issue #243). Advisory: it drives the
+     * backoff and the poisoned reporting, never a decision to discard work, and it is written by a
+     * targeted {@code UPDATE ... SET egress_attempts = egress_attempts + 1} rather than by saving
+     * this entity, so two replicas attempting the same segment both count.
+     */
+    @Column(name = "egress_attempts", nullable = false)
+    private int egressAttempts;
+
+    /**
+     * Not claimable by the egress queue before this instant; {@code null} = claimable now
+     * (issue #243).
+     */
+    @Column(name = "egress_retry_at")
+    private LocalDateTime egressRetryAt;
+
+    /** The delta-SQL twin of {@link #egressAttempts} (issue #243). */
+    @Column(name = "plugin_sql_attempts", nullable = false)
+    private int pluginSqlAttempts;
+
+    /** The delta-SQL twin of {@link #egressRetryAt} (issue #243). */
+    @Column(name = "plugin_sql_retry_at")
+    private LocalDateTime pluginSqlRetryAt;
+
+    /**
      * Whether this segment belongs to a re-baseline snapshot that is still streaming (033).
      *
      * <p>A snapshot too large to buffer is sealed into bounded segments as it arrives. Those
