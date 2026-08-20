@@ -251,7 +251,11 @@ ticket grows into one larger, run-sized problem instead of a sibling appearing. 
 is **never reopened**: almost always the observation is simply stale (the fix is already in
 `develop`, your worktree is older — nothing needed, say so and move on), and only a true
 regression, reproducing on current `origin/develop`, gets a new issue linking the old one and
-the fixing commit. Only when the theme has no
+the fixing commit. **A closed match carrying `duplicate` is the exception to "stale"** — it was
+closed by another ticket's work rather than by its own PR, and that other ticket may still be
+open (four of the eight such closes were, on 2026-08-19), so read it as a pointer: take the
+absorber from its closing comment and look at *its* state. Ask the search for labels, not just
+titles (`--json number,title,state,labels,body`). Only when the theme has no
 ticket yet, file one — framed as the **theme** (root cause / subsystem), not a one-symptom
 note, so later findings have a place to land; described, labelled, milestoned, `Backlog` on
 the board, sized so one run fixes it whole. Work on a finding never starts in the current
@@ -311,12 +315,12 @@ window rather than two hours into an executor's session.
 ticket into another (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item
 closed`** workflow then sets its `Status` to `Done` — so `Done` mixes two different things: a
 ticket closed by **its own** PR, and a ticket closed by **somebody else's**. Read on 2026-08-19 the
-board carried four of the second kind with nothing telling them apart, the sharpest being **#200**
-(`priority: high`, SQL regeneration unfixed in production) sitting in `Done` while its absorber
-#190 was open and `status: blocked`; #210 in `Done` under an open #185, #192 under an open #193,
-#218 under an open #205. Four more — #143, #162, #204, #214 — were also closed by their absorbers
-(#142, #149, #186, #213), whose work *did* land. A person reading the board treats all eight as
-shipped, and for four of them that is false.
+board carried **eight** of the second kind with nothing telling them from the first, and for four
+of the eight the absorber was still open — the sharpest being **#200** (`priority: high`, SQL
+regeneration unfixed in production) sitting in `Done` while #190 was open and `status: blocked`;
+#210 under an open #185, #192 under an open #193, #218 under an open #205. The other four — #143,
+#162, #204, #214 — were absorbed by #142, #149, #186 and #213, whose work *did* land. A person
+reading the board treats all eight as shipped, and for four of them that is false.
 
 The marker is the **`duplicate` label, and it is mandatory** — the decision taken for #230. The two
 rejected options are worth recording:
@@ -351,6 +355,10 @@ absorbed close is labelled, whatever the absorber's fate, and the live answer to
 comes from the absorber — which is why **the closing comment is required beside the label** and
 must name the absorber and say whether it is still open. The label narrows the question; the
 comment answers it.
+
+The **label's own description carries that meaning** — it reads "Closed by another ticket's work,
+not by its own PR — the closing comment names the absorber", replacing GitHub's default "This issue
+or pull request already exists", which states the rejected reading to anyone hovering it in the UI.
 
 So: **whoever closes a ticket as absorbed applies `duplicate` and leaves that comment.** The card
 stays in `Done` — that is the automation's answer and this rule does not fight it. What the label
@@ -605,8 +613,25 @@ pages/{feature}/            # Route pages
   labelling it is the consequence of choosing the other one. `Done` minus `duplicate` is now the
   work that closed on its own merits. The rule binds all three closing sites — `/github-issue`,
   `/merge` and `/github-issue-runner` — and says nothing about *which* ticket survives, which stays
-  a judgement about where the work is. Documentation and command files only: no production code,
-  test, REST, gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change.
+  a judgement about where the work is. The `duplicate` label's **description** was rewritten to
+  carry the same meaning ("Closed by another ticket's work, not by its own PR — the closing comment
+  names the absorber"): GitHub's default text, "This issue or pull request already exists", states
+  the rejected reading to anyone hovering it in the UI. **Review round 1 found the rule's own
+  misreading one step upstream** and that is the finding worth keeping: the follow-ups search rule
+  still told an agent that a *closed* match "almost always" means the fix is already in `develop`,
+  so a `duplicate`-closed #192 or #218 — whose absorbers #193 and #205 are open — would have been
+  read as shipped at the search step, which is #230's defect moved off the board and into
+  `/github-issue`; the closed-match branch now names `duplicate` as the exception and the searches
+  ask for labels. Three more from the same round: the absorbed close strips `status: *` like any
+  other close (a ticket closed in `Done` still carrying `status: blocked` was literally #200); the
+  "do not move the card" instruction was narrowed to "do not move it to another column, but check
+  it reached `Done` and move it there by hand otherwise", since assuming the workflow fired
+  contradicts this file's own "a command that exited 0 is not proof"; and the dispatcher rule had
+  been extended to closes that are **not** absorbed at all — an issue merged by its own PR in the
+  same run, and a finding already fixed in `develop` — which would have broken the very invariant
+  the label buys. Documentation and command files only: no production code, test, REST, gRPC,
+  proto, DTO, migration, configuration-key, metric, S3-key or frontend change (the label
+  description is repository metadata, not a file).
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three
