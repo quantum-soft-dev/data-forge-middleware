@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -382,36 +381,6 @@ public class SqlGenerationService {
             throw e;
         } finally {
             MDC.clear();
-        }
-    }
-
-    /**
-     * Asynchronously generates SQL for a batch during reinit operation.
-     * <p>
-     * This method runs in a separate thread to avoid blocking the HTTP request.
-     * The reinit endpoint returns immediately (202 Accepted) while SQL generation
-     * continues in the background.
-     * </p>
-     * <p>
-     * Error handling: If SQL generation fails, it's logged but does NOT fail the
-     * reinit operation (which has already completed and returned).
-     * </p>
-     *
-     * @param batchId The batch ID to generate SQL from
-     * @param accountPluginId The account plugin ID
-     * @param accountId The account ID (for logging)
-     */
-    @Async("pluginExecutor")
-    public void generateSqlForBatchAsync(UUID batchId, Long accountPluginId, UUID accountId) {
-        log.info("Starting async SQL generation for reinit: batchId={}, accountId={}", batchId, accountId);
-        try {
-            // forceFullGeneration=true: generate all INSERTs since history was cleared
-            generateSqlForBatch(batchId, accountPluginId, true);
-            log.info("Async SQL generation completed successfully: batchId={}, accountId={}", batchId, accountId);
-        } catch (Exception e) {
-            // Log error but don't propagate - reinit has already returned successfully
-            log.error("Async SQL generation failed for reinit: batchId={}, accountId={}, error={}",
-                    batchId, accountId, e.getMessage(), e);
         }
     }
 

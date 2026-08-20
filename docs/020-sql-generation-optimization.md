@@ -343,7 +343,10 @@ It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass 
 original superseded. #190 then retired the whole regeneration path, so that consumer no longer
 exists; the history stays in the bullet list above.)
 
-(`generateSqlForBatchAsync` is not in the table: it has no callers — see #210.)
+(`generateSqlForBatchAsync` — feature 015's async reinit generator, an `@Async("pluginExecutor")`
+method whose Javadoc described a reinit flow that had been removed — never appears in the table:
+it had no callers, and #185 (folding #210) deleted it. `PluginHistoryService`'s "SQL generation no
+longer triggered for reinit" comment is the remaining record of that flow.)
 
 The regeneration hazard was closed for good by #190 itself: rather than moving the generation out
 of the caller's transaction, #190 retired the regeneration path entirely (it could not serve any
