@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -49,9 +48,9 @@ class ChangelogRetentionOutsideTransactionTest {
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final S3FileStorageService objectDeleter = mock(S3FileStorageService.class);
     private final DeltaSyncStateService syncStateService = mock(DeltaSyncStateService.class);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final ChangelogRetentionService service = new ChangelogRetentionService(
-            segmentRepository, objectDeleter, syncStateService,
-            new DeltaMetrics(new SimpleMeterRegistry()), 0);
+            segmentRepository, objectDeleter, syncStateService, new DeltaMetrics(registry), 0);
 
     @AfterEach
     void clearAmbientTransaction() {
@@ -89,17 +88,19 @@ class ChangelogRetentionOutsideTransactionTest {
     }
 
     @Test
-    void theObjectDeleteRunsAfterTheRowDeleteAndWithNoTransactionOpen() {
+    void theObjectDeleteRunsOnlyAfterTheRowDeleteReportedSuccess() {
         when(syncStateService.getSyncState(SITE))
                 .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
         View processed = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(processed));
         when(segmentRepository.deleteByIdIfProcessed(processed.id())).thenReturn(1);
-        when(objectDeleter.deleteObjects(anyList())).thenAnswer(invocation -> {
-            assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
-                    "the batched DeleteObjects must not run inside a transaction (issue #234)");
-            return new S3FileStorageService.DeleteObjectsResult(1, List.of());
-        });
+        // Review round 2: asserting isActualTransactionActive() here would be vacuous — this
+        // service is built with new(), the repository is a mock and there is no transaction
+        // manager, so nothing in this class could make it fail. That property is pinned by
+        // pruneIsNotTransactional above and, on the wired application, by
+        // ChangelogRetentionIntegrationTest.theObjectDeleteRunsWithNoTransactionOpen.
+        when(objectDeleter.deleteObjects(anyList()))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
 
         assertEquals(1, service.prune(SITE));
 
@@ -125,10 +126,33 @@ class ChangelogRetentionOutsideTransactionTest {
         when(segmentRepository.deleteByIdIfProcessed(first.id())).thenReturn(1);
         when(segmentRepository.deleteByIdIfProcessed(failing.id()))
                 .thenThrow(new CannotAcquireLockException("lock timeout"));
+        when(objectDeleter.deleteObjects(anyList()))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
 
         assertThrows(CannotAcquireLockException.class, () -> service.prune(SITE));
 
         verify(objectDeleter).deleteObjects(List.of(first.key()));
+    }
+
+    @Test
+    void anExceptionMidPassStillReportsWhatThePassDidBeforeIt() {
+        // Review round 2: durable partial progress needs durable accounting. The held-back
+        // counters are the #212 stuck-backlog alarm and the INFO is the only record that rows
+        // were pruned, so leaving them past the throw makes an aborted pass read as "nothing
+        // happened" while rows and objects are gone.
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        View pending = new View(UUID.randomUUID(), "delta/s/1.pb.gz", null, DONE);
+        View failing = new View(UUID.randomUUID(), "delta/s/2.pb.gz", DONE, DONE);
+        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(pending, failing));
+        when(segmentRepository.deleteByIdIfProcessed(failing.id()))
+                .thenThrow(new CannotAcquireLockException("lock timeout"));
+
+        assertThrows(CannotAcquireLockException.class, () -> service.prune(SITE));
+
+        assertEquals(1.0, registry.get("delta.retention.segments.held-back")
+                        .tag("reason", "pending_plugin_sql").counter().count(),
+                "the hold-back this pass observed is counted even though the pass aborted");
     }
 
     private record View(UUID id, String key, LocalDateTime pluginSqlAt, LocalDateTime egressAt)

@@ -149,21 +149,26 @@ public class ChangelogRetentionService {
                         heldBack.countIfPending(rePended.isPendingPluginSql(), rePended.isPendingEgress()));
             }
         } finally {
+            // Everything this pass did is reported from the finally, because everything it did is
+            // durable (issue #234, review round 2): a throw mid-loop leaves rows deleted and their
+            // objects deleted with them, so leaving the counters and the lines past the throw would
+            // make an aborted pass read as "nothing happened" — and the #212 stuck-backlog alarm
+            // would read zero for a pass that did observe held-back segments.
             deletePrunedObjects(siteId, prunedKeys);
+            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
+            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
+            if (heldBack.segments > 0) {
+                log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
+                                + "{} awaiting plugin SQL, {} awaiting egress; retention does not "
+                                + "delete unprocessed queue work (issue #212)",
+                        heldBack.segments, siteId, heldBack.pendingPluginSql, heldBack.pendingEgress);
+            }
+            if (!prunedKeys.isEmpty()) {
+                log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
+                        prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
+            }
         }
 
-        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
-        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
-        if (heldBack.segments > 0) {
-            log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
-                            + "{} awaiting plugin SQL, {} awaiting egress; retention does not delete "
-                            + "unprocessed queue work (issue #212)",
-                    heldBack.segments, siteId, heldBack.pendingPluginSql, heldBack.pendingEgress);
-        }
-        if (!prunedKeys.isEmpty()) {
-            log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
-                    prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
-        }
         return prunedKeys.size();
     }
 

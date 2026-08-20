@@ -617,7 +617,19 @@ pages/{feature}/            # Route pages
   hold with the assertion green (it reads both, on the method and the declaring class, through
   `AnnotatedElementUtils`), and the integration spy asserted "exactly one `deleteObjects` in this
   context", which any concurrent batch-retention pass would have failed while blaming this ticket
-  (it is scoped to this test's own key and its list is synchronized). Tests were written first and are
+  (it is scoped to this test's own key and its list is synchronized).
+  **Round 2 found the same asymmetry one level up**: durable partial progress needs durable
+  accounting, and the held-back counters, their WARN and the `Pruned N` INFO all sat *after* the
+  `try`/`finally`, so a pass aborting on row 1200 of 3000 deleted 1199 rows and their objects while
+  reporting nothing but `CheckpointScheduler`'s generic per-site failure — with the #212
+  stuck-backlog alarm reading zero for a pass that had just observed the backlog. They moved into
+  the `finally` with the delete. Two test corrections with it, both about a test claiming more than
+  it can: the unit test's `isActualTransactionActive()` assertion was **vacuous** (a service built
+  with `new`, a mocked repository, no transaction manager — nothing there could fail it, restoring
+  `@Transactional` included), so it is gone and the method is named for what it does pin, the
+  row-before-object order; and the mid-pass test left `deleteObjects` unstubbed, so its `verify`
+  passed through an NPE swallowed by the delete's own catch — the success branch it documents was
+  never taken. Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own
