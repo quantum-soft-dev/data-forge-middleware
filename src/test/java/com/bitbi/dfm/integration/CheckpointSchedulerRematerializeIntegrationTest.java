@@ -98,7 +98,7 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         // The fixture path leaves both queue markers NULL, and since issue #212 retention holds a
         // pending segment back. This test's subject is the pruned-to-nothing work list (#137), so
         // the segment must be prunable: mark its queue work done before the tick.
-        markSegmentsProcessed();
+        markSegmentsProcessed(SITE);
 
         scheduler.buildCheckpoints();
 
@@ -140,6 +140,12 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", FIRST_SEQ, List.of(
                 rec("customers", Op.INSERT, FIRST_SEQ, key("id", intVal(1)),
                         data("id", intVal(1), "name", strVal("Ann")))));
+        // Review round 1, A4a: pending, this fixture segment would be held back by every prune
+        // (issue #212) and survive the class as a claimable head of both global queues — the
+        // #226/#175 leak shape. Its pending-ness is not this test's subject, so mark it processed;
+        // window 0 then prunes it on the first tick and the drain below runs for the original
+        // #149 reason (the unmaterialized row), not for a weaker one.
+        markSegmentsProcessed(SITE);
 
         int cap = Integer.parseInt(MAX_ATTEMPTS);
         for (int tick = 1; tick <= cap; tick++) {
@@ -174,14 +180,6 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         assertNotNull(recovered.getS3KeyParquet(), "the forced rebuild materializes from the frame");
         assertEquals(0, recovered.materializeAttempts(), "a snapshot clears the attempt count");
         assertFalse(recovered.hasGivenUpMaterializing(cap), "and puts the row back in the population");
-    }
-
-    private void markSegmentsProcessed() {
-        segmentRepository.findBySiteIdOrderByFirstSeq(SITE).forEach(segment -> {
-            segment.markEgressed();
-            segment.markPluginSqlProcessed();
-            segmentRepository.save(segment);
-        });
     }
 
     private void awaitMaterialized() {

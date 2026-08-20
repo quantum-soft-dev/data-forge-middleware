@@ -75,7 +75,7 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         ChangelogSegment seg1 = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
         String seg1Key = seg1.getS3Key();
         assertTrue(segmentStorage.exists(seg1Key), "segment object exists before prune");
-        markProcessed(seg1);
+        markSegmentsProcessed(SITE);
 
         int pruned = retentionService.prune(SITE);
 
@@ -114,17 +114,23 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
 
         int held = retentionService.prune(SITE);
 
-        assertEquals(0, held, "a segment with pending queue work is not prunable (issue #212)");
+        // Review round 1, A4b: both queues are global, so a background drain of any cached
+        // context could stamp this row mid-test and flip the outcome. Assessed improbable
+        // (#159/#167/#175 keep the sweeps at an hour), but a steal must diagnose itself in one
+        // shot — every message re-reads the markers, so a red run says which queue took the row.
+        assertEquals(0, held, () -> "a segment with pending queue work is not prunable "
+                + "(issue #212); markers now: " + describeMarkers());
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent(),
-                "the pending segment's row survives the prune");
-        assertTrue(segmentStorage.exists(pendingKey), "the pending segment's S3 object survives the prune");
+                () -> "the pending segment's row survives the prune; markers now: " + describeMarkers());
+        assertTrue(segmentStorage.exists(pendingKey),
+                () -> "the pending segment's S3 object survives the prune; markers now: " + describeMarkers());
         assertEquals(1.0, heldBack("pending_plugin_sql") - sqlBefore,
-                "the hold-back is counted for the pending plugin SQL");
+                () -> "the hold-back is counted for the pending plugin SQL; markers now: " + describeMarkers());
         assertEquals(1.0, heldBack("pending_egress") - egressBefore,
-                "the hold-back is counted for the pending egress");
+                () -> "the hold-back is counted for the pending egress; markers now: " + describeMarkers());
 
         // Once both queues have drained the segment, retention reclaims it exactly as before.
-        markProcessed(pending);
+        markSegmentsProcessed(SITE);
         int pruned = retentionService.prune(SITE);
 
         assertEquals(1, pruned, "the same segment is pruned once its work is done");
@@ -137,10 +143,11 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
                 .tag("reason", reason).counter().count();
     }
 
-    private void markProcessed(ChangelogSegment segment) {
-        segment.markEgressed();
-        segment.markPluginSqlProcessed();
-        segmentRepository.save(segment);
+    private String describeMarkers() {
+        return segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L)
+                .map(segment -> "plugin_sql_at=" + segment.getPluginSqlAt()
+                        + ", egress_at=" + segment.getEgressAt())
+                .orElse("row gone");
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
