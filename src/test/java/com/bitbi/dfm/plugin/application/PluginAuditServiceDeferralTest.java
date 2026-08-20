@@ -138,16 +138,6 @@ class PluginAuditServiceDeferralTest {
         }
 
         @Test
-        @DisplayName("SQL regeneration completed — PluginHistoryService.regenerateSql supplies the transaction")
-        void shouldDeferSqlRegenerationCompleted() {
-            service.logSqlRegenerationCompleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(),
-                    UUID.randomUUID(), new com.bitbi.dfm.plugin.domain.SqlGenerationStats(1, 0, 0, 1), 5L);
-
-            assertThat(deferredEntry().getActionType())
-                    .isEqualTo(PluginActionType.SQL_REGENERATION_COMPLETED);
-        }
-
-        @Test
         @DisplayName("credential rotated")
         void shouldDeferCredentialRotated() {
             service.logCredentialRotated(PLUGIN_ID, accountId, PluginActionType.API_KEY_ROTATED);

@@ -800,50 +800,23 @@ public class AccountPluginsController {
     }
 
     /**
-     * Regenerates SQL for a generation.
-     */
-    @PostMapping("/{pluginId}/generations/{generationId}/regenerate")
-    @Operation(
-        summary = "Regenerate SQL",
-        description = "Regenerates SQL for a batch. Original generation is marked as superseded."
-    )
-    @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Regeneration completed"),
-        @ApiResponse(responseCode = "401", description = "Not authenticated"),
-        @ApiResponse(responseCode = "404", description = "Generation not found"),
-        @ApiResponse(responseCode = "409", description = "Generation already superseded")
-    })
-    public ResponseEntity<?> regenerateSql(
-            @PathVariable String pluginId,
-            @PathVariable UUID generationId) {
-
-        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
-        if (accountIdOpt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-
-        UUID accountId = accountIdOpt.get();
-        log.info("Regenerate SQL requested: plugin={}, account={}, generation={}", pluginId, accountId, generationId);
-
-        try {
-            RegenerateResultDto result = pluginHistoryService.regenerateSql(pluginId, accountId, generationId);
-            log.info("SQL regenerated: original={}, new={}", generationId, result.newGenerationId());
-            return ResponseEntity.ok(result);
-        } catch (IllegalStateException e) {
-            return ResponseEntity.status(409)
-                    .body(java.util.Map.of("error", "CONFLICT", "message", e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
-        }
-    }
-
-    /**
      * Deletes a SQL generation.
      */
     @DeleteMapping("/{pluginId}/generations/{generationId}")
     @Operation(
         summary = "Delete SQL generation",
-        description = "Deletes a SQL generation and its S3 file. Requires confirmation."
+        description = """
+                Deletes a SQL generation and its S3 file. Requires confirmation.
+
+                **Delete + generate re-serves the batch to a client that already fetched it.**
+                Re-creating the SQL (POST generate-sql) writes a row with a new created_at, so a
+                /sql-changes client whose `since` cursor already passed the batch receives its
+                SQL a second time — and the generated SQL is not idempotent. A cursor still
+                behind the batch receives it once, correctly. For a batch the client has already
+                fetched, use reinit instead. Generate also only re-creates SQL for a batch above
+                the plugin's current delta baselines: after a reinit re-captured them, an older
+                segment-backed batch renders no statements.
+                """
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Generation deleted"),

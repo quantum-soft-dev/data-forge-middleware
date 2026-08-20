@@ -138,55 +138,6 @@ public class SqlGenerationPersistence {
         return new BatchData(batch, site, relevantFiles, previousBatchOpt, previousFilesMap, List.of());
     }
 
-    /**
-     * Load batch data for regeneration (skips the existing-generation check).
-     * Always filters to CSV files — CDC regeneration is not yet supported.
-     */
-    @Transactional(readOnly = true)
-    public BatchData loadBatchDataForRegeneration(UUID batchId) {
-        Batch batch = batchRepository.findByIdWithFiles(batchId)
-                .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
-
-        Site site = siteRepository.findById(batch.getSiteId())
-                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
-
-        if (changelogSegmentRepository.existsByBatchId(batchId)) {
-            throw new IllegalArgumentException(
-                    "SQL regeneration is not supported for segment-backed batches: siteId=" + site.getId());
-        }
-
-        List<UploadedFile> currentFiles = batch.getUploadedFiles();
-        if (currentFiles.isEmpty()) {
-            return null;
-        }
-
-        List<UploadedFile> csvFiles = currentFiles.stream()
-                .filter(f -> f.getOriginalFileName().toLowerCase().endsWith(".csv") ||
-                             f.getOriginalFileName().toLowerCase().endsWith(".csv.gz"))
-                .collect(Collectors.toList());
-
-        if (csvFiles.isEmpty()) {
-            return null;
-        }
-
-        if (csvFiles.size() > MAX_FILES_PER_BATCH) {
-            throw new IllegalArgumentException(
-                    "Batch contains " + csvFiles.size() + " CSV files, exceeding limit of " + MAX_FILES_PER_BATCH);
-        }
-
-        Optional<Batch> previousBatchOpt = batchRepository
-                .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
-
-        Map<String, UploadedFile> previousFilesMap = new HashMap<>();
-        if (previousBatchOpt.isPresent()) {
-            for (UploadedFile file : previousBatchOpt.get().getUploadedFiles()) {
-                previousFilesMap.put(normalizeFileName(file.getOriginalFileName()), file);
-            }
-        }
-
-        return new BatchData(batch, site, csvFiles, previousBatchOpt, previousFilesMap, List.of());
-    }
-
     /** Phase 3: persist the generation record. */
     @Transactional
     public PluginSqlGeneration saveGenerationRecord(

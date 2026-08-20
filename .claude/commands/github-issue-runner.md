@@ -373,8 +373,9 @@ review `PENDING`, он вызывает `submitPullRequestReview` **до** resol
 
 Красный CI на чистом дереве — повод перепрогнать проверку и сверить с `develop`; красный
 на любом тесте, который не воспроизводится на `develop`, — блокер. Тесты
-`SqlGenerationService` / `regenerateForBatch` и CONFIG-fallback расписания ретенции
-изолированы в #119, а `SqlGenerationIntegrationTest` и `BitBiDeltaSqlIntegrationTest` — в #159;
+`SqlGenerationService` и CONFIG-fallback расписания ретенции изолированы в #119
+(`regenerateForBatch` вместе со своими тестами удалён в #190), а
+`SqlGenerationIntegrationTest` и `BitBiDeltaSqlIntegrationTest` — в #159;
 ни те, ни другие больше не считаются известной флакухой.
 
 ### 5. Merge — по одному, под замком

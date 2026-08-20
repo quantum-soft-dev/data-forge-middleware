@@ -2,10 +2,10 @@
  * BatchSqlTable Component
  *
  * Table displaying batches with their SQL generation status.
- * Allows generating, viewing, regenerating, and deleting SQL for batches.
+ * Allows generating, viewing, and deleting SQL for batches.
  */
 
-import { Database, Eye, RefreshCw, Trash2, Plus, Loader2, Info } from 'lucide-react'
+import { Database, Eye, Trash2, Plus, Loader2, Info } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -23,7 +23,6 @@ interface BatchSqlTableProps {
   isLoading: boolean
   onViewSql: (batch: BatchSqlStatus) => void
   onGenerateSql: (batch: BatchSqlStatus) => void
-  onRegenerateSql: (batch: BatchSqlStatus) => void
   onDeleteSql: (batch: BatchSqlStatus) => void
   onShowProperties: (batch: BatchSqlStatus) => void
   pendingBatchId?: string | null
@@ -113,7 +112,6 @@ function BatchActions({
   batch,
   onViewSql,
   onGenerateSql,
-  onRegenerateSql,
   onDeleteSql,
   onShowProperties,
   isPending,
@@ -121,7 +119,6 @@ function BatchActions({
   batch: BatchSqlStatus
   onViewSql: (batch: BatchSqlStatus) => void
   onGenerateSql: (batch: BatchSqlStatus) => void
-  onRegenerateSql: (batch: BatchSqlStatus) => void
   onDeleteSql: (batch: BatchSqlStatus) => void
   onShowProperties: (batch: BatchSqlStatus) => void
   isPending: boolean
@@ -159,7 +156,8 @@ function BatchActions({
     )
   }
 
-  // Batch has SQL - show view, regenerate, delete, properties
+  // Batch has SQL - show view, delete, properties (re-creating SQL is Delete + Generate,
+  // the regeneration path was retired by #190)
   if (batch.hasSql && batch.generationId) {
     return (
       <div className="flex items-center gap-1">
@@ -171,16 +169,6 @@ function BatchActions({
           title="View SQL"
         >
           <Eye className="h-4 w-4" />
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onRegenerateSql(batch)}
-          className="h-8 w-8 p-0"
-          title="Regenerate SQL"
-        >
-          <RefreshCw className="h-4 w-4" />
         </Button>
 
         <Button
@@ -206,7 +194,7 @@ function BatchActions({
     )
   }
 
-  // No changes detected - show only properties (no regenerate needed)
+  // No changes detected - show only properties
   if (batch.noChangesDetected) {
     return (
       <div className="flex items-center gap-1">
@@ -261,7 +249,6 @@ export function BatchSqlTable({
   isLoading,
   onViewSql,
   onGenerateSql,
-  onRegenerateSql,
   onDeleteSql,
   onShowProperties,
   pendingBatchId,
@@ -320,7 +307,6 @@ export function BatchSqlTable({
                   batch={batch}
                   onViewSql={onViewSql}
                   onGenerateSql={onGenerateSql}
-                  onRegenerateSql={onRegenerateSql}
                   onDeleteSql={onDeleteSql}
                   onShowProperties={onShowProperties}
                   isPending={pendingBatchId === batch.batchId}

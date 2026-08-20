@@ -51,7 +51,7 @@ public record SqlGenerationSummaryDto(
         @Schema(description = "True if this was the first batch (initial load)")
         boolean isInitialLoad,
 
-        @Schema(description = "True if this generation has been superseded by regeneration")
+        @Schema(description = "Historical flag of the retired regeneration path (#190); nothing writes it any more")
         boolean superseded,
 
         @Schema(description = "ID of the generation that superseded this one")

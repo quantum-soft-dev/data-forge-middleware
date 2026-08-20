@@ -71,31 +71,17 @@ class SqlGenerationOutsideTransactionTest {
     }
 
     @Test
-    void regenerateForBatchRefusesToRunInsideATransaction() {
-        TransactionSynchronizationManager.setActualTransactionActive(true);
-
-        IllegalStateException thrown = assertThrows(IllegalStateException.class,
-                () -> service.regenerateForBatch(UUID.randomUUID(), 1L));
-        assertTrue(thrown.getMessage().contains("transaction"), thrown.getMessage());
-    }
-
-    @Test
     void persistenceCollaboratorCarriesTheRealTransactionBoundary() throws Exception {
         Method load = SqlGenerationPersistence.class.getDeclaredMethod("loadBatchData", UUID.class, boolean.class);
         Method save = SqlGenerationPersistence.class.getDeclaredMethod("saveGenerationRecord",
                 Long.class, SqlGenerationPersistence.BatchData.class, String.class, long.class,
                 SqlGenerationStats.class, long.class);
-        Method loadRegen = SqlGenerationPersistence.class.getDeclaredMethod(
-                "loadBatchDataForRegeneration", UUID.class);
 
         Transactional loadTx = load.getAnnotation(Transactional.class);
         Transactional saveTx = save.getAnnotation(Transactional.class);
-        Transactional regenTx = loadRegen.getAnnotation(Transactional.class);
         assertNotNull(loadTx, "loadBatchData must be transactional on the collaborator, not self-invoked");
         assertTrue(loadTx.readOnly());
         assertNotNull(saveTx, "saveGenerationRecord must be transactional on the collaborator, not self-invoked");
         assertFalse(saveTx.readOnly());
-        assertNotNull(regenTx);
-        assertTrue(regenTx.readOnly());
     }
 }

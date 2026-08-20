@@ -503,6 +503,88 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- retire-sql-regeneration: The SQL regeneration path is gone, because it had never worked end to
+  end and repairing it would have repaired a path that can serve no live batch (issue #190,
+  folding #200 — the two were one piece of work: #190's transaction refusal fired first and #200's
+  V11 unique forbade the second row the fix needed, so neither was completable alone). The owner
+  recorded **Plan 2 — retire** on the ticket before implementation, and the deciding facts are
+  worth keeping: `loadBatchDataForRegeneration` threw for segment-backed batches and required CSV
+  `uploadedFiles`, which no batch has since 032 retired HTTP ingestion, so even fully fixed the
+  Regenerate button answered "not supported" for every Delta site; the superseded-history model it
+  preserved had no readers (`includeSuperseded` is always sent `false`) **and no rows** — since no
+  regeneration ever completed, no production row was ever marked superseded; and recovery already
+  exists on the same SQL tab (**Delete + Generate**, where manual `POST .../generate-sql` supports
+  segment-backed batches) plus `reinit` for the full reset. **Deleted**:
+  `PluginHistoryService.regenerateSql` (and with it the service's whole `SqlGenerationService`
+  dependency), both `/regenerate` endpoints (owner `AccountPluginsController`, admin
+  `PluginAdminController`), `RegenerateResultDto`, `SqlGenerationService.regenerateForBatch` /
+  `doRegenerateForBatch`, `SqlGenerationPersistence.loadBatchDataForRegeneration`, the
+  never-called `findActiveBySourceBatchId` (feature 014's unfinished half, fact 6 of the ticket),
+  the three `PluginAuditService.logSqlRegeneration*` writers, and the Regenerate
+  button/mutation/dialog on **both** frontend surfaces — `features/my-plugins` (owner SQL tab) and
+  `features/plugin-history` + `PluginHistoryWidget` (admin history page), with the two route
+  builders in `shared/api/apiRoutes.ts`. **Kept, deliberately**: `superseded`/`superseded_by`
+  (V11/V14 columns; dropping them is a separate decision, **no migration here — V55 stays free**),
+  the `includeSuperseded` query parameter (harmless, avoids an API change), and the
+  `SQL_REGENERATION_*` values of `PluginActionType` — they are stored-data values a historical
+  audit row could carry, so they become read-only history exactly like the columns (the frontend
+  logs-tab label map keeps its entries for the same reason). **The one thing the retired path
+  owned that must survive is the unique**: `uk_sql_gen_source_batch` is #164's durable claim for
+  the delta-SQL queue (`persistOrAdoptExisting`), and the DoD's binding checkbox is now pinned by
+  `SqlGenerationConcurrentClaimIntegrationTest` — two concurrent `generateSqlForBatch` calls for
+  one batch against the **real** constraint (the mock twin in `SqlGenerationServiceTest` stubs the
+  violation and cannot prove it), made deterministic by a `@MockitoSpyBean` barrier on
+  `storeSqlFile` scoped to the test's site, so both callers pass the `existsBySourceBatchId` guard
+  before either persists; both end with the same generation, exactly one row exists, and the
+  loser's orphaned S3 object is deleted. The seeded segment is marked
+  `plugin_sql_at`/`egress_at` immediately so the global queue (no site predicate, #175) can never
+  hand it to a sweep worker. Proven by mutation, since the claim already holds: with the
+  `DataIntegrityViolationException` catch removed the loser throws instead of adopting.
+  **The #172 rollback-audit guard is rewired, not deleted**: its invariant (a deferred audit entry
+  must not survive its publisher's rollback) belongs to the listener, not to regeneration, so
+  `PluginHistoryIntegrationTest` now publishes through `logSqlGenerationCompleted` — the surviving
+  deferred writer — and the audit hazard #172 recorded on #190 (entry standing while the supersede
+  rolls back) is closed **by the deletion itself**: no code publishes `SQL_REGENERATION_COMPLETED`
+  any more, so no guard test is needed. Obsolete tests deleted with the behaviour (Rule 2):
+  the `RegenerateSql` nested classes in `PluginHistoryServiceTest`, `PluginHistoryIntegrationTest`
+  (`@Disabled` since 014) and `PluginHistoryAdminControllerTest`, the regeneration cases in
+  `SqlGenerationServiceTest`, `SqlGenerationStreamingTest`, `SqlGenerationConcurrencyTest`,
+  `SqlGenerationOutsideTransactionTest` and `PluginAuditServiceDeferralTest`. Two REST endpoints
+  disappear (never functional — every call since #164 answered 409, and before #164 died at commit
+  on the unique); `/actuator/prometheus` loses `sql.regeneration.duration` and
+  `sql.regeneration.errors`, series only a failed attempt could ever move (the #165 precedent for
+  naming a removed series). **The delete+generate caveat is now documented where that recovery
+  is described** (`docs/bitbi-integration.md` "Recovering a batch's SQL", both delete-generation
+  `@Operation` descriptions, the delete dialog in the SQL tab): the new row gets a new
+  `created_at`, so a client whose `since` cursor already passed the batch receives its SQL a
+  second time — and the SQL is not idempotent — so for an already-fetched batch the answer is
+  `reinit`. Pre-existing behaviour of that path, not new.
+  **Review round 1 corrected the caveat itself before anything else** — the bold Swagger lead
+  said "re-delivers to lagging cursors only", the exact inverse of its own body (re-delivery of
+  the non-idempotent SQL hits precisely the cursor that **already passed** the batch; a lagging
+  one receives it once, correctly), and the owner delete `@Operation` had no caveat at all while
+  this entry claimed both carried it. It also named the **second limit** of delete+generate,
+  now documented beside the first: generate renders only records above the plugin's current
+  delta baselines, so after a reinit re-captured them an older segment-backed batch renders
+  nothing, settles as "No changes" with no Generate button, and the deleted SQL is unrecoverable
+  through the UI — the delete dialog and both guides say so and point at reinit. The concurrency
+  test was hardened on six axes (spy verifies scoped to the test's account and
+  `clearInvocations`, since a `@MockitoSpyBean` records since context refresh over a global
+  queue; the backlog retired by one UPDATE instead of rendering it; the persist→mark window made
+  harmless by creating the activation only after the mark, so a claim in the window takes the
+  #175 skip branch; `max-concurrent=2` pinned by `@TestPropertySource` instead of inherited; the
+  barrier failure named instead of sneaky-thrown as an S3 error; a bounded `awaitTermination`).
+  `markAsSuperseded` is deleted too — an inviting documented mutator for a model nothing reads
+  is a trap — and the admin history page drops its "Show superseded" checkbox and
+  Superseded/Active badge (frontend only; the server keeps accepting `includeSuperseded`).
+  `sql.generation.semaphore.queue.size` kept its only non-zero pin by moving the queueing test
+  onto the surviving `generateSqlForBatch` path. One pre-existing finding was traced to the
+  findings inbox (#242) rather than fixed: the adopt path's loser still logs
+  `SQL_GENERATION_COMPLETED` with its own just-deleted `s3Key` and double-increments
+  `sql.generation.statements.*` — since #164, made visible by this ticket's determinism.
+  No migration, gRPC, proto, configuration-key, S3-key, TanStack-Query-key or route-path change
+  beyond the two removed REST routes. See `docs/bitbi-integration.md`,
+  `docs/cr-bitbi-delta-sql.md`, `docs/020-sql-generation-optimization.md`.
 - followup-declares-its-files: A follow-up ticket states what it will touch, so a collision is read
   rather than inferred (issue #216, filed from the backlog pass that untangled #190/#200). **A
   keyword search finds a duplicate and finds a collision only if somebody runs it**: #200 was a

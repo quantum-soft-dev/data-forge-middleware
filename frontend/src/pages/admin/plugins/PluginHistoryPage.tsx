@@ -2,8 +2,8 @@
  * PluginHistoryPage - Plugin SQL Generation History
  *
  * Admin page for viewing and managing SQL generation history for a specific
- * account's plugin. Allows viewing SQL content, downloading files, regenerating,
- * and clearing all history.
+ * account's plugin. Allows viewing SQL content, downloading files, and clearing
+ * all history.
  *
  * Route: /admin/plugins/:pluginId/accounts/:accountId/history
  * Requires: ROLE_ADMIN

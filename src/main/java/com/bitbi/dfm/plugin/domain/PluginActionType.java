@@ -35,13 +35,19 @@ public enum PluginActionType {
     /** Admin cleared all plugin history for an account */
     PLUGIN_HISTORY_CLEARED,
 
-    /** SQL regeneration started for a batch */
+    /**
+     * SQL regeneration started for a batch.
+     *
+     * <p>Historical: the regeneration path was retired by issue #190 and nothing writes this
+     * value any more. It is kept so audit rows that may carry it stay readable — the same
+     * reasoning that keeps the write-only {@code superseded}/{@code superseded_by} columns.</p>
+     */
     SQL_REGENERATION_STARTED,
 
-    /** SQL regeneration completed successfully */
+    /** SQL regeneration completed successfully. Historical since #190 — see {@link #SQL_REGENERATION_STARTED}. */
     SQL_REGENERATION_COMPLETED,
 
-    /** SQL regeneration failed with error */
+    /** SQL regeneration failed with error. Historical since #190 — see {@link #SQL_REGENERATION_STARTED}. */
     SQL_REGENERATION_FAILED,
 
     /** Plugin SQL state reinitialized (history cleared + regenerated from latest batch) */

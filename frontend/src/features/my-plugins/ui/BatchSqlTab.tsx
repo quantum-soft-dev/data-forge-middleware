@@ -2,8 +2,8 @@
  * BatchSqlTab Component
  *
  * Main container for batch SQL management in My Plugins widget.
- * Shows batches with SQL status and provides actions to generate,
- * view, regenerate, and delete SQL.
+ * Shows batches with SQL status and provides actions to generate, view and delete SQL.
+ * (Regeneration was retired by #190; re-creating a batch's SQL is Delete + Generate.)
  *
  * Features:
  * - Site filtering
@@ -32,7 +32,6 @@ import { PluginTabFilters, type SqlFilterState } from './PluginTabFilters'
 import {
   useBatchSqlStatusQuery,
   useGenerateSqlMutation,
-  useRegenerateSqlMutation,
   useDeleteGenerationMutation,
 } from '../api/batchSqlQueries'
 import type { BatchSqlStatus } from '../model/types'
@@ -41,7 +40,7 @@ interface BatchSqlTabProps {
   pluginId: string
 }
 
-type DialogAction = 'generate' | 'regenerate' | 'delete' | null
+type DialogAction = 'generate' | 'delete' | null
 
 export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
   // Filter and pagination state
@@ -65,7 +64,6 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
     siteId: filters.siteId,
   })
   const generateMutation = useGenerateSqlMutation()
-  const regenerateMutation = useRegenerateSqlMutation()
   const deleteMutation = useDeleteGenerationMutation()
 
   // Filter and pagination handlers
@@ -93,11 +91,6 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
   const handleGenerateClick = useCallback((batch: BatchSqlStatus) => {
     setSelectedBatch(batch)
     setDialogAction('generate')
-  }, [])
-
-  const handleRegenerateClick = useCallback((batch: BatchSqlStatus) => {
-    setSelectedBatch(batch)
-    setDialogAction('regenerate')
   }, [])
 
   const handleDeleteClick = useCallback((batch: BatchSqlStatus) => {
@@ -157,31 +150,6 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
     )
   }, [selectedBatch, pluginId, generateMutation, handleCloseDialog])
 
-  const handleConfirmRegenerate = useCallback(() => {
-    if (!selectedBatch?.generationId) return
-
-    setPendingBatchId(selectedBatch.batchId)
-    regenerateMutation.mutate(
-      { pluginId, generationId: selectedBatch.generationId },
-      {
-        onSuccess: (result) => {
-          toast.success('SQL Regenerated', {
-            description: `Regenerated ${result.statementCount} statements`,
-          })
-          handleCloseDialog()
-        },
-        onError: (err) => {
-          toast.error('Regeneration Failed', {
-            description: err.message || 'Failed to regenerate SQL',
-          })
-        },
-        onSettled: () => {
-          setPendingBatchId(null)
-        },
-      }
-    )
-  }, [selectedBatch, pluginId, regenerateMutation, handleCloseDialog])
-
   const handleConfirmDelete = useCallback(() => {
     if (!selectedBatch?.generationId) return
 
@@ -229,7 +197,6 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
             isLoading={isLoading}
             onViewSql={handleViewSql}
             onGenerateSql={handleGenerateClick}
-            onRegenerateSql={handleRegenerateClick}
             onDeleteSql={handleDeleteClick}
             onShowProperties={handleShowProperties}
             pendingBatchId={pendingBatchId}
@@ -305,29 +272,6 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Regenerate Confirmation Dialog */}
-      <AlertDialog open={dialogAction === 'regenerate'} onOpenChange={(open) => !open && handleCloseDialog()}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Regenerate SQL</AlertDialogTitle>
-            <AlertDialogDescription>
-              Regenerate SQL statements for batch from <strong>{selectedBatch?.siteDomain}</strong>?
-              <br /><br />
-              This will delete the existing SQL and generate new statements. Use this if the baseline has changed or if you need fresh SQL.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={regenerateMutation.isPending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmRegenerate}
-              disabled={regenerateMutation.isPending}
-            >
-              {regenerateMutation.isPending ? 'Regenerating...' : 'Regenerate'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={dialogAction === 'delete'} onOpenChange={(open) => !open && handleCloseDialog()}>
         <AlertDialogContent>
@@ -336,7 +280,12 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
             <AlertDialogDescription>
               Delete SQL generation for batch from <strong>{selectedBatch?.siteDomain}</strong>?
               <br /><br />
-              This will permanently delete the SQL file. You can regenerate it later if needed.
+              This will permanently delete the SQL file. Generate can re-create it only while the
+              batch is above the plugin&apos;s current baselines — after a reinitialize, older
+              batches generate nothing. Re-created SQL gets a new timestamp, so a Bit BI client
+              whose cursor already passed this batch will receive its SQL a second time. If the
+              client has already fetched this batch, or Generate produces nothing, use
+              Reinitialize instead.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
