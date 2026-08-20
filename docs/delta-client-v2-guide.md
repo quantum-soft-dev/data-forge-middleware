@@ -1151,17 +1151,23 @@ can carry. A `double` key needs no exception either: PostgreSQL compares `NaN` e
 
 **The declared type is what decides on the Parquet side, and the wire case is what decides here** —
 so one combination still disagrees, and it is the combination the schema contract already forbids. A
-client that declares a column `numeric`/`decimal` and nevertheless sends `double_value` (see
-[Value typing](#value-typing): *never send these as `double_value`*) has its cell
-written NULL by every Parquet writer — `toBigDecimal` cannot render a non-finite into a DECIMAL,
-whatever Java type it arrived as, and it is counted on
-`delta.parquet.unrepresentable-decimals{reason=non_finite}` — while the SQL stream renders
-`'NaN'`. If that cell is a **key**, the record is not skipped either, because
-the **key** is guarded: quoting the literal would have turned a loud failure into a silent one —
+client that declares a column `numeric(p,s)` and nevertheless sends the value as `double_value` — or
+as a `string_value` spelling one of the three (see [Value typing](#value-typing): *never send these
+as `double_value`*) — has that cell written NULL by every Parquet writer, since `toBigDecimal`
+cannot render a non-finite into a DECIMAL whatever Java type it arrived as, counted on
+`delta.parquet.unrepresentable-decimals{reason=non_finite}`, while the SQL stream renders `'NaN'`.
+
+The **key** is guarded: quoting the literal would have turned a loud failure into a silent one —
 before #233 the bare `NaN` was invalid SQL that Bit BI rejected, whereas `col = 'NaN'` applies
 cleanly against a baseline row whose key cell is NULL and matches nothing — so such a record is
 skipped, on the same WARN and `sql.generation.delta.records.skipped.unrepresentable_key` as the
-`decimal_value` case. The **data** cells of that combination still differ (NULL in Parquet,
+`decimal_value` case. The `string_value` spelling is guarded with it: that one was never loud in the
+first place — a quoted string has always been valid SQL — so it is the same silent divergence one
+wire case over. An *unparseable* string such as `abc` in the same column needs no guard: Parquet
+nulls it too, but its SQL fails at apply time with `invalid input syntax for type numeric`, and only
+a value both sides consider legal can diverge quietly. An `INSERT` is skipped by the same rule, on
+purpose — PostgreSQL would create the row, but every later `UPDATE` and `DELETE` carrying that key
+is skipped, so it would be a row this stream can create and never address again. The **data** cells of that combination still differ (NULL in Parquet,
 `'NaN'` in SQL), as they did before with the SQL merely invalid on top; teaching the SQL path the
 destination type for those is a decision of its own and belongs to issue #240, which owns the
 question for both sides.
@@ -1169,7 +1175,10 @@ question for both sides.
 A *bare* `numeric` is not in this at all: it maps to Avro STRING to carry the token losslessly, so
 nothing is degraded and nothing is skipped. The guard asks
 `ParquetSchemaMapper.rendersAsParquetDecimal`, i.e. the field the writers actually build, rather
-than reading the type name a second time.
+than reading the type name a second time — and a declaration Avro refuses although PostgreSQL
+accepts it (`numeric(2,5)`, `numeric(5,-2)`, `numeric(0)`) answers *no* rather than throwing: such a
+table has already lost its Parquet artifacts entirely, and failing here would fail the whole batch's
+SQL generation for it.
 
 **Comparison caveat.** `'Infinity'` and `1e400` are not the same cell: the wire value is an IEEE
 double, so a magnitude the source held in a `numeric` and cast to `double precision` may already be
@@ -1243,9 +1252,12 @@ other, so several such rows are indistinguishable in a checkpoint snapshot or a 
 artifact, and the baseline can contain a row the delta stream will never address. Consumers reading
 those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
 
-Only a `decimal_value` reaches that skip, and after issue #233 that is the whole of the population
-it should reach: a non-finite arriving as `double_value` is representable, so it is rendered, and a
-`string_value` was never at risk because a string is quoted anyway.
+A `decimal_value` reaches that skip whatever the column is declared as, because this pipeline cannot
+store the value under any decimal declaration. Issue #233 added a second, narrower reason: a
+non-finite arriving as `double_value` or as a non-finite `string_value` is representable and is
+normally rendered — but not when the column it keys is declared `numeric(p,s)`, where the Parquet
+side must write NULL and the two would otherwise disagree about which row the statement addresses.
+See [A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted).
 
 
 **What this does not give you:** for a `numeric` column `NaN` is not `NULL`, so a row-for-row

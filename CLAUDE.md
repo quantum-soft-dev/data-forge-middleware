@@ -602,8 +602,7 @@ pages/{feature}/            # Route pages
   consumers can carry. The same property removes any need for a key exception: PostgreSQL compares
   `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row, and
   `DeltaSqlGenerationStrategy.hasUnrepresentableKey` is therefore correct to match `DECIMAL_VALUE`
-  alone — closing half of the coverage gap #240 declares (the `string_value` half was never a gap: a
-  string is quoted anyway).
+  alone for the values it *can* store.
   **One combination disagrees, and review round 3 found that quoting turned its worst case from loud
   to silent**: the rule keys on the wire case while the Parquet writers key on the **declared** type,
   so a column declared `numeric(p,s)` whose value arrives as `double_value` — which the wire contract
@@ -614,7 +613,15 @@ pages/{feature}/            # Route pages
   So that guard now also skips a non-finite `double_value` **whose declared column materialises as a
   Parquet DECIMAL**, asking `ParquetSchemaMapper.rendersAsParquetDecimal` — the field the writers
   actually build — rather than parsing the type name a second time, which would have got a **bare**
-  `numeric` wrong (Avro STRING, carries the token losslessly, nothing to skip). The counter and WARN
+  `numeric` wrong (Avro STRING, carries the token losslessly, nothing to skip); a declaration Avro
+  refuses though PostgreSQL accepts it (`numeric(2,5)`, `numeric(5,-2)`, `numeric(0)`) answers *no*
+  rather than throwing, since that table has already lost its Parquet and a throw here would fail the
+  whole batch's SQL. **Round 4 then widened the same guard to `string_value`** — the identical silent
+  divergence one wire case over, and this half was never loud even before #233, which corrects this
+  entry's earlier claim that "a string is quoted anyway" settled it: quoting settles SQL *validity*,
+  not which row the statement *addresses*. An unparseable string needs no guard for the mirror
+  reason — its SQL fails loudly at apply time — and an `INSERT` is skipped with the rest, since a row
+  whose key this stream will always skip is one it could create and never address again. The counter and WARN
   are the existing ones. The **data** cells of that combination still differ; that is coercion, which
   is #240's subject on both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
   already written**: `/sql-changes` returns the stored objects, so a pre-fix batch comes back

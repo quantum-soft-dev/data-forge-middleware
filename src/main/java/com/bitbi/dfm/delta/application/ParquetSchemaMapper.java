@@ -103,7 +103,17 @@ public final class ParquetSchemaMapper {
      * @return {@code true} if the column materialises as a Parquet DECIMAL
      */
     public static boolean rendersAsParquetDecimal(String pgType) {
-        return avroType(pgType).getLogicalType() instanceof LogicalTypes.Decimal;
+        try {
+            return avroType(pgType).getLogicalType() instanceof LogicalTypes.Decimal;
+        } catch (RuntimeException e) {
+            // A declaration Avro refuses but PostgreSQL accepts -- numeric(2,5), numeric(5,-2),
+            // numeric(0). That table already loses its Parquet artifacts entirely (the throw is
+            // caught per table where the schema is built), so this answer decides nothing about a
+            // baseline that does not exist -- while letting the exception out here would fail the
+            // whole batch's SQL generation and leave the segment pending for an identical retry, a
+            // poison route on the path #215 exists to keep un-poisonable.
+            return false;
+        }
     }
 
     private static Schema avroType(String pgType) {

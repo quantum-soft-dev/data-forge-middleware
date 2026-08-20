@@ -142,6 +142,22 @@ public final class ValueMapper {
     }
 
     /**
+     * Whether this value is a {@code string_value} spelling one of the three non-finite numbers.
+     *
+     * <p>Like {@link #isNonFiniteDouble(Value)} and unlike the decimal predicates, this is no loss
+     * here: the string is carried as it arrived. It matters only to a caller comparing the value
+     * against the column's <em>declared</em> type, where a {@code numeric(p,s)} destination cannot
+     * store it although this wire case can (issue #233, review round 4).</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a string spelling {@code NaN} or {@code ±Infinity}
+     */
+    public static boolean isNonFiniteString(Value value) {
+        return value.getVCase() == Value.VCase.STRING_VALUE
+                && canonicalNonFinite(value.getStringValue()) != null;
+    }
+
+    /**
      * Whether this value is a decimal token {@link BigDecimal} cannot parse and which is <em>not</em>
      * one of PostgreSQL's non-finite spellings — i.e. a client sending nonsense (issue #215, review
      * round 1).

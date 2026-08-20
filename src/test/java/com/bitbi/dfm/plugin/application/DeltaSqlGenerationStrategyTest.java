@@ -299,6 +299,8 @@ class DeltaSqlGenerationStrategyTest {
 
         when(segmentService.readRecords(anyString())).thenReturn(List.of(
                 record("priced", Op.DELETE, 1, Map.of("id", dbl(Double.NaN)), Map.of()),
+                // the same hazard one wire case over: a string spelling, quoted just as legally
+                record("priced", Op.DELETE, 3, Map.of("id", str("Infinity")), Map.of()),
                 record("measured", Op.DELETE, 2, Map.of("id", dbl(Double.NaN)), Map.of())));
 
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 2, "DELTA")),
