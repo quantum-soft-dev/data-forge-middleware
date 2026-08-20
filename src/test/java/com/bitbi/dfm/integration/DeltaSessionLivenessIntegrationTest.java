@@ -415,10 +415,22 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
             // symmetric with the fixture's own sweep rather than fixing one of the two.
             jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
                     + "(SELECT id FROM batches WHERE site_id = ?)", siteId);
+            jdbc.update("DELETE FROM device_authorizations WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM batches WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM sites WHERE id = ?", siteId);
         }
         for (UUID accountId : createdAccounts) {
+            // Batches / sites / device_authorizations keyed by this account but not by a site in
+            // createdSites (issue #228): Batch.start takes the two ids independently, and
+            // device_authorizations.account_id has no cascade (V21), so a site_id-only sweep
+            // leaves a row that blocks DELETE FROM accounts.
+            jdbc.update("DELETE FROM device_authorizations WHERE account_id = ?", accountId);
+            jdbc.update("DELETE FROM changelog_segments WHERE batch_id IN "
+                    + "(SELECT id FROM batches WHERE account_id = ?)", accountId);
+            jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
+                    + "(SELECT id FROM batches WHERE account_id = ?)", accountId);
+            jdbc.update("DELETE FROM batches WHERE account_id = ?", accountId);
+            jdbc.update("DELETE FROM sites WHERE account_id = ?", accountId);
             jdbc.update("DELETE FROM accounts WHERE id = ?", accountId);
         }
         createdSites.clear();

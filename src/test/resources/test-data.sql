@@ -12,12 +12,49 @@ CREATE TABLE IF NOT EXISTS error_logs_2025_10 PARTITION OF error_logs
     FOR VALUES FROM ('2025-10-01') TO ('2025-11-01');
 
 -- Clean up (idempotent) - Order matters due to foreign key constraints
--- Delete child tables first, then parent tables
-DELETE FROM comparison_results WHERE comparison_id IN (SELECT id FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com'));
-DELETE FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
-DELETE FROM admin_action_logs WHERE target_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com') OR admin_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
-DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
-DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
+-- Delete child tables first, then parent tables.
+--
+-- Owned accounts / sites (issue #228). The original predicates were
+-- accounts.email LIKE '%@example.com' and sites.domain LIKE '%.example.com'. Three more sets
+-- have to travel with them, and a general "sweep every non-cascading FK by its own relationship"
+-- does not cover (3):
+--   (1) batches.account_id / sites.account_id (V3 / V2, no cascade) -- Batch.start takes the two
+--       ids independently, so a batch pairing an owned account with a foreign-domain site
+--       survives a site-keyed DELETE FROM batches and blocks DELETE FROM accounts.
+--   (2) device_authorizations.site_id / .account_id (V21, no cascade) -- the fixture had no
+--       statement for that table, so an approved row pointing at a seeded site blocks
+--       DELETE FROM sites.
+--   (3) Rows outside the seed identity predicates: *.test.local (three integration classes)
+--       and {uuid}_example.com (BatchRetentionIntegrationTest; LIKE '%.example.com' needs a
+--       literal dot). Widening DELETE FROM sites pulls those sites in, so every site-keyed
+--       statement above it (error_logs, checkpoints, site_sync_state, the segment sweep's
+--       site_id arm) has to use the same set or it blocks on the way through.
+-- Owned accounts: the two email predicates. Owned sites: the two domain predicates PLUS every
+-- site of an owned account. Owned batches: site in owned sites OR account in owned accounts.
+-- ScriptUtils splits on ';' and does not understand a DO $$ block, so the subqueries are
+-- repeated rather than factored into a temp table or a procedure.
+
+DELETE FROM comparison_results WHERE comparison_id IN (SELECT id FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local'));
+DELETE FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local');
+DELETE FROM admin_action_logs WHERE target_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local') OR admin_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local');
+-- error_logs.site_id has no ON DELETE action (V5). Must widen with owned sites, not just
+-- %.example.com, or a pulled-in {uuid}_example.com site blocks DELETE FROM sites.
+DELETE FROM error_logs WHERE site_id IN (
+    SELECT id FROM sites
+     WHERE domain LIKE '%.example.com'
+        OR domain LIKE '%.test.local'
+        OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+);
+DELETE FROM uploaded_files WHERE batch_id IN (
+    SELECT id FROM batches
+     WHERE site_id IN (
+            SELECT id FROM sites
+             WHERE domain LIKE '%.example.com'
+                OR domain LIKE '%.test.local'
+                OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+          )
+        OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+);
 -- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted
 -- before batches -- and by that relationship as well as by account (issue #226): the constraint is
 -- fk_account_plugins_baseline_batch, which RESTRICTs on the *batch*, so an activation owned by an
@@ -29,23 +66,78 @@ DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_
 -- and plugin_sql_generations / plugin_delta_baselines / download_links cascade with them. That is
 -- intended -- the alternative is the FK stopping the run -- but a test seeding an activation for a
 -- foreign account against a seeded batch will lose it mid-class, with nothing pointing here.
-DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com')
-                               OR baseline_batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
+DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                               OR baseline_batch_id IN (
+                                    SELECT id FROM batches
+                                     WHERE site_id IN (
+                                            SELECT id FROM sites
+                                             WHERE domain LIKE '%.example.com'
+                                                OR domain LIKE '%.test.local'
+                                                OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                                          )
+                                        OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                               );
 -- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches.
 -- Both relationships are cleared, not just site_id (issue #226): the blocking constraint is
 -- changelog_segments_batch_id_fkey, and a segment's batch need not belong to the segment's site --
 -- ChangelogSegment.create(siteId, batchId, ...) takes the two independently, so a test can pair a
 -- site this predicate does not match with a batch the next statement deletes. Same shape as the
 -- uploaded_files sweep above, and for the same constraint-shaped reason.
-DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com')
-                                  OR batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
-DELETE FROM checkpoints WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
-DELETE FROM site_sync_state WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
-DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
-DELETE FROM sites WHERE domain LIKE '%.example.com';
+-- The site_id arm is the owned-sites set, not just %.example.com, so a pulled-in foreign-domain
+-- site does not leave a segment to block DELETE FROM sites via ON DELETE CASCADE waiting on
+-- nothing -- the cascade is there, but the batch_id arm still has to name every batch we will
+-- delete, including those reached only through account_id.
+DELETE FROM changelog_segments WHERE site_id IN (
+                                        SELECT id FROM sites
+                                         WHERE domain LIKE '%.example.com'
+                                            OR domain LIKE '%.test.local'
+                                            OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                                    )
+                                  OR batch_id IN (
+                                        SELECT id FROM batches
+                                         WHERE site_id IN (
+                                                SELECT id FROM sites
+                                                 WHERE domain LIKE '%.example.com'
+                                                    OR domain LIKE '%.test.local'
+                                                    OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                                              )
+                                            OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                                  );
+DELETE FROM checkpoints WHERE site_id IN (
+    SELECT id FROM sites
+     WHERE domain LIKE '%.example.com'
+        OR domain LIKE '%.test.local'
+        OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+);
+DELETE FROM site_sync_state WHERE site_id IN (
+    SELECT id FROM sites
+     WHERE domain LIKE '%.example.com'
+        OR domain LIKE '%.test.local'
+        OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+);
+-- device_authorizations.site_id / .account_id have no ON DELETE action (V21). An approved
+-- leftover pointing at a seeded site is live today (DeviceFlowSessionSupersedeContractTest
+-- used to hand-delete its own rows to keep the next @Sql from failing).
+DELETE FROM device_authorizations WHERE site_id IN (
+                                        SELECT id FROM sites
+                                         WHERE domain LIKE '%.example.com'
+                                            OR domain LIKE '%.test.local'
+                                            OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                                    )
+                                  OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local');
+DELETE FROM batches WHERE site_id IN (
+                            SELECT id FROM sites
+                             WHERE domain LIKE '%.example.com'
+                                OR domain LIKE '%.test.local'
+                                OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local')
+                        )
+                       OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local');
+DELETE FROM sites WHERE domain LIKE '%.example.com'
+                     OR domain LIKE '%.test.local'
+                     OR account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local');
 -- Clean up plugin-related data (FK to accounts or referencing account)
--- Note: plugin_audit_logs cleanup skipped - table is partitioned and should be empty in tests
-DELETE FROM accounts WHERE email LIKE '%@example.com';
+-- Note: plugin_audit_logs cleanup skipped - table is partitioned and has no FK to accounts
+DELETE FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.local';
 
 -- Test accounts
 -- NOTE: identity_provider_user_id must follow Auth0 format: {provider}|{alphanumeric} (e.g., 'auth0|abc123')
