@@ -2076,6 +2076,13 @@ segments still count toward the audit window — it keeps its meaning of "the mo
 below-checkpoint segments are retained", and the hold-back retains segments on top of it rather
 than re-shaping it, so a pending segment does not shield an older processed one from the window.
 
+**The S3 half is outside the database transaction (issue #234).** Each conditional row delete has
+its repository transaction; only after it commits does retention send the collected keys in the
+batched `DeleteObjects` call. A crash or S3 failure between those phases leaves unreferenced
+objects, which the #158 orphan sweep converges, rather than restoring rows that point to objects a
+partially completed delete already removed. This keeps a HikariCP connection out of the potentially
+large S3 backlog while preserving the row-before-object safety order.
+
 **The hold-back is counted and logged, not silent in the other direction.**
 `delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}` counts, per pass,
 the segments the window would have pruned but the predicate retained — a pending segment still

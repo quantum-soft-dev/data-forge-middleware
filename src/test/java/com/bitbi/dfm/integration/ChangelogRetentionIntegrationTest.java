@@ -11,11 +11,15 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +28,8 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
 
 /**
  * T3.5b — changelog retention prunes segments at/below the durable checkpoint (DB row + S3 object),
@@ -64,6 +70,9 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private MeterRegistry meterRegistry;
 
+    @MockitoSpyBean
+    private S3FileStorageService objectDeleter;
+
     @Test
     void prunesBelowCheckpointSegmentsAndKeepsReconstructionCorrect() {
         // Segment 1 (seq 1..2), then a checkpoint@2 (frame@2 written) — segment 1 is now below checkpoint.
@@ -92,6 +101,24 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         Checkpoint cp = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertEquals(4L, cp.getSeq());
         assertEquals(2L, cp.getRowCount(), "Ann (frame) + Cleo (delta); Bob deleted");
+    }
+
+    @Test
+    void deletesPrunedObjectsWithNoDatabaseTransactionOpen() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        checkpointService.buildCheckpoint(SITE);
+        markSegmentsProcessed(SITE);
+        List<Boolean> transactionsAtObjectDelete = new ArrayList<>();
+        doAnswer(invocation -> {
+            transactionsAtObjectDelete.add(TransactionSynchronizationManager.isActualTransactionActive());
+            return invocation.callRealMethod();
+        }).when(objectDeleter).deleteObjects(anyList());
+
+        retentionService.prune(SITE);
+
+        assertEquals(List.of(false), transactionsAtObjectDelete,
+                "the batched S3 DeleteObjects call must not hold the retention database transaction (issue #234)");
     }
 
     /**

@@ -584,6 +584,18 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- retention-s3-outside-transaction: Changelog retention no longer holds its database transaction
+  across the batched S3 deletion (issue #234). #235 had already made pruning use a conditional
+  row-first delete plus 1000-key `DeleteObjects`; retaining the service-level `@Transactional`
+  still pinned one HikariCP connection for the entire below-checkpoint backlog and made an S3
+  network failure after one chunk hazardous — rolling back the rows while earlier chunks had
+  already deleted their objects. `prune` now has no transaction of its own: each
+  `deleteByIdIfProcessed` remains its short repository transaction and commits before the one
+  batched S3 call. The safe failure mode is therefore an unreferenced object, reclaimed by the
+  #158 orphan sweep, never a metadata row referring to a deleted object. The Spring-wired
+  integration test spies on the actual `DeleteObjects` call and pins that no transaction is open;
+  restoring the service annotation makes it fail. No REST, gRPC, proto, DTO, migration,
+  configuration, metric, S3-key, frontend, or route change.
 - adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the
   winner's success as its own (issue #246, a pre-existing defect promoted out of the withdrawn
   findings inbox #242 after #190/PR #236 made the race deterministic in a test). Since #164 two

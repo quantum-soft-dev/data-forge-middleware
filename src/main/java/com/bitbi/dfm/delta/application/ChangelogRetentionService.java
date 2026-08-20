@@ -8,7 +8,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -95,7 +94,6 @@ public class ChangelogRetentionService {
      * @param siteId site identifier
      * @return number of segments pruned (held-back segments are not pruned and not counted here)
      */
-    @Transactional
     public int prune(UUID siteId) {
         long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
         if (checkpointSeq <= 0) {
@@ -136,9 +134,9 @@ public class ChangelogRetentionService {
             // deletes back and report a healthy prune as a failure. deleteObjects catches
             // S3Exception per chunk but not SdkClientException (the gap #158 round 2 documented),
             // so the catch below is what actually holds the row-first invariant: a network failure
-            // after chunk 1 would otherwise destroy 1000 objects and then roll every row delete
-            // back — rows restored, objects gone, in bulk. Moving the S3 call out of this
-            // transaction entirely is #234.
+            // after chunk 1 leaves only unreferenced objects. The repository's conditional DELETE
+            // commits before this S3 call, so no database transaction can restore rows whose
+            // objects a preceding delete chunk already removed (issue #234).
             try {
                 S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
                 if (!result.errors().isEmpty()) {
