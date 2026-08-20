@@ -292,12 +292,64 @@ class ChangelogFoldTest {
                 "a NaN key folds as one row instead of throwing out of the build");
     }
 
-    /** `nan` and `NaN` are the same source row, so they must fold to one identity. */
+    /**
+     * The fold and {@link ValueMapper} must recognise the *same* vocabulary. Two copies of it is
+     * what issue #238 was — the identical sign-handling slip in both, with nothing asserting they
+     * agree — so a token one calls non-finite must never keep its raw form as the other's fold
+     * identity, which is how one source row becomes two in the checkpoint snapshot.
+     */
+    @org.junit.jupiter.api.Test
+    void everySpellingValueMapperCallsNonFiniteFoldsUnderItsCanonicalIdentity() {
+        String[][] groups = {
+                {"NaN", "nan", "+NaN", "-NaN", "-nan", " NaN "},
+                {"Infinity", "infinity", "+Infinity", "inf", "+INF"},
+                {"-Infinity", "-infinity", "-inf", " -Inf "},
+        };
+        for (String[] group : groups) {
+            java.util.Map<String, java.util.Map<String, ChangelogFold.FoldedRow>> state =
+                    new java.util.LinkedHashMap<>();
+            for (String spelling : group) {
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        ValueMapper.isNonFiniteDecimal(com.bitbi.dfm.delta.grpc.v2.Value.newBuilder()
+                                .setDecimalValue(spelling).build()),
+                        spelling + " must be recognised as non-finite by ValueMapper");
+                ChangelogFold.apply(state, com.bitbi.dfm.delta.grpc.v2.ChangeRecord.newBuilder()
+                        .setTable("t").setOp(com.bitbi.dfm.delta.grpc.v2.Op.INSERT).setSeq(1)
+                        .putKey("id", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder()
+                                .setDecimalValue(spelling).build())
+                        .putData("v", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder().setIntValue(7).build())
+                        .build());
+            }
+            org.junit.jupiter.api.Assertions.assertEquals(1, state.get("t").size(),
+                    "spellings of " + group[0] + " must fold under one identity");
+        }
+
+        // The two infinities stay apart: a shared vocabulary must not collapse them the way it
+        // deliberately collapses the NaN sign.
+        java.util.Map<String, java.util.Map<String, ChangelogFold.FoldedRow>> both =
+                new java.util.LinkedHashMap<>();
+        for (String spelling : new String[]{"Infinity", "-Infinity"}) {
+            ChangelogFold.apply(both, com.bitbi.dfm.delta.grpc.v2.ChangeRecord.newBuilder()
+                    .setTable("t").setOp(com.bitbi.dfm.delta.grpc.v2.Op.INSERT).setSeq(1)
+                    .putKey("id", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder()
+                            .setDecimalValue(spelling).build())
+                    .putData("v", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder().setIntValue(7).build())
+                    .build());
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(2, both.get("t").size(),
+                "+Infinity and -Infinity are different values");
+    }
+
+    /**
+     * `nan`, `NaN` and the signed spellings are the same source row, so they must fold to one
+     * identity. PostgreSQL has a single NaN — the sign carries no meaning — and a client is free to
+     * send any of these spellings, which is why the sign is stripped for infinity too (issue #238).
+     */
     @org.junit.jupiter.api.Test
     void nonFiniteKeySpellingsFoldToOneIdentity() {
         java.util.Map<String, java.util.Map<String, ChangelogFold.FoldedRow>> state =
                 new java.util.LinkedHashMap<>();
-        for (String spelling : new String[]{"NaN", "nan"}) {
+        for (String spelling : new String[]{"NaN", "nan", "+NaN", "-NaN", "-nan"}) {
             ChangelogFold.apply(state, com.bitbi.dfm.delta.grpc.v2.ChangeRecord.newBuilder()
                     .setTable("t").setOp(com.bitbi.dfm.delta.grpc.v2.Op.INSERT).setSeq(1)
                     .putKey("id", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder()

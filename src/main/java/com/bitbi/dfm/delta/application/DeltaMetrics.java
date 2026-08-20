@@ -719,8 +719,10 @@ public class DeltaMetrics {
     private static Counter unrepresentableDecimals(MeterRegistry registry, String reason) {
         Counter counter = Counter.builder("delta.parquet.unrepresentable-decimals")
                 .description("Decimal cells written as NULL because the value has no Parquet DECIMAL "
-                        + "representation: non_finite = NaN or +/-Infinity (legal in PostgreSQL), "
-                        + "malformed = a token BigDecimal cannot parse (issue #215)")
+                        + "representation: non_finite = NaN or +/-Infinity, legal in PostgreSQL and "
+                        + "nothing to repair here; the signed NaN spelling PostgreSQL rejects also "
+                        + "lands here and is deliberately not separated (issue #238); malformed = a "
+                        + "token BigDecimal cannot parse at all, a client defect (issue #215)")
                 .tag("reason", reason)
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         counter.increment(0.0);
@@ -736,6 +738,14 @@ public class DeltaMetrics {
      * PostgreSQL {@code numeric} holding {@code NaN} or {@code +/-Infinity}, which is legal at the
      * source and simply has no DECIMAL encoding — nothing to repair here — while {@code malformed}
      * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix.</p>
+     *
+     * <p>One spelling is on this series without being separable on it, deliberately: PostgreSQL
+     * rejects {@code '-NaN'::numeric}, so a signed NaN can only come from a client that formats
+     * non-faithfully — but the loss it causes is the ordinary one, a cell this pipeline cannot
+     * store, so it is counted as {@code non_finite} and nothing distinguishes it (issue #238).
+     * Neither series moves differently for it and no log line prints the token: a signal of its own
+     * would page an operator about a formatting quirk that costs nothing beyond the degradation
+     * already reported here.</p>
      *
      * <p>Read it as <b>cells</b>, not rows or files: one row with two such columns counts twice,
      * and the same source cell is counted again by each <em>Parquet</em> consumer that renders it
