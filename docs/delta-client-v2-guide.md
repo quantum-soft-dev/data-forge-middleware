@@ -1095,6 +1095,29 @@ volume was busy, so:
   something this budget introduced, but it is the reason to size the key with headroom rather than
   to the exact worst case.
 
+### A value the column type cannot hold
+
+PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
+`decimal_value` tokens. Parquet DECIMAL is a scaled integer and has no representation for any of
+them, so the cell is written **NULL** — under the column's declared type there is nowhere else to
+put it.
+
+The loss is reported rather than silent. Each rendered table logs one WARN naming the table and how
+many cells it degraded, and `delta.parquet.non-finite-decimals` carries the rate. Read that series
+as **cells, not rows or files**: a row with two such columns counts twice, and the same source cell
+is counted again by every consumer that renders it — per-segment egress, the completed-batch
+artifact, the nightly checkpoint — because each writes a separate artifact in which that cell is
+separately NULL. A steady rate is the client legitimately holding values this pipeline cannot store,
+not a fault to repair here; the Bit BI SQL path renders the same cell as SQL NULL and logs it per
+cell at DEBUG.
+
+**What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
+server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
+such cell threw out of the mapper, and because every consumer catches per table it cost the table's
+whole delta file, failed its checkpoint snapshot (spending a `materialize_attempts` towards the
+permanent give-up above) and stopped the batch's Bit BI SQL. Storing the value truthfully would mean
+widening the column's type, which changes the Parquet schema every consumer reads.
+
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
 unset**, which is the shipped default and how the key is sized before it is turned on
@@ -2280,6 +2303,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
+| `delta.parquet.non-finite-decimals` | `delta_parquet_non_finite_decimals_total` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:
