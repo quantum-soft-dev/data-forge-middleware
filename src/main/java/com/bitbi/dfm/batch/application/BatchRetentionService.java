@@ -188,24 +188,31 @@ public class BatchRetentionService {
                 artifactRepository.deleteByBatchId(batchId);
 
                 // #212: batch retention is the deliberate outer horizon of the queues' retry —
-                // the one scheduled deleter allowed to take pending work. Count and WARN before
-                // destroying it, so the loss has a moment and a number instead of being
-                // indistinguishable from routine cleanup.
+                // the one scheduled deleter allowed to take pending work. The counts are read
+                // before the delete (the rows are gone after it) but counted and WARNed only once
+                // the segment delete has returned (review round 2, R2-4): this per-batch catch
+                // swallows failures into summary.errors, so counting first would inflate the
+                // "permanently unproducible" series nightly with phantom losses for a batch whose
+                // deletion keeps failing.
                 PendingQueueWork pending = segmentRepository.countPendingQueueWorkByBatchId(batchId);
+
+                // Remove Delta v2 changelog segments (DB + S3) so the batch_id FK does not block delete.
+                // NOTE (pre-existing, the #164 shape, noted by #212's review): cleanupSiteInDb's
+                // @Transactional is inert — the method is protected and self-invoked, so these
+                // deletes are each their own repository transaction, not one atomic unit.
+                changelogSegmentService.deleteByBatchId(batchId);
+
                 if (pending.hasAny()) {
                     metrics.retentionPendingSegmentsDeleted(
                             DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, pending.getPendingPluginSql());
                     metrics.retentionPendingSegmentsDeleted(
                             DeltaMetrics.RETENTION_PENDING_EGRESS, pending.getPendingEgress());
-                    logger.warn("Batch retention is deleting batch {} of site {} with pending queue "
+                    logger.warn("Batch retention deleted batch {} of site {} with pending queue "
                                     + "work — {} segment(s) awaiting plugin SQL, {} awaiting egress: "
                                     + "their SQL/delta Parquet is now permanently unproducible "
                                     + "(issue #212, the deliberate outer horizon of the queues' retry)",
                             batchId, siteId, pending.getPendingPluginSql(), pending.getPendingEgress());
                 }
-
-                // Remove Delta v2 changelog segments (DB + S3) so the batch_id FK does not block delete.
-                changelogSegmentService.deleteByBatchId(batchId);
 
                 batchRepository.deleteById(batchId);
                 summary.deletedBatches++;

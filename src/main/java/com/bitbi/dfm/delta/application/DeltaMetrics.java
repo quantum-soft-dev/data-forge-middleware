@@ -538,8 +538,11 @@ public class DeltaMetrics {
      * silent: each count here is a segment whose SQL or delta Parquet is now permanently
      * unproducible. Registered at zero; a non-zero rate means work sat in a queue for the whole
      * retention window, which is an incident to explain, not routine. The explicit admin batch
-     * delete is deliberately <b>not</b> counted here — it is an informed operator action, logged at
-     * the endpoint instead.</p>
+     * delete is deliberately <b>not</b> counted here — it is an operator action, and
+     * {@code BatchDeletionService} WARNs with the pending count instead. That "informed override"
+     * is informed only as far as the server log today: the delete's HTTP response carries no
+     * pending count, because a REST-contract change was deliberately avoided in #212 — a UI
+     * confirmation surface is its own decision if ever wanted.</p>
      *
      * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
      * @param count  how many pending segments the batch deletion destroyed for that reason

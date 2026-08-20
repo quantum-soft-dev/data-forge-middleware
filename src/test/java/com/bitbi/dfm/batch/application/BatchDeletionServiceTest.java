@@ -2,6 +2,9 @@ package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.util.LogCapture;
+import ch.qos.logback.classic.Level;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
@@ -22,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -31,8 +35,7 @@ class BatchDeletionServiceTest {
 
     private final BatchRepository batchRepository = mock(BatchRepository.class);
     private final ChangelogSegmentService segmentService = mock(ChangelogSegmentService.class);
-    private final com.bitbi.dfm.delta.domain.ChangelogSegmentRepository segmentRepository =
-            mock(com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.class);
+    private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final BatchParquetArtifactRepository artifactRepository =
             mock(BatchParquetArtifactRepository.class);
     private final S3FileStorageService storage = mock(S3FileStorageService.class);
@@ -41,23 +44,8 @@ class BatchDeletionServiceTest {
 
     {
         // Every delete reaches the #212 pending-work count; no pending work unless a test says so.
-        when(segmentRepository.countPendingQueueWorkByBatchId(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(pendingWork(0, 0));
-    }
-
-    private static com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PendingQueueWork pendingWork(
-            long pluginSql, long egress) {
-        return new com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PendingQueueWork() {
-            @Override
-            public long getPendingPluginSql() {
-                return pluginSql;
-            }
-
-            @Override
-            public long getPendingEgress() {
-                return egress;
-            }
-        };
+        when(segmentRepository.countPendingQueueWorkByBatchId(any()))
+                .thenReturn(QueueWorkStubs.pendingWork(0, 0));
     }
 
     @Test
@@ -178,18 +166,17 @@ class BatchDeletionServiceTest {
         when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
         when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
         when(segmentService.deleteMetadataByBatchId(batchId)).thenReturn(List.of());
-        when(storage.listAllKeys(org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
-        when(storage.deleteObjects(org.mockito.ArgumentMatchers.any()))
+        when(storage.listAllKeys(any())).thenReturn(List.of());
+        when(storage.deleteObjects(any()))
                 .thenReturn(new S3FileStorageService.DeleteObjectsResult(0, List.of()));
         when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
-                .thenReturn(pendingWork(3, 0));
+                .thenReturn(QueueWorkStubs.pendingWork(3, 0));
 
-        try (com.bitbi.dfm.util.LogCapture capture =
-                     com.bitbi.dfm.util.LogCapture.attachTo(BatchDeletionService.class)) {
+        try (LogCapture capture = LogCapture.attachTo(BatchDeletionService.class)) {
             service.deleteBatch(batchId);
 
-            org.junit.jupiter.api.Assertions.assertTrue(
-                    capture.messagesAt(ch.qos.logback.classic.Level.WARN).stream()
+            assertTrue(
+                    capture.messagesAt(Level.WARN).stream()
                             .anyMatch(message -> message.contains("pending queue work")
                                     && message.contains("3 segment(s) awaiting plugin SQL")),
                     "the override must be informed of the work it destroys");

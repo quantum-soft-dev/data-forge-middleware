@@ -151,14 +151,25 @@ public class ChangelogRetentionService {
             // One DeleteObjects round trip per 1000 keys instead of one per object. Errors are
             // summarized, not thrown: the rows are gone, so a failed object delete leaves the same
             // unreferenced litter the #158 sweep reclaims — while a throw here would roll the row
-            // deletes back and report a healthy prune as a failure. Moving the S3 call out of this
+            // deletes back and report a healthy prune as a failure. deleteObjects catches
+            // S3Exception per chunk but not SdkClientException (the gap #158 round 2 documented),
+            // so the catch below is what actually holds the row-first invariant: a network failure
+            // after chunk 1 would otherwise destroy 1000 objects and then roll every row delete
+            // back — rows restored, objects gone, in bulk. Moving the S3 call out of this
             // transaction entirely is #234.
-            S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
-            if (!result.errors().isEmpty()) {
-                log.warn("Pruned {} changelog segment row(s) for site {} but {} object delete(s) "
-                                + "failed — the objects are unreferenced and the S3 orphan sweep "
-                                + "reclaims them (issue #158)",
-                        prunedKeys.size(), siteId, result.errors().size());
+            try {
+                S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
+                if (!result.errors().isEmpty()) {
+                    log.warn("Pruned {} changelog segment row(s) for site {} but {} object delete(s) "
+                                    + "failed — the objects are unreferenced and the S3 orphan sweep "
+                                    + "reclaims them (issue #158)",
+                            prunedKeys.size(), siteId, result.errors().size());
+                }
+            } catch (RuntimeException e) {
+                log.warn("Pruned {} changelog segment row(s) for site {} but the object delete "
+                                + "failed mid-way — the undeleted objects are unreferenced and the "
+                                + "S3 orphan sweep reclaims them (issue #158)",
+                        prunedKeys.size(), siteId, e);
             }
         }
 

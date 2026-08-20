@@ -5,6 +5,8 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.util.LogCapture;
+import ch.qos.logback.classic.Level;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
@@ -65,21 +67,6 @@ class BatchRetentionServiceTest {
 
     private BatchRetentionService service;
 
-    /** A {@code PendingQueueWork} literal — the projection is an interface, so tests build it. */
-    private static ChangelogSegmentRepository.PendingQueueWork pendingWork(long pluginSql, long egress) {
-        return new ChangelogSegmentRepository.PendingQueueWork() {
-            @Override
-            public long getPendingPluginSql() {
-                return pluginSql;
-            }
-
-            @Override
-            public long getPendingEgress() {
-                return egress;
-            }
-        };
-    }
-
     private UUID siteId;
     private UUID accountId;
     private UUID batchId;
@@ -104,7 +91,7 @@ class BatchRetentionServiceTest {
         batchId = UUID.randomUUID();
         // Every deleting test reaches the #212 pending-work count; no pending work by default.
         lenient().when(segmentRepository.countPendingQueueWorkByBatchId(any()))
-                .thenReturn(pendingWork(0, 0));
+                .thenReturn(QueueWorkStubs.pendingWork(0, 0));
     }
 
     @Test
@@ -313,14 +300,13 @@ class BatchRetentionServiceTest {
         when(s3FileStorageService.deleteObjects(any()))
                 .thenReturn(new DeleteObjectsResult(0, List.of()));
         when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
-                .thenReturn(pendingWork(2, 1));
+                .thenReturn(QueueWorkStubs.pendingWork(2, 1));
 
-        try (com.bitbi.dfm.util.LogCapture capture =
-                     com.bitbi.dfm.util.LogCapture.attachTo(BatchRetentionService.class)) {
+        try (LogCapture capture = LogCapture.attachTo(BatchRetentionService.class)) {
             service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
                     siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
 
-            assertThat(capture.messagesAt(ch.qos.logback.classic.Level.WARN))
+            assertThat(capture.messagesAt(Level.WARN))
                     .anyMatch(message -> message.contains("pending queue work")
                             && message.contains(batchId.toString()));
         }
@@ -353,5 +339,41 @@ class BatchRetentionServiceTest {
         verify(segmentRepository, never()).countPendingQueueWorkByBatchId(any());
         assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
                 .tag("reason", "pending_plugin_sql").counter().count()).isEqualTo(0.0);
+    }
+
+    @Test
+    @DisplayName("a batch whose deletion fails moves no deleted-pending counter (issue #212, R2-4)")
+    void doesNotCountPendingWorkWhenTheBatchDeleteFails() {
+        // The per-batch catch swallows failures into summary.errors, so counting before the
+        // delete would inflate the 'permanently unproducible' series nightly with phantom losses
+        // — the meter's own Javadoc calls a non-zero rate an incident to explain.
+        Site site = mock(Site.class);
+        Batch batch = mock(Batch.class);
+        when(site.getId()).thenReturn(siteId);
+        when(site.getRetentionDays()).thenReturn(45);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
+                .thenReturn(List.of(batch));
+        when(batch.getId()).thenReturn(batchId);
+        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
+        // No listAllKeys stub: the failing batch never registers its prefix for enumeration.
+        when(s3FileStorageService.deleteObjects(any()))
+                .thenReturn(new DeleteObjectsResult(0, List.of()));
+        when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
+                .thenReturn(QueueWorkStubs.pendingWork(40, 40));
+        doThrow(new RuntimeException("FK contention")).when(changelogSegmentService).deleteByBatchId(batchId);
+
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
+                new BatchRetentionService.BatchCleanupRequest(
+                        siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+
+        assertThat(summary.errors()).isNotEmpty();
+        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_plugin_sql").counter().count())
+                .as("nothing was destroyed, so nothing is counted destroyed").isEqualTo(0.0);
+        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_egress").counter().count()).isEqualTo(0.0);
     }
 }

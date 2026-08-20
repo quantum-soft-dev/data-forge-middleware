@@ -252,6 +252,26 @@ class ChangelogRetentionServiceTest {
     }
 
     @Test
+    void survivesAnObjectDeleteFailureWithoutRollingBackTheRowDeletes() {
+        // Review round 2, R2-3: deleteObjects catches S3Exception per chunk but not
+        // SdkClientException, so a network failure mid-way would otherwise escape prune()'s
+        // transaction and roll every row delete back — after earlier chunks' objects were already
+        // destroyed: rows restored, objects gone, in bulk. The prune must swallow it (the rows are
+        // gone; the #158 sweep reclaims the unreferenced objects) rather than report a healthy
+        // prune as a failure.
+        checkpointAt(10L);
+        View processed = processed("delta/s/1.pb.gz");
+        belowCheckpoint(10L, processed);
+        when(segmentRepository.deleteByIdIfProcessed(processed.id())).thenReturn(1);
+        when(objectDeleter.deleteObjects(anyList()))
+                .thenThrow(software.amazon.awssdk.core.exception.SdkClientException.create("connection reset"));
+
+        int pruned = service(0).prune(SITE);
+
+        assertEquals(1, pruned, "the row deletes stand; the objects are the sweep's to reclaim");
+    }
+
+    @Test
     void doesNothingForASiteWithoutACheckpoint() {
         checkpointAt(0L);
 
