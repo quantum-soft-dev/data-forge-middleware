@@ -1122,18 +1122,24 @@ volume was busy, so:
 
 ### A non-finite `double` is kept, and quoted
 
-`real` and `double precision` travel as `double_value` — a real IEEE double — and Parquet DOUBLE
-carries `NaN` and `±Infinity` natively, so the per-segment delta file, the completed-batch artifact
-and the checkpoint snapshot all hold the value the source had. **No degradation, no counter, nothing
-to configure.**
+`real` and `double precision` travel as `double_value` — a real IEEE double — and where the column
+is **declared** as one of those two, Parquet DOUBLE carries `NaN` and `±Infinity` natively, so the
+per-segment delta file, the completed-batch artifact and the checkpoint snapshot all hold the value
+the source had. **No degradation, no counter, nothing to configure.**
 
 The Bit BI SQL stream renders those three as **quoted literals** — `'NaN'`, `'Infinity'`,
 `'-Infinity'` — which PostgreSQL coerces to the column's own type. Unquoted they are identifiers,
 not literals, so until issue #233 the generated statement read `SET price = NaN` and the server
 applying it answered `ERROR: column "nan" does not exist`. That failure was invisible on this side:
 generation succeeded, the file was uploaded, the batch was marked processed, and the error surfaced
-only in Bit BI — taking the rest of the file with it where a file is applied as one transaction. A
-client that saw such a file needs no re-baseline, only the batch's SQL re-fetched after this fix.
+only in Bit BI — taking the rest of the file with it where a file is applied as one transaction.
+
+**A file already written is not repaired by this fix, and re-fetching it does not help.**
+`/sql-changes` concatenates the objects `plugin_sql_generations` names, so the same bytes with the
+bare `NaN` come back. The recoveries are the ones the SQL tab already offers: **delete + generate**
+for that batch — with the re-delivery caveat documented there, since the new row gets a new
+`created_at` and the SQL is not idempotent — or `reinit` for a batch a client has already fetched.
+The records themselves were never lost, so no re-baseline of the *source* is involved.
 
 **Why quoted and not NULL, when the `numeric` path below nulls the same three values.** The
 trade-off runs the other way for each. Parquet DECIMAL is a scaled integer and cannot hold a
@@ -1142,6 +1148,20 @@ same thing about that cell; Parquet DOUBLE *can* hold it, so nulling it in SQL a
 exactly the disagreement the `numeric` rule exists to prevent, and would drop a value both consumers
 can carry. A `double` key needs no exception either: PostgreSQL compares `NaN` equal to itself, so
 `WHERE reading = 'NaN'` addresses the row.
+
+**The declared type is what decides on the Parquet side, and the wire case is what decides here** —
+so one combination still disagrees, and it is the combination the schema contract already forbids. A
+client that declares a column `numeric`/`decimal` and nevertheless sends `double_value` (see
+[Type mapping](#schema-json--type-mapping): *never send these as `double_value`*) has its cell
+written NULL by every Parquet writer — `toBigDecimal` cannot render a non-finite into a DECIMAL,
+whatever Java type it arrived as, and it is counted on
+`delta.parquet.unrepresentable-decimals{reason=non_finite}` — while the SQL stream renders
+`'NaN'`. If that cell is a **key**, the record is not skipped either, because
+`hasUnrepresentableKey` reads the wire case: the statement addresses `col = 'NaN'` against a
+baseline row whose key cell is NULL. Both were true before issue #233 as well, except that the SQL
+was invalid and cost the client the whole file, so nothing here is a new loss — but teaching the SQL
+path the destination type is a decision of its own and belongs to issue #240, which owns that
+question for both sides.
 
 **Comparison caveat.** `'Infinity'` and `1e400` are not the same cell: the wire value is an IEEE
 double, so a magnitude the source held in a `numeric` and cast to `double precision` may already be

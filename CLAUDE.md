@@ -603,7 +603,17 @@ pages/{feature}/            # Route pages
   `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row, and
   `DeltaSqlGenerationStrategy.hasUnrepresentableKey` is therefore correct to match `DECIMAL_VALUE`
   alone — closing half of the coverage gap #240 declares (the `string_value` half was never a gap: a
-  string is quoted anyway). **The DBF path's `formatValue` had the same shape of hole** for a numeric
+  string is quoted anyway).
+  **One combination still disagrees and is documented rather than fixed here** (review round 1): the
+  rule keys on the wire case while the Parquet writers key on the **declared** type, so a column
+  declared `numeric` whose value arrives as `double_value` — which the wire contract forbids — is
+  NULL in every Parquet artifact and `'NaN'` in the SQL, and as a key it is not skipped either. Both
+  were already true, with the SQL additionally invalid; destination-awareness is #240's subject on
+  both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
+  already written**: `/sql-changes` returns the stored objects, so a pre-fix batch comes back
+  byte-identical — the recoveries are delete + generate (with its documented re-delivery caveat) or
+  `reinit`, which is what the guide now says instead of the "just re-fetch" this entry first
+  claimed. **The DBF path's `formatValue` had the same shape of hole** for a numeric
   token and is guarded too, through `ValueMapper.canonicalNonFinite` — widened from package-private
   rather than copied, since a second copy of that vocabulary is exactly what #238 was. That guard is
   belt-and-braces by its own admission: DBF stores `N`/`F` fields as fixed-width ASCII digits, so the
@@ -612,8 +622,7 @@ pages/{feature}/            # Route pages
   comparison against an existing vocabulary is cheaper than relying on it. Proven by mutation: with
   both branches removed six methods fail across `SqlStatementGeneratorTest` and
   `DeltaSqlGenerationStrategyTest`. No new metric — the value is not degraded, so there is nothing to
-  count; and no client action beyond re-fetching the SQL of a batch that failed to apply, since the
-  records themselves were never lost. No REST, gRPC, proto, DTO, migration, configuration-key,
+  count. No REST, gRPC, proto, DTO, migration, configuration-key,
   metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A non-finite `double` is
   kept, and quoted"), `docs/bitbi-integration.md`.
 - adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the

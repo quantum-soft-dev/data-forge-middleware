@@ -491,11 +491,13 @@ WHERE col1 = 'val1' AND col2 = 'val2' AND col3 = 'val3';
 ### Non-finite Numbers in Generated SQL
 
 `NaN`, `Infinity` and `-Infinity` are emitted as **quoted** literals (`'NaN'`, `'Infinity'`,
-`'-Infinity'`), which PostgreSQL coerces to the target column's type — a bare `NaN` would parse as a
-column name and fail the statement with `ERROR: column "nan" does not exist` (issue #233). This
-applies to a `real` / `double precision` value from a Delta v2 site, where the value is carried
-end to end; for a PostgreSQL `numeric` column the pipeline cannot store the value at all and writes
-NULL instead (issue #215), which is described in
+`'-Infinity'`), which PostgreSQL coerces to the target column's type **where that type accepts a
+non-finite value** — `numeric`, `real` and `double precision` do; an integral column does not, and
+such a statement fails either way (`invalid input syntax for type integer` instead of
+`column "nan" does not exist`). A bare `NaN` is a column name, not a literal, which is what made
+every such statement fail before issue #233. The value is carried end to end for a `real` /
+`double precision` column of a Delta v2 site; for a PostgreSQL `numeric` column the pipeline cannot
+store it at all and writes NULL (issue #215), described in
 [the Delta client guide](delta-client-v2-guide.md#a-value-the-column-type-cannot-hold).
 
 A DBF snapshot has nothing to produce such a token from — `N` and `F` fields are fixed-width ASCII

@@ -169,7 +169,12 @@ public class SqlStatementGenerator {
      *
      * <p>A non-finite token in a numeric column is quoted, for the reason
      * {@link #formatJsonValue(Object)} explains: unquoted, {@code NaN} is an identifier to
-     * PostgreSQL, not a literal. It is guarded here rather than argued away because the claim that
+     * PostgreSQL, not a literal. Quoting makes the statement <em>valid</em> only where the target
+     * type accepts a non-finite value — {@code numeric}, {@code real} and {@code double precision}
+     * do, an integral one does not, and there the statement fails either way
+     * ({@code invalid input syntax for type integer} in place of {@code column "nan" does not
+     * exist}); {@link DbfColumnType#INTEGER} and {@link DbfColumnType#CURRENCY} are quoted with the
+     * rest because a uniform rule is never worse than the bare token, not because it rescues them. It is guarded here rather than argued away because the claim that
      * a DBF file cannot carry one is a claim about a client this repository cannot see: DBF stores
      * {@code N}/{@code F} fields as fixed-width ASCII digits, so the extractor has nothing to read
      * a non-finite value <em>from</em>, and since 032 retired HTTP ingestion no new CSV snapshot
@@ -342,6 +347,15 @@ public class SqlStatementGenerator {
      * {@code NaN} equal to itself, so {@code col = 'NaN'} addresses the row, which is why
      * {@code DeltaSqlGenerationStrategy} skips a record only for an unrepresentable
      * <em>decimal</em> key.</p>
+     *
+     * <p>The rule keys on the <em>wire</em> type while the Parquet writers key on the
+     * <em>declared</em> one, so one combination still disagrees: a column declared
+     * {@code numeric}/{@code decimal} whose value nevertheless arrives as {@code double_value} —
+     * which the wire contract forbids — is NULL in every Parquet artifact
+     * ({@code ParquetCheckpointWriter.toBigDecimal} cannot render a non-finite into a DECIMAL
+     * whatever Java type it arrived as) and {@code 'NaN'} here. That was equally true before
+     * issue #233, when the SQL was merely invalid as well; teaching this path the destination type
+     * is issue #240, which owns the question for both sides.</p>
      */
     private String formatJsonValue(Object value) {
         if (value == null) {
