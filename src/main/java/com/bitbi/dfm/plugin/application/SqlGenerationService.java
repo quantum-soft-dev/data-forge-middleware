@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -48,10 +47,22 @@ public class SqlGenerationService {
     private static final Logger log = LoggerFactory.getLogger(SqlGenerationService.class);
 
     /**
-     * Maximum number of files allowed per batch for SQL generation.
-     * Prevents memory exhaustion from processing too many files.
+     * The plugin this service generates for: its audit entries and activations are keyed by it.
      */
     private static final String PLUGIN_ID = "bit-bi";
+
+    /**
+     * Keys and defaults of the three {@code plugin.sql-generation.*} values this service
+     * consumes — one home each, used by the {@code @Value} placeholders and the validator
+     * messages alike, so a rename or a default retune cannot edit one copy and miss the other
+     * (issue #185).
+     */
+    public static final String MAX_CONCURRENT_KEY = "plugin.sql-generation.max-concurrent";
+    public static final String DEFAULT_MAX_CONCURRENT = "2";
+    public static final String SEMAPHORE_TIMEOUT_SECONDS_KEY = "plugin.sql-generation.semaphore-timeout-seconds";
+    public static final String DEFAULT_SEMAPHORE_TIMEOUT_SECONDS = "120";
+    public static final String HEAP_THRESHOLD_PERCENT_KEY = "plugin.sql-generation.heap-threshold-percent";
+    public static final String DEFAULT_HEAP_THRESHOLD_PERCENT = "80";
 
     private final AccountPluginRepository accountPluginRepository;
     private final SqlGenerationPersistence persistence;
@@ -80,9 +91,12 @@ public class SqlGenerationService {
             SiteSchemaService siteSchemaService,
             DeltaSqlGenerationStrategy deltaStrategy,
             PluginDeltaBaselineRepository pluginDeltaBaselineRepository,
-            @Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
-            @Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
-            @Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
+            @Value("${" + MAX_CONCURRENT_KEY + ":" + DEFAULT_MAX_CONCURRENT + "}")
+            int maxConcurrent,
+            @Value("${" + SEMAPHORE_TIMEOUT_SECONDS_KEY + ":" + DEFAULT_SEMAPHORE_TIMEOUT_SECONDS + "}")
+            int semaphoreTimeoutSeconds,
+            @Value("${" + HEAP_THRESHOLD_PERCENT_KEY + ":" + DEFAULT_HEAP_THRESHOLD_PERCENT + "}")
+            int heapThresholdPercent) {
         this.accountPluginRepository = accountPluginRepository;
         this.persistence = persistence;
         this.s3SqlFileStorageService = s3SqlFileStorageService;
@@ -93,9 +107,24 @@ public class SqlGenerationService {
         this.siteSchemaService = siteSchemaService;
         this.deltaStrategy = deltaStrategy;
         this.pluginDeltaBaselineRepository = pluginDeltaBaselineRepository;
-        this.maxConcurrent = maxConcurrent;
-        this.semaphoreTimeoutSeconds = semaphoreTimeoutSeconds;
-        this.heapThresholdPercent = heapThresholdPercent;
+        // Out of range fails startup (issue #185, fail fast by owner decision — reasoning in
+        // docs/020-sql-generation-optimization.md). The heap floor is 1, not 0: the reading is
+        // ceiling-rounded and a live JVM never reports 0, so a strict "> 0" refuses every
+        // generation exactly like a negative value — and 0-as-off would collide with this
+        // deployment's own "0 disables" convention while 100 is already the documented off-switch.
+        this.maxConcurrent = PluginConfigValidation.requireAtLeast(
+                MAX_CONCURRENT_KEY, maxConcurrent, 1,
+                "with no permits every generation times out after the semaphore timeout "
+                        + "and the delta-SQL queue retries it for ever");
+        this.semaphoreTimeoutSeconds = PluginConfigValidation.requireAtLeast(
+                SEMAPHORE_TIMEOUT_SECONDS_KEY, semaphoreTimeoutSeconds, 1,
+                "a non-positive timeout waits for a busy semaphore not at all, so any "
+                        + "concurrency fails immediately");
+        this.heapThresholdPercent = PluginConfigValidation.requireInRange(
+                HEAP_THRESHOLD_PERCENT_KEY, heapThresholdPercent, 1, 100,
+                "above 100 the memory-pressure abort is silently disabled (100 itself is the "
+                        + "documented off-switch, issue #174), and at or below 0 every SQL "
+                        + "generation is refused for ever");
     }
 
     /**
@@ -343,36 +372,6 @@ public class SqlGenerationService {
             throw e;
         } finally {
             MDC.clear();
-        }
-    }
-
-    /**
-     * Asynchronously generates SQL for a batch during reinit operation.
-     * <p>
-     * This method runs in a separate thread to avoid blocking the HTTP request.
-     * The reinit endpoint returns immediately (202 Accepted) while SQL generation
-     * continues in the background.
-     * </p>
-     * <p>
-     * Error handling: If SQL generation fails, it's logged but does NOT fail the
-     * reinit operation (which has already completed and returned).
-     * </p>
-     *
-     * @param batchId The batch ID to generate SQL from
-     * @param accountPluginId The account plugin ID
-     * @param accountId The account ID (for logging)
-     */
-    @Async("pluginExecutor")
-    public void generateSqlForBatchAsync(UUID batchId, Long accountPluginId, UUID accountId) {
-        log.info("Starting async SQL generation for reinit: batchId={}, accountId={}", batchId, accountId);
-        try {
-            // forceFullGeneration=true: generate all INSERTs since history was cleared
-            generateSqlForBatch(batchId, accountPluginId, true);
-            log.info("Async SQL generation completed successfully: batchId={}, accountId={}", batchId, accountId);
-        } catch (Exception e) {
-            // Log error but don't propagate - reinit has already returned successfully
-            log.error("Async SQL generation failed for reinit: batchId={}, accountId={}, error={}",
-                    batchId, accountId, e.getMessage(), e);
         }
     }
 

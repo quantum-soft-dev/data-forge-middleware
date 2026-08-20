@@ -7,9 +7,11 @@ import java.util.UUID;
 
 /**
  * DTO for plugin reinit operation result.
- * Contains details about what was deleted and whether SQL generation was triggered.
+ * Contains details about what was deleted and the batch set as the new baseline.
  *
- * <p>Feature 015: Plugin Reinit Option</p>
+ * <p>Feature 015: Plugin Reinit Option. The async SQL regeneration that feature originally
+ * performed was removed — reinit now only re-baselines — so {@code sqlGenerationTriggered} is
+ * always {@code false} and survives purely for API compatibility.</p>
  */
 @Schema(description = "Result of reinitializing plugin SQL state")
 public record ReinitResultDto(
@@ -25,10 +27,11 @@ public record ReinitResultDto(
         @Schema(description = "Total storage freed in bytes")
         long totalBytesFreed,
 
-        @Schema(description = "Whether SQL generation was triggered (false if no batches exist)")
+        @Schema(description = "Always false: reinit no longer triggers SQL generation "
+                + "(field kept for API compatibility)")
         boolean sqlGenerationTriggered,
 
-        @Schema(description = "ID of the batch used for SQL generation (null if no batches)")
+        @Schema(description = "ID of the batch set as the new baseline (null if no completed batches)")
         UUID batchId,
 
         @Schema(description = "Human-readable status message")
@@ -43,8 +46,9 @@ public record ReinitResultDto(
      * @param deletedGenerations number of generations deleted
      * @param deletedS3Files number of S3 files deleted
      * @param totalBytesFreed total bytes deleted
-     * @param sqlGenerationTriggered whether SQL generation was triggered
-     * @param batchId the batch ID used for regeneration (null if no batch)
+     * @param sqlGenerationTriggered always {@code false} — reinit no longer triggers SQL
+     *                                generation (kept for API compatibility)
+     * @param batchId the batch set as the new baseline (null if no completed batches)
      * @param failedS3Keys list of S3 keys that failed to delete
      * @return the DTO
      */
