@@ -87,14 +87,24 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         for (UUID accountId : createdAccounts) {
             // Same hole as DeltaSessionLivenessIntegrationTest.cleanUpSeededData (issue #228):
             // a site_id-only batches sweep leaves a mismatched account_id row that blocks
-            // DELETE FROM accounts. This class seeds neither today; "safe because nobody writes
-            // one yet" is how #226 sat latent, and this is the third cleanup of that shape.
-            jdbc.update("DELETE FROM device_authorizations WHERE account_id = ?", accountId);
-            jdbc.update("DELETE FROM changelog_segments WHERE batch_id IN "
-                    + "(SELECT id FROM batches WHERE account_id = ?)", accountId);
+            // DELETE FROM accounts. Children of leftover sites (error_logs.site_id, batches
+            // of those sites) have to go first, or the new DELETE FROM sites WHERE account_id
+            // is itself the next ScriptStatementFailedException. This class seeds neither
+            // today; "safe because nobody writes one yet" is how #226 sat latent.
+            jdbc.update("DELETE FROM device_authorizations WHERE account_id = ? OR site_id IN "
+                    + "(SELECT id FROM sites WHERE account_id = ?)", accountId, accountId);
+            jdbc.update("DELETE FROM error_logs WHERE site_id IN "
+                    + "(SELECT id FROM sites WHERE account_id = ?)", accountId);
+            jdbc.update("DELETE FROM changelog_segments WHERE site_id IN "
+                    + "(SELECT id FROM sites WHERE account_id = ?) OR batch_id IN "
+                    + "(SELECT id FROM batches WHERE account_id = ? OR site_id IN "
+                    + "(SELECT id FROM sites WHERE account_id = ?))",
+                    accountId, accountId, accountId);
             jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
-                    + "(SELECT id FROM batches WHERE account_id = ?)", accountId);
-            jdbc.update("DELETE FROM batches WHERE account_id = ?", accountId);
+                    + "(SELECT id FROM batches WHERE account_id = ? OR site_id IN "
+                    + "(SELECT id FROM sites WHERE account_id = ?))", accountId, accountId);
+            jdbc.update("DELETE FROM batches WHERE account_id = ? OR site_id IN "
+                    + "(SELECT id FROM sites WHERE account_id = ?)", accountId, accountId);
             jdbc.update("DELETE FROM sites WHERE account_id = ?", accountId);
             jdbc.update("DELETE FROM accounts WHERE id = ?", accountId);
         }
