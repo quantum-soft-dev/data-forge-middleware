@@ -536,6 +536,16 @@ pages/{feature}/            # Route pages
   (`ValueMapperTest.nonFiniteDecimalDegradesToNullInsteadOfThrowing` and
   `aSignedNanIsNonFiniteRatherThanMalformed`, `ChangelogFoldTest.nonFiniteKeySpellingsFoldToOneIdentity`),
   and the metric assertion is the one that pins the ticket's actual cost rather than the predicate.
+  **Review corrected the justification, not the fix**: the first wording said PostgreSQL accepts
+  these "with an optional sign", generalising the accurate "optional sign on infinity" — PostgreSQL
+  rejects `'-NaN'::numeric` outright, so a signed NaN is evidence the *client* formats
+  non-faithfully rather than a value the source held, and an operator reading the guide would
+  otherwise have concluded there was nothing to ask the client about. It still counts as
+  `non_finite`, since it is not a value this pipeline can repair. One pre-existing asymmetry this
+  change widens was traced to #240 rather than fixed: `isNonFiniteToken` trims the token while
+  `parseDecimal` is handed it raw, so a padded *finite* token (`" 1.5 "`, a shape
+  `ChangelogFold.normalizeDecimal` already carries a review-round-3 comment about) is written NULL
+  and counted `malformed` — silent loss of a legal number, and out of scope for a classification fix.
   No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend
   change; `delta.parquet.unrepresentable-decimals` keeps both tag values and simply stops
   misclassifying between them. See `docs/delta-client-v2-guide.md` ("A value the column type cannot

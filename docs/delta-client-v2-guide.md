@@ -1138,9 +1138,12 @@ many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the
 `reason`:
 
 - **`non_finite`** — `NaN` or `±Infinity`. Legal at the source; nothing to repair in this pipeline.
-  Every spelling PostgreSQL accepts counts here: case-insensitive, `inf` as well as `infinity`, and
-  with an optional sign on **both** — `-NaN` included, which until issue #238 was tested against the
-  signed form, landed on `malformed` and paged someone to chase a client defect that does not exist.
+  The classifier accepts every spelling case-insensitively, `inf` as well as `infinity`, and with an
+  optional sign on **both** — `-NaN` included, which until issue #238 landed on `malformed` and
+  paged someone to chase a client defect that does not exist. PostgreSQL itself is narrower: it
+  emits `NaN` unsigned and rejects `'-NaN'::numeric` outright, so a signed NaN says the *client*
+  formats non-faithfully, not that the source held one. That is a client to ask about, not a value
+  to repair here — which is why it still counts as `non_finite` rather than as a defect.
 - **`malformed`** — a token `BigDecimal` cannot parse at all. A client defect somebody has to fix.
   Before this change it threw and was therefore loud, so it keeps a signal of its own rather than
   disappearing into the same NULL as the legal case.
