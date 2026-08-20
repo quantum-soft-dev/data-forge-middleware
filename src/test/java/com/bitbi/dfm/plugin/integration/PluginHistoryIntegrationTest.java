@@ -44,8 +44,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *   <li>US1: Viewing SQL generation history with pagination</li>
  *   <li>US2: Clearing history (DB records + S3 files)</li>
- *   <li>US3: Regenerating SQL for a batch</li>
  * </ul>
+ *
+ * <p>US3 (regeneration) was retired by #190, and the 015 reinit class was deleted by #185: its
+ * assertions pinned the removed async regeneration ({@code sqlGenerationTriggered == true}),
+ * which the endpoint can never answer again — reinit only re-baselines now.</p>
  *
  * <p>Feature 014: Plugin History Management</p>
  *
@@ -251,7 +254,7 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
 
     @Nested
     @DisplayName("View SQL Generation History (US1)")
-    @Disabled("Requires async SQL generation to complete - run manually with extended timeout")
+    @Disabled("Depends on the retired 014 fixture: createSqlGenerationViaEvent() + sleep. Since 026 a BATCH_COMPLETED event only wakes the delta-SQL queue, and a CSV batch has no segments, so the fixture produces no generation even when run manually (#185)")
     class ViewHistory {
 
         @Test
@@ -326,7 +329,7 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
 
     @Nested
     @DisplayName("Clear Plugin History (US2)")
-    @Disabled("Requires async SQL generation to complete - run manually with extended timeout")
+    @Disabled("Depends on the retired 014 fixture: createSqlGenerationViaEvent() + sleep. Since 026 a BATCH_COMPLETED event only wakes the delta-SQL queue, and a CSV batch has no segments, so the fixture produces no generation even when run manually (#185)")
     class ClearHistory {
 
         @Test
@@ -380,88 +383,6 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
                     .andExpect(jsonPath("$.generationCount").isNumber())
                     .andExpect(jsonPath("$.totalFileSizeBytes").isNumber())
                     .andExpect(jsonPath("$.pluginWillBeDeactivated").value(true));
-        }
-    }
-
-    // ==================== Feature 015: Reinit ====================
-
-    @Nested
-    @DisplayName("Reinit Plugin SQL State (Feature 015)")
-    @Disabled("Requires async SQL generation to complete - run manually with extended timeout")
-    class ReinitPlugin {
-
-        private static final String USER_TOKEN = "Bearer mock.user.jwt.token";
-
-        @Test
-        @DisplayName("T021: Should reinit and regenerate SQL via REST endpoint")
-        void shouldReinitAndRegenerateSqlViaRestEndpoint() throws Exception {
-            // Given - Create SQL generation first
-            createSqlGenerationViaEvent();
-            Thread.sleep(1000);
-
-            List<PluginSqlGeneration> generationsBefore = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            assertThat(generationsBefore).isNotEmpty();
-            String s3KeyBefore = generationsBefore.get(0).getS3Key();
-
-            // Verify S3 file exists before reinit
-            assertS3ObjectExists(s3KeyBefore);
-
-            // When - Call reinit endpoint
-            mockMvc.perform(post("/api/v1/account/plugins/{pluginId}/reinit", PLUGIN_ID)
-                            .header("Authorization", USER_TOKEN))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.success").value(true))
-                    .andExpect(jsonPath("$.deletedGenerations").value(1))
-                    .andExpect(jsonPath("$.sqlGenerationTriggered").value(true));
-
-            // Then - Verify old records deleted
-            List<PluginSqlGeneration> generationsAfterReinit = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            // May be empty momentarily while async generation runs
-            // Old S3 file should be deleted
-            assertS3ObjectDoesNotExist(s3KeyBefore);
-
-            // Verify plugin still active (key difference from clearHistory)
-            AccountPlugin plugin = accountPluginRepository.findByAccountIdAndPluginId(TEST_ACCOUNT_ID, PLUGIN_ID)
-                    .orElseThrow();
-            assertThat(plugin.isActive()).isTrue();
-        }
-
-        @Test
-        @DisplayName("T022: Should reject reinit for inactive plugin")
-        void shouldRejectReinitForInactivePlugin() throws Exception {
-            // Given - Deactivate the plugin
-            testAccountPlugin.deactivate();
-            accountPluginRepository.save(testAccountPlugin);
-
-            // When/Then - Reinit should fail with 400
-            mockMvc.perform(post("/api/v1/account/plugins/{pluginId}/reinit", PLUGIN_ID)
-                            .header("Authorization", USER_TOKEN))
-                    .andExpect(status().isBadRequest());
-        }
-
-        @Test
-        @DisplayName("Should preserve plugin active state and configuration after reinit")
-        void shouldPreservePluginActiveStateAndConfigurationAfterReinit() throws Exception {
-            // Given - Create SQL generation
-            createSqlGenerationViaEvent();
-            Thread.sleep(1000);
-
-            // Store original plugin data
-            AccountPlugin pluginBefore = accountPluginRepository.findByAccountIdAndPluginId(TEST_ACCOUNT_ID, PLUGIN_ID)
-                    .orElseThrow();
-            assertThat(pluginBefore.isActive()).isTrue();
-            Object tenantIdBefore = pluginBefore.getPluginData().get("tenantId");
-
-            // When - Reinit
-            mockMvc.perform(post("/api/v1/account/plugins/{pluginId}/reinit", PLUGIN_ID)
-                            .header("Authorization", USER_TOKEN))
-                    .andExpect(status().isOk());
-
-            // Then - Plugin should remain active with same config
-            AccountPlugin pluginAfter = accountPluginRepository.findByAccountIdAndPluginId(TEST_ACCOUNT_ID, PLUGIN_ID)
-                    .orElseThrow();
-            assertThat(pluginAfter.isActive()).isTrue();
-            assertThat(pluginAfter.getPluginData().get("tenantId")).isEqualTo(tenantIdBefore);
         }
     }
 
