@@ -2096,8 +2096,9 @@ explain, not routine.
 
 **Deliberately no age or count bound of the prune's own on the hold-back.** The main
 permanent-stall scenario — a mistyped `plugin.sql-generation.heap-threshold-percent` making every
-generation refuse forever — **will be** closed at source by #185's fail-fast validation (still
-open), and a deterministic poison batch is already loud through `sql.generation.errors` and the
+generation refuse forever — is closed at source by #185's fail-fast validation (an out-of-range
+value in the `plugin.sql-generation.*` block fails the context at startup), and a deterministic
+poison batch is already loud through `sql.generation.errors` and the
 #181 audit entries (the egress queue has no error counter yet — #243 tracks per-segment retry
 bounds and poison-skip for both queues, which is where a sharper bound would live if one is ever
 wanted).

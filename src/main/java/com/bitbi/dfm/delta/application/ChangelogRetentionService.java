@@ -46,8 +46,9 @@ import java.util.UUID;
  *
  * <p><b>Deliberately no age or count bound of this pass's own on the hold-back.</b> The main
  * permanent-stall scenario — a mistyped {@code plugin.sql-generation.heap-threshold-percent} making
- * every generation refuse forever — will be closed at source by #185's fail-fast validation (still
- * open), and a deterministic poison batch is already loud through {@code sql.generation.errors} and
+ * every generation refuse forever — is closed at source by #185's fail-fast validation (an
+ * out-of-range value fails the context at startup, {@code PluginConfigValidation}), and a
+ * deterministic poison batch is already loud through {@code sql.generation.errors} and
  * the #181 audit entries. A hold-back therefore ends only when something else legitimately takes
  * the segment: its queues draining it; an operator deleting the segment or its batch (the admin
  * batch delete logs the pending count it destroys); a client-initiated re-baseline or history wipe
