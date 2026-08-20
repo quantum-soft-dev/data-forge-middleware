@@ -9,6 +9,8 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +55,17 @@ import static org.mockito.Mockito.verify;
  * {@code SqlGenerationServiceTest} (it stubs the violation); only this test drives the real
  * constraint in PostgreSQL, which is the half a mock cannot prove.</p>
  *
+ * <p><strong>What the loser must <em>not</em> do (issue #246).</strong> "Both callers succeed" is
+ * about the value they return, not about their side effects: only the winner produced the
+ * generation, so only the winner writes the {@code SQL_GENERATION_COMPLETED} audit entry and moves
+ * {@code sql.generation.statements.*}. Before #246 the loser wrote a second entry naming its own,
+ * just-deleted S3 key — visible to the account on
+ * {@code GET /api/v1/account/plugins/{pluginId}/logs} as a completed generation pointing at a dead
+ * object — and doubled the statement counters for one batch. The assertions below therefore pin
+ * one audit entry carrying the surviving key, a single set of statement increments, and one
+ * increment of {@code sql.generation.claims.lost}, the series that reports the lost race as
+ * itself.</p>
+ *
  * <p><strong>Why the race is deterministic rather than hoped for.</strong> The idempotency guard
  * ({@code existsBySourceBatchId}) runs in phase 1, before any S3 write; the INSERT runs in
  * phase 3, after it. The {@link MockitoSpyBean} on {@link S3SqlFileStorageService} holds both
@@ -78,7 +92,8 @@ import static org.mockito.Mockito.verify;
  * new test can start red against it: with the {@code DataIntegrityViolationException} catch in
  * {@code persistOrAdoptExisting} removed, the losing thread throws instead of adopting and this
  * test fails on the future's exception; with the adopt lookup removed, it fails on the callers
- * disagreeing.</p>
+ * disagreeing; and with the {@code claim.adopted()} branch of #246 removed, it fails on two audit
+ * entries and doubled statement counters.</p>
  *
  * <p>The spy makes this class's Spring context its own — the usual, accepted price of a bean
  * override here (the {@code S3ChangelogSegmentStorage} spy of issue #147 is the precedent); the
@@ -107,6 +122,9 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -157,6 +175,13 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
         // verifies below must count the race alone.
         Mockito.clearInvocations(s3SqlFileStorageService);
 
+        // The counters are this context's and the series are shared with every other site, so
+        // they are read as a delta across a queue that was emptied above (#175's discipline).
+        double insertsBefore = statementCount("inserts");
+        double updatesBefore = statementCount("updates");
+        double deletesBefore = statementCount("deletes");
+        double claimsLostBefore = meterRegistry.counter("sql.generation.claims.lost").count();
+
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<Optional<PluginSqlGeneration>> first = executor.submit(
@@ -189,6 +214,31 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
             String survivingKey = firstResult.get().getS3Key();
             verify(s3SqlFileStorageService).deleteFile(argThat(key ->
                     key != null && key.contains(ACCOUNT_ID.toString()) && !key.equals(survivingKey)));
+
+            // The loser's success-path side effects belong to the winner (#246). One completion
+            // entry for the batch, naming the key that still exists — before this fix the account
+            // read two, the second pointing at the object the adopt path had just deleted.
+            // Deferred through pluginAuditExecutor, so awaited rather than sampled; then held, so
+            // a late second entry fails the test instead of slipping past (#159).
+            Awaitility.await("the completion audit entry for batch " + batchId)
+                    .atMost(Duration.ofSeconds(20))
+                    .pollInterval(Duration.ofMillis(100))
+                    .untilAsserted(() -> assertThat(completionAuditKeys(batchId))
+                            .as("exactly one SQL_GENERATION_COMPLETED entry, naming the winner's key")
+                            .containsExactly(survivingKey));
+            Awaitility.await("no second completion audit entry for batch " + batchId)
+                    .during(Duration.ofMillis(500))
+                    .atMost(Duration.ofSeconds(5))
+                    .untilAsserted(() -> assertThat(completionAuditKeys(batchId))
+                            .containsExactly(survivingKey));
+
+            // Statement counters describe the batch, so the losing attempt must not double them.
+            assertThat(statementCount("inserts") - insertsBefore)
+                    .as("one INSERT record, counted once").isEqualTo(1.0);
+            assertThat(statementCount("updates") - updatesBefore).isZero();
+            assertThat(statementCount("deletes") - deletesBefore).isZero();
+            assertThat(meterRegistry.counter("sql.generation.claims.lost").count() - claimsLostBefore)
+                    .as("the lost claim is reported as itself").isEqualTo(1.0);
         } finally {
             executor.shutdownNow();
             if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
@@ -198,6 +248,23 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
                         "a racing generateSqlForBatch worker did not terminate within 30s");
             }
         }
+    }
+
+    /**
+     * The {@code s3Key} of every {@code SQL_GENERATION_COMPLETED} audit entry for one batch, in
+     * write order. Scoped by the batch this method minted, so entries of other classes sharing
+     * the partitioned {@code plugin_audit_logs} table cannot be counted here.
+     */
+    private List<String> completionAuditKeys(UUID batchId) {
+        return jdbc.queryForList(
+                "SELECT metadata->>'s3Key' FROM plugin_audit_logs "
+                        + "WHERE action_type = 'SQL_GENERATION_COMPLETED' "
+                        + "AND metadata->>'batchId' = ? ORDER BY occurred_at, id",
+                String.class, batchId.toString());
+    }
+
+    private double statementCount(String kind) {
+        return meterRegistry.counter("sql.generation.statements." + kind).count();
     }
 
     private UUID seedBatch() {
