@@ -478,9 +478,22 @@ generation, and one increment of the new counter
 
 - **`sql.generation.claims.lost`** — registered at zero, so an alert can predate the first
   occurrence. It counts *attempts that rendered and uploaded SQL for a batch another worker had
-  already claimed*: wasted work, not a failure — the batch has its SQL either way. A steady rate
-  means the delta-SQL queue is handing one segment to two workers; a single increment beside a
-  completed batch is the unique doing its job.
+  already claimed*: wasted work, not a failure — the batch has its SQL either way.
+
+**Read that counter as a waste rate, not as a defect count** (review round 2 corrected the first
+wording, which called a steady rate alert-worthy). A non-zero value is the ordinary state of a busy
+fleet: since #164 `DeltaSqlQueueService.processNextPending` opens no transaction of its own, so the
+`FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock as soon as that
+query's own short transaction commits, and `plugin_sql_at` is set only *after* the render. Two
+overlapping drains — `plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
+replica has its own pool — therefore pick the same global head segment deterministically, and one
+of them always loses the unique. An alert on "any steady rate" would fire continuously in healthy
+operation.
+
+What is worth watching is this series **against the rate of completed generations**: a large share
+means the fleet is repeatedly rendering, uploading and discarding the same batch, and the only lever
+short of a durable claim is that key. Making the claim durable so the second worker never renders at
+all belongs to the queue rather than here — recorded on **#243**, which owns that claim query.
 
 Two neighbouring series still move for both callers, deliberately: `sql.generation.duration` takes
 a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both

@@ -608,8 +608,17 @@ pages/{feature}/            # Route pages
   reported on a **counter** instead, new **`sql.generation.claims.lost`**, registered at zero so an
   alert predates the first occurrence; read it as *attempts that rendered and uploaded SQL for a
   batch another worker had already claimed* — wasted work, not a failure, since the batch has its
-  SQL either way, where a steady rate means the delta-SQL queue is handing one segment to two
-  workers and a single increment beside a completed batch is the unique doing its job. **Two
+  SQL either way. **Review round 2 corrected that counter's operator guidance, which is the finding
+  worth keeping**: the first wording called a steady rate alert-worthy, and a steady rate is the
+  ordinary state of a busy fleet — since #164 the queue worker opens no transaction of its own, so
+  the `FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock when that
+  query's own short transaction commits, and `plugin_sql_at` is set only *after* the render, so two
+  overlapping drains (`plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
+  replica has its own pool) pick the same global head segment deterministically and one always
+  loses the unique. An alert written on the first wording would have fired continuously against
+  healthy operation. It is a **waste rate**, read against the rate of completed generations, and
+  the durable claim that would stop the second worker rendering at all belongs to the queue —
+  evidence recorded on **#243**, which owns that query. **Two
   neighbouring series still move for both callers and that is deliberate**: `sql.generation.duration`
   takes a sample from each (both really did render the batch) and
   `sql.generation.semaphore.acquired` counts both permits; the loser's `SQL_GENERATION_STARTED`
