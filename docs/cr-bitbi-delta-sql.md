@@ -101,7 +101,12 @@ Metrics added: `sql.generation.delta.segments.processed`, `.records.skipped.no_s
   client-side). The window is bounded by the checkpoint fold cadence.
 - **After a source rebaseline (FULL_SNAPSHOT)** the plugin suspends SQL for the site's tables;
   the audit log carries the warning. Reinit the plugin, re-download `/files`, resume polling.
-- SQL regeneration (`regenerateForBatch`) is **not supported** for V2 sites (clear error).
+- SQL regeneration was **retired entirely** (issue #190; it never worked end to end and could not
+  serve segment-backed batches). Re-creating one batch's SQL is delete the generation + manual
+  `POST .../generate-sql`, which supports segment-backed batches — with the caveat that the new
+  row gets a new `created_at`, so a client whose `since` cursor already passed the batch receives
+  its SQL a second time, and the SQL is not idempotent. For a batch the client already fetched,
+  the answer is `reinit`.
 
 ## Known residual risks
 
