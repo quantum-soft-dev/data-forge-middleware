@@ -511,6 +511,52 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- sql-generation-config-fail-fast: An out-of-range value anywhere in the `plugin.sql-generation.*`
+  block fails the application context at startup, and the dead async generator is gone (issue #185,
+  folding **#210** — both hygiene in `SqlGenerationService`, sequenced after #190). **Fail fast over
+  a startup WARN is an owner decision recorded on the ticket**; the argued form lives in one place —
+  `docs/020-sql-generation-optimization.md`, "One caveat on 'unbounded retry is safe'" — and in
+  short: a GKE rolling update keeps old replicas serving while the rollout goes red, the WARN
+  channel is proven unread (#174's "abort disabled" line), and the silent failures are the
+  expensive ones (`800` disables the heap guard, a negative value is an endless retry loop, #181,
+  ending in silent data loss once retention passes the pending segments, #212; clamping was ruled
+  out by the ticket). **All five keys, two consuming constructors** — review round 1 caught the
+  first cut validating three keys while the docs claimed the block: `SqlGenerationService` holds
+  `heap-threshold-percent` ∈ [1..100], `max-concurrent` >= 1, `semaphore-timeout-seconds` >= 1, and
+  `DeltaSqlSweepWorker` holds `delta-max-concurrent` >= 1 (0 used to crash-loop through
+  `ArrayBlockingQueue`'s message-less `IllegalArgumentException`, the exact anonymous failure
+  fail-fast replaces) and `delta-sweep-ms` >= 1 (0 was *accepted* by Spring and busy-looped the
+  fallback sweep), through shared package-private `PluginConfigValidation` — deliberately not
+  shared wider: the delta packages keep their own constructor checks. **The heap floor is 1, not
+  the 0 first shipped** (round 1's F1): a live JVM's ceiling-rounded reading is never 0, so a
+  strict `> 0` refuses every generation exactly like the `-1` beside it — a pathological value
+  blessed by validation one unit above the cut, and a collision with this deployment's own
+  "0 disables" convention (`delta.parquet.max-scratch-bytes`); 100 stays #174's documented
+  off-switch, still pinned by `SqlGenerationStreamingTest`. Round 1 also killed the consequence
+  text "0 permits deadlock the semaphore outright", which had been copied into five surfaces and
+  was wrong in kind — `acquireSemaphore` uses a bounded `tryAcquire`, so the real signature is
+  120-second timeouts retried for ever, a different incident to chase. The refusal names the key
+  **and the value** ("but was N" — pinned literally, after round 1 showed `hasMessageContaining("0")`
+  satisfied by static text), and the promise is scoped: it holds for a well-formed integer, while a
+  value Spring cannot convert (`"80%"`, or an env var present but empty — `${VAR:80}` does not
+  default for `""`) dies earlier in `@Value` conversion naming the constructor parameter, said in
+  the yaml comment and docs/020 rather than closed with String-parsing constructors. Tests pin both
+  boundaries of every range as `@ParameterizedTest`s in the two consumers' test classes.
+  **Part 2**: `generateSqlForBatchAsync` is deleted — one grep hit in `src/`, the declaration; its
+  Javadoc described the reinit flow that was removed (`PluginHistoryService`'s "SQL generation no
+  longer triggered for reinit" comment stays as the record); as a correctly-qualified `@Async` site
+  the #195 guard kept it alive while readers of the #161 inventory counted it as a `pluginExecutor`
+  consumer. Round 1 then swept the prose the deletion left stale: `docs/reinit.md` documented the
+  async regeneration as live down to a `sqlGenerationTriggered: true` example (it is always
+  `false`), `AccountPluginsController`'s 202 comment promised background generation,
+  `BackgroundConnectionDemandTest` still classified the deleted entry point,
+  `AsyncExecutorQualifierTest`'s failure message counted 15-of-18 `@Async` sites (13 of 15 now),
+  `PluginHistoryServiceTest`'s T017 display name asserted the deleted behaviour, and `PLUGIN_ID`
+  carried the Javadoc of a max-files constant deleted long ago. No migration (**V55 stays free**),
+  no REST, gRPC, proto, DTO, metric, S3-key, configuration-key-**name** or frontend change; key
+  names and defaults are untouched — only an out-of-range value's fate changes.
+  See `docs/020-sql-generation-optimization.md`.
+||||||| 3a58ba79
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three

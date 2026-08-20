@@ -135,9 +135,11 @@ class BackgroundConnectionDemandTest {
         beans.put("com.bitbi.dfm.config.SchedulingConfiguration#taskScheduler",
                 new Consumer(7, Hold.SHORT, "sized by " + POOL_KEY + "; its long ticks counted"
                         + " separately from ScheduledTaskInventoryTest"));
-        // Immediate plugin audit writes and the async SQL-generation entry point: one INSERT each.
-        // The methods on PluginAuditService are @Transactional (REQUIRED), so a CallerRunsPolicy
-        // overflow joins the caller's transaction rather than asking for a second connection.
+        // Immediate plugin audit writes (the dispatch/execute hand-offs run here too): one INSERT
+        // each. The async SQL-generation entry point this comment used to name was deleted by
+        // #185 — it had no callers. The methods on PluginAuditService are @Transactional
+        // (REQUIRED), so a CallerRunsPolicy overflow joins the caller's transaction rather than
+        // asking for a second connection.
         beans.put("com.bitbi.dfm.plugin.infrastructure.PluginAsyncConfiguration#pluginExecutor",
                 new Consumer(10, Hold.SHORT, "one audit INSERT per task"));
         // The deferred audit writes of PluginAuditEventListener, given a lane of their own by #171:
