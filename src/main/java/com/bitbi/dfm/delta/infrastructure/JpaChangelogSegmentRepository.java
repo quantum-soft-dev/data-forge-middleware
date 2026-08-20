@@ -155,6 +155,16 @@ public interface JpaChangelogSegmentRepository
             + "AND s.lastSeq <= :checkpointSeq ORDER BY s.firstSeq")
     java.util.List<PrunableSegmentView> findBelowCheckpointBySiteId(UUID siteId, long checkpointSeq);
 
+    @Override
+    @Query("SELECT s.firstSeq AS firstSeq, s.lastSeq AS lastSeq FROM ChangelogSegment s "
+            + "WHERE s.siteId = :siteId AND s.provisional = false ORDER BY s.firstSeq")
+    java.util.List<SegmentSeqRange> findSeqRangesBySiteIdOrderByFirstSeq(UUID siteId);
+
+    @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false "
+            + "AND s.firstSeq > :afterSeq ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(UUID siteId, long afterSeq);
+
     // The marker predicate travels with the DELETE (issue #212): a reinit committing between
     // retention's read and this statement re-NULLs plugin_sql_at site-wide, and the freshly
     // re-pended row must survive. flushAutomatically for the same reason the sibling bulk

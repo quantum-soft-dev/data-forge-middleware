@@ -29,6 +29,37 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
 
     /**
+     * Seq coverage of a site's committed segments, oldest first — two longs per row, never the
+     * entity (issue #212 review). The checkpoint build decides "is a lossless refold possible"
+     * and "is there new work" from coverage alone, and since #212 held-back pending segments make
+     * the committed set unbounded, so hydrating every entity (JSONB stats included) for those two
+     * questions is the read this projection replaces.
+     *
+     * @param siteId site identifier
+     * @return {@code (first_seq, last_seq)} of every committed segment, ordered by {@code first_seq}
+     */
+    List<SegmentSeqRange> findSeqRangesBySiteIdOrderByFirstSeq(UUID siteId);
+
+    /**
+     * Full entities of a site's committed segments above a sequence — the fold's actual input:
+     * everything above the seed frame's pointer, or everything at all when {@code afterSeq} is 0
+     * (a frameless full refold). Ordered by {@code first_seq}, provisional excluded.
+     *
+     * @param siteId   site identifier
+     * @param afterSeq only segments with {@code first_seq > afterSeq} are returned
+     * @return committed segments above {@code afterSeq}, oldest first
+     */
+    List<ChangelogSegment> findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(UUID siteId, long afterSeq);
+
+    /** One committed segment's seq coverage (issue #212 review). */
+    interface SegmentSeqRange {
+
+        long getFirstSeq();
+
+        long getLastSeq();
+    }
+
+    /**
      * A batch's provisional segments — the leftovers of one re-baseline session that never reached
      * {@code SessionEnd} (033). Batch-scoped on purpose: a site-wide sweep would let one session
      * delete another's in-flight snapshot.

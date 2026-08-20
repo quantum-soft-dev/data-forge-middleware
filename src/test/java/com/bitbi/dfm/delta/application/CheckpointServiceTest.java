@@ -103,6 +103,36 @@ class CheckpointServiceTest {
     /** Flipped by a test to model {@code ContextClosedEvent} arriving mid-build. */
     private volatile boolean shuttingDown;
 
+    /**
+     * One list drives both segment reads (issue #212 review): the seq-range projection the build
+     * decides from, and the entity load the fold takes — everything above the seed, which with
+     * {@code afterSeq} 0 is the whole committed set. Stubbed together so a fixture cannot
+     * desynchronize coverage from content.
+     */
+    private void stubSiteSegments(List<ChangelogSegment> segments) {
+        when(segmentRepository.findSeqRangesBySiteIdOrderByFirstSeq(SITE))
+                .thenReturn(segments.stream().map(CheckpointServiceTest::rangeOf).toList());
+        when(segmentRepository.findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(eq(SITE), anyLong()))
+                .thenAnswer(inv -> {
+                    long afterSeq = inv.getArgument(1, Long.class);
+                    return segments.stream().filter(s -> s.getFirstSeq() > afterSeq).toList();
+                });
+    }
+
+    private static ChangelogSegmentRepository.SegmentSeqRange rangeOf(ChangelogSegment segment) {
+        return new ChangelogSegmentRepository.SegmentSeqRange() {
+            @Override
+            public long getFirstSeq() {
+                return segment.getFirstSeq();
+            }
+
+            @Override
+            public long getLastSeq() {
+                return segment.getLastSeq();
+            }
+        };
+    }
+
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
@@ -121,7 +151,7 @@ class CheckpointServiceTest {
 
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "FULL_SNAPSHOT", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
+        stubSiteSegments(List.of(segment));
         stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("customers", 2L, 2, "Bob")));
@@ -347,7 +377,7 @@ class CheckpointServiceTest {
         when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+        stubSiteSegments(List.of(survivor));
 
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
                 () -> service.buildCheckpoint(SITE));
@@ -396,7 +426,7 @@ class CheckpointServiceTest {
         stubFrame(2L, ChangelogCodec.serialize(List.of()));
         ChangelogSegment newer = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 3L, 4L, 2L, "hash", "s3/tail", "DELTA", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(newer));
+        stubSiteSegments(List.of(newer));
         stubSegmentRecords("s3/tail", List.of(
                 record("customers", 3L, 3, "Cara"),
                 record("customers", 4L, 4, "Dan")));
@@ -423,7 +453,7 @@ class CheckpointServiceTest {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
         stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
                 Checkpoint.create(SITE, "customers", 2L, 1L)));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
@@ -523,7 +553,7 @@ class CheckpointServiceTest {
         // and a rebuild parked behind the nightly sweep would fold a segment list that retention
         // had already deleted from S3 behind the advanced pointer.
         verify(syncStateService, never()).getSyncState(any());
-        verify(segmentRepository, never()).findBySiteIdOrderByFirstSeq(any());
+        verify(segmentRepository, never()).findSeqRangesBySiteIdOrderByFirstSeq(any());
     }
 
     @Test
@@ -654,7 +684,7 @@ class CheckpointServiceTest {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
         stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
                 Checkpoint.create(SITE, "customers", 2L, 1L)));
 
@@ -673,7 +703,7 @@ class CheckpointServiceTest {
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
         stubFrame(2L, ChangelogCodec.serialize(List.of(
                 record("customers", 1L, 1, "Ann"), record("customers", 2L, 2, "Bob"))));
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
                 Checkpoint.create(SITE, "customers", 2L, 1L)));
 
@@ -708,7 +738,7 @@ class CheckpointServiceTest {
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, budget);
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 5L, 5L, "hash", "s3/segment", "DELTA", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
+        stubSiteSegments(List.of(segment));
         stubSegmentRecords("s3/segment", records);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
@@ -744,7 +774,7 @@ class CheckpointServiceTest {
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
         when(checkpointStorage.openFrame(SITE, 2L)).thenThrow(
                 new S3CheckpointStorage.CheckpointStorageException("GetObject failed", null));
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
                 Checkpoint.create(SITE, "customers", 2L, 1L)));
 
@@ -770,7 +800,7 @@ class CheckpointServiceTest {
                 throw new IOException("connection reset mid-body");
             }
         });
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
                 Checkpoint.create(SITE, "customers", 2L, 1L)));
 
@@ -817,7 +847,7 @@ class CheckpointServiceTest {
         // would poison the series an operator reads as "how much room is left".
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
 
         service.buildCheckpoint(SITE);
@@ -1482,7 +1512,7 @@ class CheckpointServiceTest {
         Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         for (int attempt = 1; attempt <= MAX_MATERIALIZE_ATTEMPTS; attempt++) {
@@ -1509,7 +1539,7 @@ class CheckpointServiceTest {
         when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.UNKNOWN);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+        stubSiteSegments(List.of(survivor));
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         assertThrows(CheckpointService.FramePresenceUnknownException.class,
@@ -1537,7 +1567,7 @@ class CheckpointServiceTest {
         Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.UNKNOWN);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         for (int tick = 1; tick <= MAX_MATERIALIZE_ATTEMPTS + 1; tick++) {
@@ -1561,7 +1591,7 @@ class CheckpointServiceTest {
         when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+        stubSiteSegments(List.of(survivor));
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
@@ -1570,6 +1600,96 @@ class CheckpointServiceTest {
         verify(metrics).checkpointBuildAborted("lossy_refold");
         verify(metrics, never()).checkpointBuildAborted("history_gone");
         assertEquals(0, owing.materializeAttempts(), "a site that is visited anyway cannot drain");
+    }
+
+    @Test
+    void refusesARefoldOverAGapBehindARetainedHead() {
+        // Issue #212 review, A1. The prune used to delete oldest-first unconditionally, so
+        // "head at seq 1" proved contiguity; the hold-back can now retain an older *pending*
+        // segment while its younger processed neighbours are pruned, leaving a gap behind a head
+        // that still starts at 1 (a reinit re-pends interleaved segments out of queue order —
+        // markFullSnapshotPluginSqlProcessed / clearPluginSqlBySiteId — which is the concrete
+        // route). The old proxy read that as "full history survives" and silently published a
+        // truncated checkpoint from seq 0, advancing the pointer over the loss.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 6L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(6L, 6L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 6L)).thenReturn(ObjectPresence.ABSENT);
+        ChangelogSegment retainedHead = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/head", "DELTA", Map.of());
+        ChangelogSegment afterTheGap = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 5L, 6L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        stubSiteSegments(List.of(retainedHead, afterTheGap)); // seqs 3..4 are gone
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("lossy_refold");
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void spendsAnAttemptWhenOnlyBelowCheckpointSegmentsRemainBehindAGoneFrame() {
+        // Issue #212 review, A3. Everything the changelog holds is already inside the lost frame's
+        // fold, so no new work will ever change the verdict — and a held-back pending segment can
+        // keep the list non-empty for ever, where before #212 retention emptied it and the site
+        // reached history_gone's bounded drain. The same bound applies here now.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 10L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
+        ChangelogSegment heldBack = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 5L, 6L, 2L, "hash", "s3/held", "DELTA", Map.of());
+        stubSiteSegments(List.of(heldBack));
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        for (int attempt = 1; attempt <= MAX_MATERIALIZE_ATTEMPTS; attempt++) {
+            assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                    () -> service.buildCheckpoint(SITE));
+            assertEquals(attempt, owing.materializeAttempts(),
+                    "every such night spends one attempt, the #149 drain");
+        }
+
+        // The tag stays lossy_refold — the segments are real data and the condition is the
+        // pruned-history one — and the alarm fired once per night while the retry lasted.
+        verify(metrics, times(MAX_MATERIALIZE_ATTEMPTS)).checkpointBuildAborted("lossy_refold");
+        verify(metrics, never()).checkpointBuildAborted("history_gone");
+        assertTrue(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
+
+        // Drained: the visit ends quietly — no further increment, nothing thrown, nothing written.
+        // The site stays pinned to the work list by its held-back segments;
+        // delta.checkpoint.tables.given-up is the standing signal from here on.
+        service.buildCheckpoint(SITE);
+
+        verify(metrics, times(MAX_MATERIALIZE_ATTEMPTS)).checkpointBuildAborted("lossy_refold");
+        assertEquals(MAX_MATERIALIZE_ATTEMPTS, owing.materializeAttempts(),
+                "a drained site spends nothing further");
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void aForcedRebuildRearmsTheRowsBehindAGoneFrameWithOnlyBelowCheckpointSegments() {
+        // The FORCE half of the drain above, #149's own rule: a forced rebuild is the operator
+        // asserting the cause was dealt with, so it re-arms the retry instead of spending it —
+        // and it still fails loudly, because the frame is still gone.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 10L, 1L);
+        for (int i = 0; i < MAX_MATERIALIZE_ATTEMPTS; i++) {
+            owing.recordFailedMaterialization();
+        }
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
+        ChangelogSegment heldBack = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 5L, 6L, 2L, "hash", "s3/held", "DELTA", Map.of());
+        stubSiteSegments(List.of(heldBack));
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.rebuildFromFrame(SITE));
+
+        verify(metrics).checkpointBuildAborted("lossy_refold");
+        assertEquals(0, owing.materializeAttempts(), "the forced pass re-arms instead of spending");
+        assertFalse(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
     }
 
     @Test
@@ -1582,7 +1702,7 @@ class CheckpointServiceTest {
         owing.recordFailedMaterialization();
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
@@ -1754,7 +1874,7 @@ class CheckpointServiceTest {
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
         parkAtPointer(2L, lastFrameBytes, firstSave.getValue());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
         recordUploads("checkpoints/recovered-after-prune");
         clearInvocations(syncStateService, checkpointStorage, checkpointRepository, eventPublisher);
 
@@ -1772,7 +1892,7 @@ class CheckpointServiceTest {
     void refusesWhenFrameUnreadableAndNoSegmentsRemain() {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        stubSiteSegments(List.of());
 
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
                 () -> service.buildCheckpoint(SITE));
@@ -1925,7 +2045,7 @@ class CheckpointServiceTest {
         when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+        stubSiteSegments(List.of(survivor));
 
         assertThrows(CheckpointService.BuildDiscardedException.class,
                 () -> service.buildCheckpoint(SITE));
@@ -1989,7 +2109,7 @@ class CheckpointServiceTest {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
         when(syncStateService.getSyncState(SITE)).thenAnswer(invocation -> {
-            when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+            stubSiteSegments(List.of());
             return new SyncStateView(0L, 0L, 1, false, false, 0L, 1L);
         });
         SiteSyncState rebaselined = SiteSyncState.initial(SITE);
