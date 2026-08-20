@@ -3,6 +3,9 @@ package com.bitbi.dfm.batch.application;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.DeltaMetrics;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PendingQueueWork;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
@@ -34,7 +37,9 @@ public class BatchRetentionService {
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final S3FileStorageService s3FileStorageService;
     private final ChangelogSegmentService changelogSegmentService;
+    private final ChangelogSegmentRepository segmentRepository;
     private final BatchParquetArtifactRepository artifactRepository;
+    private final DeltaMetrics metrics;
 
     public BatchRetentionService(
             BatchRepository batchRepository,
@@ -43,14 +48,18 @@ public class BatchRetentionService {
             PluginSqlGenerationRepository sqlGenerationRepository,
             S3FileStorageService s3FileStorageService,
             ChangelogSegmentService changelogSegmentService,
-            BatchParquetArtifactRepository artifactRepository) {
+            ChangelogSegmentRepository segmentRepository,
+            BatchParquetArtifactRepository artifactRepository,
+            DeltaMetrics metrics) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.sqlGenerationRepository = sqlGenerationRepository;
         this.s3FileStorageService = s3FileStorageService;
         this.changelogSegmentService = changelogSegmentService;
+        this.segmentRepository = segmentRepository;
         this.artifactRepository = artifactRepository;
+        this.metrics = metrics;
     }
 
     public BatchCleanupSummary runCleanup(BatchCleanupRequest request) {
@@ -178,8 +187,32 @@ public class BatchRetentionService {
                 // above, then remove rows before their parent batch.
                 artifactRepository.deleteByBatchId(batchId);
 
+                // #212: batch retention is the deliberate outer horizon of the queues' retry —
+                // the one scheduled deleter allowed to take pending work. The counts are read
+                // before the delete (the rows are gone after it) but counted and WARNed only once
+                // the segment delete has returned (review round 2, R2-4): this per-batch catch
+                // swallows failures into summary.errors, so counting first would inflate the
+                // "permanently unproducible" series nightly with phantom losses for a batch whose
+                // deletion keeps failing.
+                PendingQueueWork pending = segmentRepository.countPendingQueueWorkByBatchId(batchId);
+
                 // Remove Delta v2 changelog segments (DB + S3) so the batch_id FK does not block delete.
+                // NOTE (pre-existing, the #164 shape, noted by #212's review): cleanupSiteInDb's
+                // @Transactional is inert — the method is protected and self-invoked, so these
+                // deletes are each their own repository transaction, not one atomic unit.
                 changelogSegmentService.deleteByBatchId(batchId);
+
+                if (pending.hasAny()) {
+                    metrics.retentionPendingSegmentsDeleted(
+                            DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, pending.getPendingPluginSql());
+                    metrics.retentionPendingSegmentsDeleted(
+                            DeltaMetrics.RETENTION_PENDING_EGRESS, pending.getPendingEgress());
+                    logger.warn("Batch retention deleted batch {} of site {} with pending queue "
+                                    + "work — {} segment(s) awaiting plugin SQL, {} awaiting egress: "
+                                    + "their SQL/delta Parquet is now permanently unproducible "
+                                    + "(issue #212, the deliberate outer horizon of the queues' retry)",
+                            batchId, siteId, pending.getPendingPluginSql(), pending.getPendingEgress());
+                }
 
                 batchRepository.deleteById(batchId);
                 summary.deletedBatches++;
