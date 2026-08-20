@@ -537,6 +537,41 @@ pages/{feature}/            # Route pages
   pill **Checkpoint failed · 1.2k**, the card names the abort. Stalled still wins. No gRPC, proto,
   configuration-key, metric-name, S3-key or route change. See `docs/delta-client-v2-guide.md`
   ("A first checkpoint build that keeps failing").
+- shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
+  / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
+  **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three
+  axes, because a general "sweep every non-cascading FK by its own relationship" covers 1 and 2
+  and **cannot** cover 3. **(1)** `batches.account_id` and `sites.account_id` (V3 / V2, no cascade).
+  `Batch.start(accountId, siteId)` takes the two independently, so a batch pairing an
+  `%@example.com` account with a foreign-domain site survived the site-keyed `DELETE FROM batches`
+  and blocked the account delete — the #226 symptom one statement later. **(2)**
+  `device_authorizations.site_id` / `.account_id` (V21, no cascade). The fixture had no statement
+  for that table; an approved leftover pointing at a seeded site blocked `DELETE FROM sites`.
+  Live, not hypothetical: `DeviceFlowSessionSupersedeContractTest` hand-deleted its own rows to
+  keep the next `@Sql` from failing, and that private cleanup is now dropped. **(3)** Rows outside
+  the seed identity predicates: `*.test.local` (three integration classes that never hit
+  `%@example.com` / `%.example.com`) and `{uuid}_example.com` (`BatchRetentionIntegrationTest`
+  today — an owned account whose domain uses an underscore where `LIKE '%.example.com'` needs a
+  literal dot, kept off `DELETE FROM accounts` only by a per-method `@Transactional` rollback).
+  Widening `DELETE FROM sites` pulls those sites in, so every site-keyed statement above it
+  (`error_logs` especially — V5, no cascade on `site_id` — plus `checkpoints`, `site_sync_state`
+  and the segment sweep's `site_id` arm) widens in step; `ScriptUtils` splits on `;` and cannot
+  parse a `DO $$` block, so the owned-account / owned-site / owned-batch subqueries are repeated.
+  The same account-keyed batches / device-auth / sites sweep is in
+  `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` and
+  `BatchTerminalTransitionLockingIntegrationTest.tearDown`. Leftover-then-clear guards of
+  #119 / #226 pin each shape, mutation-red against the unfixed fixture (`batches_account_id_fkey`,
+  `device_authorizations_site_id_fkey`, a remaining `*.test.local` account, `error_logs.site_id`
+  blocking the pulled-in site). **#220 is the other half of the same unit of work**:
+  `RunOwnedScratch` called `PropertyPlaceholderHelper(prefix, suffix, separator, boolean)`,
+  `@Deprecated(since = "6.2", forRemoval = true)`, so every `compileTestJava` printed a
+  `[removal]` warning that would become a red compile on the Boot bump that drops it — the same
+  "the build blames the wrong change" complaint #207 and #226 were filed for. The 5-arg form with
+  a null escape character keeps prefix, suffix, value separator and fail-on-unresolvable; the
+  4-arg constructor was only ever that delegate. `ParquetScratchTestProfileTest` still fails when
+  a scratch key is dropped from `application-test.yml`. Test-only — no production code, REST,
+  gRPC, proto, DTO, **no migration (V55 stays free)**, configuration-key, metric, S3-key or
+  frontend change.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
   cell as NULL and returns a tally so the WARN and
