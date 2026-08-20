@@ -279,6 +279,19 @@ pages/{feature}/            # Route pages
   prefix. Complete-listing callers retain their existing `listAll` semantics. No REST, gRPC, proto,
   DTO, migration, configuration-key, metric-name, S3-key, or frontend change. See
   `docs/delta-client-v2-guide.md`.
+- shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
+  / `DELETE FROM accounts`, and rows that have no path back to the seed (issue #228, folding #229
+  and #220; parent #226 closed what blocked `DELETE FROM batches`). Three axes: `batches.account_id`
+  / `sites.account_id` (V3/V2, no cascade — `Batch.start` takes the ids independently);
+  `device_authorizations` (V21, no cascade — the fixture had no statement, and
+  `DeviceFlowSessionSupersedeContractTest` hand-deleted its own rows; that cleanup is dropped);
+  and rows outside the seed identity predicates (`*.test.local`, `{uuid}_example.com`), which a
+  general FK-by-relationship rule cannot reach. Widening `DELETE FROM sites` pulls those in, so
+  every site-keyed statement above it widens in step. Same account-keyed sweep in the two
+  per-class cleanups. Leftover-then-clear guards pin each shape. `RunOwnedScratch` calls the 5-arg
+  `PropertyPlaceholderHelper` (null escape) instead of the `forRemoval` 4-arg constructor, same
+  four semantics; `ParquetScratchTestProfileTest` still fails when a scratch key is dropped.
+  Test-only — no production code, REST, gRPC, proto, DTO, **no migration (V55 stays free)**.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the cell NULL and
   returns a tally; `toAvroSchema` still mapped a `NOT NULL` column to a REQUIRED Parquet field, so
