@@ -20,6 +20,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -196,16 +197,23 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         String prunedKey = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow().getS3Key();
         markSegmentsProcessed(SITE);
 
-        List<Boolean> insideTransaction = new ArrayList<>();
+        // Scoped to the deletion of this test's own key, and thread-safe: the spy is a
+        // context-wide bean, so batch retention's cron pass or a wipe left in flight would
+        // otherwise add an entry from another thread and fail this test with a message blaming
+        // issue #234 (review round 1).
+        List<Boolean> insideTransaction = Collections.synchronizedList(new ArrayList<>());
         doAnswer(invocation -> {
-            insideTransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
+            List<?> keys = invocation.getArgument(0);
+            if (keys.contains(prunedKey)) {
+                insideTransaction.add(TransactionSynchronizationManager.isActualTransactionActive());
+            }
             return invocation.callRealMethod();
         }).when(objectDeleter).deleteObjects(anyList());
 
         assertEquals(1, retentionService.prune(SITE));
 
         assertEquals(List.of(false), insideTransaction,
-                "the pruned objects must not be deleted inside a transaction (issue #234)");
+                "the pruned object must be deleted exactly once, with no transaction open (issue #234)");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
         assertFalse(segmentStorage.exists(prunedKey), "segment S3 object pruned");
     }

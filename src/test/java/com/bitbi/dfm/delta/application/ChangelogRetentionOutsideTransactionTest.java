@@ -7,9 +7,12 @@ import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.annotation.AnnotatedElementUtils;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -23,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -56,10 +60,18 @@ class ChangelogRetentionOutsideTransactionTest {
 
     @Test
     void pruneIsNotTransactional() throws Exception {
+        // Review round 1: reading only the method-level Spring annotation would stay green against
+        // a class-level @Transactional (or the jakarta variant), which restores the exact hold this
+        // ticket removes — and the runtime guard would then fire on every site of every tick, so
+        // retention would stop entirely behind a per-site WARN from CheckpointScheduler's catch.
         Method prune = ChangelogRetentionService.class.getMethod("prune", UUID.class);
 
-        assertNull(prune.getAnnotation(Transactional.class),
-                "prune must not pin a connection across the object deletes (issue #234)");
+        for (AnnotatedElement element : List.of(prune, ChangelogRetentionService.class)) {
+            assertNull(AnnotatedElementUtils.findMergedAnnotation(element, Transactional.class),
+                    () -> "no Spring @Transactional may reach prune (issue #234): " + element);
+            assertNull(AnnotatedElementUtils.findMergedAnnotation(element, jakarta.transaction.Transactional.class),
+                    () -> "no jakarta @Transactional may reach prune (issue #234): " + element);
+        }
     }
 
     @Test
@@ -96,6 +108,27 @@ class ChangelogRetentionOutsideTransactionTest {
         var order = inOrder(segmentRepository, objectDeleter);
         order.verify(segmentRepository).deleteByIdIfProcessed(processed.id());
         order.verify(objectDeleter).deleteObjects(List.of(processed.key()));
+    }
+
+    @Test
+    void anExceptionMidPassStillDeletesTheObjectsOfTheRowsAlreadyGone() {
+        // Review round 1: with the pass no longer one transaction, a failure inside the loop (a
+        // lock timeout on one row, a pool timeout, a failover) leaves every row deleted so far
+        // committed — so the keys must go to S3 anyway, or the pass leaks exactly the objects the
+        // row-first ordering exists to bound. The #158 sweep is the backstop, not the plan: it
+        // ships dry-run by default, so its reclaim is inert until an operator turns it on.
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        View first = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
+        View failing = new View(UUID.randomUUID(), "delta/s/2.pb.gz", DONE, DONE);
+        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(first, failing));
+        when(segmentRepository.deleteByIdIfProcessed(first.id())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(failing.id()))
+                .thenThrow(new CannotAcquireLockException("lock timeout"));
+
+        assertThrows(CannotAcquireLockException.class, () -> service.prune(SITE));
+
+        verify(objectDeleter).deleteObjects(List.of(first.key()));
     }
 
     private record View(UUID id, String key, LocalDateTime pluginSqlAt, LocalDateTime egressAt)

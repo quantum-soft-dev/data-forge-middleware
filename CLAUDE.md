@@ -605,7 +605,19 @@ pages/{feature}/            # Route pages
   where it used to roll back — a pass interrupted after fifty rows has pruned fifty segments — which
   is the intended direction (a pruned row is durable work, not a step of one atomic pass) and is
   also why the failed-object-delete catch stays: the rows are already gone, and a throw would report
-  a healthy prune to `CheckpointScheduler` as this site's failure. Tests were written first and are
+  a healthy prune to `CheckpointScheduler` as this site's failure. **Review round 1 found the half
+  that made partial progress unsafe**: the object delete was reached only by falling out of the
+  loop, so an exception raised *inside* it — a lock timeout on one row, a pool timeout, a failover —
+  left every row deleted so far committed with its key never handed to S3, i.e. the pass leaked
+  precisely the objects the row-first ordering exists to bound (a site failing on row 1200 of 3000
+  strands 1199 of them), and the reclaim path it was leaning on ships `delta.s3-orphan.dry-run:
+  true`, inert until an operator turns it on. The delete now runs in a `finally`. The two test
+  findings were the same class of over-claim: the annotation guard read only the *method-level*
+  Spring `@Transactional`, so a class-level one — or the `jakarta` variant — would have restored the
+  hold with the assertion green (it reads both, on the method and the declaring class, through
+  `AnnotatedElementUtils`), and the integration spy asserted "exactly one `deleteObjects` in this
+  context", which any concurrent batch-retention pass would have failed while blaming this ticket
+  (it is scoped to this test's own key and its list is synchronized). Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own

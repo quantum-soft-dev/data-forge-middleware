@@ -2035,7 +2035,11 @@ is an unreferenced object the #158 orphan sweep reclaims, never a row whose obje
 partial progress now **stands** where it used to roll back: a pass interrupted after fifty rows has
 pruned fifty segments rather than none. That is the intended direction (a pruned row is durable
 work, not a step of one atomic pass), and it is also why a failed object delete is still summarized
-rather than thrown — the rows are already gone.
+rather than thrown — the rows are already gone. For the same reason the object delete runs in a
+`finally`: a failure inside the loop (a lock timeout on one row, a pool timeout, a failover) leaves
+those rows deleted, so their keys go to S3 anyway before the exception leaves `prune`. The #158
+orphan sweep is the backstop for a crash, not the plan for an ordinary exception — it ships
+`delta.s3-orphan.dry-run: true`, so its reclaim is inert until an operator turns it on.
 
 ### No S3 inside the ingestion commit (issue #147)
 

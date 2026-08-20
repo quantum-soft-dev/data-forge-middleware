@@ -123,47 +123,33 @@ public class ChangelogRetentionService {
         int pruneCount = Math.max(0, belowCheckpoint.size() - auditWindowSegments);
         List<String> prunedKeys = new ArrayList<>();
         HeldBackTally heldBack = new HeldBackTally();
-        for (int i = 0; i < pruneCount; i++) {
-            PrunableSegmentView segment = belowCheckpoint.get(i);
-            if (heldBack.countIfPending(segment.isPendingPluginSql(), segment.isPendingEgress())) {
-                continue;
-            }
-            if (segmentRepository.deleteByIdIfProcessed(segment.getId()) == 1) {
-                // Row first, object after the row delete reported success: a crash in between
-                // leaves an unreferenced object for the #158 orphan sweep, never a row whose
-                // object is gone.
-                prunedKeys.add(segment.getS3Key());
-                continue;
-            }
-            // The row read as processed above but the conditional delete refused it: a reinit
-            // committed in between and re-pended it (or another deleter took it). Re-read and
-            // count it by what the row says now; a row that vanished counts nowhere.
-            segmentRepository.findById(segment.getId()).ifPresent(rePended ->
-                    heldBack.countIfPending(rePended.isPendingPluginSql(), rePended.isPendingEgress()));
-        }
-
-        if (!prunedKeys.isEmpty()) {
-            // One DeleteObjects round trip per 1000 keys instead of one per object, and since #234
-            // with no transaction open. Errors are summarized, not thrown: the rows are gone, so a
-            // failed object delete leaves the same unreferenced litter the #158 sweep reclaims,
-            // while a throw would end the whole pass and report a healthy prune to
-            // CheckpointScheduler as this site's failure. deleteObjects catches S3Exception per
-            // chunk but not SdkClientException (the gap #158 round 2 documented), which is why the
-            // catch below is broader than the summarized errors.
-            try {
-                S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
-                if (!result.errors().isEmpty()) {
-                    log.warn("Pruned {} changelog segment row(s) for site {} but {} object delete(s) "
-                                    + "failed — the objects are unreferenced and the S3 orphan sweep "
-                                    + "reclaims them (issue #158)",
-                            prunedKeys.size(), siteId, result.errors().size());
+        // The delete is in a finally because the pass is no longer one transaction (issue #234,
+        // review round 1): a failure inside the loop — a lock timeout on one row, a pool timeout, a
+        // failover — leaves every row deleted so far committed, and their keys would otherwise
+        // never reach S3. The #158 orphan sweep is the backstop for a crash, not the plan for an
+        // ordinary exception: it ships dry-run by default, so its reclaim is inert until an
+        // operator turns it on.
+        try {
+            for (int i = 0; i < pruneCount; i++) {
+                PrunableSegmentView segment = belowCheckpoint.get(i);
+                if (heldBack.countIfPending(segment.isPendingPluginSql(), segment.isPendingEgress())) {
+                    continue;
                 }
-            } catch (RuntimeException e) {
-                log.warn("Pruned {} changelog segment row(s) for site {} but the object delete "
-                                + "failed mid-way — the undeleted objects are unreferenced and the "
-                                + "S3 orphan sweep reclaims them (issue #158)",
-                        prunedKeys.size(), siteId, e);
+                if (segmentRepository.deleteByIdIfProcessed(segment.getId()) == 1) {
+                    // Row first, object after the row delete reported success: a crash in between
+                    // leaves an unreferenced object for the #158 orphan sweep, never a row whose
+                    // object is gone.
+                    prunedKeys.add(segment.getS3Key());
+                    continue;
+                }
+                // The row read as processed above but the conditional delete refused it: a reinit
+                // committed in between and re-pended it (or another deleter took it). Re-read and
+                // count it by what the row says now; a row that vanished counts nowhere.
+                segmentRepository.findById(segment.getId()).ifPresent(rePended ->
+                        heldBack.countIfPending(rePended.isPendingPluginSql(), rePended.isPendingEgress()));
             }
+        } finally {
+            deletePrunedObjects(siteId, prunedKeys);
         }
 
         metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
@@ -179,6 +165,40 @@ public class ChangelogRetentionService {
                     prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
         }
         return prunedKeys.size();
+    }
+
+    /**
+     * Delete the objects of the rows this pass has already removed (issue #234).
+     *
+     * <p>One {@code DeleteObjects} round trip per 1000 keys instead of one per object, and with no
+     * transaction open. Errors are summarized, not thrown: the rows are gone, so a failed object
+     * delete leaves the same unreferenced litter the #158 sweep reclaims, while a throw would end
+     * the pass and report a healthy prune to {@code CheckpointScheduler} as this site's failure.
+     * {@code deleteObjects} catches {@code S3Exception} per chunk but not {@code SdkClientException}
+     * (the gap #158 round 2 documented), which is why the catch here is broader than the summarized
+     * errors — and why it must not mask an exception the loop is already unwinding with.</p>
+     *
+     * @param siteId     the site being pruned, for the log line
+     * @param prunedKeys keys whose row delete reported success; may be empty
+     */
+    private void deletePrunedObjects(UUID siteId, List<String> prunedKeys) {
+        if (prunedKeys.isEmpty()) {
+            return;
+        }
+        try {
+            S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
+            if (!result.errors().isEmpty()) {
+                log.warn("Pruned {} changelog segment row(s) for site {} but {} object delete(s) "
+                                + "failed — the objects are unreferenced and the S3 orphan sweep "
+                                + "reclaims them (issue #158)",
+                        prunedKeys.size(), siteId, result.errors().size());
+            }
+        } catch (RuntimeException e) {
+            log.warn("Pruned {} changelog segment row(s) for site {} but the object delete "
+                            + "failed mid-way — the undeleted objects are unreferenced and the "
+                            + "S3 orphan sweep reclaims them (issue #158)",
+                    prunedKeys.size(), siteId, e);
+        }
     }
 
     /**
