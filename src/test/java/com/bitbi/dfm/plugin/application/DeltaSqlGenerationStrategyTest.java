@@ -96,6 +96,34 @@ class DeltaSqlGenerationStrategyTest {
         assertThat(result.stats().filesProcessed()).isEqualTo(1);
     }
 
+    /**
+     * A key column this pipeline cannot represent addresses no row. Rendered as SQL the WHERE clause
+     * becomes {@code col = NULL}, which is never true, so the statement would be emitted, applied,
+     * match nothing, and leave the Bit BI mirror silently diverged — worse than the throw #215
+     * removed, because that at least was loud. The record is skipped instead (review round 1).
+     *
+     * <p>{@code NaN} is a usable primary key at the source: PostgreSQL compares it equal to itself.</p>
+     */
+    @Test
+    @DisplayName("should skip a record whose key holds a decimal it cannot represent")
+    void shouldSkipRecordWithUnrepresentableKey() throws IOException {
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("customers", Op.DELETE, 1,
+                        Map.of("id", Value.newBuilder().setDecimalValue("NaN").build()), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")),
+                schemas, Map.of());
+
+        // The strategy answers null when a batch yields no statements at all, which is what a
+        // batch whose only record was skipped produces -- and is the point: no DELETE is emitted,
+        // so nothing claims to address a row the key cannot identify, and no `= NULL` predicate
+        // reaches the mirror.
+        assertThat(result)
+                .as("the record is skipped, so this batch produces no SQL rather than SQL that "
+                        + "matches nothing")
+                .isNull();
+    }
+
     @Test
     @DisplayName("should carry the record seq in the statement terminator")
     void shouldCarrySeqInTerminator() throws IOException {

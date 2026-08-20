@@ -453,6 +453,70 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- non-finite-decimal-null: A `NaN` or `+/-Infinity` arriving in a `numeric` column is written as
+  NULL and reported, instead of costing the table its delta file, its checkpoint snapshot and its
+  Bit BI SQL (issue #215, from the PDE soak on the live stand). PostgreSQL `numeric` holds all three
+  and, since PostgreSQL-data-extractor#86, the extractor sends them as `decimal_value` tokens —
+  where `new BigDecimal("Infinity")` threw. **The ticket's body described one symptom and its
+  comment corrected the scope, which is the part worth keeping**: `ValueMapper` has *three*
+  independent consumers, so the reported "skipping the table's delta file" was the mildest of them.
+  `DeltaEgressService` logged an ERROR, skipped the file and still marked the segment egressed, so
+  it was lost rather than retried; `CheckpointService` recorded
+  `tables.unmaterialized{reason=parquet_failed}`, which spends a `materialize_attempts` and after
+  `delta.checkpoint.max-materialize-attempts` nights gives the table up **permanently** (#149); and
+  `DeltaSqlGenerationStrategy` threw into the SQL queue, so Bit BI never received that batch's SQL.
+  A fourth throw site the ticket did not list — `DeltaParquetWriter`'s decimal-envelope scan — dies
+  the same way, and the three secondary parses are guarded by `java == null`. That was written as
+  "closing the mapper closes every path" and **review proved it false twice** — see the rounds
+  below: the mapper is not the only thing on this path that parses a decimal.
+  **Parquet DECIMAL is a scaled integer with no representation for any of the three**, so the DoD's
+  first branch ("land correctly in parquet") is not available for the declared column type, and its
+  second (reject at ingest) would need an `ErrorCode` in `delta-ingestion.proto` against a shipped
+  Windows client *and* make a legal PostgreSQL row unreplicable. So the cell is stored NULL and the
+  degradation is made loud in three registers, each sized to its own noise floor: one WARN per
+  rendered table naming the table and the count (the workload that produces these writes one every
+  two seconds, so a line per cell would bury the log), per-cell DEBUG in the SQL strategy where the
+  column and seq are known, and **`delta.parquet.unrepresentable-decimals{reason=non_finite|malformed}`**, registered at zero so
+  an alert predates the first occurrence. Read that series as **cells, not rows or files**: a row with
+  two such columns counts twice, and the same source cell is counted again by each consumer that
+  renders it, because each writes a separate artifact in which it is separately NULL.
+  `isNonFiniteDecimal` is deliberately **narrower** than "`toJava` returned null" — a real SQL NULL,
+  an unset value and a *malformed* token all answer false, since the three want different responses
+  from an operator (nothing, nothing, and a client sending nonsense) and a counter that conflates
+  them cannot be alerted on.
+  **What this does not do is stated rather than implied**: `NaN` is not `NULL`, so soak #39's
+  source-vs-server comparison still will not match. This removes the data loss and the silent skip;
+  making the value survive would mean widening the column's Avro type, which changes the Parquet
+  schema Bit BI, Parquet Export and the checkpoint download all read — weighed and not taken.
+  Tests were written first and proven by mutation: with `parseDecimal` put back to
+  `new BigDecimal(token)`, four methods fail across `ValueMapperTest` and
+  `ParquetCheckpointWriterTest`. One incidental correction came from the gate — capturing the
+  checkpoint count had switched `timeCheckpointPhase("parquet", ...)` from the `Runnable` overload
+  to `Supplier`, which `CheckpointServiceTest` pins as part of the #111 phase guard; which overload
+  times a phase is incidental to this change, so the timing shape was restored rather than the guard
+  rewritten. No REST, gRPC, proto, DTO, migration, configuration-key, S3-key or frontend change.
+  **Three review rounds then changed what this ships, and the history is the part worth keeping.**
+  Round 1 found two regressions the fix had introduced: a degraded **key** column rendered
+  `WHERE col = NULL`, which is never true, so a DELETE for a row keyed on a `NaN` numeric (a usable
+  key — PostgreSQL compares `NaN` equal to itself) was emitted, applied, matched nothing and left the
+  Bit BI mirror silently diverged, worse than the throw being removed; such a record is skipped now,
+  loudly. And the guard was keyed on the **wire case**, so a `double_value` NaN — protobuf `double`
+  carries it natively — still threw, i.e. "closing the mapper closes every path" was false.
+  **Round 2 found the fix had a larger blast radius than the bug**: `ChangelogFold.encode` parses
+  decimal keys with a bare `new BigDecimal` and runs *before* any Parquet writing, so a `NaN` key
+  aborted the **whole site's** checkpoint build, deterministically, every night, with the pointer and
+  retention frozen — where the original defect cost one table one file. That guard stays whatever
+  else changes. Round 2 also made the writers destination-aware, keeping the token for a bare
+  `numeric` (Avro STRING) and the double for `double precision` (Avro DOUBLE).
+  **Round 3 found that destination rule had introduced silent corruption** — a non-finite narrowed
+  into a `bigint` wrote `0`, uncounted — and it was **reverted** rather than patched again: two
+  rounds running, a fix here had opened a hole elsewhere on the same coercion path. So the shipped
+  rule is the simple one, NULL for every destination, with the Parquet and SQL paths agreeing; the
+  two column types that could keep the value are a **deferred** piece of work, recorded with that
+  history as its warning. The cost of the revert is stated rather than hidden: `NaN != NULL` now
+  holds for *every* column type, so soak #39's source-vs-server comparison differs on more cells
+  than the destination-aware form would have left.
+  See `docs/delta-client-v2-guide.md` ("A value the column type cannot hold", Metrics).
 - error-toast-once: `setupErrorHandler()` replaces its own interceptor instead of stacking another
   one behind it, so one API failure produces one toast (issue #225, found by review round 3 on
   #211/#223). It was the **only** `apiClient.interceptors.*.use(...)` in the application that kept

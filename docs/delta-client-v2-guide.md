@@ -1095,6 +1095,54 @@ volume was busy, so:
   something this budget introduced, but it is the reason to size the key with headroom rather than
   to the exact worst case.
 
+### A value the column type cannot hold
+
+PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
+`decimal_value` tokens. Parquet DECIMAL is a scaled integer with no representation for any of them,
+so the cell is written **NULL** — and it is written NULL **whatever the destination column is**,
+which is a deliberate simplification rather than a necessity.
+
+Two declared types could keep the value: a bare `numeric`/`decimal` maps to Avro STRING precisely so
+the value travels in its on-the-wire form, and `double precision` maps to Avro DOUBLE, which carries
+`NaN` natively. Storing it there was tried and taken back out — it made the Parquet writers and the
+Bit BI SQL path disagree about the same cell (the checkpoint keeping a value the delta stream
+nulled), and the coercion it needed narrowed a non-finite into a `bigint` column as `0`. One rule
+for every column is what ships; keeping more is its own piece of work.
+
+The loss is reported rather than silent. Each rendered table logs one WARN naming the table and how
+many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the rate, tagged by
+`reason`:
+
+- **`non_finite`** — `NaN` or `±Infinity`. Legal at the source; nothing to repair in this pipeline.
+- **`malformed`** — a token `BigDecimal` cannot parse at all. A client defect somebody has to fix.
+  Before this change it threw and was therefore loud, so it keeps a signal of its own rather than
+  disappearing into the same NULL as the legal case.
+
+Read the series as **cells, not rows or files**: a row with two such columns counts twice, and the
+same source cell is counted again by every *Parquet* consumer that renders it — per-segment egress,
+the completed-batch artifact, the nightly checkpoint — because each writes a separate artifact in
+which that cell is separately NULL. The Bit BI SQL path is **not** a feeder: it renders the same
+cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total number of places
+one source cell was degraded.
+
+**In the Bit BI SQL stream a key column is the exception — the record is skipped, not degraded.** A
+value that cannot be represented cannot address a row, so the WHERE clause would render as
+`col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
+the mirror silently diverged. Such a record is dropped with a WARN and
+`sql.generation.delta.records.skipped.unrepresentable_key`.
+
+That exception is **the SQL path's alone.** Both Parquet writers write a key cell NULL like any
+other, so several such rows are indistinguishable in a checkpoint snapshot or a completed-batch
+artifact, and the baseline can contain a row the delta stream will never address. Consumers reading
+those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
+
+**What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
+server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
+such cell threw out of the mapper, and because every consumer catches per table it cost the table's
+whole delta file, failed its checkpoint snapshot (spending a `materialize_attempts` towards the
+permanent give-up above) and stopped the batch's Bit BI SQL. Storing the value truthfully would mean
+widening the column's type, which changes the Parquet schema every consumer reads.
+
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
 unset**, which is the shipped default and how the key is sized before it is turned on
@@ -2280,6 +2328,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
+| `delta.parquet.unrepresentable-decimals{reason=non_finite\|malformed}` | `delta_parquet_unrepresentable_decimals_total{reason=...}` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:

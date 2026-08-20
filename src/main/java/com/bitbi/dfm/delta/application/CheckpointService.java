@@ -984,14 +984,25 @@ public class CheckpointService {
             Path snapshot = createScratchFile(siteId);
             ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_TABLE);
             try {
+                // Captured rather than returned through timeCheckpointPhase so the phase keeps
+                // being timed as a Runnable: which overload times a phase is incidental to this
+                // change, and CheckpointServiceTest pins the shape as part of the #111 phase guard.
+                java.util.concurrent.atomic.AtomicReference<DecimalDegradeTally> nonFinite = new java.util.concurrent.atomic.AtomicReference<>();
                 metrics.timeCheckpointPhase("parquet", () ->
-                        ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
+                        nonFinite.set(ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
                                 dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
-                                lease));
+                                lease)));
+
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
                 epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
+                // After the epoch guard, not merely after the upload (review round 3): a wipe or
+                // re-baseline landing mid-build makes the guard throw and discards everything the
+                // build produced, so counting earlier credited cells to an artifact that was never
+                // published -- and the next build re-renders and counts them again.
+                metrics.unrepresentableDecimalsDegraded(nonFinite.get().nonFiniteCount(), false);
+                metrics.unrepresentableDecimalsDegraded(nonFinite.get().malformedCount(), true);
             } catch (CheckpointEpochGuard.EpochChangedException e) {
                 // A replaced baseline is not a fact about this table: nothing this build produced
                 // may be published, so it must escape the per-table skip below and end the build.
