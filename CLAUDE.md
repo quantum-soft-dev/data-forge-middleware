@@ -585,6 +585,25 @@ pages/{feature}/            # Route pages
   `*_attempts`/`*_retry_at` back — #245's clobber now has four more columns, which is recorded there
   as evidence with the note that its targeted-UPDATE option is the one these two statements already
   demonstrate.
+  **Round 2 found the same clobber one degree worse and closed that half inside this ticket**: the
+  success path's whole-entity `save` does not merely write a stale count, it can **erase a live
+  deferral** — the SQL queue finishing minutes after its claim writes the egress columns back as
+  they were then, restarting the escalation from zero and making the poison immediately claimable,
+  i.e. #245's clobber reaching the one bound this queue has. All four retry columns are therefore
+  `updatable = false`: Hibernate leaves them out of the entity's own UPDATE while the bulk JPQL
+  statements still write them, so the markers stay #245's work and the retry state is out of its
+  reach. Pinned by an integration test that reads the **row** rather than the persistence context,
+  since merge copies the detached values onto the managed instance whatever the mapping says and
+  only the generated UPDATE leaves them out (red without the flag). Round 2 also moved the site and
+  activation lookups and the mark write **inside** the try: `orElseThrow("Site not found")` for a
+  segment whose `sites` row is gone was this ticket's own defect reached through the three
+  statements the deferral did not wrap — no attempt, no cooldown, offered first on every wake. And
+  both worker Javadocs and `docs/020` still described the pre-round-1 behaviour ("the drain moves on
+  to another site"), which the guide contradicted three paragraphs later. **One finding is not fixed
+  here and is #261**: only the memory-pressure refusal has a type, so a semaphore timeout — a
+  pod-level condition raised before any work — is deferred like a data failure and can walk healthy
+  heads to the poisoned ERROR; giving it a type means editing `SqlGenerationService`, which #246
+  held in the same window, and the limit is stated in the guide rather than left implied.
 - signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
   identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
   by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings

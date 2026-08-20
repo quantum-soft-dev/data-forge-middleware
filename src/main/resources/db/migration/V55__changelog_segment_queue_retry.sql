@@ -3,8 +3,9 @@
 -- Both queues claim the globally oldest per-site head with LIMIT 1, so one segment whose work
 -- deterministically throws was offered first on every wake and no other site's SQL or delta
 -- Parquet was ever produced. These columns let a failed attempt defer that one segment with an
--- exponential backoff instead of ending the drain: its own site keeps waiting (per-site seq order
--- is a contract), every other site drains.
+-- exponential backoff: its own site keeps waiting (per-site seq order is a contract) while the
+-- next wake claims a different site's head, where before the same segment was offered first for
+-- ever.
 --
 -- Nothing here discards work: there is no attempt ceiling that gives up. The counters escalate
 -- reporting (delta.egress.segments.poisoned / sql.generation.delta.segments.poisoned) and the

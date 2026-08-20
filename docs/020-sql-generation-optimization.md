@@ -451,8 +451,8 @@ not delete unprocessed work").
 memory-pressure refusal, which is systemic and deliberately keeps that behaviour. Any *other*
 failure of a claimed segment — an unreadable object, data the declared schema cannot render — is
 now recorded as a durable deferral (`changelog_segments.plugin_sql_attempts` /
-`plugin_sql_retry_at`, V55) and `processNextPending` returns normally, so the drain moves on to
-another site. Before that, since the claim is the globally oldest per-site head with `LIMIT 1`,
+`plugin_sql_retry_at`, V55) and the drain ends, so the **next** wake — every `BATCH_COMPLETED`, a
+reinit, or the 60 s sweep — claims a different site's head and drains it to the end. Before that, since the claim is the globally oldest per-site head with `LIMIT 1`,
 one poison batch meant no site anywhere had SQL generated. The cooldown starts at
 `plugin.sql-generation.delta-retry-delay-seconds` and doubles per attempt to 64x; past
 `plugin.sql-generation.delta-poison-after-attempts` the WARN becomes an ERROR naming the segment

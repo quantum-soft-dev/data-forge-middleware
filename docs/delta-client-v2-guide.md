@@ -2160,7 +2160,7 @@ work was silently lost. With retention holding it back, the stall became permane
 
 A failed attempt now **defers that one segment**: `changelog_segments` carries
 `plugin_sql_attempts` / `plugin_sql_retry_at` and `egress_attempts` / `egress_retry_at` (V55), the
-claim query skips a segment inside its cooldown, and the drain continues with another site. The
+claim query skips a segment inside its cooldown, and the next wake claims another site's head. The
 cooldown starts at `delta.egress.retry-delay-seconds` /
 `plugin.sql-generation.delta-retry-delay-seconds` (60 s) and doubles per attempt to 64x, the shape
 `delta.batch-parquet.retry-delay-seconds` already uses.
@@ -2214,6 +2214,22 @@ incident either way, and nothing is lost — every one of those segments is stil
 retries once its cooldown ends. A deferral whose UPDATE matches no row — the work landed on another
 replica while this attempt was failing, or the row is gone — is not reported at all, so the
 counters never send an operator after a segment that is already done.
+
+**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
+claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
+own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
+any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
+failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
+prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
+"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+
+**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
+claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
+own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
+any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
+failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
+prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
+"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
 
 **The memory-pressure refusal is exempt** and still ends the drain. `MemoryPressureAbortedException`
 (#181) is a reading of the *pod's* heap taken before any work, so every segment claimed while it

@@ -2,6 +2,8 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +35,9 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private ChangelogSegmentRepository repository;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     private ChangelogSegment segment(UUID siteId, UUID batchId, long firstSeq, long lastSeq) {
         ChangelogSegment segment = ChangelogSegment.create(
@@ -113,6 +118,38 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
 
         ChangelogSegment reloaded = repository.findById(poison.getId()).orElseThrow();
         assertEquals(1, reloaded.getEgressAttempts());
+    }
+
+    /**
+     * Issue #243, review round 2: the two queues finish with {@code markX(); save(segment)} on the
+     * snapshot taken at claim time, so without {@code updatable = false} on the retry columns the
+     * delta-SQL queue's success — minutes after its own claim — would write the egress columns back
+     * as they were then, erasing a deferral recorded in between and restarting its escalation from
+     * zero. That is #245's marker clobber reaching the one bound this queue has, so the retry state
+     * is deliberately outside the entity's own UPDATE while the bulk statements still write it.
+     */
+    @Test
+    void staleWholeEntitySaveDoesNotEraseTheOtherQueuesDeferral() {
+        ChangelogSegment claimed = segment(SITE_A, BATCH_A, 1L, 5L);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        // the egress worker defers it while the delta-SQL worker still holds its claim-time snapshot
+        repository.deferEgress(claimed.getId(), now.plusMinutes(4));
+
+        claimed.markPluginSqlProcessed();
+        repository.save(claimed);
+
+        // Read the row rather than the persistence context: merge copies the detached values onto
+        // the managed instance whatever the column mapping says, and only the generated UPDATE
+        // leaves them out — which is the property under test.
+        entityManager.flush();
+        entityManager.clear();
+        ChangelogSegment reloaded = repository.findById(claimed.getId()).orElseThrow();
+        assertEquals(1, reloaded.getEgressAttempts(), "the deferral survives the other queue's save");
+        assertNotNull(reloaded.getEgressRetryAt());
+        assertNotNull(reloaded.getPluginSqlAt(), "and the save it came with still landed");
+        assertTrue(repository.findNextPendingEgress(10, now).isEmpty(),
+                "still inside its cooldown rather than immediately claimable again");
     }
 
     /** A deferral is refused once the work landed (issue #243, the #212 marker-predicate shape). */

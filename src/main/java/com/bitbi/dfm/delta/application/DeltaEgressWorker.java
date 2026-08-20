@@ -24,9 +24,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * A low-frequency sweep re-wakes the pool for segments left pending by a crash or a failed
  * drain (a failed segment is not marked egressed, so it stays queued).</p>
  *
- * <p>Since issue #243 a failed segment does not end the drain either: it is deferred with a
- * backoff and the drain continues with another site, so one unreadable object cannot stop every
- * other site's delta Parquet.</p>
+ * <p>Since issue #243 a failed segment no longer stalls the queue: it is deferred with a backoff
+ * and this drain ends, so the <em>next</em> wake claims a different site's head — one unreadable
+ * object can no longer stop every other site's delta Parquet. The drain stops rather than
+ * continuing so that a systemic failure cannot spend an attempt on the whole backlog in one
+ * pass.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0

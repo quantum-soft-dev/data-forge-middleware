@@ -23,9 +23,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code /sql-changes} (ordered by {@code created_at}) streams them correctly. A low-frequency
  * sweep re-wakes the pool for segments left pending by a crash or a failed generation.</p>
  *
- * <p>A failed generation no longer ends the drain (issue #243): the queue service defers that one
- * segment with a backoff and the drain moves on to another site. What still ends a drain is a
- * condition that would meet the next claim too — the memory-pressure refusal of #181.</p>
+ * <p>A failed generation no longer stalls the queue (issue #243): the queue service defers that
+ * one segment with a backoff and ends the drain, and because the segment is then inside its
+ * cooldown the <em>next</em> wake claims a different site's head and drains it to the end. The
+ * drain stops rather than continuing so that a systemic failure cannot spend an attempt on every
+ * pending segment of every site in one pass. What also ends a drain, without recording anything,
+ * is a condition that would meet the next claim too — the memory-pressure refusal of #181 and the
+ * pod shutting down.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0

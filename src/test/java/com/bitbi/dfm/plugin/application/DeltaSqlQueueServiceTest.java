@@ -258,6 +258,20 @@ class DeltaSqlQueueServiceTest {
     }
 
     @Test
+    @DisplayName("a segment whose site row is gone is deferred, not left to stall the queue (#243 r2)")
+    void shouldDeferWhenTheSiteLookupFails() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(siteRepository.findById(SITE_ID)).thenReturn(Optional.empty());
+        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(1);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
+    }
+
+    @Test
     @DisplayName("a failure while the pod is shutting down spends no attempt (#162's rule)")
     void shouldNotSpendAnAttemptWhenThePodIsShuttingDown() {
         ChangelogSegment segment = segment("DELTA", Map.of());

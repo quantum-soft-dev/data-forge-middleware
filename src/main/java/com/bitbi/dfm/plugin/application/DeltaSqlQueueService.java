@@ -128,14 +128,19 @@ public class DeltaSqlQueueService {
         }
         ChangelogSegment segment = claimed.get(0);
 
-        Site site = siteRepository.findById(segment.getSiteId())
-                .orElseThrow(() -> new IllegalStateException("Site not found: " + segment.getSiteId()));
-
-        Optional<AccountPlugin> activation = accountPluginRepository
-                .findByAccountIdAndPluginId(site.getAccountId(), PLUGIN_ID)
-                .filter(AccountPlugin::isActive);
-
+        // Everything after the claim is inside the try (review round 2): the site lookup, the
+        // activation lookup and the mark write can fail deterministically too — a segment whose
+        // `sites` row is gone threw "Site not found" out of the drain on every wake, spending no
+        // attempt and writing no cooldown, which is exactly the permanent global stall this ticket
+        // closes, reached through the three statements the deferral did not wrap.
         try {
+            Site site = siteRepository.findById(segment.getSiteId())
+                    .orElseThrow(() -> new IllegalStateException("Site not found: " + segment.getSiteId()));
+
+            Optional<AccountPlugin> activation = accountPluginRepository
+                    .findByAccountIdAndPluginId(site.getAccountId(), PLUGIN_ID)
+                    .filter(AccountPlugin::isActive);
+
             if (activation.isEmpty()) {
                 log.debug("No active bit-bi activation for account {} — marking segment {} processed",
                         site.getAccountId(), segment.getId());
@@ -150,6 +155,9 @@ public class DeltaSqlQueueService {
                 // batch, so the next sweep generates normally once the heap recovers.
                 sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
             }
+            segment.markPluginSqlProcessed();
+            segmentRepository.save(segment);
+            return true;
         } catch (SqlGenerationService.MemoryPressureAbortedException e) {
             // Deliberately not deferred and not counted as this segment's attempt (issue #243).
             // The refusal is a reading of the pod's heap taken before any work, so it is systemic
@@ -159,7 +167,7 @@ public class DeltaSqlQueueService {
             // also the right answer here, since the next claim would be refused too.
             throw e;
         } catch (RuntimeException e) {
-            deferSegment(segment, site, e);
+            deferSegment(segment, e);
             // Stop this drain after one deferral (issue #243, review round 1): continuing would
             // walk the whole backlog during a systemic failure — a bucket outage, sustained
             // semaphore contention — spending an attempt and a cooldown on every pending segment
@@ -168,10 +176,6 @@ public class DeltaSqlQueueService {
             // now in its cooldown and the next wake claims a different site's head.
             return false;
         }
-
-        segment.markPluginSqlProcessed();
-        segmentRepository.save(segment);
-        return true;
     }
 
     /**
@@ -194,7 +198,7 @@ public class DeltaSqlQueueService {
      * incremented in the database, so with two replicas attempting one segment the row can be
      * ahead of the line logged here.</p>
      */
-    private void deferSegment(ChangelogSegment segment, Site site, RuntimeException failure) {
+    private void deferSegment(ChangelogSegment segment, RuntimeException failure) {
         if (shutdownSignal.isShuttingDown()) {
             // The process ending, not the segment failing — #162's rule: such an ending records no
             // verdict. The segment stays pending and the next process claims it.
@@ -220,11 +224,11 @@ public class DeltaSqlQueueService {
                             + "plugin, or delete the batch. If this fires for many segments at once "
                             + "the cause is systemic, not the data; "
                             + "plugin.sql-generation.delta-poison-after-attempts sets the threshold",
-                    attempts, segment.getId(), site.getId(), segment.getBatchId(),
+                    attempts, segment.getId(), segment.getSiteId(), segment.getBatchId(),
                     segment.getFirstSeq(), segment.getLastSeq(), retryAt, failure);
         } else {
             log.warn("Bit BI delta SQL failed for segment {} of site {} (attempt {}, retry at {}): {}",
-                    segment.getId(), site.getId(), attempts, retryAt, failure.toString());
+                    segment.getId(), segment.getSiteId(), attempts, retryAt, failure.toString());
         }
     }
 
