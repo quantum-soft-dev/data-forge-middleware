@@ -336,8 +336,7 @@ public class CheckpointService {
             // gap can sit *behind* a retained head (a reinit re-pends interleaved segments out of
             // queue order, which is the concrete route). Contiguity from seq 1 is therefore
             // checked, not inferred from the head alone.
-            boolean historyPruned = ranges.isEmpty() || ranges.get(0).getFirstSeq() > 1
-                    || hasSeqGap(ranges);
+            boolean historyPruned = notSeedableFromScratch(ranges);
 
             // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
             // recordCheckpoint). If it is genuinely gone — deleted; not merely unreadable, which
@@ -423,20 +422,25 @@ public class CheckpointService {
      * fact from then on. Recovery is a re-baseline or a history wipe, both of which delete the rows
      * outright.</p>
      *
-     * <p><b>The state in between joined with issue #212</b>: segments on record, every one of them
-     * at or below the pointer. Before #212 that state converged to one of the two above — retention
-     * pruned below-checkpoint segments, so the list either emptied ({@code history_gone}) or new
-     * data arrived — but a held-back pending segment can now sit below the pointer for ever, and
-     * without a bound this site would raise {@code lossy_refold} nightly, spend nothing and never
-     * drain: #149's regression, reached through #212's fix. Everything such segments hold is
-     * already inside the lost frame's fold, so the changelog brings no new work — only the lossy
-     * refold being refused — and the visit is charged to the retryable rows exactly as
-     * {@code history_gone} charges it. Once they have given up, the visit ends <em>quietly</em>
-     * (an empty fold, no counter): the site stays pinned to the work list by its held-back
-     * segments, {@code delta.checkpoint.tables.given-up} is the standing signal, and a forced
-     * rebuild re-arms the rows as it always has. The {@code lossy_refold} tag is kept while
-     * attempts last — the segments are real data and the condition is the pruned-history one, not
-     * a vanished history.</p>
+     * <p><b>The state issue #212 created sits in between</b>: segments on record, every one of
+     * them at or below the pointer, and at least one of them <b>held back pending queue work</b> —
+     * the row retention can never remove, so without a bound this site would raise
+     * {@code lossy_refold} nightly, spend nothing and never drain: #149's regression, reached
+     * through #212's fix. Everything such segments hold is already inside the lost frame's fold,
+     * so the changelog brings no new work — only the lossy refold being refused — and the visit is
+     * charged to the retryable rows exactly as {@code history_gone} charges it. Once they have
+     * given up, the visit ends <em>quietly</em> (an empty fold, no counter): the site stays pinned
+     * to the work list by its held-back segments, {@code delta.checkpoint.tables.given-up} is the
+     * standing signal, and a forced rebuild re-arms the rows as it always has. The
+     * {@code lossy_refold} tag is kept while attempts last — the segments are real data and the
+     * condition is the pruned-history one, not a vanished history.</p>
+     *
+     * <p><b>The drain is scoped to that state and no wider</b> (review round 2): a frame-gone site
+     * whose below-pointer segments are all <em>processed</em> — the ordinary audit window of a
+     * quiet site, which with the default window of 20 retention never emptied even before #212 —
+     * keeps the never-quiets contract: loud nightly, no attempt spent, because that alarm is a
+     * real, rebuild-recoverable data-loss condition that #212 did not create and must not
+     * silence.</p>
      */
     private Map<String, Map<String, FoldedRow>> refuseRefold(UUID siteId,
                                                              List<SegmentSeqRange> ranges,
@@ -476,13 +480,20 @@ public class CheckpointService {
         }
         boolean nothingAboveCheckpoint = ranges.stream()
                 .allMatch(range -> range.getLastSeq() <= checkpointSeq);
-        if (nothingAboveCheckpoint) {
+        // R2-7 of the #212 review scoped this drain to the state #212 actually created: it applies
+        // only while a *held-back pending* segment sits below the pointer — the row retention can
+        // never remove. A frame-gone site whose below-pointer segments are all processed is the
+        // pre-#212 population (with the default window of 20, retention never emptied a quiet
+        // site's list), and it keeps the never-quiets contract below: draining it would have
+        // silenced a real, rebuild-recoverable data-loss alarm after five nights.
+        if (nothingAboveCheckpoint
+                && segmentRepository.existsCommittedPendingBelowCheckpoint(siteId, checkpointSeq)) {
             // Everything the changelog still holds is already inside the lost frame's fold, so no
-            // new work will ever change this verdict — and since #212 a held-back pending segment
-            // can keep the list non-empty for ever. Bound the dedicated retry the way history_gone
-            // does (issue #149): spend an attempt per retryable row on a scheduled pass, re-arm on
-            // a forced one, and once every row has given up, end the visit quietly — the site
-            // stays pinned to the work list by its held-back segments, and
+            // new work will ever change this verdict — and a held-back pending segment can keep
+            // the list non-empty for ever. Bound the dedicated retry the way history_gone does
+            // (issue #149): spend an attempt per retryable row on a scheduled pass, re-arm on a
+            // forced one, and once every row has given up, end the visit quietly — the site stays
+            // pinned to the work list by its held-back segments, and
             // delta.checkpoint.tables.given-up is the standing signal from then on.
             if (pass != SnapshotPass.FORCE && !hasRetryableUnmaterializedTables(siteId)) {
                 log.debug("Frame@{} for site {} is gone and only below-checkpoint segments remain; "
@@ -491,15 +502,21 @@ public class CheckpointService {
             }
             metrics.checkpointBuildAborted("lossy_refold");
             settleSiteWide(siteId, epoch, pass);
+            // Pass-aware (R2-6): #186 puts this text verbatim into the admin lastRebuildMessage,
+            // and on the forced pass settleSiteWide re-arms instead of spending — telling the
+            // operator their documented recovery action burned an attempt would be false.
+            String settled = pass == SnapshotPass.FORCE
+                    ? "The forced rebuild re-armed the per-table retry (the operator asserting the "
+                            + "cause was dealt with) but cannot conjure a frame"
+                    : "Every remaining segment is below the checkpoint and held back pending queue "
+                            + "work, so an attempt was spent (issue #149's drain): after "
+                            + retryProperties.maxMaterializeAttempts()
+                            + " such nights the retry stops and "
+                            + "delta.checkpoint.tables.given-up carries the fact";
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
                             + " is gone and earlier segments are pruned — refusing lossy refold. "
-                            + "Every remaining segment is below the checkpoint, so an attempt was "
-                            + "spent (issue #149's drain): after "
-                            + retryProperties.maxMaterializeAttempts()
-                            + " such nights the retry stops and "
-                            + "delta.checkpoint.tables.given-up carries the fact; recovery is a "
-                            + "re-baseline or a history wipe",
+                            + settled + "; recovery is a re-baseline or a history wipe",
                     null);
         }
         // Counted with the frame ceiling (issue #153) and for the same reason: the pointer
@@ -511,6 +528,29 @@ public class CheckpointService {
                 "Checkpoint frame@" + checkpointSeq + " for site " + siteId
                         + " is gone and earlier segments are pruned — refusing lossy refold",
                 null);
+    }
+
+    /**
+     * Whether this coverage cannot seed a lossless refold from seq 1 (issue #212): empty, a head
+     * above 1, or a gap anywhere behind it.
+     */
+    private static boolean notSeedableFromScratch(List<SegmentSeqRange> ranges) {
+        return ranges.isEmpty() || ranges.get(0).getFirstSeq() > 1 || hasSeqGap(ranges);
+    }
+
+    /** The coverage view of one loaded entity — for the post-load re-verification (R2-5). */
+    private static SegmentSeqRange rangeOf(ChangelogSegment segment) {
+        return new SegmentSeqRange() {
+            @Override
+            public long getFirstSeq() {
+                return segment.getFirstSeq();
+            }
+
+            @Override
+            public long getLastSeq() {
+                return segment.getLastSeq();
+            }
+        };
     }
 
     /**
@@ -616,6 +656,25 @@ public class CheckpointService {
             // committed set for the full refold, exactly as before.
             List<ChangelogSegment> newSegments =
                     segmentRepository.findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(siteId, foldFrom);
+
+            // R2-5 of the #212 review: the coverage read above and this entity load are two
+            // transactions with an S3 round trip (the frame probe) between them, and a deleter
+            // that bumps no epoch — batch retention's 45-day horizon, a sibling replica's prune —
+            // can remove rows in the window. On the full-refold path that would fold a silently
+            // gapped history into truncated checkpoints and advance the pointer over the loss, so
+            // contiguity is re-verified on the list actually folded. Thrown without counting:
+            // unlike the refusals in refuseRefold this is a transient race, and the next tick
+            // re-reads and classifies the state properly (the read-denial rule — one tick's cost,
+            // off the permanent meter).
+            if (!haveFrame && checkpointSeq > 0
+                    && notSeedableFromScratch(newSegments.stream()
+                            .map(CheckpointService::rangeOf).toList())) {
+                throw new S3CheckpointStorage.CheckpointStorageException(
+                        "The changelog of site " + siteId + " changed between the coverage read "
+                                + "and the fold — refusing the refold; the next tick re-reads and "
+                                + "classifies the state",
+                        null);
+            }
 
             Map<String, Map<String, FoldedRow>> state =
                     foldSite(siteId, checkpointSeq, haveFrame, newSegments);

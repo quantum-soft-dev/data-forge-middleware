@@ -230,6 +230,21 @@ public interface ChangelogSegmentRepository {
     int deleteByIdIfProcessed(UUID id);
 
     /**
+     * Whether any committed below-checkpoint segment of a site still owes queue work
+     * (issue #212, review round 2). This is what scopes the checkpoint build's bounded
+     * {@code lossy_refold} drain to the state #212 actually created: a frame-gone site whose
+     * below-pointer segments are all <em>processed</em> is the pre-#212 population and keeps the
+     * never-quiets alarm, while one pinned open by a held-back pending segment drains like
+     * {@code history_gone}.
+     *
+     * @param siteId        site identifier
+     * @param checkpointSeq the site's durable checkpoint pointer
+     * @return {@code true} if a committed segment with {@code last_seq <= checkpointSeq} has a
+     *         {@code NULL} queue marker
+     */
+    boolean existsCommittedPendingBelowCheckpoint(UUID siteId, long checkpointSeq);
+
+    /**
      * How much pending queue work a batch's committed segments still carry (issue #212). Read by
      * the batch deleters — batch retention (the deliberate outer horizon of the queues' retry) and
      * the explicit admin delete — so destroying pending work is counted and logged rather than

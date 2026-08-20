@@ -177,6 +177,12 @@ public interface JpaChangelogSegmentRepository
     int deleteByIdIfProcessed(UUID id);
 
     @Override
+    @Query("SELECT COUNT(s) > 0 FROM ChangelogSegment s WHERE s.siteId = :siteId "
+            + "AND s.provisional = false AND s.lastSeq <= :checkpointSeq "
+            + "AND (s.pluginSqlAt IS NULL OR s.egressAt IS NULL)")
+    boolean existsCommittedPendingBelowCheckpoint(UUID siteId, long checkpointSeq);
+
+    @Override
     @Query("SELECT COALESCE(SUM(CASE WHEN s.pluginSqlAt IS NULL THEN 1 ELSE 0 END), 0) AS pendingPluginSql, "
             + "COALESCE(SUM(CASE WHEN s.egressAt IS NULL THEN 1 ELSE 0 END), 0) AS pendingEgress "
             + "FROM ChangelogSegment s WHERE s.batchId = :batchId AND s.provisional = false")

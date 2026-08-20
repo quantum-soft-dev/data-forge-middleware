@@ -554,6 +554,7 @@ class CheckpointServiceTest {
         // had already deleted from S3 behind the advanced pointer.
         verify(syncStateService, never()).getSyncState(any());
         verify(segmentRepository, never()).findSeqRangesBySiteIdOrderByFirstSeq(any());
+        verify(segmentRepository, never()).findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(any(), anyLong());
     }
 
     @Test
@@ -1641,13 +1642,19 @@ class CheckpointServiceTest {
         ChangelogSegment heldBack = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 5L, 6L, 2L, "hash", "s3/held", "DELTA", Map.of());
         stubSiteSegments(List.of(heldBack));
+        // R2-7: the drain applies only while a held-back *pending* segment pins the state open.
+        when(segmentRepository.existsCommittedPendingBelowCheckpoint(SITE, 10L)).thenReturn(true);
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         for (int attempt = 1; attempt <= MAX_MATERIALIZE_ATTEMPTS; attempt++) {
-            assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
-                    () -> service.buildCheckpoint(SITE));
+            S3CheckpointStorage.CheckpointStorageException thrown =
+                    assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                            () -> service.buildCheckpoint(SITE));
             assertEquals(attempt, owing.materializeAttempts(),
                     "every such night spends one attempt, the #149 drain");
+            // R2-6: #186 shows this text to the operator, so it must describe what happened.
+            assertTrue(thrown.getMessage().contains("an attempt was spent"),
+                    "the scheduled pass says it spent an attempt: " + thrown.getMessage());
         }
 
         // The tag stays lossy_refold — the segments are real data and the condition is the
@@ -1682,14 +1689,79 @@ class CheckpointServiceTest {
         ChangelogSegment heldBack = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 5L, 6L, 2L, "hash", "s3/held", "DELTA", Map.of());
         stubSiteSegments(List.of(heldBack));
+        when(segmentRepository.existsCommittedPendingBelowCheckpoint(SITE, 10L)).thenReturn(true);
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
-        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
-                () -> service.rebuildFromFrame(SITE));
+        S3CheckpointStorage.CheckpointStorageException thrown =
+                assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                        () -> service.rebuildFromFrame(SITE));
 
         verify(metrics).checkpointBuildAborted("lossy_refold");
         assertEquals(0, owing.materializeAttempts(), "the forced pass re-arms instead of spending");
         assertFalse(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
+        // R2-6: #186 puts this text into the admin lastRebuildMessage verbatim — telling the
+        // operator their re-arm action spent an attempt would be false.
+        assertTrue(thrown.getMessage().contains("re-armed"),
+                "the forced pass says it re-armed, not spent: " + thrown.getMessage());
+        assertFalse(thrown.getMessage().contains("an attempt was spent"),
+                "the forced pass must not claim an attempt was spent: " + thrown.getMessage());
+    }
+
+    @Test
+    void keepsTheNeverQuietsAlarmForProcessedOnlyBelowCheckpointSegments() {
+        // R2-7 of the #212 review. A frame-gone quiet site holding its ordinary processed audit
+        // window is the pre-#212 population — retention never emptied that list (default window
+        // 20), and the alarm is a real, rebuild-recoverable data-loss condition. The drain is
+        // scoped to the state #212 created (a held-back *pending* segment below the pointer);
+        // without one, this must stay loud every night and spend nothing, for ever.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 10L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
+        ChangelogSegment processed = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 5L, 6L, 2L, "hash", "s3/processed", "DELTA", Map.of());
+        processed.markEgressed();
+        processed.markPluginSqlProcessed();
+        stubSiteSegments(List.of(processed));
+        when(segmentRepository.existsCommittedPendingBelowCheckpoint(SITE, 10L)).thenReturn(false);
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        for (int tick = 1; tick <= MAX_MATERIALIZE_ATTEMPTS + 2; tick++) {
+            assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                    () -> service.buildCheckpoint(SITE));
+        }
+
+        verify(metrics, times(MAX_MATERIALIZE_ATTEMPTS + 2)).checkpointBuildAborted("lossy_refold");
+        assertEquals(0, owing.materializeAttempts(),
+                "the pre-#212 population never drains: no attempt is ever spent");
+    }
+
+    @Test
+    void refusesTheFoldWhenTheChangelogChangedBetweenTheCoverageReadAndTheEntityLoad() {
+        // R2-5 of the #212 review. The coverage read and the entity load are two transactions
+        // with an S3 frame probe between them; a deleter that bumps no epoch (batch retention's
+        // 45-day horizon, a sibling replica's prune) can remove rows in the window. The coverage
+        // said "contiguous from seq 1" so the full-refold gate passed — but the list actually
+        // folded is gapped, and folding it would publish truncated checkpoints and advance the
+        // pointer over the loss. The stubs are deliberately inconsistent: that *is* the race.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 4L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 4L)).thenReturn(ObjectPresence.ABSENT);
+        ChangelogSegment head = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/head", "DELTA", Map.of());
+        ChangelogSegment tail = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 3L, 4L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findSeqRangesBySiteIdOrderByFirstSeq(SITE))
+                .thenReturn(List.of(rangeOf(head), rangeOf(tail)));
+        when(segmentRepository.findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(SITE, 0L))
+                .thenReturn(List.of(tail)); // head deleted between the reads
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        // Transient race, not a permanent abort: the next tick re-reads and classifies the state,
+        // so the never-repairs-itself meter must not move (the read-denial rule).
+        verify(metrics, never()).checkpointBuildAborted(any());
     }
 
     @Test
