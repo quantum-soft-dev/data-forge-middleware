@@ -584,6 +584,74 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the
+  winner's success as its own (issue #246, a pre-existing defect promoted out of the withdrawn
+  findings inbox #242 after #190/PR #236 made the race deterministic in a test). Since #164 two
+  workers can race `generateSqlForBatch` for one batch — the idempotency guard
+  (`existsBySourceBatchId`) runs before the S3 write and the INSERT after it, so both can pass the
+  guard and only `uk_sql_gen_source_batch` (V11) decides it. `persistOrAdoptExisting` already did
+  the correct durable thing: catch the `DataIntegrityViolationException`, delete the object **this**
+  attempt uploaded, adopt the winner's row. What it could not say is *which* branch it returned
+  through, so the loser carried on down the success path and did the winner's reporting a second
+  time: a second `SQL_GENERATION_COMPLETED` audit entry whose `s3Key` was **the key it had just
+  deleted** — the account sees two completed generations for one batch on
+  `GET /api/v1/account/plugins/{pluginId}/logs`, one naming a dead object — and a second increment
+  of `sql.generation.statements.{inserts,updates,deletes}`, which describe the batch, so a raced
+  batch was doubled on every dashboard reading them. The generation itself was always the winner's;
+  the lie was in audit and metrics. **The fix is to make the branch visible rather than to add an
+  entry for it**: `persistOrAdoptExisting` returns a private `ClaimOutcome(generation, adopted)`,
+  and an adopted one returns early — no completion audit, no statement counters, one INFO line
+  naming the adopted generation. The ticket's alternative (an explicit "adopted existing generation"
+  audit entry carrying the winner's key) was **not** taken: it needs a new `PluginActionType`, which
+  is a stored-data value and a `chk_plugin_audit_logs_action_type` migration, to say something the
+  DoD asks to be silent about — "exactly one `SQL_GENERATION_COMPLETED` row". The lost race is
+  reported on a **counter** instead, new **`sql.generation.claims.lost`**, registered at zero so an
+  alert predates the first occurrence; read it as *attempts that rendered and uploaded SQL for a
+  batch another worker had already claimed* — wasted work, not a failure, since the batch has its
+  SQL either way. **Review round 2 corrected that counter's operator guidance, which is the finding
+  worth keeping**: the first wording called a steady rate alert-worthy, and a steady rate is the
+  ordinary state of a busy fleet — since #164 the queue worker opens no transaction of its own, so
+  the `FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock when that
+  query's own short transaction commits, and `plugin_sql_at` is set only *after* the render, so two
+  overlapping drains (`plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
+  replica has its own pool) pick the same global head segment deterministically and one always
+  loses the unique. An alert written on the first wording would have fired continuously against
+  healthy operation. It is a **waste rate**, read against the rate of completed generations, and
+  the durable claim that would stop the second worker rendering at all belongs to the queue —
+  evidence recorded on **#243**, which owns that query. **Two
+  neighbouring series still move for both callers and that is deliberate**: `sql.generation.duration`
+  takes a sample from each (both really did render the batch) and
+  `sql.generation.semaphore.acquired` counts both permits; the loser's `SQL_GENERATION_STARTED`
+  entry stands for the same reason — it did start. **Review named the cost of that last one and it
+  is documented rather than fixed**: the adopt path is now the *only* exit of `generateSqlForBatch`
+  leaving a started entry with no terminal companion (a failure writes `SQL_GENERATION_FAILED`, an
+  empty diff writes `logSqlGenerationCompletedNoChanges`, and #181 moved `refuseUnderMemoryPressure`
+  above the started entry precisely so a refusal costs no unterminated row), so a raced batch reads
+  in the account's Logs tab as **two "Generating SQL..." lines and one "SQL Generated"** — a flat
+  event log, so nothing spins, but a shape the log did not carry before, with `claims.lost` the
+  series that says the unmatched line was a lost race rather than a crash. A terminal entry of its
+  own needs a new `PluginActionType` — stored data plus a widening of
+  `chk_plugin_audit_logs_action_type`, i.e. a migration — for a cosmetic asymmetry on a path that
+  fires only on a genuine collision, and reusing an existing value would be worse than the gap
+  (`SQL_GENERATION_COMPLETED` is the duplicate being removed; `SQL_GENERATION_FAILED` is a
+  `success = false` row claiming an error that did not happen). Filed as the theme **#260**.
+  **No test can start red against a property that
+  already holds in the other direction**, so the negative assertions are paired with a winner test
+  in the same class (`shouldAuditAndCountTheWinnerOfTheUniqueClaim`, which passes throughout and is
+  what stops "never audited" from being satisfied by a service that audits nothing) and both were
+  proven by mutation: with the `claim.adopted()` branch removed, the unit test and
+  `SqlGenerationConcurrentClaimIntegrationTest` go red — the latter on two audit entries and doubled
+  statement counters. That integration class is #190's own, already holding the race deterministic
+  with a `@MockitoSpyBean` barrier at `storeSqlFile`; it gains the loser's three observables
+  (one `SQL_GENERATION_COMPLETED` row for the batch **carrying the surviving key**, awaited because
+  the audit write is deferred through `pluginAuditExecutor` and then held for half a second so a
+  late second entry fails rather than slips past, #159's discipline; one set of statement
+  increments; one `claims.lost`), with the counters read as a **delta** over a queue emptied first,
+  since the registry is this context's and the series are shared with every other site (#175).
+  No migration (**V55 stays free**), no REST, gRPC, proto, DTO, configuration-key, cache, S3-key or
+  frontend change; no metric is renamed — `sql.generation.claims.lost` is new and
+  `sql.generation.statements.*` keeps its name and simply stops double-counting.
+  See `docs/020-sql-generation-optimization.md` ("Losing the unique claim is not a second success").
 - absorbed-duplicates-marker: A ticket closed as absorbed carries the **`duplicate`** label, so the
   board stops reading an unfixed defect as shipped (issue #230, filed from the same backlog pass as
   #216 and deliberately not folded into it — that ticket is about what a follow-up states *before*
