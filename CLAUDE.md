@@ -584,6 +584,38 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- double-nan-sql-literal: A non-finite `double` reaches Bit BI as a quoted literal, so the SQL it is
+  handed is valid PostgreSQL (issue #233). `SqlStatementGenerator.formatJsonValue` rendered every
+  `Number` through `toString()`, and PostgreSQL `real`/`double precision` legitimately hold `NaN` and
+  `±Infinity` — which the extractor sends as `double_value`, a real IEEE double — so the statement
+  read `SET price = NaN`, where a bare `NaN` is an **identifier**, not a literal:
+  `ERROR: column "nan" does not exist`. **The failure was invisible on this side**, which is what
+  separates it from #215: generation succeeded, the file went to S3, the batch was marked processed,
+  and the error surfaced only when Bit BI applied the file — taking the rest of it with it wherever a
+  file is applied as one transaction. The three values are emitted as `'NaN'`, `'Infinity'`,
+  `'-Infinity'`, which PostgreSQL coerces to the column's own type.
+  **Quoted rather than NULLed, and the asymmetry with #215 is the decision worth keeping.** For a
+  `numeric` column NULL is right because Parquet DECIMAL is a scaled integer and cannot hold the
+  value at all, so nulling keeps the Parquet artifacts and the SQL stream saying the same thing about
+  that cell. Parquet DOUBLE holds it natively, so here NULL would *create* that disagreement — the
+  checkpoint baseline keeping a value the delta stream dropped — and would discard a value both
+  consumers can carry. The same property removes any need for a key exception: PostgreSQL compares
+  `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row, and
+  `DeltaSqlGenerationStrategy.hasUnrepresentableKey` is therefore correct to match `DECIMAL_VALUE`
+  alone — closing half of the coverage gap #240 declares (the `string_value` half was never a gap: a
+  string is quoted anyway). **The DBF path's `formatValue` had the same shape of hole** for a numeric
+  token and is guarded too, through `ValueMapper.canonicalNonFinite` — widened from package-private
+  rather than copied, since a second copy of that vocabulary is exactly what #238 was. That guard is
+  belt-and-braces by its own admission: DBF stores `N`/`F` fields as fixed-width ASCII digits, so the
+  extractor has nothing to read a non-finite value from, and since 032 no new CSV snapshot arrives on
+  that path at all — but "a client this repository cannot see cannot produce it" is a claim, and one
+  comparison against an existing vocabulary is cheaper than relying on it. Proven by mutation: with
+  both branches removed six methods fail across `SqlStatementGeneratorTest` and
+  `DeltaSqlGenerationStrategyTest`. No new metric — the value is not degraded, so there is nothing to
+  count; and no client action beyond re-fetching the SQL of a batch that failed to apply, since the
+  records themselves were never lost. No REST, gRPC, proto, DTO, migration, configuration-key,
+  metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A non-finite `double` is
+  kept, and quoted"), `docs/bitbi-integration.md`.
 - adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the
   winner's success as its own (issue #246, a pre-existing defect promoted out of the withdrawn
   findings inbox #242 after #190/PR #236 made the race deterministic in a test). Since #164 two

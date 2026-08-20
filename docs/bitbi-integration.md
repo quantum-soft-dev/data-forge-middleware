@@ -488,6 +488,19 @@ WHERE col1 = 'val1' AND col2 = 'val2' AND col3 = 'val3';
 | **Integer** | I | **0** |
 | **Currency** | Y | **0** |
 
+### Non-finite Numbers in Generated SQL
+
+`NaN`, `Infinity` and `-Infinity` are emitted as **quoted** literals (`'NaN'`, `'Infinity'`,
+`'-Infinity'`), which PostgreSQL coerces to the target column's type — a bare `NaN` would parse as a
+column name and fail the statement with `ERROR: column "nan" does not exist` (issue #233). This
+applies to a `real` / `double precision` value from a Delta v2 site, where the value is carried
+end to end; for a PostgreSQL `numeric` column the pipeline cannot store the value at all and writes
+NULL instead (issue #215), which is described in
+[the Delta client guide](delta-client-v2-guide.md#a-value-the-column-type-cannot-hold).
+
+A DBF snapshot has nothing to produce such a token from — `N` and `F` fields are fixed-width ASCII
+digits — so on that path the quoting is a guard rather than an observed case.
+
 ### Table Name Derivation
 
 Table names are derived from CSV filenames:
