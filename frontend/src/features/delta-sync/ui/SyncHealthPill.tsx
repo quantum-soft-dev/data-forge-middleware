@@ -4,7 +4,8 @@
  * Design handoff v2 §3, fed by the bulk health endpoint (B10):
  * Healthy "Synced · lag 12" · Elevated "Lag 2.3k" · Critical "Lag 18.2k" ·
  * Stalled "Stalled · 26 h" · no sync row → grey "No sync yet" · a site whose first checkpoint has
- * not been built yet → grey "No checkpoint · 1.2k" (#213), since its lag is measured against zero.
+ * not been built yet → grey "No checkpoint · 1.2k" (#213), since its lag is measured against zero ·
+ * a site whose first scheduled build already aborted → "Checkpoint failed · 1.2k" (#224).
  * While the bulk data is loading nothing renders (no skeleton pill — D5).
  */
 
@@ -41,7 +42,12 @@ export function SyncHealthPill({ health, isLoading, now = new Date() }: SyncHeal
 
   const lag = Math.max(0, health.lastAppliedSeq - (health.lastCheckpointSeq ?? 0));
   const status = getSyncStatus(
-    { lastAppliedSeq: health.lastAppliedSeq, lastCheckpointSeq: health.lastCheckpointSeq, updatedAt: health.updatedAt },
+    {
+      lastAppliedSeq: health.lastAppliedSeq,
+      lastCheckpointSeq: health.lastCheckpointSeq,
+      updatedAt: health.updatedAt,
+      lastCheckpointBuildAbort: health.lastCheckpointBuildAbort,
+    },
     now,
   );
   const sev = syncStatusTone(status);
@@ -52,11 +58,13 @@ export function SyncHealthPill({ health, isLoading, now = new Date() }: SyncHeal
       // A pointer of zero makes every applied record read as lag, so this site used to arrive in
       // the list wearing an amber "Lag 1.2k" for a checkpoint that is not due yet (#213). The tone
       // changes and the count does not: how much is waiting is exactly what this pill is for.
-      : status === 'awaiting-first-checkpoint'
-        ? `No checkpoint · ${formatLagShort(lag)}`
-        : status === 'healthy'
-          ? `Synced · lag ${formatLagShort(lag)}`
-          : `Lag ${formatLagShort(lag)}`;
+      : status === 'first-checkpoint-failed'
+        ? `Checkpoint failed · ${formatLagShort(lag)}`
+        : status === 'awaiting-first-checkpoint'
+          ? `No checkpoint · ${formatLagShort(lag)}`
+          : status === 'healthy'
+            ? `Synced · lag ${formatLagShort(lag)}`
+            : `Lag ${formatLagShort(lag)}`;
 
   return (
     <span

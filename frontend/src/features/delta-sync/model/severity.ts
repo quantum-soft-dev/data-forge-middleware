@@ -19,9 +19,10 @@ export type SyncSeverity = 'healthy' | 'elevated' | 'critical' | 'stalled';
  * none until that tick fires. Every record it has applied then counts as lag against a pointer of
  * zero, and a freshly ingested site read as "Elevated — 1,155 records behind checkpoint": a
  * designed wait rendered as a backlog alarm. It is a distinct state rather than a lag band because
- * there is nothing for it to be behind.
+ * there is nothing for it to be behind. `first-checkpoint-failed` is issue #224: the same pointer
+ * of zero after a scheduled visit that produced nothing — no longer painted as that wait.
  */
-export type SyncStatus = SyncSeverity | 'awaiting-first-checkpoint';
+export type SyncStatus = SyncSeverity | 'awaiting-first-checkpoint' | 'first-checkpoint-failed';
 
 export const LAG_ELEVATED_THRESHOLD = 1_000;
 export const LAG_CRITICAL_THRESHOLD = 10_000;
@@ -83,20 +84,23 @@ export function hasCheckpoint(state: { lastCheckpointSeq: number | null }): bool
  * whether a checkpoint exists. And the pending state wins over every lag band, because a lag
  * measured against a pointer of zero is not a backlog.
  *
- * It says *no checkpoint exists*, not *the build is healthy*, and it cannot age itself out: nothing
- * persisted says how long a site has been waiting (`site_sync_state` has no creation timestamp, and
- * a build that aborts before writing anything leaves no `checkpoints` row either), so a first build
- * that keeps failing keeps this verdict. It is deliberately not bounded by lag magnitude — a first
- * FULL_SNAPSHOT is unbounded, so that would report the largest sites as critical on day one, which
- * is the defect this exists to remove. Both surfaces therefore keep the count visible, the card
- * names the build the state should not outlive, and the durable alarm stays where it belongs:
- * `delta.checkpoint.builds.aborted`, `delta.checkpoint.tables.given-up`, `delta.seq.lag`.
+ * It says *no checkpoint exists*, not *the build is healthy*. Since issue #224 a scheduled visit
+ * that produced nothing leaves `lastCheckpointBuildAbort` on the projection, so a first build that
+ * keeps failing is no longer the same payload as a site ingested this afternoon — that is
+ * `first-checkpoint-failed`, not this wait. It is deliberately not bounded by lag magnitude — a
+ * first FULL_SNAPSHOT is unbounded, so that would report the largest sites as critical on day one,
+ * which is the defect #213 exists to remove.
  *
  * @param state the sync-state projection or a bulk health entry
  * @param now   injectable clock
  */
 export function getSyncStatus(
-  state: { lastAppliedSeq: number; lastCheckpointSeq: number | null; updatedAt: string },
+  state: {
+    lastAppliedSeq: number;
+    lastCheckpointSeq: number | null;
+    updatedAt: string;
+    lastCheckpointBuildAbort?: string | null;
+  },
   now: Date = new Date(),
 ): SyncStatus {
   if (isStalled(state.updatedAt, now)) return 'stalled';
@@ -109,7 +113,13 @@ export function getSyncStatus(
   // row", and an all-zero row (what a wipe leaves, and what a re-baseline requested for a client
   // that never connected creates) is on neither list. Claiming a scheduled build for it would be a
   // promise nothing keeps (review r1).
-  if (!hasCheckpoint(state) && lag > 0) return 'awaiting-first-checkpoint';
+  if (!hasCheckpoint(state) && lag > 0) {
+    // A recorded abort is the fact that a scheduled visit already passed this site by (#224).
+    // Without it the wait is still the right reading — the first nightly build has not come
+    // round yet.
+    if (state.lastCheckpointBuildAbort) return 'first-checkpoint-failed';
+    return 'awaiting-first-checkpoint';
+  }
   return getSyncSeverity(lag, state.updatedAt, now);
 }
 
@@ -126,12 +136,22 @@ const AWAITING_FIRST_CHECKPOINT_TONE: SeverityToken = {
 };
 
 /**
+ * Alarm tone for a first checkpoint the scheduled build already tried and failed to produce
+ * (issue #224). Critical rather than the wait's grey: the wait is a designed gap until 02:00,
+ * this is a visit that produced nothing. The count stays on both surfaces.
+ */
+const FIRST_CHECKPOINT_FAILED_TONE: SeverityToken = {
+  ...severityTokens.critical,
+  label: 'Checkpoint failed',
+};
+
+/**
  * Chip colors and label for a status, so every sync surface paints the same verdict the same way.
  *
  * @param status the verdict from {@link getSyncStatus}
  */
 export function syncStatusTone(status: SyncStatus): SeverityToken {
-  return status === 'awaiting-first-checkpoint'
-    ? AWAITING_FIRST_CHECKPOINT_TONE
-    : severityTokens[status];
+  if (status === 'awaiting-first-checkpoint') return AWAITING_FIRST_CHECKPOINT_TONE;
+  if (status === 'first-checkpoint-failed') return FIRST_CHECKPOINT_FAILED_TONE;
+  return severityTokens[status];
 }
