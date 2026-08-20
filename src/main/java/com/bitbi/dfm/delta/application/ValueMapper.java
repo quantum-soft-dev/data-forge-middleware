@@ -26,8 +26,22 @@ public final class ValueMapper {
     /**
      * Convert a single Protobuf {@link Value} to its typed Java representation.
      *
+     * <p>A {@code decimal_value} that {@link BigDecimal} cannot parse yields {@code null} rather
+     * than throwing (issue #215). Two different clients produce one: PostgreSQL {@code numeric}
+     * legitimately holds {@code NaN} and {@code ±Infinity} and the extractor sends them as those
+     * tokens, and a malformed token is possible from any client. Parquet DECIMAL is a scaled
+     * integer with no representation for a non-finite value, so the pipeline cannot store it under
+     * the column's declared type — but throwing here cost far more than the value: every consumer
+     * of this mapper catches per table, so one such cell discarded the whole table's delta file,
+     * failed its checkpoint snapshot (spending a {@code materialize_attempts} towards #149's
+     * permanent give-up) and stopped the batch's Bit BI SQL.</p>
+     *
+     * <p>The degradation is deliberately <em>not</em> silent: {@link #isNonFiniteDecimal(Value)}
+     * lets a caller that has the site/table context tell this apart from a real SQL NULL and report
+     * it. A caller that does not ask still gets a row instead of an exception.</p>
+     *
      * @param value the wire value
-     * @return typed Java value, or {@code null} for SQL NULL / unset
+     * @return typed Java value, or {@code null} for SQL NULL / unset / an unrepresentable decimal
      */
     public static Object toJava(Value value) {
         return switch (value.getVCase()) {
@@ -35,10 +49,50 @@ public final class ValueMapper {
             case DOUBLE_VALUE -> value.getDoubleValue();
             case STRING_VALUE -> value.getStringValue();
             case BOOL_VALUE -> value.getBoolValue();
-            case DECIMAL_VALUE -> new BigDecimal(value.getDecimalValue());
+            case DECIMAL_VALUE -> parseDecimal(value.getDecimalValue());
             case BYTES_VALUE -> value.getBytesValue().toByteArray();
             case IS_NULL, V_NOT_SET -> null;
         };
+    }
+
+    /**
+     * Whether this value is a decimal carrying one of PostgreSQL's three non-finite {@code numeric}
+     * values, which {@link #toJava(Value)} degrades to {@code null}.
+     *
+     * <p>Deliberately narrower than "{@code toJava} returned null": a real SQL NULL, an unset value
+     * and a <em>malformed</em> decimal all answer {@code false}. The three cases want different
+     * responses from an operator — nothing to do, nothing to do, and a client sending nonsense —
+     * so a counter keyed on this must not conflate them.</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for {@code NaN}, {@code Infinity} or {@code -Infinity} in any casing
+     */
+    public static boolean isNonFiniteDecimal(Value value) {
+        return value.getVCase() == Value.VCase.DECIMAL_VALUE
+                && isNonFiniteToken(value.getDecimalValue());
+    }
+
+    /**
+     * PostgreSQL accepts these case-insensitively and with an optional sign on infinity, and emits
+     * them as {@code NaN} / {@code Infinity} / {@code -Infinity}. Both spellings are matched, since
+     * the token reaching us is whatever the client chose to send.
+     */
+    private static boolean isNonFiniteToken(String token) {
+        String trimmed = token.trim();
+        if (trimmed.equalsIgnoreCase("nan")) {
+            return true;
+        }
+        String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
+                ? trimmed.substring(1) : trimmed;
+        return unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf");
+    }
+
+    private static BigDecimal parseDecimal(String token) {
+        try {
+            return new BigDecimal(token);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**

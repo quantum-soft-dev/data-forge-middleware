@@ -97,6 +97,7 @@ public class DeltaMetrics {
     private final Counter sessionOverflowsBytes;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
+    private final Counter nonFiniteDecimals;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
     private final Counter checkpointFrameTooLarge;
@@ -142,6 +143,11 @@ public class DeltaMetrics {
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.nonFiniteDecimals = Counter.builder("delta.parquet.non-finite-decimals")
+                .description("Decimal cells degraded to NULL because the value is NaN or +/-Infinity, "
+                        + "which Parquet DECIMAL cannot represent (issue #215)")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.nonFiniteDecimals.increment(0.0);
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
@@ -598,5 +604,26 @@ public class DeltaMetrics {
     /** A changelog segment's delta Parquet egress was materialized. */
     public void segmentEgressed() {
         egressSegments.increment();
+    }
+
+    /**
+     * Decimal cells that could not be stored under their declared type and were written as NULL
+     * (issue #215): PostgreSQL {@code numeric} holds {@code NaN} and {@code +/-Infinity}, and
+     * Parquet DECIMAL -- a scaled integer -- has no representation for any of them.
+     *
+     * <p>Registered at zero, so an alert can predate the first occurrence. Read it as <b>cells</b>,
+     * not rows or files: one row with two such columns counts twice, and the same source cell is
+     * counted again by each consumer that renders it (per-segment egress, the completed-batch
+     * artifact, the nightly checkpoint, Bit BI SQL), because each writes a separate artifact in
+     * which that cell is separately NULL. A steady rate is the client legitimately holding values
+     * this pipeline cannot store -- not a fault to repair here -- and the log line beside it names
+     * the table and column.</p>
+     *
+     * @param cells how many cells were degraded in one render; ignored when zero
+     */
+    public void nonFiniteDecimalsDegraded(long cells) {
+        if (cells > 0) {
+            nonFiniteDecimals.increment(cells);
+        }
     }
 }

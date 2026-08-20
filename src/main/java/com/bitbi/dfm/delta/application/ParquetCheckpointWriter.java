@@ -80,9 +80,10 @@ public final class ParquetCheckpointWriter {
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross {@code maxBytes}
      * @throws ScratchBudgetExceededException     when the shared scratch directory has no room
      */
-    public static void writeParquet(Path output, String tableName, TableSchema tableSchema,
+    public static long writeParquet(Path output, String tableName, TableSchema tableSchema,
                                     Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes,
                                     ScratchLease lease) {
+        java.util.concurrent.atomic.AtomicLong nonFinite = new java.util.concurrent.atomic.AtomicLong();
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
                         new FileOutputFile(output, maxBytes, lease))
@@ -93,11 +94,17 @@ public final class ParquetCheckpointWriter {
                 .withCompressionCodec(CODEC)
                 .build()) {
             for (Map<String, Value> row : rows) {
-                writer.write(toRecord(avro, tableSchema, row));
+                writer.write(toRecord(avro, tableSchema, row, nonFinite));
             }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
         }
+        if (nonFinite.get() > 0) {
+            log.warn("Checkpoint table {}: {} decimal cell(s) written as NULL -- the value is NaN or "
+                    + "+/-Infinity, which Parquet DECIMAL cannot represent (issue #215)",
+                    tableName, nonFinite.get());
+        }
+        return nonFinite.get();
     }
 
     /**
@@ -127,6 +134,28 @@ public final class ParquetCheckpointWriter {
      */
     static Object coerceValue(Value value, Schema fieldSchema) {
         return coerce(value, branch(fieldSchema));
+    }
+
+    /**
+     * As {@link #coerceValue(Value, Schema)}, counting the cells this pipeline cannot store under
+     * their declared type (issue #215).
+     *
+     * <p>The single coercion seam both Parquet writers share, which is why the tally is threaded
+     * here rather than duplicated in each. A non-finite {@code numeric} -- {@code NaN},
+     * {@code +/-Infinity}, all legal in PostgreSQL -- has no Parquet DECIMAL representation, so the
+     * cell is written NULL; counting it here is what keeps that from being silent, since the value
+     * is otherwise indistinguishable in the file from a column that really was NULL.</p>
+     *
+     * @param value       the wire value
+     * @param fieldSchema the Avro field schema to coerce into
+     * @param nonFinite   tally incremented once per degraded cell
+     * @return the coerced value, or {@code null} when absent, NULL or unrepresentable
+     */
+    static Object coerceValue(Value value, Schema fieldSchema, java.util.concurrent.atomic.AtomicLong nonFinite) {
+        if (value != null && ValueMapper.isNonFiniteDecimal(value)) {
+            nonFinite.incrementAndGet();
+        }
+        return coerceValue(value, fieldSchema);
     }
 
     /**
@@ -216,11 +245,16 @@ public final class ParquetCheckpointWriter {
         return model;
     }
 
-    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, Map<String, Value> row) {
+    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, Map<String, Value> row,
+                                          java.util.concurrent.atomic.AtomicLong nonFinite) {
         GenericRecord record = new GenericData.Record(avro);
         for (ColumnDefinition column : tableSchema.columns()) {
             Schema fieldType = branch(avro.getField(column.name()).schema());
-            record.put(column.name(), coerce(row.get(column.name()), fieldType));
+            Value cell = row.get(column.name());
+            if (cell != null && ValueMapper.isNonFiniteDecimal(cell)) {
+                nonFinite.incrementAndGet();
+            }
+            record.put(column.name(), coerce(cell, fieldType));
         }
         return record;
     }

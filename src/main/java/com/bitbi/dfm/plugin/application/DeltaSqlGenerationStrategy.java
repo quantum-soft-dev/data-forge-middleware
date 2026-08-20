@@ -136,6 +136,7 @@ public class DeltaSqlGenerationStrategy {
      */
     private JsonlChangeRecord mapRecord(ChangeRecord record, TableSchema schema, String tableName) {
         int lineNumber = (int) Math.min(record.getSeq(), Integer.MAX_VALUE);
+        warnNonFiniteDecimals(record, tableName);
         Map<String, Object> key = ValueMapper.toMap(record.getKeyMap());
 
         return switch (record.getOp()) {
@@ -178,5 +179,26 @@ public class DeltaSqlGenerationStrategy {
             }
         }
         return filtered;
+    }
+
+    /**
+     * A decimal cell this pipeline cannot store under its declared type is rendered as SQL NULL
+     * rather than aborting the batch's SQL (issue #215). PostgreSQL {@code numeric} holds
+     * {@code NaN} and {@code +/-Infinity}; {@code new BigDecimal} used to throw on all three, and
+     * the throw reached the queue rather than this row -- so one such cell cost Bit BI the whole
+     * batch. Logged at DEBUG per record because a CDC workload writing these produces one per
+     * change: the rate lives on {@code delta.parquet.non-finite-decimals}, and the Parquet writers
+     * log the per-table summary.
+     */
+    private void warnNonFiniteDecimals(ChangeRecord record, String tableName) {
+        if (!log.isDebugEnabled()) {
+            return;
+        }
+        for (Map.Entry<String, com.bitbi.dfm.delta.grpc.v2.Value> cell : record.getDataMap().entrySet()) {
+            if (ValueMapper.isNonFiniteDecimal(cell.getValue())) {
+                log.debug("Table {} column {} at seq {}: non-finite decimal rendered as SQL NULL",
+                        tableName, cell.getKey(), record.getSeq());
+            }
+        }
     }
 }

@@ -489,6 +489,7 @@ public class BatchParquetFinalizationService {
                 String tableName = entry.getKey();
                 Claim claim = claimsByTable.get(tableName);
                 DeltaParquetWriter.FileWriteResult result = entry.getValue();
+                metrics.nonFiniteDecimalsDegraded(result.nonFiniteDecimals());
                 try {
                     OptionalLong expectedRows = expectedRowCount(segments, tableName);
                     if (expectedRows.isPresent() && result.rowCount() != expectedRows.getAsLong()) {

@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +41,41 @@ class ParquetCheckpointWriterTest {
 
     @TempDir
     Path tempDir;
+
+    /**
+     * PostgreSQL {@code numeric} holds {@code NaN} and {@code ±Infinity} and the extractor sends
+     * them; Parquet DECIMAL cannot represent any of them. Before #215 the parse threw out of the
+     * writer, `CheckpointService` caught it per table, and the table spent a
+     * {@code materialize_attempts} towards #149's permanent give-up — so one such cell cost the
+     * table its snapshot every night, for ever. The file must be written, the cell must be NULL,
+     * and the count must come back so the caller can report it.
+     */
+    @Test
+    void nonFiniteDecimalIsWrittenAsNullAndCounted() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("numeric_edge", "numeric(10,2)", true)),
+                List.of("id"), List.of());
+
+        List<Map<String, Value>> rows = new ArrayList<>();
+        for (String token : new String[]{"Infinity", "-Infinity", "NaN"}) {
+            Map<String, Value> row = new LinkedHashMap<>();
+            row.put("id", intVal(rows.size() + 1));
+            row.put("numeric_edge", decVal(token));
+            rows.add(row);
+        }
+        Map<String, Value> finite = new LinkedHashMap<>();
+        finite.put("id", intVal(4));
+        finite.put("numeric_edge", decVal("12.50"));
+        rows.add(finite);
+
+        Path out = tempDir.resolve("non-finite.parquet");
+        long degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema, rows,
+                Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(3L, degraded, "one per non-finite cell, and only those");
+        assertTrue(Files.size(out) > 0, "the file is written rather than the table skipped");
+    }
 
     @Test
     void writesTypedParquetCoercingValuesByDeclaredType() throws Exception {

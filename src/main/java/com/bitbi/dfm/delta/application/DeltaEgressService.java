@@ -114,10 +114,11 @@ public class DeltaEgressService {
                 return;
             }
             byte[] parquet;
+            java.util.concurrent.atomic.AtomicLong nonFinite = new java.util.concurrent.atomic.AtomicLong();
             try {
                 parquet = metrics.timeEgressPhase("write",
                         () -> DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords,
-                                parquetProperties.rowGroupBytes()));
+                                parquetProperties.rowGroupBytes(), nonFinite));
             } catch (RuntimeException e) {
                 // One poison table (data the declared schema cannot render) must not wedge the
                 // queue: without this the whole segment stays pending and the sweep retries it
@@ -129,6 +130,7 @@ public class DeltaEgressService {
                         table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
                 return;
             }
+            metrics.nonFiniteDecimalsDegraded(nonFinite.get());
             metrics.timeEgressPhase("upload", () -> storage.uploadDelta(
                     segment.getSiteId(), table, segment.getFirstSeq(),
                     segment.getLastSeq(), parquet));

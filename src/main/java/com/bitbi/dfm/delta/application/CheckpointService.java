@@ -984,10 +984,15 @@ public class CheckpointService {
             Path snapshot = createScratchFile(siteId);
             ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_TABLE);
             try {
+                // Captured rather than returned through timeCheckpointPhase so the phase keeps
+                // being timed as a Runnable: which overload times a phase is incidental to this
+                // change, and CheckpointServiceTest pins the shape as part of the #111 phase guard.
+                java.util.concurrent.atomic.AtomicLong nonFinite = new java.util.concurrent.atomic.AtomicLong();
                 metrics.timeCheckpointPhase("parquet", () ->
-                        ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
+                        nonFinite.set(ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
                                 dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
-                                lease));
+                                lease)));
+                metrics.nonFiniteDecimalsDegraded(nonFinite.get());
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
