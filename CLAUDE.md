@@ -511,6 +511,42 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
+  the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
+  cell as NULL and returns a tally so the WARN and
+  `delta.parquet.unrepresentable-decimals` can fire; that only worked when the column was nullable.
+  `ParquetSchemaMapper.toAvroSchema` — the **checkpoint** schema — unioned with null only for a
+  nullable column, so a `NOT NULL` one became a REQUIRED Parquet field, parquet-avro threw
+  `"Null-value for required field"` *before* the tally came back, `CheckpointService` recorded an
+  opaque `tables.unmaterialized{reason=parquet_failed}` that never mentions decimals, the snapshot
+  key was detached (a 404 for Bit BI, Parquet Export and the Delta Sync download) and one
+  `materialize_attempts` was spent, deterministically, until the row gave up permanently (#149).
+  `toDeltaAvroSchema` already forced every declared column nullable, so the delta and completed-batch
+  artifacts were unaffected — **checkpoint-only**.
+  **Option 1 of the ticket**, not 2 or 3: every checkpoint column is a `[null, T]` union with a null
+  default, the declared constraint notwithstanding, sharing one `nullableColumn` helper with the
+  delta mapper so the two artifacts cannot disagree the way they did. Option 2 (union only the
+  decimal columns) is ruled out by a bare `numeric NOT NULL`, which maps to Avro STRING, not to a
+  decimal logical type, yet is still degraded to NULL by `coerceValue` (the wire value, not the
+  destination). Option 3 (skip the row) would have been the SQL-path treatment of a degraded *key*,
+  and is the wrong shape here: a folded `UPDATE` with no prior `INSERT` seeds the row from its key
+  columns plus the carried change, so a declared `NOT NULL` varchar can be legitimately absent —
+  nothing about decimals — and refusing that row would drop it from the snapshot. The constraint is
+  therefore not carried at all rather than carried until it fails; a consumer that needs the source
+  constraint reads it from the schema it submitted, not from the Parquet field's repetition. The
+  gzipped CSV retired by #113 never carried nullability either.
+  Tests first: the two halves of the hazard (degradation; a `NOT NULL` decimal) had each been
+  covered and never met — every #215 case declared the column nullable, every non-nullable decimal
+  in the class was only ever fed a finite value. Four writer tests now put them in one row (scaled
+  `numeric(12,2) NOT NULL` with `NaN` and with a malformed token; bare `numeric NOT NULL` with
+  `Infinity`; a folded row missing a `NOT NULL` varchar) and require the file, the tally and a NULL
+  cell; a mapper test requires every checkpoint field to be a nullable union, and a comparison test
+  requires the checkpoint and delta schemas to agree field-for-field on the declared columns.
+  Mutation: restoring the `if (column.nullable())` branch fails those. No REST, gRPC, proto, DTO,
+  migration, configuration-key, metric-name, S3-key or frontend change; the Parquet schema of a
+  checkpoint snapshot is the consumer-visible contract, and it is now the same nullable-union rule
+  the other two artifacts already had. See `docs/delta-client-v2-guide.md` ("Schema JSON / type
+  mapping", "A value the column type cannot hold").
 - retire-sql-regeneration: The SQL regeneration path is gone, because it had never worked end to
   end and repairing it would have repaired a path that can serve no live batch (issue #190,
   folding #200 — the two were one piece of work: #190's transaction refusal fired first and #200's

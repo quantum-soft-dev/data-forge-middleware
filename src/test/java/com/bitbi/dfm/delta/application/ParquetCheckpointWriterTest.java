@@ -159,6 +159,157 @@ class ParquetCheckpointWriterTest {
         assertTrue(Files.size(out) > 0);
     }
 
+    /**
+     * The degradation and the {@code NOT NULL} declaration are the two halves of one hazard, and
+     * before #237 they had never met in a test: every degradation case above declares its decimal
+     * column nullable, while the non-nullable decimals elsewhere in this class are only ever fed
+     * finite values. A {@code NOT NULL} column used to be mapped to a bare Avro type, i.e. a
+     * REQUIRED Parquet field, so the NULL #215 writes for a non-finite cell made parquet-avro throw
+     * {@code "Null-value for required field"} out of {@link ParquetCheckpointWriter#writeParquet} —
+     * before the tally was returned, so the WARN and both
+     * {@code delta.parquet.unrepresentable-decimals} counters were lost too, and the table took
+     * exactly the outcome #215 was opened to remove.
+     */
+    @Test
+    void nonFiniteDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(12,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> degradedRow = new LinkedHashMap<>();
+        degradedRow.put("id", intVal(1));
+        degradedRow.put("price", decVal("NaN"));
+        Map<String, Value> finiteRow = new LinkedHashMap<>();
+        finiteRow.put("id", intVal(2));
+        finiteRow.put("price", decVal("12.50"));
+
+        Path file = tempDir.resolve("not-null-non-finite.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(degradedRow, finiteRow), Long.MAX_VALUE, ROW_GROUP_BYTES,
+                TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount(), "the tally is returned rather than lost to a throw");
+        assertEquals(0L, degraded.malformedCount());
+        assertTrue(Files.size(file) > 0, "the table keeps its snapshot");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            assertNull(first.get("price"), "the unrepresentable cell is NULL, not the row's absence");
+            assertEquals(1L, first.get("id"), "and the rest of the row survives");
+            assertEquals(new BigDecimal("12.50"), reader.read().get("price"),
+                    "the other rows of the same column are unaffected");
+        }
+    }
+
+    /**
+     * The malformed half of the same hazard: a token {@link BigDecimal} cannot parse degrades to
+     * NULL exactly like a non-finite one (#215), so a {@code NOT NULL} column used to cost the
+     * table its snapshot for that route as well. It stays counted apart, since only this one is a
+     * client defect.
+     */
+    @Test
+    void malformedDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(12,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("price", decVal("12,50"));
+
+        Path file = tempDir.resolve("not-null-malformed.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.malformedCount(), "counted as a client defect");
+        assertEquals(0L, degraded.nonFiniteCount());
+        assertTrue(Files.size(file) > 0, "the table keeps its snapshot");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertNull(reader.read().get("price"), "the unparseable cell is NULL, not a lost row");
+        }
+    }
+
+    /**
+     * A bare {@code numeric NOT NULL} — an ordinary PostgreSQL declaration — is the case that rules
+     * out unioning "the decimal columns" alone: it maps to Avro <b>STRING</b>, not to a decimal
+     * logical type (rounding would be silent, see
+     * {@code bareNumericWithoutScaleMapsToStringToAvoidRounding}), yet a {@code NaN} token in it is
+     * still degraded to NULL by {@code coerceValue}, which keys on the wire value and not on the
+     * destination. A fix aimed at decimal-typed fields would leave this one throwing.
+     */
+    @Test
+    void nonFiniteInANotNullBareNumericColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("amount", "numeric", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("amount", decVal("Infinity"));
+
+        Path file = tempDir.resolve("not-null-bare-numeric.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount());
+        assertTrue(Files.size(file) > 0, "a string-typed destination is degraded too, so it must tolerate NULL");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertNull(reader.read().get("amount"),
+                    "the STRING destination is NULL, which a REQUIRED string field would have refused");
+        }
+    }
+
+    /**
+     * The second route to a null cell in a {@code NOT NULL} column, and the reason the constraint is
+     * one the snapshot was never in a position to keep: {@link ChangelogFold} seeds a row whose
+     * {@code UPDATE} has no prior {@code INSERT} in the fold with its <em>key columns plus the
+     * carried change</em>, so a folded row can legitimately lack a declared column altogether —
+     * {@code toRecord} then reads {@code null} for it. Nothing about decimals is involved; the
+     * REQUIRED field cost the table its snapshot here too.
+     */
+    @Test
+    void aFoldedRowMissingANotNullColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("name", "varchar(255)", false),
+                col("price", "numeric(12,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> partial = new LinkedHashMap<>();   // an UPDATE with no prior INSERT
+        partial.put("id", intVal(1));
+        partial.put("price", decVal("3.00"));
+
+        Path file = tempDir.resolve("partial-row.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(partial), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount(),
+                "an absent column is not a degraded cell and must not be counted as one");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord row = reader.read();
+            assertNull(row.get("name"), "the absent column is a null cell, not a lost row");
+            assertEquals(new BigDecimal("3.00"), row.get("price"));
+        }
+    }
+
     @Test
     void writesTypedParquetCoercingValuesByDeclaredType() throws Exception {
         TableSchema schema = new TableSchema(List.of(
