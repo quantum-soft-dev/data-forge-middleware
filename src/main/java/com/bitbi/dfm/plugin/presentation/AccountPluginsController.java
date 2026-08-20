@@ -805,7 +805,18 @@ public class AccountPluginsController {
     @DeleteMapping("/{pluginId}/generations/{generationId}")
     @Operation(
         summary = "Delete SQL generation",
-        description = "Deletes a SQL generation and its S3 file. Requires confirmation."
+        description = """
+                Deletes a SQL generation and its S3 file. Requires confirmation.
+
+                **Delete + generate re-serves the batch to a client that already fetched it.**
+                Re-creating the SQL (POST generate-sql) writes a row with a new created_at, so a
+                /sql-changes client whose `since` cursor already passed the batch receives its
+                SQL a second time — and the generated SQL is not idempotent. A cursor still
+                behind the batch receives it once, correctly. For a batch the client has already
+                fetched, use reinit instead. Generate also only re-creates SQL for a batch above
+                the plugin's current delta baselines: after a reinit re-captured them, an older
+                segment-backed batch renders no statements.
+                """
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Generation deleted"),

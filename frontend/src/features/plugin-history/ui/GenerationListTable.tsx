@@ -14,7 +14,6 @@ import {
 } from '@/shared/ui/ui/table'
 import { Button } from '@/shared/ui/ui/button'
 import { severityTokens } from '@/shared/ui/tokens';
-import { Badge } from '@/shared/ui/ui/badge'
 import { Skeleton } from '@/shared/ui/ui/skeleton'
 import {
   ChevronLeft,
@@ -97,7 +96,6 @@ export function GenerationListTable({
             <TableHead className="text-right">INS/UPD/DEL</TableHead>
             <TableHead className="text-right">Size</TableHead>
             <TableHead className="text-right">Duration</TableHead>
-            <TableHead>Status</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -130,13 +128,6 @@ export function GenerationListTable({
               </TableCell>
               <TableCell className="text-right">
                 {formatDuration(generation.generationDurationMs)}
-              </TableCell>
-              <TableCell>
-                {generation.superseded ? (
-                  <Badge variant="neutral">Superseded</Badge>
-                ) : (
-                  <Badge variant="success" dot>Active</Badge>
-                )}
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex justify-end gap-1">

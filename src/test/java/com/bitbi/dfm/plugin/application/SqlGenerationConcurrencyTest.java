@@ -534,6 +534,59 @@ class SqlGenerationConcurrencyTest {
     }
 
     @Nested
+    @DisplayName("Semaphore Queueing")
+    class SemaphoreQueueing {
+
+        @Test
+        @DisplayName("a second caller waits on the semaphore and the queue gauge reads it")
+        void shouldQueueSecondCallerOnTheSemaphore() throws Exception {
+            // The non-zero pin for sql.generation.semaphore.queue.size. It used to live on the
+            // retired regenerateForBatch path (#190 deleted that test with the method); the
+            // property — a caller that cannot get a permit is visible on the gauge while it
+            // waits — belongs to generateSqlForBatch just the same. Long timeout: this asserts
+            // queueing, not that a clock expires (issue #119).
+            SqlGenerationService service = createService(1, 120);
+
+            CountDownLatch holdPermit = new CountDownLatch(1);
+            CountDownLatch firstHoldsPermit = new CountDownLatch(1);
+
+            UUID batchId1 = UUID.randomUUID();
+            UUID batchId2 = UUID.randomUUID();
+            Long pluginId1 = 1L;
+            Long pluginId2 = 2L;
+
+            // Block at the first statement after acquireSemaphore so the permit is
+            // held without depending on S3 / CSV work ever running.
+            when(accountPluginRepository.findById(pluginId1)).thenAnswer(invocation -> {
+                firstHoldsPermit.countDown();
+                if (!holdPermit.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("first holder was not released");
+                }
+                return Optional.of(mock(AccountPlugin.class));
+            });
+
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            try {
+                Future<?> first = executor.submit(() -> service.generateSqlForBatch(batchId1, pluginId1));
+                assertThat(firstHoldsPermit.await(5, TimeUnit.SECONDS))
+                        .as("first generateSqlForBatch should hold the semaphore").isTrue();
+
+                Future<?> second = executor.submit(() -> service.generateSqlForBatch(batchId2, pluginId2));
+                awaitSemaphoreQueueSize(1);
+
+                assertThat(second.isDone())
+                        .as("second generateSqlForBatch should still be waiting on the semaphore").isFalse();
+
+                holdPermit.countDown();
+                first.get(5, TimeUnit.SECONDS);
+            } finally {
+                holdPermit.countDown();
+                executor.shutdownNow();
+            }
+        }
+    }
+
+    @Nested
     @DisplayName("Semaphore Metrics")
     class SemaphoreMetrics {
 

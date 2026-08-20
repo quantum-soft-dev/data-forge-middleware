@@ -9,7 +9,6 @@
 
 import { useState, useCallback } from 'react'
 import { Button } from '@/shared/ui/ui/button'
-import { Checkbox } from '@/shared/ui/ui/checkbox'
 import { Trash2 } from 'lucide-react'
 import {
   GenerationListTable,
@@ -29,9 +28,8 @@ export function PluginHistoryWidget({
   pluginId,
   accountId,
 }: PluginHistoryWidgetProps) {
-  // Pagination and filters
+  // Pagination
   const [page, setPage] = useState(0)
-  const [includeSuperseded, setIncludeSuperseded] = useState(false)
 
   // Modal state
   const [viewingGeneration, setViewingGeneration] =
@@ -50,7 +48,10 @@ export function PluginHistoryWidget({
     accountId,
     page,
     size: 20,
-    includeSuperseded,
+    // The superseded model died with the retired regeneration path (#190): no row was ever
+    // superseded and nothing writes the flag any more, so there is nothing to include. The
+    // server keeps accepting the parameter (recorded decision on #190).
+    includeSuperseded: false,
   })
 
   const downloadMutation = useDownloadSqlFile()
@@ -103,26 +104,7 @@ export function PluginHistoryWidget({
   return (
     <div className="space-y-6">
       {/* Header with actions */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="include-superseded"
-              checked={includeSuperseded}
-              onCheckedChange={(checked) => {
-                setIncludeSuperseded(checked === true)
-                setPage(0)
-              }}
-            />
-            <label
-              htmlFor="include-superseded"
-              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-            >
-              Show superseded generations
-            </label>
-          </div>
-        </div>
-
+      <div className="flex items-center justify-end">
         <Button
           variant="destructive"
           size="sm"

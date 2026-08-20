@@ -409,15 +409,22 @@ the admin API: **delete** the generation (`DELETE .../generations/{generationId}
 which removes the S3 file and frees the batch's one-generation slot), then **generate**
 (`POST .../generate-sql` with the batch id — segment-backed Delta batches are supported).
 
-**Caveat — the new SQL is re-delivered to lagging cursors only in the safe direction.** The new
+**Caveat — delete + generate re-serves the batch to a client that already fetched it.** The new
 generation gets a new `created_at`, and `/sql-changes` serves rows by that timestamp against the
 client's `since` cursor. A client whose cursor has **not yet** passed the batch simply receives
-the corrected SQL. A client whose cursor **already passed** the batch will receive that batch's
-SQL a **second time** — and the generated SQL is plain `INSERT`/`UPDATE`/`DELETE` with no
+the corrected SQL once. A client whose cursor **already passed** the batch will receive that
+batch's SQL a **second time** — and the generated SQL is plain `INSERT`/`UPDATE`/`DELETE` with no
 `ON CONFLICT`, so applying it twice duplicates rows or violates primary keys. For a batch the
 client has already fetched, do not use delete + generate: use **reinit**
 (`POST /api/v1/account/plugins/bit-bi/reinit`), which resets the baselines and has the client
 re-download `/files`.
+
+**Second limit — generate only re-creates SQL for a batch above the plugin's current delta
+baselines.** `DeltaSqlGenerationStrategy` emits only records with `seq` above the captured
+baseline, so after a reinit re-captured the baselines, delete + generate on an **older**
+segment-backed batch renders zero statements and the batch settles as "No changes" — the deleted
+SQL is not recoverable through this path. If generate produces nothing where SQL existed before,
+the answer is again **reinit**.
 
 ---
 

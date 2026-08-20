@@ -774,10 +774,14 @@ public class PluginAdminController {
                     - Regenerating a batch's SQL from scratch: delete, then POST generate-sql
                     - Cleaning up old generation records
 
-                    **Delete + generate re-delivers to lagging cursors only.** The new row gets a
-                    new created_at, so a /sql-changes client whose `since` cursor already passed
-                    the batch receives its SQL a second time — and the generated SQL is not
-                    idempotent. For a batch the client has already fetched, use reinit instead.
+                    **Delete + generate re-serves the batch to a client that already fetched it.**
+                    The new row gets a new created_at, so a /sql-changes client whose `since`
+                    cursor already passed the batch receives its SQL a second time — and the
+                    generated SQL is not idempotent. A cursor still behind the batch receives it
+                    once, correctly. For a batch the client has already fetched, use reinit
+                    instead. Generate also only re-creates SQL for a batch above the plugin's
+                    current delta baselines: after a reinit re-captured them, an older
+                    segment-backed batch renders no statements.
 
                     **Requires confirmation:** Set confirm=true to proceed with deletion.
                     """

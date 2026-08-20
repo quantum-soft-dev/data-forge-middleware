@@ -2,7 +2,7 @@
  * BatchSqlTable Component
  *
  * Table displaying batches with their SQL generation status.
- * Allows generating, viewing, regenerating, and deleting SQL for batches.
+ * Allows generating, viewing, and deleting SQL for batches.
  */
 
 import { Database, Eye, Trash2, Plus, Loader2, Info } from 'lucide-react'

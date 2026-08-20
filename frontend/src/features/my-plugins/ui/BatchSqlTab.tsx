@@ -280,10 +280,12 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
             <AlertDialogDescription>
               Delete SQL generation for batch from <strong>{selectedBatch?.siteDomain}</strong>?
               <br /><br />
-              This will permanently delete the SQL file. You can generate it again afterwards —
-              note that the new SQL gets a new timestamp, so a Bit BI client whose cursor already
-              passed this batch will receive its SQL a second time. If the client has already
-              fetched this batch, use Reinitialize instead.
+              This will permanently delete the SQL file. Generate can re-create it only while the
+              batch is above the plugin&apos;s current baselines — after a reinitialize, older
+              batches generate nothing. Re-created SQL gets a new timestamp, so a Bit BI client
+              whose cursor already passed this batch will receive its SQL a second time. If the
+              client has already fetched this batch, or Generate produces nothing, use
+              Reinitialize instead.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

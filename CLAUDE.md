@@ -558,10 +558,33 @@ pages/{feature}/            # Route pages
   `@Operation` descriptions, the delete dialog in the SQL tab): the new row gets a new
   `created_at`, so a client whose `since` cursor already passed the batch receives its SQL a
   second time — and the SQL is not idempotent — so for an already-fetched batch the answer is
-  `reinit`. Pre-existing behaviour of that path, not new. No migration, gRPC, proto,
-  configuration-key, S3-key, TanStack-Query-key or route-path change beyond the two removed REST
-  routes. See `docs/bitbi-integration.md`, `docs/cr-bitbi-delta-sql.md`,
-  `docs/020-sql-generation-optimization.md`.
+  `reinit`. Pre-existing behaviour of that path, not new.
+  **Review round 1 corrected the caveat itself before anything else** — the bold Swagger lead
+  said "re-delivers to lagging cursors only", the exact inverse of its own body (re-delivery of
+  the non-idempotent SQL hits precisely the cursor that **already passed** the batch; a lagging
+  one receives it once, correctly), and the owner delete `@Operation` had no caveat at all while
+  this entry claimed both carried it. It also named the **second limit** of delete+generate,
+  now documented beside the first: generate renders only records above the plugin's current
+  delta baselines, so after a reinit re-captured them an older segment-backed batch renders
+  nothing, settles as "No changes" with no Generate button, and the deleted SQL is unrecoverable
+  through the UI — the delete dialog and both guides say so and point at reinit. The concurrency
+  test was hardened on six axes (spy verifies scoped to the test's account and
+  `clearInvocations`, since a `@MockitoSpyBean` records since context refresh over a global
+  queue; the backlog retired by one UPDATE instead of rendering it; the persist→mark window made
+  harmless by creating the activation only after the mark, so a claim in the window takes the
+  #175 skip branch; `max-concurrent=2` pinned by `@TestPropertySource` instead of inherited; the
+  barrier failure named instead of sneaky-thrown as an S3 error; a bounded `awaitTermination`).
+  `markAsSuperseded` is deleted too — an inviting documented mutator for a model nothing reads
+  is a trap — and the admin history page drops its "Show superseded" checkbox and
+  Superseded/Active badge (frontend only; the server keeps accepting `includeSuperseded`).
+  `sql.generation.semaphore.queue.size` kept its only non-zero pin by moving the queueing test
+  onto the surviving `generateSqlForBatch` path. One pre-existing finding was traced to the
+  findings inbox (#242) rather than fixed: the adopt path's loser still logs
+  `SQL_GENERATION_COMPLETED` with its own just-deleted `s3Key` and double-increments
+  `sql.generation.statements.*` — since #164, made visible by this ticket's determinism.
+  No migration, gRPC, proto, configuration-key, S3-key, TanStack-Query-key or route-path change
+  beyond the two removed REST routes. See `docs/bitbi-integration.md`,
+  `docs/cr-bitbi-delta-sql.md`, `docs/020-sql-generation-optimization.md`.
 - followup-declares-its-files: A follow-up ticket states what it will touch, so a collision is read
   rather than inferred (issue #216, filed from the backlog pass that untangled #190/#200). **A
   keyword search finds a duplicate and finds a collision only if somebody runs it**: #200 was a
