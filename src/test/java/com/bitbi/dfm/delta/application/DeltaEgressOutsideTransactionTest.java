@@ -6,6 +6,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
@@ -54,7 +55,8 @@ class DeltaEgressOutsideTransactionTest {
     void setUp() {
         service = new DeltaEgressService(segmentRepository, changelogSegmentService,
                 siteSchemaService, storage, new DeltaMetrics(new SimpleMeterRegistry()),
-                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7);
+                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7,
+                new ApplicationShutdownSignal());
         segment = ChangelogSegment.create(SITE, UUID.randomUUID(), 1L, 1L, 1L,
                 "hash", "changelog/key", "DELTA", null);
     }

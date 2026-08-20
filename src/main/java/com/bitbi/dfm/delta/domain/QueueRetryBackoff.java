@@ -77,11 +77,4 @@ public final class QueueRetryBackoff {
     public boolean isPoisoned(int attempts) {
         return attempts >= poisonAfterAttempts;
     }
-
-    /**
-     * @return the configured attempt count at which a segment is reported as poisoned
-     */
-    public int poisonAfterAttempts() {
-        return poisonAfterAttempts;
-    }
 }

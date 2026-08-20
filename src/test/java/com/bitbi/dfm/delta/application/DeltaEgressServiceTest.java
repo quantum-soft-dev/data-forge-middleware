@@ -6,6 +6,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -58,6 +60,7 @@ class DeltaEgressServiceTest {
     private S3CheckpointStorage storage;
 
     private SimpleMeterRegistry registry;
+    private ApplicationShutdownSignal shutdownSignal;
     private DeltaEgressService service;
 
     private ChangelogSegment segment;
@@ -65,9 +68,10 @@ class DeltaEgressServiceTest {
     @BeforeEach
     void setUp() {
         registry = new SimpleMeterRegistry();
+        shutdownSignal = new ApplicationShutdownSignal();
         service = new DeltaEgressService(segmentRepository, changelogSegmentService,
                 siteSchemaService, storage, new DeltaMetrics(registry),
-                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7);
+                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7, shutdownSignal);
         segment = ChangelogSegment.create(SITE_ID, UUID.randomUUID(), 1L, 2L, 2L,
                 "hash", "changelog/key", "DELTA", null);
     }
@@ -136,13 +140,13 @@ class DeltaEgressServiceTest {
      * ({@link DeltaEgressService#egressSegment}) still throws — that is what the deferral reads.
      */
     @Test
-    void shouldDeferAFailingSegmentInsteadOfEndingTheDrain() {
+    void shouldDeferAFailingSegmentAndEndThisDrain() {
         LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
-        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
-        when(changelogSegmentService.readRecords("changelog/key"))
-                .thenThrow(new RuntimeException("object unreadable"));
+        failingSegmentIsClaimed();
 
-        assertTrue(service.egressNextPending(), "the drain keeps going");
+        assertFalse(service.egressNextPending(),
+                "this drain stops after one deferral; the next wake claims another site's head, "
+                        + "which is what keeps a systemic failure from walking the whole backlog");
 
         ArgumentCaptor<LocalDateTime> retryAt = ArgumentCaptor.forClass(LocalDateTime.class);
         verify(segmentRepository).deferEgress(eq(segment.getId()), retryAt.capture());
@@ -158,14 +162,52 @@ class DeltaEgressServiceTest {
     @Test
     void shouldReportASegmentPoisonedOnceItPassesTheAttemptThreshold() {
         ReflectionTestUtils.setField(segment, "egressAttempts", 6);
-        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
-        when(changelogSegmentService.readRecords("changelog/key"))
-                .thenThrow(new RuntimeException("object unreadable"));
+        failingSegmentIsClaimed();
 
-        assertTrue(service.egressNextPending());
+        assertFalse(service.egressNextPending());
 
         assertEquals(1.0, registry.get("delta.egress.segments.poisoned").counter().count());
         assertEquals(1.0, registry.get("delta.egress.errors").counter().count());
+    }
+
+    /**
+     * #162's rule, review round 1: a failure because the pod is closing is the process ending, not
+     * the segment failing — the S3 client may already be gone — so it records no verdict.
+     */
+    @Test
+    void shouldNotSpendAnAttemptWhenThePodIsShuttingDown() {
+        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
+        when(changelogSegmentService.readRecords("changelog/key"))
+                .thenThrow(new RuntimeException("S3 client is closed"));
+        shutdownSignal.onApplicationEvent(null);
+
+        assertFalse(service.egressNextPending());
+
+        verify(segmentRepository, never()).deferEgress(any(), any());
+        assertEquals(0.0, registry.get("delta.egress.errors").counter().count());
+    }
+
+    /**
+     * The work landed on another replica while this attempt was failing (the claim lock is released
+     * before the work since #164), so the deferral matches no row — and reporting it would send an
+     * operator after a segment that is already done (review round 1).
+     */
+    @Test
+    void shouldNotReportADeferralThatMatchedNoRow() {
+        failingSegmentIsClaimed();
+        when(segmentRepository.deferEgress(any(), any())).thenReturn(0);
+
+        assertFalse(service.egressNextPending());
+
+        assertEquals(0.0, registry.get("delta.egress.errors").counter().count());
+        assertEquals(0.0, registry.get("delta.egress.segments.poisoned").counter().count());
+    }
+
+    private void failingSegmentIsClaimed() {
+        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
+        when(segmentRepository.deferEgress(any(), any())).thenReturn(1);
+        when(changelogSegmentService.readRecords("changelog/key"))
+                .thenThrow(new RuntimeException("object unreadable"));
     }
 
     /** Both new series exist from startup, so an alert can predate the first failure. */

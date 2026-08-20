@@ -456,7 +456,9 @@ another site. Before that, since the claim is the globally oldest per-site head 
 one poison batch meant no site anywhere had SQL generated. The cooldown starts at
 `plugin.sql-generation.delta-retry-delay-seconds` and doubles per attempt to 64x; past
 `plugin.sql-generation.delta-poison-after-attempts` the WARN becomes an ERROR naming the segment
-and `sql.generation.delta.segments.poisoned` moves. **No attempt ceiling discards the work** — a
+and `sql.generation.delta.segments.poisoned` moves. A drain stops after **one** deferral, so a
+systemic failure cannot walk the whole backlog in a single wake, and a failure while the pod is
+shutting down spends no attempt at all (#162). **No attempt ceiling discards the work** — a
 skip would lose that batch's SQL permanently, with no route to re-drive it, which is what #212
 had just stopped — so the horizon stays the one described above. A plugin reinit clears the retry
 state with the marker. See `docs/delta-client-v2-guide.md` ("One failing segment does not stall

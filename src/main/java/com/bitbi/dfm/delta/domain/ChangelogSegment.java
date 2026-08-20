@@ -76,9 +76,13 @@ public class ChangelogSegment {
 
     /**
      * Consecutive failed delta-Parquet egress attempts (issue #243). Advisory: it drives the
-     * backoff and the poisoned reporting, never a decision to discard work, and it is written by a
-     * targeted {@code UPDATE ... SET egress_attempts = egress_attempts + 1} rather than by saving
-     * this entity, so two replicas attempting the same segment both count.
+     * backoff and the poisoned reporting, never a decision to discard work.
+     *
+     * <p>A failure is <em>recorded</em> by a targeted
+     * {@code UPDATE ... SET egress_attempts = egress_attempts + 1}, not by saving this entity, so
+     * two replicas attempting the same segment both count. The column is still carried by the
+     * entity, so the success path's whole-entity {@code save} of a claim-time snapshot can write a
+     * stale value back — issue #245's marker clobber, which these four columns join.</p>
      */
     @Column(name = "egress_attempts", nullable = false)
     private int egressAttempts;

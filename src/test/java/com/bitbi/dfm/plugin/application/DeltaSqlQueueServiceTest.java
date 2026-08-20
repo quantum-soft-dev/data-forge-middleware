@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -21,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -68,14 +70,16 @@ class DeltaSqlQueueServiceTest {
     private Site site;
     private AccountPlugin activation;
     private SimpleMeterRegistry meterRegistry;
+    private ApplicationShutdownSignal shutdownSignal;
 
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
+        shutdownSignal = new ApplicationShutdownSignal();
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                meterRegistry, 60, 7);
+                meterRegistry, 60, 7, shutdownSignal);
 
         site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -221,10 +225,12 @@ class DeltaSqlQueueServiceTest {
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
+        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(1);
 
         assertThat(queueService.processNextPending())
-                .as("the drain keeps going, on to another site's head")
-                .isTrue();
+                .as("this drain stops after one deferral; the next wake claims another site's head, "
+                        + "which is what keeps a systemic failure from walking the whole backlog")
+                .isFalse();
 
         ArgumentCaptor<LocalDateTime> retryAt = ArgumentCaptor.forClass(LocalDateTime.class);
         verify(segmentRepository).deferPluginSql(eq(segment.getId()), retryAt.capture());
@@ -243,11 +249,56 @@ class DeltaSqlQueueServiceTest {
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
+        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(1);
 
-        assertThat(queueService.processNextPending()).isTrue();
+        assertThat(queueService.processNextPending()).isFalse();
 
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isEqualTo(1.0);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("a failure while the pod is shutting down spends no attempt (#162's rule)")
+    void shouldNotSpendAnAttemptWhenThePodIsShuttingDown() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new RuntimeException("data source is closed"));
+        shutdownSignal.onApplicationEvent(null);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        verify(segmentRepository, never()).deferPluginSql(any(), any());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("a deferral that matched no row is not reported (#243, review round 1)")
+    void shouldNotReportADeferralThatMatchedNoRow() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new RuntimeException("boom"));
+        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(0);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("the #164 guard is loud rather than read as this segment's failure")
+    void shouldRefuseToDrainInsideATransaction() {
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThatThrownBy(() -> queueService.processNextPending())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("#164");
+            verify(segmentRepository, never()).deferPluginSql(any(), any());
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
     }
 
     @Test

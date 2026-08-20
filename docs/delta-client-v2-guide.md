@@ -2165,6 +2165,14 @@ cooldown starts at `delta.egress.retry-delay-seconds` /
 `plugin.sql-generation.delta-retry-delay-seconds` (60 s) and doubles per attempt to 64x, the shape
 `delta.batch-parquet.retry-delay-seconds` already uses.
 
+**A drain stops after one deferral** (review round 1). Continuing would walk the whole backlog
+during a *systemic* failure — an S3 outage, the database refusing connections — spending an attempt
+and a cooldown on every pending segment of every site, which both drowns the poisoned signal and
+delays recovery by the accumulated cooldowns. One deferral per wake is enough to unblock the queue:
+the deferred segment is inside its cooldown, so the next wake claims a different site's head and
+drains it to the end. Wakes are frequent — every `BATCH_COMPLETED`, every plugin reinit, plus the
+60 s sweep — so this costs latency measured in seconds, not in sweeps.
+
 **The deferral is per segment, not per site.** The backoff applies to the candidate row only; the
 head-of-line rule is untouched, so the failing segment still blocks *its own* site's later
 segments. That is deliberate — a site's SQL generations and delta files publish in `first_seq`
@@ -2179,6 +2187,14 @@ repairable stall into permanent, unrecoverable loss of that batch's SQL, which i
 #212 had just stopped. The attempt count therefore escalates **reporting** instead of taking a
 verdict, and the one bounded ending stays batch retention (`delta.retention.segments.deleted-pending`).
 
+**Two failures are exempt and still end the drain rather than being deferred.** The
+memory-pressure refusal (below), and a failure while the pod is shutting down — the S3 client or
+the data source may already be closed, so that is the process ending rather than the segment
+failing, and #162's rule is that such an ending records no verdict. The #164 "no transaction across
+S3" guard is checked *before* the queue claims anything, for the same reason: swallowed into a
+deferral, a caller that wrapped the drain in a transaction would read as "every segment in the
+queue is poison data" instead of as the wiring mistake it is.
+
 **What the escalation looks like.** Every failed attempt increments
 `sql.generation.delta.segments.deferred` (SQL) or `delta.egress.errors` (egress — the
 `sql.generation.errors` twin that side never had) and logs a WARN. Once a segment has failed
@@ -2189,6 +2205,15 @@ ERROR naming the segment, its site, its seq range and its next retry, and
 as a **census, not an arrival rate**: the same segment counts again on every retry — past the cap
 once an hour — until the cause is fixed or the batch is deleted. All four series are registered at
 zero, so an alert can predate the first failure.
+
+**How to read them**: one segment climbing is that segment's data or object. *Many* segments
+poisoned at once is systemic — the bucket, the database, a ceiling — and the ERROR line says so.
+An outage that outlasts the whole doubling window (roughly an hour) does reach the threshold for
+every site's head, which is the honest reading rather than a false promise: at that length it is an
+incident either way, and nothing is lost — every one of those segments is still queued, and each
+retries once its cooldown ends. A deferral whose UPDATE matches no row — the work landed on another
+replica while this attempt was failing, or the row is gone — is not reported at all, so the
+counters never send an operator after a segment that is already done.
 
 **The memory-pressure refusal is exempt** and still ends the drain. `MemoryPressureAbortedException`
 (#181) is a reading of the *pod's* heap taken before any work, so every segment claimed while it

@@ -562,6 +562,29 @@ pages/{feature}/            # Route pages
   REST, gRPC, proto, DTO, configuration-key **rename**, S3-key or frontend change. See
   `docs/delta-client-v2-guide.md` ("One failing segment does not stall the other sites", Metrics),
   `docs/020-sql-generation-optimization.md`.
+  **Review round 1 changed the blast radius, not the design.** A drain now stops after **one**
+  deferral: continuing would walk the whole backlog during a *systemic* failure — an S3 outage, the
+  database refusing connections, sustained semaphore contention — spending an attempt and a cooldown
+  on every pending segment of every site, drowning the poisoned signal and delaying recovery by the
+  accumulated cooldowns; one deferral per wake unblocks the queue, since the deferred segment is
+  inside its cooldown and the next wake claims a different site's head (and wakes are per
+  `BATCH_COMPLETED`, not only the 60 s sweep). A failure while the pod is **shutting down** spends
+  no attempt either — the S3 client or the data source may already be closed, so it is the process
+  ending, #162's rule again. The #164 "no transaction across S3" guard is checked **before** the
+  queue claims anything, because swallowed into a deferral a caller that wrapped the drain in a
+  transaction would read as "every segment in the queue is poison data" rather than as the wiring
+  mistake it is. A deferral whose UPDATE matches **no row** (the work landed on another replica
+  while this attempt was failing, or a reinit/retention moved it) is not reported at all, so the
+  counters never send an operator after a segment that is already done. The guide gained the reading
+  rule this implies — one segment climbing is that segment's data, many at once is systemic — and
+  the honest caveat that an outage outlasting the whole doubling window does reach the threshold for
+  every site's head. Two smaller ones: the ERROR names the configuration key that sets the
+  threshold, and the unused `poisonAfterAttempts()` accessor is gone. **The entity Javadoc's claim
+  was corrected rather than left standing**: the deferral write is targeted, but the new columns are
+  still carried by the entity, so the success path's whole-entity `save` can write a stale
+  `*_attempts`/`*_retry_at` back — #245's clobber now has four more columns, which is recorded there
+  as evidence with the note that its targeted-UPDATE option is the one these two statements already
+  demonstrate.
 - signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
   identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
   by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings

@@ -5,6 +5,7 @@ import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -55,7 +56,7 @@ class DeltaSqlQueueOutsideTransactionTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, mock(PluginDeltaBaselineRepository.class),
-                mock(PluginAuditService.class), new SimpleMeterRegistry(), 60, 7);
+                mock(PluginAuditService.class), new SimpleMeterRegistry(), 60, 7, new ApplicationShutdownSignal());
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);

@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -15,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -71,6 +73,7 @@ public class DeltaSqlQueueService {
     private final PluginAuditService pluginAuditService;
     private final MeterRegistry meterRegistry;
     private final QueueRetryBackoff backoff;
+    private final ApplicationShutdownSignal shutdownSignal;
 
     public DeltaSqlQueueService(ChangelogSegmentRepository segmentRepository,
                                 SiteRepository siteRepository,
@@ -82,7 +85,8 @@ public class DeltaSqlQueueService {
                                 @Value("${plugin.sql-generation.delta-retry-delay-seconds:60}")
                                 int retryDelaySeconds,
                                 @Value("${plugin.sql-generation.delta-poison-after-attempts:7}")
-                                int poisonAfterAttempts) {
+                                int poisonAfterAttempts,
+                                ApplicationShutdownSignal shutdownSignal) {
         this.segmentRepository = segmentRepository;
         this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -93,6 +97,7 @@ public class DeltaSqlQueueService {
         this.backoff = new QueueRetryBackoff(
                 "plugin.sql-generation.delta-retry-delay-seconds", retryDelaySeconds,
                 "plugin.sql-generation.delta-poison-after-attempts", poisonAfterAttempts);
+        this.shutdownSignal = shutdownSignal;
         // Registered at zero so an alert on either can predate the first failure.
         meterRegistry.counter(DEFERRED_METRIC).increment(0);
         meterRegistry.counter(POISONED_METRIC).increment(0);
@@ -105,6 +110,17 @@ public class DeltaSqlQueueService {
      *         queue is empty
      */
     public boolean processNextPending() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            // The #164 guard, checked before anything is claimed (issue #243, review round 1).
+            // SqlGenerationService refuses the same way, but from inside the try that turns a
+            // failure into this segment's deferral — so a caller that wrapped the drain in a
+            // transaction would read as "every segment in the queue is poison data" rather than as
+            // the wiring mistake it is.
+            throw new IllegalStateException(
+                    "Refusing to drain the delta-SQL queue inside an active transaction: the "
+                            + "generation waits on the semaphore and then talks to S3, which would "
+                            + "hold that transaction's connection throughout (issue #164).");
+        }
         List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(
                 1, LocalDateTime.now(ZoneOffset.UTC));
         if (claimed.isEmpty()) {
@@ -144,7 +160,13 @@ public class DeltaSqlQueueService {
             throw e;
         } catch (RuntimeException e) {
             deferSegment(segment, site, e);
-            return true;
+            // Stop this drain after one deferral (issue #243, review round 1): continuing would
+            // walk the whole backlog during a systemic failure — a bucket outage, sustained
+            // semaphore contention — spending an attempt and a cooldown on every pending segment
+            // of every site, drowning the poisoned signal and delaying recovery by the accumulated
+            // cooldowns. One deferral per wake unblocks the queue, since the deferred segment is
+            // now in its cooldown and the next wake claims a different site's head.
+            return false;
         }
 
         segment.markPluginSqlProcessed();
@@ -173,16 +195,31 @@ public class DeltaSqlQueueService {
      * ahead of the line logged here.</p>
      */
     private void deferSegment(ChangelogSegment segment, Site site, RuntimeException failure) {
+        if (shutdownSignal.isShuttingDown()) {
+            // The process ending, not the segment failing — #162's rule: such an ending records no
+            // verdict. The segment stays pending and the next process claims it.
+            log.info("Delta SQL generation for segment {} ended with the shutdown; it stays pending "
+                    + "and spends no attempt", segment.getId());
+            return;
+        }
         int attempts = segment.getPluginSqlAttempts() + 1;
         LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
-        segmentRepository.deferPluginSql(segment.getId(), retryAt);
+        if (segmentRepository.deferPluginSql(segment.getId(), retryAt) == 0) {
+            // The marker predicate refused: the work landed on another replica while this attempt
+            // was failing, or a reinit/retention moved the row. Reporting it would send an operator
+            // after a segment that is already done (review round 1).
+            log.debug("Not deferring segment {}: it is no longer pending plugin SQL", segment.getId());
+            return;
+        }
         meterRegistry.counter(DEFERRED_METRIC).increment();
         if (backoff.isPoisoned(attempts)) {
             meterRegistry.counter(POISONED_METRIC).increment();
             log.error("Bit BI delta SQL failed {} times for segment {} of site {} (batch {}, seq {}..{}) "
                             + "— the segment stays queued and is retried at {}, and its site's later "
                             + "segments wait behind it. Nothing discards it: fix the cause, reinit the "
-                            + "plugin, or delete the batch",
+                            + "plugin, or delete the batch. If this fires for many segments at once "
+                            + "the cause is systemic, not the data; "
+                            + "plugin.sql-generation.delta-poison-after-attempts sets the threshold",
                     attempts, segment.getId(), site.getId(), segment.getBatchId(),
                     segment.getFirstSeq(), segment.getLastSeq(), retryAt, failure);
         } else {
