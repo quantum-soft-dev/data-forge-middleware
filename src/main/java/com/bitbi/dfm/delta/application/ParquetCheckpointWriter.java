@@ -80,9 +80,10 @@ public final class ParquetCheckpointWriter {
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross {@code maxBytes}
      * @throws ScratchBudgetExceededException     when the shared scratch directory has no room
      */
-    public static void writeParquet(Path output, String tableName, TableSchema tableSchema,
+    public static DecimalDegradeTally writeParquet(Path output, String tableName, TableSchema tableSchema,
                                     Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes,
                                     ScratchLease lease) {
+        DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
                         new FileOutputFile(output, maxBytes, lease))
@@ -93,11 +94,13 @@ public final class ParquetCheckpointWriter {
                 .withCompressionCodec(CODEC)
                 .build()) {
             for (Map<String, Value> row : rows) {
-                writer.write(toRecord(avro, tableSchema, row));
+                writer.write(toRecord(avro, tableSchema, row, nonFinite));
             }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
         }
+        warnDegraded(tableName, nonFinite);
+        return nonFinite;
     }
 
     /**
@@ -126,23 +129,45 @@ public final class ParquetCheckpointWriter {
      * Coerce a wire value to the (possibly nullable-union) field schema's declared type.
      */
     static Object coerceValue(Value value, Schema fieldSchema) {
-        return coerce(value, branch(fieldSchema));
+        return coerceValue(value, fieldSchema, new DecimalDegradeTally());
     }
 
     /**
-     * Widen declared decimal columns whose data does not fit their declared precision (a client
-     * schema understating its data would otherwise fail the whole file: "Cannot encode decimal
-     * with precision N as max precision M"). The declared scale is kept — values are rescaled to
-     * it on write regardless — and the precision grows to the widest value actually present
-     * (measured after that rescale). Shared by the checkpoint and delta writers.
+     * As {@link #coerceValue(Value, Schema)}, counting the cells this pipeline cannot store under
+     * their declared type (issue #215).
      *
-     * <p>The rows are traversed <b>once</b>, and not at all when no column declares a decimal, so a
-     * caller may hand over a lazily iterated view of its state instead of a materialized list.</p>
+     * <p>The single coercion seam both Parquet writers share, which is why the tally is threaded
+     * here rather than duplicated in each. A non-finite {@code numeric} -- {@code NaN},
+     * {@code +/-Infinity}, all legal in PostgreSQL -- has no Parquet DECIMAL representation, so the
+     * cell is written NULL; counting it here is what keeps that from being silent, since the value
+     * is otherwise indistinguishable in the file from a column that really was NULL.</p>
      *
-     * @param recordSchema the schema typed from the declared columns
-     * @param rows         each row's column → wire value
-     * @return the same schema, or a rebuilt one with widened decimal columns
+     * @param value       the wire value
+     * @param fieldSchema the Avro field schema to coerce into
+     * @param nonFinite   tally incremented once per degraded cell
+     * @return the coerced value, or {@code null} when absent, NULL or unrepresentable
      */
+    static Object coerceValue(Value value, Schema fieldSchema, DecimalDegradeTally nonFinite) {
+        if (value != null && ValueMapper.isUnrepresentable(value)) {
+            // NaN, +/-Infinity and a token BigDecimal cannot parse are all written NULL, whatever
+            // the destination (issue #215).
+            //
+            // A destination-aware rule preserves more -- a bare `numeric` maps to Avro STRING and
+            // could carry the token verbatim, `double precision` maps to DOUBLE and holds NaN
+            // natively -- and is deliberately NOT done here. It was tried in review round 2 and
+            // taken back out: it made the Parquet writers disagree with the SQL path about the same
+            // cell (checkpoint keeps the value, delta stream nulls it), and the coercion changes it
+            // required narrowed a non-finite into a bigint column as 0. Its own ticket.
+            if (ValueMapper.isMalformedDecimal(value)) {
+                nonFinite.malformed();
+            } else {
+                nonFinite.nonFinite();
+            }
+            return null;
+        }
+        return coerce(value, branch(fieldSchema), nonFinite);
+    }
+
     static Schema widenDecimalsToFit(Schema recordSchema, Iterable<Map<String, Value>> rows) {
         Map<String, LogicalTypes.Decimal> declared = new java.util.LinkedHashMap<>();
         for (Schema.Field field : recordSchema.getFields()) {
@@ -163,7 +188,11 @@ public final class ParquetCheckpointWriter {
                 if (java == null) {
                     continue;
                 }
-                needed.merge(column.getKey(), toBigDecimal(java)
+                BigDecimal measurable = toBigDecimal(java);
+                if (measurable == null) {
+                    continue;
+                }
+                needed.merge(column.getKey(), measurable
                         .setScale(column.getValue().getScale(), RoundingMode.HALF_UP).precision(), Math::max);
             }
         }
@@ -216,23 +245,46 @@ public final class ParquetCheckpointWriter {
         return model;
     }
 
-    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, Map<String, Value> row) {
+    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, Map<String, Value> row,
+                                          DecimalDegradeTally nonFinite) {
         GenericRecord record = new GenericData.Record(avro);
         for (ColumnDefinition column : tableSchema.columns()) {
             Schema fieldType = branch(avro.getField(column.name()).schema());
-            record.put(column.name(), coerce(row.get(column.name()), fieldType));
+            Value cell = row.get(column.name());
+            record.put(column.name(), coerceValue(cell, fieldType, nonFinite));
         }
         return record;
     }
 
-    private static Object coerce(Value value, Schema type) {
+    private static Object coerce(Value value, Schema type,
+                                 DecimalDegradeTally nonFinite) {
         Object java = value == null ? null : ValueMapper.toJava(value);
         if (java == null) {
             return null;
         }
         LogicalType logical = type.getLogicalType();
         if (logical instanceof LogicalTypes.Decimal decimal) {
-            return toBigDecimal(java).setScale(decimal.getScale(), RoundingMode.HALF_UP);
+            BigDecimal exact = toBigDecimal(java);
+            if (exact == null) {
+                // Present, but with no DECIMAL representation: stored NULL and reported by the
+                // caller's tally rather than thrown (issue #215). Reached by a non-finite double or
+                // an unparseable string bound for a decimal column -- routes the wire-case check
+                // cannot see, which is why the guard lives at the destination type.
+                // Classified by the token, not by the Java type it arrived as: a legal PostgreSQL
+                // NaN sent as a string_value is still non_finite, and calling it "malformed" would
+                // page someone to chase a client defect that does not exist.
+                if (java instanceof CharSequence text
+                        && ValueMapper.isNonFiniteDecimal(Value.newBuilder()
+                                .setDecimalValue(text.toString()).build())) {
+                    nonFinite.nonFinite();
+                } else if (java instanceof Double || java instanceof Float) {
+                    nonFinite.nonFinite();
+                } else {
+                    nonFinite.malformed();
+                }
+                return null;
+            }
+            return exact.setScale(decimal.getScale(), RoundingMode.HALF_UP);
         }
         if (logical instanceof LogicalTypes.Date) {
             return toLocalDate(java);
@@ -249,6 +301,26 @@ public final class ParquetCheckpointWriter {
             case BYTES -> ByteBuffer.wrap(toBytes(java));
             default -> java.toString();
         };
+    }
+
+    /**
+     * One line per rendered table, not per cell: the workload that produces these writes them
+     * continuously (a PostgreSQL numeric column cycling through NaN / +/-Infinity), so a line per
+     * value would bury the log. The two reasons are reported separately because their remedies
+     * differ -- see {@link DecimalDegradeTally}.
+     */
+    static void warnDegraded(String tableName, DecimalDegradeTally tally) {
+        if (tally.nonFiniteCount() > 0) {
+            log.warn("Table {}: {} decimal cell(s) written as NULL -- the value is NaN or "
+                    + "+/-Infinity, which Parquet DECIMAL cannot represent (issue #215)",
+                    tableName, tally.nonFiniteCount());
+        }
+        if (tally.malformedCount() > 0) {
+            log.warn("Table {}: {} decimal cell(s) written as NULL -- the token could not be parsed "
+                    + "as a decimal at all, which is a client defect rather than a value this "
+                    + "pipeline cannot store (issue #215)",
+                    tableName, tally.malformedCount());
+        }
     }
 
     private static Schema branch(Schema schema) {
@@ -274,9 +346,32 @@ public final class ParquetCheckpointWriter {
         };
     }
 
+    /**
+     * The decimal a column of that declared type can hold, or {@code null} when the value has no
+     * DECIMAL representation at all (issue #215, review round 1).
+     *
+     * <p>The check belongs here rather than at the wire type: a non-finite value reaches a decimal
+     * column by more routes than {@code decimal_value}. Protobuf {@code double} carries
+     * {@code NaN} and {@code +/-Infinity} natively, and a {@code string_value} of {@code "NaN"} is
+     * equally possible, so guarding only the decimal token left both of those throwing out of the
+     * writer and costing the table its file -- the exact blast radius #215 exists to close.</p>
+     */
     private static BigDecimal toBigDecimal(Object java) {
         if (java instanceof BigDecimal bd) {
             return bd;
+        }
+        if (java instanceof Double d && !Double.isFinite(d)) {
+            return null;
+        }
+        if (java instanceof Float f && !Float.isFinite(f)) {
+            return null;
+        }
+        if (java instanceof CharSequence text) {
+            try {
+                return new BigDecimal(text.toString());
+            } catch (NumberFormatException e) {
+                return null;
+            }
         }
         return new BigDecimal(java.toString());
     }

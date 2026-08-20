@@ -1095,6 +1095,54 @@ volume was busy, so:
   something this budget introduced, but it is the reason to size the key with headroom rather than
   to the exact worst case.
 
+### A value the column type cannot hold
+
+PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
+`decimal_value` tokens. Parquet DECIMAL is a scaled integer with no representation for any of them,
+so the cell is written **NULL** — and it is written NULL **whatever the destination column is**,
+which is a deliberate simplification rather than a necessity.
+
+Two declared types could keep the value: a bare `numeric`/`decimal` maps to Avro STRING precisely so
+the value travels in its on-the-wire form, and `double precision` maps to Avro DOUBLE, which carries
+`NaN` natively. Storing it there was tried and taken back out — it made the Parquet writers and the
+Bit BI SQL path disagree about the same cell (the checkpoint keeping a value the delta stream
+nulled), and the coercion it needed narrowed a non-finite into a `bigint` column as `0`. One rule
+for every column is what ships; keeping more is its own piece of work.
+
+The loss is reported rather than silent. Each rendered table logs one WARN naming the table and how
+many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the rate, tagged by
+`reason`:
+
+- **`non_finite`** — `NaN` or `±Infinity`. Legal at the source; nothing to repair in this pipeline.
+- **`malformed`** — a token `BigDecimal` cannot parse at all. A client defect somebody has to fix.
+  Before this change it threw and was therefore loud, so it keeps a signal of its own rather than
+  disappearing into the same NULL as the legal case.
+
+Read the series as **cells, not rows or files**: a row with two such columns counts twice, and the
+same source cell is counted again by every *Parquet* consumer that renders it — per-segment egress,
+the completed-batch artifact, the nightly checkpoint — because each writes a separate artifact in
+which that cell is separately NULL. The Bit BI SQL path is **not** a feeder: it renders the same
+cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total number of places
+one source cell was degraded.
+
+**In the Bit BI SQL stream a key column is the exception — the record is skipped, not degraded.** A
+value that cannot be represented cannot address a row, so the WHERE clause would render as
+`col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
+the mirror silently diverged. Such a record is dropped with a WARN and
+`sql.generation.delta.records.skipped.unrepresentable_key`.
+
+That exception is **the SQL path's alone.** Both Parquet writers write a key cell NULL like any
+other, so several such rows are indistinguishable in a checkpoint snapshot or a completed-batch
+artifact, and the baseline can contain a row the delta stream will never address. Consumers reading
+those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
+
+**What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
+server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
+such cell threw out of the mapper, and because every consumer catches per table it cost the table's
+whole delta file, failed its checkpoint snapshot (spending a `materialize_attempts` towards the
+permanent give-up above) and stopped the batch's Bit BI SQL. Storing the value truthfully would mean
+widening the column's type, which changes the Parquet schema every consumer reads.
+
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
 unset**, which is the shipped default and how the key is sized before it is turned on
@@ -1444,7 +1492,7 @@ ownership, admin routes require ROLE_ADMIN):
 
 | Endpoint | Method | Access | Purpose |
 |---|---|---|---|
-| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags; 404 until the client first connects |
+| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags and `nextCheckpointBuildAt` (when the scheduled build next runs — #213); 404 until the client first connects |
 | `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with the `hasParquet` presence flag (`hasCsv` removed — #113) |
 | `.../delta/checkpoints/{table}/download?format=parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click. `format=csv` answers `410 Gone`: the snapshot is no longer produced |
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while an attempt is queued, running or pending retry (`PENDING`/`BUILDING`/`FAILED`); `404` when absent or abandoned after `max-attempts` (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
@@ -1507,6 +1555,64 @@ root-level stable layout. While an attempt is queued, running or awaiting retry 
 `409`; a missing or abandoned artifact returns `404`. Tables without a declared/renderable schema
 fail independently and do not block other tables. A finished batch that predates the feature is
 enqueued by the first click (`409`) and downloads on the next one.
+
+**A site whose first checkpoint is not due yet (issue #213)**: `CheckpointScheduler.buildCheckpoints`
+(`delta.checkpoint.cron`, `0 0 2 * * *` by default) is the only producer of checkpoints apart from an
+operator-forced rebuild, so a site whose FULL_SNAPSHOT commits at 15:45 has none until 02:00. That is
+the design, but the lag model could not say it: lag is `lastAppliedSeq − lastCheckpointSeq`, and
+against a pointer of zero every record the site has ever applied counts as backlog — a freshly
+ingested site read as **"Elevated — 1,155 records behind checkpoint"**, with the site-list pill amber
+beside it.
+
+`lastCheckpointSeq == 0` is now a **state of its own** on every sync surface. It is the canonical
+"no checkpoint": the initial `site_sync_state` row carries it, a history wipe and a re-baseline reset
+to it, and `CheckpointService` applies the same test before seeding a build from a frame. The Delta
+Sync tab shows a neutral **"No checkpoint yet"** chip, keeps the number but labels it *records
+awaiting the first checkpoint*, and **replaces** the lag track rather than recolouring it — the
+track's bands and its 1k/10k ticks are a scale of "how far behind", and no position on it is true for
+a site with nothing to be behind. In its place goes the moment the wait ends, from the new
+`nextCheckpointBuildAt` on the projection — labelled *next* scheduled build, since it is recomputed
+per request and stops coinciding with the first the moment that one passes: the next occurrence of
+`delta.checkpoint.cron` (declared in `application.yml`, `DELTA_CHECKPOINT_CRON`), resolved
+in the JVM's own zone (the zone `@Scheduled` uses), null when the schedule names none — the sweep can
+be switched off with Spring's `-`, and promising a time the payload does not carry would be the same
+class of lie. `CheckpointScheduleService` and the `@Scheduled` tick share one constant, so the answer
+cannot drift from the tick that produces it.
+
+Three limits are deliberate. **Stalled still wins**: a client that has not updated its sync state for
+a day is both more actionable and independent of whether a checkpoint exists. **A site with nothing
+applied is not in this state at all**: an all-zero row — what a wipe leaves, and what a re-baseline
+requested for a client that never connected creates — is on neither of `CheckpointScheduler`'s work
+lists (segments, unmaterialized `checkpoints` rows), so promising it a build would be a promise
+nothing keeps, and there is nothing waiting either. And the state says *no checkpoint exists*, not
+*the build is healthy*: it **cannot age itself out**, because nothing persisted says how long a site
+has been waiting — `site_sync_state` has no creation timestamp, and every whole-site abort
+(`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`, a deferral) leaves
+no `checkpoints` row either, so a first build that has failed thirty nights carries byte-for-byte the
+payload of a site ingested this afternoon. It is deliberately **not** bounded by lag magnitude: a
+first FULL_SNAPSHOT is unbounded, so that bound would report the largest sites as critical on day one,
+which is the defect this removes. What is done instead — both surfaces keep the count, and the card
+names the build the state should not outlive ("Still missing a day later? The build is not
+completing" — a day rather than "after that", because the sweep walks sites serially and a build
+deferred behind the fold budget of #178 is a designed miss that repairs itself next tick) — with the
+durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
+`delta.checkpoint.tables.given-up`, `delta.seq.lag`); separating the two payloads needs persisted
+state and a migration, filed as **#224**. Building a checkpoint on the ingest path when a site's first
+snapshot commits was the alternative and was **not** taken: it moves a whole-site fold onto the
+commit that the nightly cron exists to keep off it, and it would have to queue behind the same fold
+budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to introduce, since
+what was wrong was the reporting rather than the schedule.
+
+**The Upload History File column is the same defect, not an egress delay (issue #214, folded in)**:
+the **File** pill on a delta batch serves the unified completed-batch artifact of 036
+(`GET .../delta/batches/{batchId}/tables/{table}/parquet`), which `BatchParquetFinalizationService`
+enqueues on `BATCH_COMPLETED`. Since 029 a batch *is* a session, so a CONTINUOUS session holds its
+batch `IN_PROGRESS` for hours and there is by design nothing to link to for its whole life, however
+promptly the per-segment egress worker runs (it is woken by the commit itself — the sweep interval is
+only a backstop). The column showed a bare em dash, which reads as "the file is missing". It now says
+**"After session"** with the reason on hover, and only for a session still in progress: nothing
+enqueues an artifact for a session that failed, so promising one there would be a promise nothing
+keeps.
 
 **Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
 server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily
@@ -2222,6 +2328,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
+| `delta.parquet.unrepresentable-decimals{reason=non_finite\|malformed}` | `delta_parquet_unrepresentable_decimals_total{reason=...}` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:

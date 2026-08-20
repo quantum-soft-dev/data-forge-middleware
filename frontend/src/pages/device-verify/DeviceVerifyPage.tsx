@@ -29,6 +29,10 @@ import {
   useVerifyInfo,
   useApproveAuthorization,
   useDenyAuthorization,
+  formatUserCode,
+  isCompleteUserCode,
+  describeVerifyFailure,
+  USER_CODE_LENGTH,
 } from '@/features/device-auth';
 import { AlertTriangle, CheckCircle2, XCircle, Smartphone, Loader2, Server } from 'lucide-react';
 
@@ -36,10 +40,18 @@ type PageState = 'input' | 'confirm' | 'success' | 'denied' | 'expired' | 'error
 
 export default function DeviceVerifyPage() {
   const search = useSearch({ from: '/device-verify' }) as { code?: string };
-  const userCodeFromUrl = search?.code || '';
+  // The direct URL is printed by a client TUI and pasted by hand, so the code in
+  // it may not arrive in the presentation the backend stores; look up what the
+  // field would have produced, not the raw parameter (#211).
+  const userCodeFromUrl = formatUserCode(search?.code || '');
 
   const [userCode, setUserCode] = useState(userCodeFromUrl);
-  const [pageState, setPageState] = useState<PageState>(userCodeFromUrl ? 'confirm' : 'input');
+  // Only a complete code goes straight to confirmation: an incomplete one
+  // cannot be looked up, and a confirm state with no info to show renders
+  // neither the details nor the spinner — a blank page (#211).
+  const [pageState, setPageState] = useState<PageState>(
+    isCompleteUserCode(userCodeFromUrl) ? 'confirm' : 'input'
+  );
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [createdSiteName, setCreatedSiteName] = useState<string | null>(null);
 
@@ -50,7 +62,7 @@ export default function DeviceVerifyPage() {
   if (userCodeFromUrl && userCodeFromUrl !== syncedUrlCode) {
     setSyncedUrlCode(userCodeFromUrl);
     setUserCode(userCodeFromUrl);
-    setPageState('confirm');
+    setPageState(isCompleteUserCode(userCodeFromUrl) ? 'confirm' : 'input');
     setErrorMessage('');
     setCreatedSiteName(null);
   }
@@ -61,7 +73,9 @@ export default function DeviceVerifyPage() {
     isLoading: isLoadingVerifyInfo,
     error: verifyInfoError,
     refetch: refetchVerifyInfo,
-  } = useVerifyInfo(userCode, { enabled: userCode.length >= 8 && pageState !== 'success' && pageState !== 'denied' });
+  } = useVerifyInfo(userCode, {
+    enabled: isCompleteUserCode(userCode) && pageState !== 'success' && pageState !== 'denied',
+  });
 
   // Mutations
   const approveMutation = useApproveAuthorization();
@@ -72,19 +86,10 @@ export default function DeviceVerifyPage() {
   if (verifyInfoError && verifyInfoError !== reportedError) {
     setReportedError(verifyInfoError);
 
-    const status = (verifyInfoError as { response?: { status?: number } })?.response?.status;
-    const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string; message?: string } } })
-      ?.response?.data?.error_description ||
-      (verifyInfoError as { response?: { data?: { message?: string } } })?.response?.data?.message;
-
     setPageState('error');
-    setErrorMessage(
-      // 400 = Authorization already processed (approved or denied) - show error, not success
-      status === 400
-        ? 'This authorization code has already been processed. Please start a new authorization from your device.'
-        // 404 = Not found or expired
-        : errorMsg || 'Device code not found or expired. Please check the code and try again.'
-    );
+    // The global toast is suppressed for this call, so this message is the only
+    // report of the failure and has to distinguish a bad code from a bad day.
+    setErrorMessage(describeVerifyFailure(verifyInfoError));
   }
 
   // Update page state when verify info is loaded
@@ -94,7 +99,7 @@ export default function DeviceVerifyPage() {
 
   const handleCodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (userCode.length >= 8) {
+    if (isCompleteUserCode(userCode)) {
       setErrorMessage('');
       refetchVerifyInfo();
     }
@@ -123,15 +128,6 @@ export default function DeviceVerifyPage() {
         ?.response?.data?.error_description;
       setErrorMessage(errorMsg || 'Failed to deny authorization. Please try again.');
     }
-  };
-
-  const formatUserCode = (code: string) => {
-    // Format as XXXX-1234
-    const cleaned = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (cleaned.length <= 4) {
-      return cleaned;
-    }
-    return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}`;
   };
 
   const handleUserCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,7 +190,7 @@ export default function DeviceVerifyPage() {
                     value={userCode}
                     onChange={handleUserCodeChange}
                     placeholder="XXXX-1234"
-                    maxLength={9}
+                    maxLength={USER_CODE_LENGTH}
                     className="text-center text-2xl tracking-widest font-mono"
                     autoFocus
                   />
@@ -205,7 +201,7 @@ export default function DeviceVerifyPage() {
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={userCode.length < 8 || isLoadingVerifyInfo}
+                  disabled={!isCompleteUserCode(userCode) || isLoadingVerifyInfo}
                 >
                   {isLoadingVerifyInfo ? (
                     <>

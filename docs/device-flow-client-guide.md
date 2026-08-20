@@ -99,6 +99,11 @@ This code expires in 15 minutes.
 
 **Tips:**
 - Display `userCode` prominently
+- Print `verificationUriComplete` as well: opening it fills the code in for the
+  operator, so the code never has to be retyped. The parameter survives the
+  Auth0 round trip a cold browser session takes, and the code in it may be given
+  in any case and with or without the separator — the page normalizes it before
+  it looks anything up (issue #211)
 - Consider generating QR code from `verificationUriComplete`
 - Show expiration countdown
 
@@ -682,6 +687,8 @@ api_base_url = "https://dev.dfm.bitbi.io"
 | `expired_token` | Took too long | Restart authorization (15 min limit) |
 | `invalid_grant` | Wrong deviceCode | Check you're using correct code |
 | 401 on Batch API | Expired or invalid access token | Refresh via `POST /api/v1/device/auth/refresh` |
+| A "Resource not found." toast on the verification page, over a flow that then succeeds | Fixed in #211: the page used to look a code up one keystroke before it was complete, and the 404 for that partial code reached the global error toast | Reload the page; on a build that carries #211 it cannot happen |
+| `verificationUriComplete` opened with an empty code field | Fixed in #211: the login redirect dropped the query string | Retype the code; on a build that carries #211 the parameter survives |
 
 ---
 
@@ -690,6 +697,7 @@ api_base_url = "https://dev.dfm.bitbi.io"
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2025-01-12 | Initial release |
+| 1.0.1 | 2026-08-19 | `verificationUriComplete` pre-fills the code again, and a partial code is no longer looked up (issue #211) |
 
 ---
 

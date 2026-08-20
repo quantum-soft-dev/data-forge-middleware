@@ -268,4 +268,44 @@ class ChangelogFoldTest {
         }
         return Value.newBuilder().setStringValue((String) o).build();
     }
+
+    /**
+     * The fold runs before any Parquet writing, so a bare `new BigDecimal` here threw out of
+     * `apply` and aborted the **whole site's** build — a larger blast radius than the per-table skip
+     * #215 set out to remove, and deterministic, so every following night ended the same way with
+     * the pointer and retention frozen. PostgreSQL `numeric` compares NaN equal to itself, which
+     * makes it a usable key (review round 2).
+     */
+    @org.junit.jupiter.api.Test
+    void foldsARowWhoseDecimalKeyIsNonFinite() {
+        com.bitbi.dfm.delta.grpc.v2.ChangeRecord insert = com.bitbi.dfm.delta.grpc.v2.ChangeRecord.newBuilder()
+                .setTable("t").setOp(com.bitbi.dfm.delta.grpc.v2.Op.INSERT).setSeq(1)
+                .putKey("id", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder().setDecimalValue("NaN").build())
+                .putData("v", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder().setIntValue(7).build())
+                .build();
+
+        java.util.Map<String, java.util.Map<String, ChangelogFold.FoldedRow>> state =
+                new java.util.LinkedHashMap<>();
+        ChangelogFold.apply(state, insert);
+
+        org.junit.jupiter.api.Assertions.assertEquals(1, state.get("t").size(),
+                "a NaN key folds as one row instead of throwing out of the build");
+    }
+
+    /** `nan` and `NaN` are the same source row, so they must fold to one identity. */
+    @org.junit.jupiter.api.Test
+    void nonFiniteKeySpellingsFoldToOneIdentity() {
+        java.util.Map<String, java.util.Map<String, ChangelogFold.FoldedRow>> state =
+                new java.util.LinkedHashMap<>();
+        for (String spelling : new String[]{"NaN", "nan"}) {
+            ChangelogFold.apply(state, com.bitbi.dfm.delta.grpc.v2.ChangeRecord.newBuilder()
+                    .setTable("t").setOp(com.bitbi.dfm.delta.grpc.v2.Op.INSERT).setSeq(1)
+                    .putKey("id", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder()
+                            .setDecimalValue(spelling).build())
+                    .putData("v", com.bitbi.dfm.delta.grpc.v2.Value.newBuilder().setIntValue(7).build())
+                    .build());
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(1, state.get("t").size(),
+                "one source row must not fold into two identities");
+    }
 }

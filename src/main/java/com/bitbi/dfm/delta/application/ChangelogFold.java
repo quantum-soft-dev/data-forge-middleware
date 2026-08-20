@@ -224,10 +224,49 @@ public final class ChangelogFold {
             case DOUBLE_VALUE -> "D" + Double.doubleToLongBits(value.getDoubleValue());
             case STRING_VALUE -> "S" + value.getStringValue();
             case BOOL_VALUE -> "L" + value.getBoolValue();
-            case DECIMAL_VALUE -> "M" + new java.math.BigDecimal(value.getDecimalValue()).stripTrailingZeros().toPlainString();
+            case DECIMAL_VALUE -> "M" + normalizeDecimal(value.getDecimalValue());
             case BYTES_VALUE -> "B" + HexFormat.of().formatHex(value.getBytesValue().toByteArray());
             case IS_NULL, V_NOT_SET -> "N";
         };
+    }
+
+    /**
+     * The identity form of a decimal key column, so {@code 1.0} and {@code 1.00} fold as one row.
+     *
+     * <p>A value {@link java.math.BigDecimal} cannot parse keeps the token itself as its identity
+     * (issue #215, review round 2). PostgreSQL {@code numeric} holds {@code NaN} and
+     * {@code ±Infinity} and compares {@code NaN} equal to itself, so it is a usable key — and the
+     * bare parse here threw on every one of them, out of {@code apply}, aborting the <b>whole
+     * site's</b> fold rather than one table. That is a larger blast radius than the per-table skip
+     * this ticket set out to remove, and it is deterministic: every following nightly build ends
+     * the same way, with the pointer and retention frozen.</p>
+     *
+     * <p>The non-finite spellings are canonicalised so a client sending {@code nan} and {@code NaN}
+     * for the same source row does not fold into two identities.</p>
+     */
+    private static String normalizeDecimal(String token) {
+        try {
+            return new java.math.BigDecimal(token).stripTrailingZeros().toPlainString();
+        } catch (NumberFormatException e) {
+            String trimmed = token.trim();
+            try {
+                // BigDecimal rejects surrounding whitespace, so " 1.0" reached this fallback and
+                // folded as its own identity beside "1.0" -- one source row becoming two (review
+                // round 3). Retried trimmed before falling back to the token.
+                return new java.math.BigDecimal(trimmed).stripTrailingZeros().toPlainString();
+            } catch (NumberFormatException stillNotANumber) {
+                // genuinely non-finite or malformed: the token itself is the identity
+            }
+            String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
+                    ? trimmed.substring(1) : trimmed;
+            if (trimmed.equalsIgnoreCase("nan")) {
+                return "NaN";
+            }
+            if (unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf")) {
+                return trimmed.startsWith("-") ? "-Infinity" : "Infinity";
+            }
+            return trimmed;
+        }
     }
 
     private static Map<String, Map<String, FoldedRow>> deepCopy(Map<String, Map<String, FoldedRow>> source) {

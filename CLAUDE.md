@@ -468,6 +468,439 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- non-finite-decimal-null: A `NaN` or `+/-Infinity` arriving in a `numeric` column is written as
+  NULL and reported, instead of costing the table its delta file, its checkpoint snapshot and its
+  Bit BI SQL (issue #215, from the PDE soak on the live stand). PostgreSQL `numeric` holds all three
+  and, since PostgreSQL-data-extractor#86, the extractor sends them as `decimal_value` tokens —
+  where `new BigDecimal("Infinity")` threw. **The ticket's body described one symptom and its
+  comment corrected the scope, which is the part worth keeping**: `ValueMapper` has *three*
+  independent consumers, so the reported "skipping the table's delta file" was the mildest of them.
+  `DeltaEgressService` logged an ERROR, skipped the file and still marked the segment egressed, so
+  it was lost rather than retried; `CheckpointService` recorded
+  `tables.unmaterialized{reason=parquet_failed}`, which spends a `materialize_attempts` and after
+  `delta.checkpoint.max-materialize-attempts` nights gives the table up **permanently** (#149); and
+  `DeltaSqlGenerationStrategy` threw into the SQL queue, so Bit BI never received that batch's SQL.
+  A fourth throw site the ticket did not list — `DeltaParquetWriter`'s decimal-envelope scan — dies
+  the same way, and the three secondary parses are guarded by `java == null`. That was written as
+  "closing the mapper closes every path" and **review proved it false twice** — see the rounds
+  below: the mapper is not the only thing on this path that parses a decimal.
+  **Parquet DECIMAL is a scaled integer with no representation for any of the three**, so the DoD's
+  first branch ("land correctly in parquet") is not available for the declared column type, and its
+  second (reject at ingest) would need an `ErrorCode` in `delta-ingestion.proto` against a shipped
+  Windows client *and* make a legal PostgreSQL row unreplicable. So the cell is stored NULL and the
+  degradation is made loud in three registers, each sized to its own noise floor: one WARN per
+  rendered table naming the table and the count (the workload that produces these writes one every
+  two seconds, so a line per cell would bury the log), per-cell DEBUG in the SQL strategy where the
+  column and seq are known, and **`delta.parquet.unrepresentable-decimals{reason=non_finite|malformed}`**, registered at zero so
+  an alert predates the first occurrence. Read that series as **cells, not rows or files**: a row with
+  two such columns counts twice, and the same source cell is counted again by each consumer that
+  renders it, because each writes a separate artifact in which it is separately NULL.
+  `isNonFiniteDecimal` is deliberately **narrower** than "`toJava` returned null" — a real SQL NULL,
+  an unset value and a *malformed* token all answer false, since the three want different responses
+  from an operator (nothing, nothing, and a client sending nonsense) and a counter that conflates
+  them cannot be alerted on.
+  **What this does not do is stated rather than implied**: `NaN` is not `NULL`, so soak #39's
+  source-vs-server comparison still will not match. This removes the data loss and the silent skip;
+  making the value survive would mean widening the column's Avro type, which changes the Parquet
+  schema Bit BI, Parquet Export and the checkpoint download all read — weighed and not taken.
+  Tests were written first and proven by mutation: with `parseDecimal` put back to
+  `new BigDecimal(token)`, four methods fail across `ValueMapperTest` and
+  `ParquetCheckpointWriterTest`. One incidental correction came from the gate — capturing the
+  checkpoint count had switched `timeCheckpointPhase("parquet", ...)` from the `Runnable` overload
+  to `Supplier`, which `CheckpointServiceTest` pins as part of the #111 phase guard; which overload
+  times a phase is incidental to this change, so the timing shape was restored rather than the guard
+  rewritten. No REST, gRPC, proto, DTO, migration, configuration-key, S3-key or frontend change.
+  **Three review rounds then changed what this ships, and the history is the part worth keeping.**
+  Round 1 found two regressions the fix had introduced: a degraded **key** column rendered
+  `WHERE col = NULL`, which is never true, so a DELETE for a row keyed on a `NaN` numeric (a usable
+  key — PostgreSQL compares `NaN` equal to itself) was emitted, applied, matched nothing and left the
+  Bit BI mirror silently diverged, worse than the throw being removed; such a record is skipped now,
+  loudly. And the guard was keyed on the **wire case**, so a `double_value` NaN — protobuf `double`
+  carries it natively — still threw, i.e. "closing the mapper closes every path" was false.
+  **Round 2 found the fix had a larger blast radius than the bug**: `ChangelogFold.encode` parses
+  decimal keys with a bare `new BigDecimal` and runs *before* any Parquet writing, so a `NaN` key
+  aborted the **whole site's** checkpoint build, deterministically, every night, with the pointer and
+  retention frozen — where the original defect cost one table one file. That guard stays whatever
+  else changes. Round 2 also made the writers destination-aware, keeping the token for a bare
+  `numeric` (Avro STRING) and the double for `double precision` (Avro DOUBLE).
+  **Round 3 found that destination rule had introduced silent corruption** — a non-finite narrowed
+  into a `bigint` wrote `0`, uncounted — and it was **reverted** rather than patched again: two
+  rounds running, a fix here had opened a hole elsewhere on the same coercion path. So the shipped
+  rule is the simple one, NULL for every destination, with the Parquet and SQL paths agreeing; the
+  two column types that could keep the value are a **deferred** piece of work, recorded with that
+  history as its warning. The cost of the revert is stated rather than hidden: `NaN != NULL` now
+  holds for *every* column type, so soak #39's source-vs-server comparison differs on more cells
+  than the destination-aware form would have left.
+  See `docs/delta-client-v2-guide.md` ("A value the column type cannot hold", Metrics).
+- error-toast-once: `setupErrorHandler()` replaces its own interceptor instead of stacking another
+  one behind it, so one API failure produces one toast (issue #225, found by review round 3 on
+  #211/#223). It was the **only** `apiClient.interceptors.*.use(...)` in the application that kept
+  no handle on its registration — both siblings in `shared/api/interceptors.ts` store the id and
+  `eject` it first, precisely because they are called more than once — while `App.tsx` calls all
+  three from **one** `useEffect` keyed on
+  `[isLoading, isAuthenticated, getAccessTokenSilently, logout]`, which re-runs at least twice as
+  `isLoading` falls and `isAuthenticated` rises, with `getAccessTokenSilently` changing identity on
+  top. The new test reproduces the reported count exactly: three registrations, **three** toasts for
+  one 404. **Idempotent registration, not moving the call out of the effect** — the issue asked for
+  that shape and the reason is worth writing down: the effect *must* re-run, since the token getter
+  it installs closes over `isAuthenticated`, so what has to be safe is the registration and not its
+  cadence. **Two consequences fall out of the same line.** The accumulation also scrambled the
+  **order** of the response chain, which is not obvious from the symptom: axios ejects by nulling
+  the slot and registers by appending, and `setupResponseInterceptor` re-registers its 401 handler
+  on every run while the toast handler did not, so from the second run onwards the chain was
+  `[toast#1, 401#2, toast#2]` — the stale toast interceptor running **ahead** of the live refresh
+  handler; it is now always `[401, toast]`, the order `App.tsx` writes. And `initTokenRefresh`,
+  which the issue asked to audit because it is registered from the same effect, needs **nothing**:
+  it registers no interceptor at all, only assigns two module-scope callbacks, so a repeat call
+  overwrites where this one accumulated — `token-refresh.ts` is deliberately untouched.
+  **No test can start red against a property that already holds in one direction**, so the
+  assertion was proven by mutation both ways: with the `eject` removed it reads three toasts, and
+  with the freshly registered id ejected instead of the previous one — "one toast" satisfied by
+  leaving no handler at all — two of the three tests go red. Frontend-only: no backend, REST, gRPC,
+  proto, DTO, migration, configuration-key, metric, S3-key, route or `App.tsx` change, and no doc
+  named this code (the "exactly one toast" claim in `docs/delta-client-v2-guide.md` is about the
+  download pills, whose presign requests suppress the global toast, so it was true throughout and
+  stays true). One side finding was recorded rather than folded in, and two
+  review rounds widened it from one route to **four** — which is the part of this ticket most worth
+  remembering, because it says what the fix does **not** buy. The handler speaks out of turn on
+  every 401 path, and none of the four is about registration count: the `switch` has no `case 401`,
+  so a 401 rejected without a refresh reaches `default:`; a *failed* refresh rejects with the
+  **Auth0 error** rather than the original response, which carries no `.response` and is therefore
+  read as a network failure; that same error carries no `.config` either, so **`suppressErrorToast`
+  is lost** and a caller that deliberately renders its own taxonomy gets the global toast anyway;
+  and a refresh that *succeeds* retries through `apiClient.request(...)`, which **re-enters the
+  whole chain**, so a retry that fails too toasts on the inner request and again on the outer
+  rejection. **The chain order is pinned by a test rather than asserted in prose** (review round 3,
+  which found this entry recording a delivered consequence that nothing held): a 401 whose refresh
+  repairs it must produce **no** toast, which is false the moment the two are registered the other
+  way round — registration count cannot see that, only the two interceptors together can, so it is
+  the one test in this file that wires `setupResponseInterceptor` beside this handler. Round 3 also
+  added `clearErrorHandler()`, the counterpart of `interceptors.ts`'s `clearResponseInterceptor()`:
+  ejecting by a remembered index is safe only while nobody resets the response chain, and a teardown
+  calling `.clear()` restarts the ids at 0, after which a remembered id names whatever now sits in
+  that slot. The second is the ugliest and the fourth is the one that bounds this ticket's claim:
+  on the expired-refresh-token branch `interceptors.ts` stays deliberately silent so the logout
+  redirect is quiet, and this handler fills that silence with "Network error. Please check your
+  connection and try again." — a lie about the user's connection; while the fourth is **two
+  identical toasts for one failure with a correctly registered interceptor**, which is why the PR
+  title claims only that the stacking stops, not that one failure now toasts once. All four
+  contradict the comments in this file asserting a 401 is never toasted here, so **those comments
+  are corrected rather than left standing** (the `AbstractIntegrationTest` precedent of #197): the
+  file enumerates the four routes and names the finding as the open decision, and the test-file
+  header's `suppressErrorToast` claim is narrowed for the same reason. Not fixed here — different
+  mechanisms (two interceptors and a re-entrant chain, not one interceptor registered twice) and
+  what a failed refresh should say is a behaviour decision of its own.
+- fixture-clears-by-batch: The suite's shared-database cleanups clear `changelog_segments` by the
+  relationship the constraint actually uses, not only by `site_id` (issue #226, filed by the
+  `/github-issue-runner` dispatcher when `develop` went red on a change that could not have caused
+  it). `test-data.sql` swept segments by `site_id` and then deleted `batches` by `site_id`, but the
+  constraint standing in the way of the second statement is `changelog_segments_batch_id_fkey`, on
+  **`batch_id`** — and only `site_id` carries `ON DELETE CASCADE`. The two are the same relationship
+  for a segment the application wrote and **different** relationships for one a test wrote, because
+  `ChangelogSegment.create(siteId, batchId, ...)` takes them independently and nothing requires the
+  batch to belong to the site. A segment pairing a site the predicate does not match with a batch
+  the next statement deletes therefore survived the sweep and blocked it — surfacing as a
+  `ScriptStatementFailedException` **inside `@Sql`** in whichever class ran next, so the failure was
+  reported against an innocent test and cost a full investigation each time, the complaint #207 was
+  filed for one layer down. **Both** non-cascading references to
+  `batches` are swept by the relationship their constraint uses, in **three** cleanups:
+  `changelog_segments.batch_id` and — added in review round 1 — `account_plugins.baseline_batch_id`,
+  which is `ON DELETE RESTRICT` (V25) and the only other FK to `batches` without a cascade, so an
+  activation owned by an account outside `%@example.com` blocks the identical statement one
+  constraint over. `test-data.sql`, `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` and
+  `BatchTerminalTransitionLockingIntegrationTest.tearDown` all carry the pair; the third seeds
+  neither today and is fixed anyway, since "safe because nobody writes one yet" is how this sat
+  latent. It is the shape `uploaded_files` already uses two statements earlier for the same
+  constraint-shaped reason.
+  **The rows were real rather than hypothetical, and the ticket asked for their origin before a
+  fix.** Instrumenting the fixture over a full-suite run (a single statement carrying its payload in
+  a cast error — Spring's `ScriptUtils` splits on `;` and does not understand a `DO $$ … $$` block,
+  which is itself worth knowing before anyone puts one in that file) caught segments of
+  `store-02.example.com` pointing at `store-01`'s seeded batch, `first_seq` 1 and 7, keys
+  `delta/{store-02}/segments/{1,7}.pb.gz` — `DeltaSqlQueueRepositoryIntegrationTest.seedSegment`,
+  which passed one `BATCH` constant for both of its sites. It is fixed **at source** as well
+  (`batchOf`, so the batch follows the site), rather than only tolerated: a re-run of the
+  instrumented suite finds no mismatched row anywhere except the one the new guard plants
+  deliberately. Those rows also leaked into 51 other classes' fixtures before their own `@Sql`
+  cleared them, which is the second mechanism the ticket records — `findNextPendingPluginSql` has
+  **no site predicate** (the queue is global, #175), so a leaked pending head is claimed by an
+  assertion in another class that believes it owns the database.
+  **What was deliberately not concluded, and it is the important half**: this change is hardening
+  that closes a proven mechanism, **not** a demonstrated fix for the failures that prompted the
+  ticket. The captured mismatches are between two `%.example.com` sites, which the old sweep still
+  removed, so they explain the cross-class leak but have never been shown to block anything. And a
+  backlog pass on the ticket (comment of 16:08, which this work initially missed by reading the
+  issue without its comments) established the sharper fact: **the fast gate cannot create the
+  blocking row at all**, since `build.gradle.kts` excludes `**/integration/**` by path and no class
+  outside that package persists a site whose domain falls outside `%.example.com` — verified again
+  here, where the only such class is now this ticket's own guard. The originally observed failure
+  was in the fast gate, so it has a mechanism this fix does not address (a row committed by another
+  connection *between* the two statements is the open candidate, and `OR batch_id IN (...)` does
+  nothing for it). Eight fast-gate passes and a full-suite pass did not reproduce it. The fix is therefore justified structurally (the
+  constraint and the `uploaded_files` precedent) and pinned by a guard that **constructs** the
+  blocking row, rather than by a reproduction; the two observed `develop` failures
+  (`DeltaSessionLivenessIntegrationTest`, `DeltaSqlQueueRepositoryIntegrationTest`) are consistent
+  with it but not proof of it. A rate hypothesis is recorded on the ticket rather than acted on:
+  #207 raising the test JVM from 512 MB to 2 GiB removes the memory pressure that evicted cached
+  Spring contexts, so more contexts stay alive against the one shared database.
+  `TestDataFixtureCleanupContractTest` is the leftover-then-clear guard of #119 and #159 — it seeds
+  exactly the blocking row (a site outside `%.example.com` holding a seeded batch), runs the **real**
+  script through `ResourceDatabasePopulator` (the same splitter `@Sql` uses, so it cannot pass
+  against a construct `ScriptUtils` would choke on), and requires the row to be **gone** rather than
+  the script merely to survive, since "it did not throw" passes against a fixture that never had the
+  row. **Two methods, one per constraint**, each mutation-proven against its own: the segment one
+  fails on `changelog_segments_batch_id_fkey` against the unfixed sweep, and
+  `shouldClearActivationReachableOnlyThroughItsBaselineBatch` fails on
+  `fk_account_plugins_baseline_batch` against the account-only one. It lives outside
+  `**/integration/**` so the per-task gate runs it, and removes its own account, site and batch,
+  which the fixture by construction cannot reach — a leaking guard would have become the next #226.
+  The stranded rows hang off a batch the guard creates itself rather than store-01's flagship one
+  (review round 2): the batch-keyed readers — `findByBatchIdOrderByFirstSeq`,
+  `SqlGenerationPersistence.loadBatchData`, `BatchHistoryService` — have no site predicate either, so
+  a batch-parquet build would have replayed a segment whose object was never uploaded and failed an
+  artifact for a batch this class does not own.
+  Test-only — no production code, REST, gRPC, proto, DTO, migration, configuration-key, metric,
+  S3-key or frontend change.
+- first-checkpoint-state: A freshly ingested site stops reading as broken — the two surfaces that
+  reported a scheduled wait as a failure now say what they are waiting for (issue #213, folding
+  **#214**, both from the same PDE QA run). **The ticket's own first task was to establish which of
+  two candidates the Upload History "File" column was, and the answer is candidate 1**: that pill
+  presigns the unified completed-batch artifact of 036
+  (`GET .../delta/batches/{batchId}/tables/{table}/parquet`), which
+  `BatchParquetFinalizationService` enqueues on `BATCH_COMPLETED` — and since 029 a batch *is* a
+  session, so a CONTINUOUS session holds its batch `IN_PROGRESS` for hours and there is **by design**
+  nothing to link to for its whole life. Per-segment egress is not involved and has no defect here
+  (`DeltaSessionCommitTransaction` wakes the worker on the commit itself; `delta.egress.sweep-ms` is
+  only a backstop), so #215 and this ticket do not meet. The column rendered that as a bare em dash,
+  which reads as "the file is missing"; it now says **"After session"** with the reason on hover, and
+  only while the session is `IN_PROGRESS` — nothing enqueues an artifact for a session that failed,
+  so promising one there would be a promise nothing keeps.
+  **The lag surface is the same defect one level up.** `CheckpointScheduler.buildCheckpoints`
+  (`delta.checkpoint.cron`, 02:00) is the only producer of checkpoints apart from a forced rebuild,
+  so a FULL_SNAPSHOT committing at 15:45 cannot have one before the next night — but lag is
+  `lastAppliedSeq − lastCheckpointSeq`, and against a pointer of **zero** every record the site has
+  ever applied is backlog: the QA site read "Elevated — 1,155 records behind checkpoint" with an
+  amber pill beside it in the site list. `lastCheckpointSeq == 0` is now a **state of its own**
+  (`getSyncStatus` → `awaiting-first-checkpoint`), which is the canonical "no checkpoint" already
+  used by the backend — the initial row carries it, a wipe and a re-baseline reset to it, and
+  `CheckpointService` applies the same test before seeding from a frame. The chip is neutral, the
+  number stays with the caption *records awaiting the first checkpoint*, and the lag track is
+  **replaced rather than recoloured**: its bands and its 1k/10k ticks are a scale of "how far
+  behind", and no position on it is true for a site with nothing to be behind. In its place goes the
+  moment the wait ends.
+  That moment is the one backend addition: **`nextCheckpointBuildAt`** on `DeltaSyncStateResponseDto`
+  (both projections — it is the deployment's schedule, not a diagnosis, and the owner is exactly the
+  user staring at a site with no checkpoint, so the `lastRebuildMessage` reasoning of #186 does not
+  apply). New `CheckpointScheduleService` resolves the next occurrence of the cron in the JVM's own
+  zone (the zone `@Scheduled` uses when the annotation names none) and shares **one constant** with
+  the `@Scheduled` tick, so the promised hour cannot drift from the tick that keeps it; Spring's
+  disabled `-`, a blank value and — defensively, since Spring would refuse to start on it — an
+  unparseable expression all answer empty rather than throwing on a request path, and the UI then
+  says only that the build is scheduled. On the frontend the field is `z.string().nullable()
+  .optional().default(null)` for the #186/023-r3 reason: this payload drives the whole Delta Sync
+  tab and must degrade rather than fail the parse.
+  **Three limits are deliberate and all are stated in the guide, two of them corrected in review.**
+  *Stalled still wins* over the pending checkpoint — a client that has not updated its sync state for
+  a day is more actionable and is independent of whether a checkpoint exists. *A site with nothing
+  applied is not in this state at all* (review r1): an all-zero row is what a wipe leaves and what
+  `requestRebaseline` creates for a client that never connected, and such a site is on **neither** of
+  `CheckpointScheduler`'s work lists — segments, unmaterialized `checkpoints` rows — so the promised
+  build is one nothing keeps, and nothing is waiting either. And the state says *no checkpoint
+  exists*, not *the build is healthy*: it **cannot age itself out**, because no persisted fact says
+  how long a site has been waiting — `site_sync_state` has no creation timestamp, and every
+  whole-site abort (`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`,
+  a deferral) leaves no `checkpoints` row either, so thirty failed nights carry byte-for-byte the
+  payload of an afternoon's ingest. Review proposed bounding it by lag magnitude and that is
+  **declined with reasons**: a first FULL_SNAPSHOT is unbounded, so the bound would report the
+  largest sites as critical on day one — the defect itself, aimed at the sites with most to lose.
+  What is done instead: both surfaces keep the **count** (the site-list pill reads
+  `No checkpoint · 1.2k` rather than dropping the number, which is what this entry had claimed and
+  the pill did not do), and the card names the build the state should not outlive ("Still missing a
+  day later? The build is not completing" — round 2 corrected both the claim and the label: the sweep
+  walks sites serially and a build deferred behind the #178 fold budget is a *designed* miss that
+  repairs itself next tick, so "the build is failing" was the same over-claim one notch quieter,
+  and the value is the **next** occurrence rather than the first, recomputed per request).
+  Separating the two payloads needs persisted state and a migration, filed as **#224**; the
+  durable alarm stays `delta.checkpoint.builds.aborted`, `delta.checkpoint.tables.given-up` and
+  `delta.seq.lag`.
+  **The ticket's second shape — building a checkpoint when a site's first snapshot commits — was
+  weighed and rejected**: it moves a whole-site fold onto the very commit path the nightly cron
+  exists to keep clear, and it would have to queue behind the fold budget (#152/#178) and the scratch
+  budget (#150), i.e. exactly the region #193 is parked on. Nothing here was losing or corrupting
+  data — both halves are reporting — so the DoD's last item was taken as asked and **`priority: high`
+  was dropped to `priority: medium`**. No migration (V54 is still the last applied, V55 free), no
+  gRPC, proto, metric, cache, configuration-**key**, S3-key or route change; `delta.checkpoint.cron`
+  gains a second reader and, for the first time, a declaration in `application.yml`
+  (`DELTA_CHECKPOINT_CRON`, which relaxed binding already honoured) — its name and default are
+  unchanged. See `docs/delta-client-v2-guide.md`
+  ("A site whose first checkpoint is not due yet").
+- device-verify-false-toast: The one error signal on the device authorization path stopped being
+  wrong, and the direct URL the client prints works again (issue #211, two defects in one flow, both
+  frontend). **The toast is an off-by-one, not a race.** A `user_code` is eight characters rendered
+  as `XXXX-XXXX`, so the *formatted* value is nine characters long — but `DeviceVerifyPage` fired
+  its lookup at `userCode.length >= 8`, which is the keystroke **before** last. Typing `M9Q2-4AML`
+  therefore asked the backend about `M9Q2-4AM`, a seven-character code that cannot exist; the
+  backend answered 404, the global axios interceptor toasted "Resource not found.", and the ninth
+  character started a second lookup under a **new query key**, so the page's own error branch never
+  saw the failure and the flow went on to create the site. That is exactly the reported shape: a
+  transient toast over a verification that succeeds, with the page never showing an error. It is
+  invisible to a paste (one state change, one lookup, the complete code), which is why the existing
+  page test — written with `userEvent.paste` — could not see it. The threshold now lives in one
+  place (`features/device-auth/model/userCode.ts`: `formatUserCode`, `isCompleteUserCode`,
+  `USER_CODE_LENGTH`), shared by the query's `enabled`, the Continue button's `disabled`, the
+  field's `maxLength` and the hook's own guard, which had the same `>= 8` written a second time.
+  **Suppressing the 404 class was rejected as the fix and taken as the belt-and-braces**: the page
+  renders a message per status already (400 "already processed", 404 "not found or expired"), so
+  the interceptor was a *duplicate* report for every genuine failure and the *only* report for a
+  superseded one — `getVerifyInfo` therefore opts out through the existing
+  `suppressErrorToast` request flag (the `deltaSyncApi` precedent), which is one request rather
+  than a status class, so a real 404 anywhere else still toasts. **The suppression forced the page's
+  own wording to grow up**, which is user-visible for every status but 400: with the toast gone that
+  message is the *only* report, and the old fallback called everything non-400 a bad code — so a
+  network outage or a 500 told an operator holding a perfectly good code to retype it.
+  `describeVerifyFailure` (`features/device-auth/model/verifyError.ts`) splits it into no-response,
+  400, 403, 404 and everything else, quoting the server where it has wording of its own and reading
+  status and body through the existing `getServerErrorStatus`/`getServerErrorMessage`, so the
+  error-body contract keeps one home. **The second defect is the login
+  redirect, and it is what forced the typing in the first place.** `?code=` was stripped on load,
+  the field came up empty, and the operator retyped the code by hand — the keystrokes the first
+  defect needs. TanStack Router was ruled out by experiment: it keeps unvalidated search params and
+  leaves the href alone. The mechanism is Auth0: `cacheLocation="memory"` means nothing survives a
+  page load, so **every** cold load of a protected route starts unauthenticated, the guard calls
+  `loginWithRedirect`, an SSO session makes the round trip invisible (no prompt — which is why the
+  report says the session was live), and `Auth0Provider.onRedirectCallback` then restores the
+  address bar from `appState.returnTo` with `history.replaceState` — patched by `@tanstack/history`,
+  so the router follows it. `returnTo` was `window.location.pathname`: everything after the path was
+  gone before the app rendered. `currentReturnTo()` (`shared/lib/auth/returnTo.ts`) is
+  path + search + hash and is used by `AuthenticationGuard`, `UserOnlyGuard` and
+  `useAuth.signinRedirect`; it is assembled from the current location and stays root-relative, so it
+  cannot become an off-origin redirect target. This fixes deep links with query parameters for
+  **every** protected route, not only `/device-verify`. The **Try Again** button on the
+  application-wide authentication-error screen (`App.tsx`) uses `retryReturnTo()` instead, and the
+  difference is the one non-obvious rule in the module: that screen is reached after a failed
+  `handleRedirectCallback`, so the location it renders at *is* the callback URL with Auth0's own
+  parameters still on it — the SDK does not clean them up on the failure path — and returning there
+  would write a **consumed** `code`/`state` back into the address bar for the SDK to re-read as a
+  fresh callback. The test is the SDK's own `hasAuthParams` (`state` alongside a `code` or an
+  `error`), and the missing `state` is precisely what keeps `/device-verify?code=XXXX-XXXX` — which
+  has a `code` of its own — on the preserved side. The page also normalizes the code it takes
+  from the URL, since that value is pasted by hand and need not arrive in the presentation the
+  backend stores (`?code=m9q24aml` now resolves to `M9Q2-4AML` rather than 404ing), and a URL code
+  that is *incomplete* pre-fills the input state instead of going straight to a confirmation card the
+  lookup cannot fill — which used to render neither the details nor the spinner, i.e. a blank page.
+  Three existing
+  tests pinned the old path-only `returnTo` and were rewritten rather than left standing — the
+  behaviour changed deliberately. Frontend only: no REST, gRPC, proto, DTO, migration,
+  configuration-key, metric, S3-key, route-path or TanStack Query key change; `/device-verify` and
+  its `?code=` parameter are the contract the PostgreSQL Data Extractor TUI prints and are untouched.
+  See `docs/device-flow-client-guide.md` (Step 2 tips, Troubleshooting).
+- test-jvm-heap-ceiling: The test JVM has a heap ceiling, and an allocation failure in it now names
+  itself instead of an innocent test (issue #207, found by the `/github-issue-runner` dispatcher on
+  a `develop` pipeline that went red on a change which could not have caused it).
+  `tasks.withType<Test>` declared `useJUnitPlatform()` and nothing else, so every test JVM took
+  Gradle's **512 MB** default — and CI runs the whole suite in one of them (`./gradlew test
+  --no-daemon`, ~2470 tests, 444 classes, **24 cached Spring contexts** alive at once). The margin
+  was whatever the runner happened to leave, which is why it fired intermittently and, worse, why
+  it fired somewhere else each time: an `OutOfMemoryError` is an ordinary `Throwable`, so it
+  unwound into whichever caller was on the stack — Spring's `ConstructorResolver`, re-reported as a
+  `BeanCreationException` of a contract test that allocates nothing, and a retry in the same job
+  named two *different* tests. `CLAUDE.md` tells every agent never to write off a red check without
+  checking which test it is, so each occurrence cost a full investigation that ended at a name with
+  nothing to do with the failure.
+  **The number is measured, not chosen.** `./gradlew test -PtestHeapLog` (the opt-in this ticket
+  adds, one `-Xlog:gc` file per `Test` task under `build/reports/test-heap/`) at a deliberately
+  generous 3 GiB ran the suite green in 5m27s and never let G1 expand past **1014 MB**; the highest
+  occupancy *after* a collection was **801 MB** and the highest before one **965 MB**. So a 1 GiB
+  heap sits exactly on the cliff and the shipped default was under it — `maxHeapSize = "2g"`, about
+  2.5x the live set, is the ceiling, with the guard's agreed range 1.5 GiB–4 GiB. The upper bound
+  is the runner rather than the suite: `ubuntu-latest` has 16 GB shared with the PostgreSQL, Redis
+  and LocalStack service containers, the Gradle build JVM and every Testcontainers image, and past
+  that the kernel's OOM killer answers first — a failure that names nothing at all.
+  **The DoD's second item answered explicitly: one JVM, no `forkEvery`.** Forking would bound the
+  context accumulation by discarding the Spring `TestContext` cache, and that cache is exactly what
+  makes 444 classes affordable — a fresh JVM rebuilds every context it needs, Flyway migration
+  included, and restarts the Testcontainers singletons. It is the right tool for accumulation with
+  no ceiling; this accumulation has one, being **one context per distinct configuration** (24), a
+  property of the test classes and not of the test count, which is what the measurement shows
+  levelling off under a gigabyte. `maxParallelForks` is excluded for an unrelated reason and is
+  worth stating separately: the suite deliberately shares one PostgreSQL database across every
+  context — `test-data.sql` deletes by `%.example.com`, the delta-SQL queue is global (#175), and
+  #197 had to bound lock waits precisely because sibling contexts already contend on the same rows.
+  **The self-naming half is `-XX:+ExitOnOutOfMemoryError`**, with
+  `-XX:+HeapDumpOnOutOfMemoryError` + `-XX:HeapDumpPath=build/reports/test-oom` beside it because
+  the JVM is about to disappear and the dump is the only evidence left for re-sizing. Verified
+  against a real one by forcing the suite to 96 MB: the build prints
+  `java.lang.OutOfMemoryError: Java heap space`, the dump path, `Terminating due to
+  java.lang.OutOfMemoryError`, and fails as `Process 'Gradle Test Executor 4' finished with
+  non-zero exit value 3` — **no test named, because no test was at fault**. The dump is
+  deliberately *not* added to the CI artifact upload: at this ceiling it can reach two gigabytes,
+  and the log line already carries the diagnosis the ticket asked for.
+  **Three guards, and the third is the one worth reviewing.** `TestJvmHeapCeilingTest` (fast gate)
+  requires `maxHeapSize` to be declared **exactly once** and inside `tasks.withType<Test>` — a
+  second declaration on `tasks.named<Test>("test")` or `integrationTest` wins for that task and
+  would quietly leave its sibling on the 512 MB default — requires the value to sit in the agreed
+  range, requires both flags, and reads `Runtime.maxMemory()` to check that Gradle really launched
+  *this* JVM with the declared value, since `GRADLE_OPTS`, `org.gradle.jvmargs` or a later `-Xmx`
+  would make the build file documentation rather than configuration (that assertion caught its own
+  premise during development: an init script setting a heap *before* the build script is silently
+  overridden by it). Outside Gradle — an IDE run configuration, detected by the absence of the
+  `dfm.test.parquet-scratch-root` property Gradle always sets — only the floor is required, the
+  `RunOwnedScratch` fallback and for its reason. `TestJvmOutOfMemoryExitTest` is the wired half a
+  build file cannot be: three **child** JVMs at 32 MB, one per branch of the claim — with the flag a
+  real allocation failure exits 3, names `java.lang.OutOfMemoryError` and never reaches the child's
+  own `catch` (and a heap dump *is* written, so the two flags do co-operate in that order); without
+  it the identical child catches the error and exits 0, which is the swallow being removed and is
+  what stops the first assertion from passing against a JVM that would have died anyway; and with
+  the flag a `throw new OutOfMemoryError(...)` from ordinary code **stays catchable**, because it
+  never reaches the VM's allocation-failure path — the property that keeps
+  `BatchParquetFinalizationIntegrationTest`'s Mockito stub working, which otherwise reads as a
+  landmine. `TestJvmHeapTest` asserts the reader itself over synthetic build scripts (a size
+  literal with each suffix, `"2 GiB"` refused by name rather than read as two bytes, a flag named
+  only in a comment not counted, an unbalanced brace inside a string literal not ending the block,
+  and every declaration reported rather than the first) — the `LockWaitBoundTest` precedent, since
+  a guard that misreads the file is worse than no guard. `RunOwnedScratch.projectRoot()` becomes
+  public so `TestJvmHeap` locates `build.gradle.kts` the same way rather than growing a second idea
+  of where the checkout is.
+  **`.github/workflows/ci-cd.yml` is deliberately untouched**: the ceiling belongs in the build
+  file, where it applies to a developer's run and to CI alike — the ticket's own point that the
+  defect was invisible locally. The DoD's last item (`./gradlew test` green on `develop` twice in a
+  row) can only be observed after the merge. No production code, REST, gRPC, proto, DTO, migration,
+  configuration-key, metric, S3-key or frontend change. See `README.md` ("The test JVM").
+  **Two rounds of review then hardened the guard rather than the value, and the finding that
+  mattered was a hole in its own coverage.** `TestJvmHeapCeilingTest` lives under `config/` and
+  `integrationTest` includes `**/integration/**` alone, so its dynamic half could only ever observe
+  the `test` task's JVM: a `-Xmx` added to `integrationTest`'s own `jvmArgs` left all four
+  assertions green while the Testcontainers suite — the task that boots the most Spring contexts —
+  ran on 512 MB, which is #207's own defect in the worst place for it. Closed twice: a static check
+  refusing **any** `-Xmx` in the build script (`maxHeapSize` is the only form the guard can read,
+  and the override in a form it cannot read is the same override), and a twin in the `integration`
+  package that reads `Runtime.maxMemory()` of the JVM that task is actually given — no Spring
+  context, no container, in that package for the one reason that it is what the filter includes.
+  Both fire under mutation. Round 1's finding was the reader: `"…${f("x")}…"` paired the nested
+  literal's opening quote with the outer one and desynchronised from there, and both consequences
+  were silent — an unpaired brace left in what the scan then read as code ran the block match past
+  its own closing brace, and a `//` inside a literal blanked the rest of its line, declaration
+  included. `build.gradle.kts` already had that shape three times and only re-balanced by luck, so
+  the first mutation-proof fixture had to be rewritten to carry both hazards rather than the benign
+  one. The scanner is now a Kotlin lexer (nested block comments, raw strings, char literals,
+  recursive template expressions), and the Javadoc explaining it closed its own comment on the first
+  attempt — the `AsyncExecutorQualifierTest` mistake, made again and caught by the compiler. Three
+  more, all small and all the same class: `runChild` read the child's output to EOF *before*
+  `waitFor`, so the deadline was unreachable and a hung child would have parked the JUnit thread for
+  ever — the #197 failure mode inside the class about naming failures (the output goes to a file
+  now, and the child is killed when it outstays the bound); `parseSize` caught the parse but not the
+  multiplication, so `"17179869186g"` wrapped to exactly 2 GiB and passed every assertion while
+  `"9999999999g"` was reported as a negative ceiling (`Math.multiplyExact`), and `"2 g"` — which
+  Gradle passes through verbatim and the JVM refuses — was read as 2 GiB; and the IDE-branch message
+  told a developer to add `-Xmx1536 MiB`, which is not an argument the JVM takes. One finding was
+  answered with prose rather than code, deliberately: `-XX:+ExitOnOutOfMemoryError` fires for
+  **every** VM-raised `OutOfMemoryError`, so `unable to create native thread` and `Metaspace` end
+  the worker the same way and lose every remaining result — HotSpot has no per-message form, the
+  trade still favours the flag over the swallow, and what an operator needs is the warning that
+  raising the ceiling is the remedy for the first only and makes native-thread exhaustion likelier.
+  The exactly-once message was also misdiagnosing the case it fires on: the shared assignment
+  already covers the siblings, so the hazard is the *narrowed* task dropping below the floor, not a
+  sibling left on Gradle's default.
 - memory-abort-visible: A memory-pressure abort is a refusal that says so, instead of an empty
   `Optional` no caller could tell from "this batch produced no changes" (issue #181, found working
   #174 and named by it as the reason that defect was expensive rather than merely wrong).

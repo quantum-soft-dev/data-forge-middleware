@@ -114,10 +114,11 @@ public class DeltaEgressService {
                 return;
             }
             byte[] parquet;
+            DecimalDegradeTally nonFinite = new DecimalDegradeTally();
             try {
                 parquet = metrics.timeEgressPhase("write",
                         () -> DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords,
-                                parquetProperties.rowGroupBytes()));
+                                parquetProperties.rowGroupBytes(), nonFinite));
             } catch (RuntimeException e) {
                 // One poison table (data the declared schema cannot render) must not wedge the
                 // queue: without this the whole segment stays pending and the sweep retries it
@@ -132,6 +133,14 @@ public class DeltaEgressService {
             metrics.timeEgressPhase("upload", () -> storage.uploadDelta(
                     segment.getSiteId(), table, segment.getFirstSeq(),
                     segment.getLastSeq(), parquet));
+            // After the upload, not before it (issue #215, review round 2). It buys less than the
+            // completed-batch path's equivalent, and the difference is worth stating: uploadDelta
+            // sits outside the per-table catch, so a failure on a later table propagates, the
+            // segment is never marked, and the sweep re-renders every table -- re-counting the ones
+            // that already uploaded. The ordering removes the re-count for the failing table only
+            // (review round 3).
+            metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
+            metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
         });
 
         segment.markEgressed();

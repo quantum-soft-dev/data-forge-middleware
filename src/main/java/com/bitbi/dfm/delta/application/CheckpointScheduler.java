@@ -31,6 +31,15 @@ public class CheckpointScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(CheckpointScheduler.class);
 
+    /**
+     * Placeholder for the only schedule on which checkpoints are produced, an operator-forced
+     * rebuild aside. Shared with {@link CheckpointScheduleService}, which resolves the same
+     * placeholder to tell a surface when the next build is due (issue #213): a site whose first
+     * checkpoint has not been built yet is waiting for this cron, and one constant is what keeps
+     * the answer and the tick from drifting apart.
+     */
+    static final String CRON_PROPERTY = "${delta.checkpoint.cron:0 0 2 * * *}";
+
     private final CheckpointService checkpointService;
     private final ChangelogRetentionService retentionService;
     private final ChangelogSegmentRepository segmentRepository;
@@ -53,7 +62,7 @@ public class CheckpointScheduler {
         this.shutdownSignal = shutdownSignal;
     }
 
-    @Scheduled(cron = "${delta.checkpoint.cron:0 0 2 * * *}")
+    @Scheduled(cron = CRON_PROPERTY)
     public void buildCheckpoints() {
         if (!buildLock.tryLock()) {
             log.info("Checkpoint build already in progress; skipping this tick");

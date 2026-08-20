@@ -17,21 +17,21 @@ function segment(firstSeq: number, records: number): DeltaSegment {
 
 describe('ActivityCard (F6)', () => {
   it('renders the lag history caption and sparkline', () => {
-    render(<ActivityCard lagSamples={[10, 20, 15]} severity="healthy" showThroughput={false} />)
+    render(<ActivityCard lagSamples={[10, 20, 15]} status="healthy" showThroughput={false} />)
 
     expect(screen.getByText('Sampled on each poll · since page open')).toBeInTheDocument()
     expect(screen.getByTestId('lag-sparkline')).toBeInTheDocument()
   })
 
   it('hides the throughput panel for owners while P2 is pending', () => {
-    render(<ActivityCard lagSamples={[10]} severity="healthy" showThroughput={false} />)
+    render(<ActivityCard lagSamples={[10]} status="healthy" showThroughput={false} />)
     expect(screen.queryByText('Segment throughput')).not.toBeInTheDocument()
   })
 
   it('renders at most 16 throughput bars for admins', () => {
     const segments = Array.from({ length: 20 }, (_, i) => segment(i * 100 + 1, 50 + i))
     render(
-      <ActivityCard lagSamples={[10]} severity="healthy" segments={segments} showThroughput={true} />,
+      <ActivityCard lagSamples={[10]} status="healthy" segments={segments} showThroughput={true} />,
     )
 
     expect(screen.getByText('Segment throughput')).toBeInTheDocument()
@@ -39,7 +39,7 @@ describe('ActivityCard (F6)', () => {
   })
 
   it('shows an inline empty note when the admin has no segments yet', () => {
-    render(<ActivityCard lagSamples={[]} severity="healthy" segments={[]} showThroughput={true} />)
+    render(<ActivityCard lagSamples={[]} status="healthy" segments={[]} showThroughput={true} />)
     expect(screen.getByText('No segments yet')).toBeInTheDocument()
   })
 })

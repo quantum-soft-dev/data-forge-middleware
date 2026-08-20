@@ -61,6 +61,13 @@ describe('useAuth', () => {
 
     result.current.signinRedirect()
     expect(mockLoginWithRedirect).toHaveBeenCalledTimes(1)
+    // The whole location, not just the path — onRedirectCallback restores the
+    // address bar from this string verbatim (issue #211).
+    expect(mockLoginWithRedirect).toHaveBeenCalledWith({
+      appState: {
+        returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+      },
+    })
 
     result.current.signoutRedirect()
     expect(mockLogout).toHaveBeenCalledTimes(1)

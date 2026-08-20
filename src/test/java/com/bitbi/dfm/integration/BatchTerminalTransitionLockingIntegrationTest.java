@@ -70,6 +70,16 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
     void tearDown() {
         sweeperThread.shutdownNow();
         for (UUID siteId : createdSites) {
+            // The two non-cascading references to batches, cleared by the relationship each
+            // constraint actually uses (issue #226). This class seeds no segments and no
+            // activations today, so neither delete has anything to do -- but that is a property of
+            // the current tests, not of the cleanup, and "safe because nobody writes one yet" is
+            // exactly how #226 sat latent. The fixture and DeltaSessionLivenessIntegrationTest
+            // sweep both relationships; this is the third cleanup of the same shape.
+            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ? OR batch_id IN "
+                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId, siteId);
+            jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
+                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId);
             jdbc.update("DELETE FROM batches WHERE site_id = ?", siteId);
             jdbc.update("DELETE FROM sites WHERE id = ?", siteId);
         }

@@ -27,7 +27,7 @@ import {
   RebaselineDialog,
   RebuildCheckpointDialog,
 } from '@/features/delta-sync/ui/DeltaSyncDialogs';
-import { computeLag, getSyncSeverity } from '@/features/delta-sync/model/severity';
+import { computeLag, getSyncStatus } from '@/features/delta-sync/model/severity';
 import { useLagHistory } from '@/features/delta-sync/model/useLagHistory';
 import { ActivityCard } from '@/features/delta-sync/ui/ActivityCard';
 import { SyncStateShell } from '@/features/delta-sync/ui/SyncStateShell';
@@ -136,14 +136,14 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
     return <DeltaSyncEmptyState />;
   }
 
-  const severity = getSyncSeverity(computeLag(state), state.updatedAt);
+  const status = getSyncStatus(state);
 
   return (
     <div className="space-y-4" data-can-manage={canManage}>
       <SyncStateShell state={state} />
       <ActivityCard
         lagSamples={lagSamples}
-        severity={severity}
+        status={status}
         segments={segmentsQuery.data}
         showThroughput={canManage && !segmentsQuery.isError}
       />

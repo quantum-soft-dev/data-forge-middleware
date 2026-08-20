@@ -46,6 +46,9 @@ import java.util.function.Consumer;
  */
 public final class DeltaParquetWriter {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(DeltaParquetWriter.class);
+
     private static final CompressionCodecName CODEC = CompressionCodecName.SNAPPY;
 
     private DeltaParquetWriter() {
@@ -62,6 +65,12 @@ public final class DeltaParquetWriter {
      */
     public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
                                         long rowGroupBytes) {
+        return toDeltaParquet(tableName, tableSchema, records, rowGroupBytes, new DecimalDegradeTally());
+    }
+
+    /** As above, reporting the cells degraded to NULL (issue #215) into {@code nonFinite}. */
+    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
+                                        long rowGroupBytes, DecimalDegradeTally nonFinite) {
         List<Map<String, Value>> cellRows = new ArrayList<>(records.size());
         for (ChangeRecord change : records) {
             Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
@@ -85,11 +94,16 @@ public final class DeltaParquetWriter {
             Map<String, Value> cells = cellRows.get(i);
             for (ColumnDefinition column : tableSchema.columns()) {
                 row.put(column.name(), ParquetCheckpointWriter.coerceValue(
-                        cells.get(column.name()), avro.getField(column.name()).schema()));
+                        cells.get(column.name()), avro.getField(column.name()).schema(), nonFinite));
             }
             rows.add(row);
         }
-        return ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
+        // After the write, not before it: a failed write is caught by DeltaEgressService, which
+        // skips the table and never counts -- leaving a WARN describing a file that was never
+        // written (review round 3).
+        byte[] encoded = ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
+        ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
+        return encoded;
     }
 
     /**
@@ -108,6 +122,7 @@ public final class DeltaParquetWriter {
         Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
         Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
         AtomicLong rowCount = new AtomicLong();
+        DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         AtomicLong previousSeq = new AtomicLong(Long.MIN_VALUE);
 
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
@@ -128,7 +143,7 @@ public final class DeltaParquetWriter {
                             + ": " + change.getSeq() + " after " + prior);
                 }
                 try {
-                    writer.write(toRecord(avro, tableSchema, change));
+                    writer.write(toRecord(avro, tableSchema, change, nonFinite));
                     rowCount.incrementAndGet();
                 } catch (IOException e) {
                     throw new UncheckedIOException("Failed to write Parquet row for table " + tableName, e);
@@ -139,7 +154,9 @@ public final class DeltaParquetWriter {
         }
 
         try {
-            return new FileWriteResult(rowCount.get(), Files.size(output), sha256(output));
+            ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
+            return new FileWriteResult(rowCount.get(), Files.size(output), sha256(output),
+                    nonFinite);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to inspect Parquet file for table " + tableName, e);
         }
@@ -308,10 +325,36 @@ public final class DeltaParquetWriter {
                     : change.getKeyMap().get(field.name());
             Object java = value == null ? null : ValueMapper.toJava(value);
             if (java != null) {
-                int required = new BigDecimal(java.toString())
-                        .setScale(decimal.getScale(), RoundingMode.HALF_UP).precision();
-                precisions.merge(field.name(), required, Math::max);
+                // Skips what it cannot measure rather than throwing (issue #215, review round 2).
+                // The `java != null` guard alone does not cover it: a non-finite double or a "NaN"
+                // string bound for a decimal column is non-null and still has no BigDecimal form,
+                // and here the throw costs a build attempt towards ABANDONED. Mirrors
+                // ParquetCheckpointWriter.widenDecimalsToFit, its twin.
+                BigDecimal measurable = measurableDecimal(java);
+                if (measurable != null) {
+                    precisions.merge(field.name(),
+                            measurable.setScale(decimal.getScale(), RoundingMode.HALF_UP).precision(),
+                            Math::max);
+                }
             }
+        }
+    }
+
+    /** The decimal envelope this value contributes, or {@code null} when it has none. */
+    private static BigDecimal measurableDecimal(Object java) {
+        if (java instanceof BigDecimal bd) {
+            return bd;
+        }
+        if (java instanceof Double d && !Double.isFinite(d)) {
+            return null;
+        }
+        if (java instanceof Float f && !Float.isFinite(f)) {
+            return null;
+        }
+        try {
+            return new BigDecimal(java.toString());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -337,7 +380,8 @@ public final class DeltaParquetWriter {
                 recordSchema.getNamespace(), recordSchema.isError(), fields);
     }
 
-    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, ChangeRecord change) {
+    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, ChangeRecord change,
+                                          DecimalDegradeTally nonFinite) {
         GenericRecord row = new GenericData.Record(avro);
         row.put("_op", change.getOp().name());
         row.put("_seq", change.getSeq());
@@ -349,7 +393,7 @@ public final class DeltaParquetWriter {
                     ? change.getDataMap().get(column.name())
                     : change.getKeyMap().get(column.name());
             row.put(column.name(), ParquetCheckpointWriter.coerceValue(
-                    value, avro.getField(column.name()).schema()));
+                    value, avro.getField(column.name()).schema(), nonFinite));
         }
         return row;
     }
@@ -386,7 +430,13 @@ public final class DeltaParquetWriter {
         void forEach(Consumer<ChangeRecord> consumer);
     }
 
-    public record FileWriteResult(long rowCount, long fileSize, String checksum) {
+
+    /**
+     * @param degradedDecimals cells written NULL because the value has no Parquet DECIMAL
+     *                         representation, split by reason (issue #215)
+     */
+    public record FileWriteResult(long rowCount, long fileSize, String checksum,
+                                  DecimalDegradeTally degradedDecimals) {
     }
 
     /**
@@ -431,6 +481,7 @@ public final class DeltaParquetWriter {
         private final Schema avro;
         private final ParquetWriter<GenericRecord> writer;
         private long rowCount;
+        private final DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         private long previousSeq = Long.MIN_VALUE;
 
         private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes,
@@ -455,7 +506,7 @@ public final class DeltaParquetWriter {
             }
             previousSeq = change.getSeq();
             try {
-                writer.write(toRecord(avro, request.schema(), change));
+                writer.write(toRecord(avro, request.schema(), change, nonFinite));
                 rowCount++;
             } catch (IOException e) {
                 throw new UncheckedIOException("Failed to write Parquet row for table " + tableName, e);
@@ -464,7 +515,9 @@ public final class DeltaParquetWriter {
 
         private FileWriteResult result() {
             try {
-                return new FileWriteResult(rowCount, Files.size(request.output()), sha256(request.output()));
+                ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
+                return new FileWriteResult(rowCount, Files.size(request.output()), sha256(request.output()),
+                        nonFinite);
             } catch (IOException e) {
                 throw new UncheckedIOException("Failed to inspect Parquet file for table " + tableName, e);
             }
