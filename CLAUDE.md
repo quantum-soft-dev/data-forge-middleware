@@ -307,6 +307,61 @@ rather than trusting it.
 that inference becomes a read — the dispatcher sees the clash before it puts two tickets in one
 window rather than two hours into an executor's session.
 
+**A ticket closed as absorbed carries `duplicate`, because `Done` cannot say it.** Folding one
+ticket into another (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item
+closed`** workflow then sets its `Status` to `Done` — so `Done` mixes two different things: a
+ticket closed by **its own** PR, and a ticket closed by **somebody else's**. Read on 2026-08-19 the
+board carried four of the second kind with nothing telling them apart, the sharpest being **#200**
+(`priority: high`, SQL regeneration unfixed in production) sitting in `Done` while its absorber
+#190 was open and `status: blocked`; #210 in `Done` under an open #185, #192 under an open #193,
+#218 under an open #205. Four more — #143, #162, #204, #214 — were also closed by their absorbers
+(#142, #149, #186, #213), whose work *did* land. A person reading the board treats all eight as
+shipped, and for four of them that is false.
+
+The marker is the **`duplicate` label, and it is mandatory** — the decision taken for #230. The two
+rejected options are worth recording:
+
+- **A separate column loses to the automation.** The project's workflows are readable, and
+  `Item closed` is enabled:
+
+  ```bash
+  gh api graphql -f query='query{node(id:"PVT_kwDOB7LEnM4BeGrE"){... on ProjectV2{
+    workflows(first:20){nodes{name enabled}}}}}'
+  ```
+
+  It fires on the close event, so a `Duplicate` column would be overwritten by every close and
+  restored only by a manual move nothing enforces — the board would lie exactly as it does now, and
+  lie *invisibly*, a rule appearing to exist. `Auto-close issue` is enabled too, so the column set
+  is load-bearing in the other direction as well; and the columns are anyway the **state machine**
+  this file walks in order, where an outcome is not a state.
+- **"Leave them in `Done`, that is accepted" is what the board already does**, and the eight rows
+  above are what it costs.
+- **The label rides beside the automation instead of fighting it.** It survives the auto-move,
+  `gh issue list --state closed --label duplicate` is the whole query, and it was already the
+  de-facto marker: triage had applied it by hand to #218 and #229 before any rule said so, so this
+  generalizes an existing practice rather than inventing one.
+
+**What the label means is the part that had to be decided, and it is the durable fact:** *this
+ticket was closed by another ticket's work, not by its own PR.* It is **not** "the work is still
+unfixed" — that reading is unimplementable, because the person closing the ticket cannot know it
+and it changes underneath them. #200 is the proof, inside ten days: it was labelled on 2026-08-19
+with a comment saying the work was not done, and #190 merged the day after, so a label meaning
+"still unfixed" was already stale and nobody was going to come back and strip it. So every
+absorbed close is labelled, whatever the absorber's fate, and the live answer to "is it fixed?"
+comes from the absorber — which is why **the closing comment is required beside the label** and
+must name the absorber and say whether it is still open. The label narrows the question; the
+comment answers it.
+
+So: **whoever closes a ticket as absorbed applies `duplicate` and leaves that comment.** The card
+stays in `Done` — that is the automation's answer and this rule does not fight it. What the label
+buys is that **`Done` minus `duplicate` is the work that closed on its own merits**, and that the
+absorbed set is one query rather than a re-reading of the backlog. Backfilled on all eight closes
+above (#220 and #229 already carried it) so the label has a single meaning across the board; the
+four whose work shipped are labelled too, and their comments say so. The rule binds all three
+closing sites — `/github-issue` (a finding that absorbs an open ticket), `/merge` (a PR whose issue
+folds another) and `/github-issue-runner` (the dispatcher merging duplicates inside a run) — and
+says nothing about *which* ticket survives, which stays a judgement about where the work is.
+
 ### Running several issues at once
 
 `/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
@@ -376,6 +431,10 @@ columns in order — jumping is not allowed:
 `Backlog` → `Ready` (`status: ready`) → `In Progress` (`status: in progress`) → `In Review`
 (`status: in review`, then `status: ready to merge` while awaiting the human) → `Done`.
 `Blocked` (`status: blocked`) is the side exit at any point.
+
+`Done` is an outcome-blind column: the built-in `Item closed` workflow puts every closed issue
+there, shipped or absorbed alike. The `duplicate` label is what separates the two — see "A ticket
+closed as absorbed carries `duplicate`" above.
 
 Moving the board needs the `project` token scope — if `gh project` fails with
 `INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
@@ -511,6 +570,43 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- absorbed-duplicates-marker: A ticket closed as absorbed carries the **`duplicate`** label, so the
+  board stops reading an unfixed defect as shipped (issue #230, filed from the same backlog pass as
+  #216 and deliberately not folded into it — that ticket is about what a follow-up states *before*
+  filing, this one about what the board shows *after* closing). Folding one ticket into another
+  (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item closed`** workflow
+  then sets its `Status` to `Done` — so `Done` mixes a ticket closed by its own PR with one closed
+  by somebody else's. Eight such closes existed on 2026-08-19; for four of them the absorber was
+  still open, the sharpest being **#200** (`priority: high`, SQL regeneration unfixed in
+  production) sitting in `Done` while #190 was open and `status: blocked`, and the board could not
+  tell them from #143, #162, #204 and #214, whose work really had landed with #142, #149, #186 and
+  #213. **The two rejected options are recorded with the chosen one.** A separate column loses to
+  the automation, and this was checked rather than assumed — the project's workflows are readable
+  (`gh api graphql … ProjectV2{workflows(first:20){nodes{name enabled}}}`) and `Item closed` is
+  enabled, so a `Duplicate` column would be overwritten by every close and restored only by a manual
+  move nothing enforces, i.e. the board would lie exactly as it does now but *invisibly*, a rule
+  appearing to exist; `Auto-close issue` is enabled as well, and the columns are anyway the state
+  machine this file walks in order, where an outcome is not a state. "Leave them in `Done`, that is
+  accepted" is what the board already does. The label rides beside the automation instead of
+  fighting it, survives the auto-move, is one query
+  (`gh issue list --state closed --label duplicate`), and was already triage's de-facto marker on
+  #218 and #229 — so this generalizes an existing practice rather than inventing one.
+  **The part that had to be decided is what the label means, and it is the durable fact** — *closed
+  by another ticket's work, not by its own PR* — rather than "still unfixed". The second reading is
+  unimplementable: the person closing cannot know it, and it changes underneath them. #200 proves
+  that inside ten days, having been labelled on 2026-08-19 with a comment saying the work was not
+  done and #190 merging the day after, leaving a label nobody was going to come back and strip. So
+  every absorbed close is labelled whatever the absorber's fate, and the live answer to "is it
+  fixed?" comes from the absorber — which is why the **closing comment is required beside the
+  label** and must name the absorber and say whether it is still open. The label narrows the
+  question; the comment answers it. Backfilled on all eight closes so the label has one meaning:
+  #192, #200, #210, #218 (#220 and #229 already carried it) **and** #143, #162, #204, #214 — the
+  counter-set was left unlabelled by the 2026-08-19 pass under the "still unfixed" reading, and
+  labelling it is the consequence of choosing the other one. `Done` minus `duplicate` is now the
+  work that closed on its own merits. The rule binds all three closing sites — `/github-issue`,
+  `/merge` and `/github-issue-runner` — and says nothing about *which* ticket survives, which stays
+  a judgement about where the work is. Documentation and command files only: no production code,
+  test, REST, gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change.
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three
