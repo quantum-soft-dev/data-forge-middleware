@@ -473,6 +473,76 @@ the other sites").
 
 ---
 
+### Losing the unique claim is not a second success (#246)
+
+Two workers can race `generateSqlForBatch` for one batch since #164 dropped the transaction that
+used to serialize them: the idempotency guard (`existsBySourceBatchId`) runs before the S3 write
+and the INSERT after it, so both can pass the guard and only the V11 unique
+`uk_sql_gen_source_batch` decides the race. The loser catches the
+`DataIntegrityViolationException`, deletes the object **it** uploaded, and adopts the winner's row
+— so both callers return the same generation, which is correct and unchanged.
+
+What was wrong is what the loser did **afterwards**. It carried on down the success path and:
+
+- wrote a second `SQL_GENERATION_COMPLETED` audit entry whose `s3Key` was the key it had just
+  deleted, so the account saw two completed generations for one batch on
+  `GET /api/v1/account/plugins/{pluginId}/logs`, one of them pointing at a dead object;
+- incremented `sql.generation.statements.{inserts,updates,deletes}` a second time for the same
+  batch — those series describe the batch, so a raced batch was double-counted on every dashboard
+  reading them.
+
+`persistOrAdoptExisting` now returns *how* the caller came by the generation, and an adopted one
+returns early: no completion audit entry, no statement counters, one INFO line naming the adopted
+generation, and one increment of the new counter
+
+- **`sql.generation.claims.lost`** — registered at zero, so an alert can predate the first
+  occurrence. It counts *attempts that rendered and uploaded SQL for a batch another worker had
+  already claimed*: wasted work, not a failure — the batch has its SQL either way.
+
+**Read that counter as a waste rate, not as a defect count** (review round 2 corrected the first
+wording, which called a steady rate alert-worthy). A non-zero value is the ordinary state of a busy
+fleet: since #164 `DeltaSqlQueueService.processNextPending` opens no transaction of its own, so the
+`FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock as soon as that
+query's own short transaction commits, and `plugin_sql_at` is set only *after* the render. Two
+overlapping drains — `plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
+replica has its own pool — therefore pick the same global head segment deterministically, and one
+of them always loses the unique. An alert on "any steady rate" would fire continuously in healthy
+operation.
+
+What is worth watching is this series **against the rate of completed generations**: a large share
+means the fleet is repeatedly rendering, uploading and discarding the same batch, and the only lever
+short of a durable claim is that key. Making the claim durable so the second worker never renders at
+all belongs to the queue rather than here — recorded on **#243**, which owns that claim query.
+
+Two neighbouring series still move for both callers, deliberately: `sql.generation.duration` takes
+a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both
+permits.
+
+**The loser's `SQL_GENERATION_STARTED` entry stands, and what that looks like is worth stating**
+(raised in review): it did start, so the entry is true — but the adopt path is now the **only** exit
+of `generateSqlForBatch` that leaves a started entry with no terminal companion. Every other one
+pairs it: a failure writes `SQL_GENERATION_FAILED`, an empty diff writes
+`logSqlGenerationCompletedNoChanges`, and #181 deliberately moved `refuseUnderMemoryPressure`
+*above* the started entry precisely so a refusal costs no unterminated row. So a raced batch reads,
+on `GET /api/v1/account/plugins/{pluginId}/logs` and in the Logs tab of My Plugins, as **two
+"Generating SQL..." lines and one "SQL Generated"** — a reader pairing lines by eye sees one
+generation that never finished. That is a flat event log rather than a live status, so nothing
+spins; but it is a shape the log did not contain before, and it is the counter
+`sql.generation.claims.lost` that says the unmatched line was a lost race rather than a crash.
+
+Giving the loser a terminal entry of its own is the right end state and is **deliberately not done
+here**: it needs a new `PluginActionType` value, which is stored data plus a widening of
+`chk_plugin_audit_logs_action_type` — a Flyway migration, for a cosmetic asymmetry on a path that
+only fires when two workers genuinely collide. Reusing an existing value would be worse than the
+gap: `SQL_GENERATION_COMPLETED` is the duplicate this section removes, and
+`SQL_GENERATION_FAILED` is a `success = false` row claiming an error that did not happen.
+
+Pinned by `SqlGenerationConcurrentClaimIntegrationTest` (the real constraint, the race made
+deterministic by a barrier at `storeSqlFile`) and by the mock twin in `SqlGenerationServiceTest`;
+both go red when the adopted branch is removed.
+
+---
+
 ### Task 6: Reduce Thread Pool Sizes for SQL Generation
 
 **Priority**: MEDIUM (quick config change)
