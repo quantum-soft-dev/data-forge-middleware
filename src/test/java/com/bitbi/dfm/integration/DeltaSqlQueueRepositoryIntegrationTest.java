@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -88,7 +90,7 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
             processed.markPluginSqlProcessed();
             segmentRepository.save(processed);
 
-            List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(10);
+            List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(10, LocalDateTime.now(ZoneOffset.UTC));
 
             assertEquals(2, claimed.size(), "one head per site");
             assertTrue(claimed.stream().anyMatch(s -> s.getSiteId().equals(SITE) && s.getFirstSeq() == 1L));
@@ -110,6 +112,48 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
 
         assertNull(segmentRepository.findBySiteIdAndFirstSeq(SITE, 20).orElseThrow().getPluginSqlAt());
         assertNotNull(segmentRepository.findBySiteIdAndFirstSeq(OTHER_SITE, 30).orElseThrow().getPluginSqlAt());
+    }
+
+    /**
+     * Issue #243: the deferred head keeps its site's place in line (per-site seq order is a
+     * contract) and stops being offered to every other site's detriment.
+     */
+    @Test
+    void deferredHeadIsHeldOutOfTheQueueWithoutStallingOtherSites() {
+        transactionTemplate.executeWithoutResult(tx -> {
+            ChangelogSegment poison = seedSegment(SITE, 1, 5);
+            seedSegment(SITE, 6, 9);
+            seedSegment(OTHER_SITE, 1, 3);
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+            assertEquals(1, segmentRepository.deferPluginSql(poison.getId(), now.plusMinutes(5), 0));
+
+            List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(10, now);
+            assertEquals(1, claimed.size(), "only the other site's head is claimable");
+            assertEquals(OTHER_SITE, claimed.get(0).getSiteId());
+
+            assertEquals(2, segmentRepository.findNextPendingPluginSql(10, now.plusMinutes(6)).size(),
+                    "the cooldown ends and the segment is offered again — nothing is discarded");
+            assertEquals(1, segmentRepository.findById(poison.getId()).orElseThrow().getPluginSqlAttempts());
+        });
+    }
+
+    /** A plugin reinit is the operator saying the cause is gone: the cooldown goes with it (#243). */
+    @Test
+    void clearPluginSqlBySiteIdResetsTheRetryState() {
+        transactionTemplate.executeWithoutResult(tx -> {
+            ChangelogSegment poison = seedSegment(SITE, 40, 45);
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+            segmentRepository.deferPluginSql(poison.getId(), now.plusHours(1), 0);
+
+            segmentRepository.clearPluginSqlBySiteId(SITE);
+
+            ChangelogSegment reloaded = segmentRepository.findById(poison.getId()).orElseThrow();
+            assertEquals(0, reloaded.getPluginSqlAttempts());
+            assertNull(reloaded.getPluginSqlRetryAt());
+            assertFalse(segmentRepository.findNextPendingPluginSql(10, now).isEmpty(),
+                    "claimable again at once, not after the cooldown its old failures earned");
+        });
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -20,6 +21,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,6 +34,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -64,14 +71,16 @@ class DeltaSqlQueueServiceTest {
     private Site site;
     private AccountPlugin activation;
     private SimpleMeterRegistry meterRegistry;
+    private ApplicationShutdownSignal shutdownSignal;
 
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
+        shutdownSignal = new ApplicationShutdownSignal();
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                meterRegistry);
+                meterRegistry, 60, 7, shutdownSignal);
 
         site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -94,7 +103,7 @@ class DeltaSqlQueueServiceTest {
     @DisplayName("should generate SQL and mark the claimed segment processed")
     void shouldGenerateAndMark() {
         ChangelogSegment segment = segment("DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         boolean processed = queueService.processNextPending();
 
@@ -107,7 +116,7 @@ class DeltaSqlQueueServiceTest {
     @Test
     @DisplayName("should return false when the queue is empty")
     void shouldReturnFalseWhenQueueEmpty() {
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of());
 
         assertThat(queueService.processNextPending()).isFalse();
         verifyNoInteractions(sqlGenerationService);
@@ -119,7 +128,7 @@ class DeltaSqlQueueServiceTest {
         when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, "bit-bi"))
                 .thenReturn(Optional.empty());
         ChangelogSegment segment = segment("DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         boolean processed = queueService.processNextPending();
 
@@ -134,7 +143,7 @@ class DeltaSqlQueueServiceTest {
     void shouldSuspendOnFullSnapshot() {
         ChangelogSegment segment = segment("FULL_SNAPSHOT",
                 Map.of("customers", new TableChangeStats(10, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         PluginDeltaBaseline existing = PluginDeltaBaseline.create(ACTIVATION_ID, SITE_ID, "orders", 3L);
         when(baselineRepository.findByAccountPluginIdAndSiteId(ACTIVATION_ID, SITE_ID))
@@ -168,11 +177,11 @@ class DeltaSqlQueueServiceTest {
                 .thenReturn(List.of(existing));
 
         ChangelogSegment first = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(10, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(first));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(first));
         assertThat(queueService.processNextPending()).isTrue();
 
         ChangelogSegment second = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(7, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(second));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(second));
         assertThat(queueService.processNextPending()).isTrue();
 
         assertThat(existing.getBaselineSeq()).isEqualTo(Long.MAX_VALUE);
@@ -193,11 +202,11 @@ class DeltaSqlQueueServiceTest {
                 .thenReturn(List.of());
 
         ChangelogSegment first = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(10, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(first));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(first));
         queueService.processNextPending();
 
         ChangelogSegment second = segment("FULL_SNAPSHOT", Map.of("orders", new TableChangeStats(4, 0, 0)));
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(second));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(second));
         queueService.processNextPending();
 
         ArgumentCaptor<PluginDeltaBaseline> captor = ArgumentCaptor.forClass(PluginDeltaBaseline.class);
@@ -207,17 +216,110 @@ class DeltaSqlQueueServiceTest {
     }
 
     @Test
-    @DisplayName("should leave the segment pending when generation fails")
-    void shouldLeavePendingOnFailure() {
+    @DisplayName("should defer a failing segment instead of ending the drain on it (#243)")
+    void shouldDeferOnFailure() {
+        // Before #243 this threw out of DeltaSqlSweepWorker.drain, and since the claim is the
+        // globally oldest per-site head with LIMIT 1, the same segment was offered first on every
+        // wake — one poison batch and no other site's SQL was ever generated.
         ChangelogSegment segment = segment("DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
 
-        assertThatThrownBy(() -> queueService.processNextPending())
-                .isInstanceOf(RuntimeException.class);
+        assertThat(queueService.processNextPending())
+                .as("this drain stops after one deferral; the next wake claims another site's head, "
+                        + "which is what keeps a systemic failure from walking the whole backlog")
+                .isFalse();
 
-        assertThat(segment.getPluginSqlAt()).isNull();
+        ArgumentCaptor<LocalDateTime> retryAt = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), retryAt.capture(), eq(0));
+        assertThat(retryAt.getValue()).isAfter(before.plusSeconds(59));
+        assertThat(segment.getPluginSqlAt()).as("still the durable queue entry").isNull();
         verify(segmentRepository, never()).save(segment);
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("should report a segment poisoned once it passes the attempt threshold (#243)")
+    void shouldReportPoisonedPastTheThreshold() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        ReflectionTestUtils.setField(segment, "pluginSqlAttempts", 6);
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new RuntimeException("boom"));
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("a segment whose site row is gone is deferred, not left to stall the queue (#243 r2)")
+    void shouldDeferWhenTheSiteLookupFails() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(siteRepository.findById(SITE_ID)).thenReturn(Optional.empty());
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any(), anyInt());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("a failure while the pod is shutting down spends no attempt (#162's rule)")
+    void shouldNotSpendAnAttemptWhenThePodIsShuttingDown() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new RuntimeException("data source is closed"));
+        shutdownSignal.onApplicationEvent(null);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("a deferral that matched no row is not reported (#243, review round 1)")
+    void shouldNotReportADeferralThatMatchedNoRow() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new RuntimeException("boom"));
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(0);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("the #164 guard is loud rather than read as this segment's failure")
+    void shouldRefuseToDrainInsideATransaction() {
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThatThrownBy(() -> queueService.processNextPending())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("#164");
+            verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+    }
+
+    @Test
+    @DisplayName("both queue series exist from startup, so an alert can predate the first failure")
+    void shouldRegisterTheQueueSeriesAtZero() {
+        assertThat(meterRegistry.find("sql.generation.delta.segments.deferred").counter()).isNotNull();
+        assertThat(meterRegistry.find("sql.generation.delta.segments.poisoned").counter()).isNotNull();
     }
 }
