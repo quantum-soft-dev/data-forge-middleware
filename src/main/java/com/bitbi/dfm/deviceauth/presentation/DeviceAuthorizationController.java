@@ -191,7 +191,10 @@ public class DeviceAuthorizationController {
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponseDto.class))),
             @ApiResponse(responseCode = "401", description = "Not authenticated"),
-            @ApiResponse(responseCode = "404", description = "Authorization not found or expired",
+            @ApiResponse(responseCode = "404", description = "Authorization not found",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "410", description = "Authorization expired",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = ErrorResponseDto.class)))
     })
@@ -217,7 +220,7 @@ public class DeviceAuthorizationController {
             return ResponseEntity.notFound().build();
         } catch (DeviceAuthorizationService.AuthorizationExpiredException e) {
             logger.warn("Authorization expired: userCode={}", code);
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.status(HttpStatus.GONE).build();
         } catch (DeviceAuthorizationService.AuthorizationAlreadyProcessedException e) {
             logger.warn("Authorization already processed: userCode={}", code);
             return ResponseEntity.badRequest().build();

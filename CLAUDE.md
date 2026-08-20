@@ -943,6 +943,18 @@ pages/{feature}/            # Route pages
   (`DELTA_CHECKPOINT_CRON`, which relaxed binding already honoured) — its name and default are
   unchanged. See `docs/delta-client-v2-guide.md`
   ("A site whose first checkpoint is not due yet").
+- device-verify-expired-card: An expired browser verification now reaches its dedicated **Code
+  Expired** recovery card instead of being indistinguishable from an unknown code (issue #219).
+  `DeviceAuthorizationService.getAuthorizationInfo` already throws separate expired and not-found
+  exceptions, but `DeviceAuthorizationController` converted both into 404. The GET verification
+  lookup now keeps 404 for an absent authorization and returns 410 Gone for expired; the OpenAPI
+  annotations state both outcomes. `DeviceVerifyPage` maps only 410 to `expired`, so its existing
+  instruction to start a new request on the device becomes reachable while 404 and all operational
+  failures retain the existing error card. Tests pin both the controller status and the rendered
+  recovery action. The uncalled `denyAuthorizationDelete` export is deleted rather than creating a
+  second denial path alongside the used POST action. No migration, gRPC, proto, DTO,
+  configuration-key, metric, S3-key, route-path or TanStack Query key change. See
+  `docs/cr-device-verify-expired-card.md` and `docs/device-flow-client-guide.md`.
 - device-verify-false-toast: The one error signal on the device authorization path stopped being
   wrong, and the direct URL the client prints works again (issue #211, two defects in one flow, both
   frontend). **The toast is an off-by-one, not a race.** A `user_code` is eight characters rendered

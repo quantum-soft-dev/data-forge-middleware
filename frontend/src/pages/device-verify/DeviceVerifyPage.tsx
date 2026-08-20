@@ -25,6 +25,7 @@ import { Label } from '@/shared/ui/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
 import { severityTokens } from '@/shared/ui/tokens';
+import { getServerErrorStatus } from '@/shared/api/error-handler';
 import {
   useVerifyInfo,
   useApproveAuthorization,
@@ -86,7 +87,7 @@ export default function DeviceVerifyPage() {
   if (verifyInfoError && verifyInfoError !== reportedError) {
     setReportedError(verifyInfoError);
 
-    setPageState('error');
+    setPageState(getServerErrorStatus(verifyInfoError) === 410 ? 'expired' : 'error');
     // The global toast is suppressed for this call, so this message is the only
     // report of the failure and has to distinguish a bad code from a bad day.
     setErrorMessage(describeVerifyFailure(verifyInfoError));

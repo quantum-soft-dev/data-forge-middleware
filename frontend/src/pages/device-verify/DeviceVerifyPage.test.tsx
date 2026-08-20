@@ -163,6 +163,17 @@ describe('DeviceVerifyPage', () => {
     expect(screen.getByText('Device code not found')).toBeInTheDocument();
   });
 
+  it('shows the expired-code recovery card when the authorization has expired (HTTP 410)', async () => {
+    search.code = 'ABCD-1234';
+    vi.mocked(deviceAuthApi.getVerifyInfo).mockRejectedValue(httpError(410));
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Code Expired', level: 2 })).toBeInTheDocument();
+    expect(screen.getByText(/start a new authorization request on your device/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enter New Code' })).toBeInTheDocument();
+  });
+
   // The global toast is suppressed for this call, so the page's own message is
   // the only report and must not blame the code for an outage (#211 review).
   it('does not blame the code when the request never reached the server', async () => {
