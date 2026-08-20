@@ -1120,7 +1120,77 @@ volume was busy, so:
   something this budget introduced, but it is the reason to size the key with headroom rather than
   to the exact worst case.
 
+### A non-finite `double` is kept, and quoted
+
+`real` and `double precision` travel as `double_value` — a real IEEE double — and where the column
+is **declared** as one of those two, Parquet DOUBLE carries `NaN` and `±Infinity` natively, so the
+per-segment delta file, the completed-batch artifact and the checkpoint snapshot all hold the value
+the source had. **No degradation, no counter, nothing to configure.**
+
+The Bit BI SQL stream renders those three as **quoted literals** — `'NaN'`, `'Infinity'`,
+`'-Infinity'` — which PostgreSQL coerces to the column's own type. Unquoted they are identifiers,
+not literals, so until issue #233 the generated statement read `SET price = NaN` and the server
+applying it answered `ERROR: column "nan" does not exist`. That failure was invisible on this side:
+generation succeeded, the file was uploaded, the batch was marked processed, and the error surfaced
+only in Bit BI — taking the rest of the file with it where a file is applied as one transaction.
+
+**A file already written is not repaired by this fix, and re-fetching it does not help.**
+`/sql-changes` concatenates the objects `plugin_sql_generations` names, so the same bytes with the
+bare `NaN` come back. The recoveries are the ones the SQL tab already offers: **delete + generate**
+for that batch — with the re-delivery caveat documented there, since the new row gets a new
+`created_at` and the SQL is not idempotent — or `reinit` for a batch a client has already fetched.
+The records themselves were never lost, so no re-baseline of the *source* is involved.
+
+**Why quoted and not NULL, when the `numeric` path below nulls the same three values.** The
+trade-off runs the other way for each. Parquet DECIMAL is a scaled integer and cannot hold a
+non-finite value at all, so NULL is what keeps the Parquet artifacts and the SQL stream saying the
+same thing about that cell; Parquet DOUBLE *can* hold it, so nulling it in SQL alone would create
+exactly the disagreement the `numeric` rule exists to prevent, and would drop a value both consumers
+can carry. A `double` key needs no exception either: PostgreSQL compares `NaN` equal to itself, so
+`WHERE reading = 'NaN'` addresses the row.
+
+**The declared type is what decides on the Parquet side, and the wire case is what decides here** —
+so one combination still disagrees, and it is the combination the schema contract already forbids. A
+client that declares a column `numeric(p,s)` and nevertheless sends the value as `double_value` — or
+as a `string_value` spelling one of the three (see [Value typing](#value-typing): *never send these
+as `double_value`*) — has that cell written NULL by every Parquet writer, since `toBigDecimal`
+cannot render a non-finite into a DECIMAL whatever Java type it arrived as, counted on
+`delta.parquet.unrepresentable-decimals{reason=non_finite}`, while the SQL stream renders `'NaN'`.
+
+The **key** is guarded: quoting the literal would have turned a loud failure into a silent one —
+before #233 the bare `NaN` was invalid SQL that Bit BI rejected, whereas `col = 'NaN'` applies
+cleanly against a baseline row whose key cell is NULL and matches nothing — so such a record is
+skipped, on the same WARN and `sql.generation.delta.records.skipped.unrepresentable_key` as the
+`decimal_value` case. The `string_value` spelling is guarded with it: that one was never loud in the
+first place — a quoted string has always been valid SQL — so it is the same silent divergence one
+wire case over. An *unparseable* string such as `abc` in the same column needs no guard: Parquet
+nulls it too, but its SQL fails at apply time with `invalid input syntax for type numeric`, and only
+a value both sides consider legal can diverge quietly. An `INSERT` is skipped by the same rule, on
+purpose — PostgreSQL would create the row, but every later `UPDATE` and `DELETE` carrying that key
+is skipped, so it would be a row this stream can create and never address again. The **data** cells of that combination still differ (NULL in Parquet,
+`'NaN'` in SQL), as they did before with the SQL merely invalid on top; teaching the SQL path the
+destination type for those is a decision of its own and belongs to issue #240, which owns the
+question for both sides.
+
+A *bare* `numeric` is not in this at all: it maps to Avro STRING to carry the token losslessly, so
+nothing is degraded and nothing is skipped. The guard asks
+`ParquetSchemaMapper.rendersAsParquetDecimal`, i.e. the field the writers actually build, rather
+than reading the type name a second time — and a declaration Avro refuses although PostgreSQL
+accepts it (`numeric(2,5)`, `numeric(5,-2)`, `numeric(0)`) answers *no* rather than throwing: such a
+table has already lost its Parquet artifacts entirely, and failing here would fail the whole batch's
+SQL generation for it.
+
+**Comparison caveat.** `'Infinity'` and `1e400` are not the same cell: the wire value is an IEEE
+double, so a magnitude the source held in a `numeric` and cast to `double precision` may already be
+infinite before it leaves the client. That is ordinary float behaviour and not something this
+pipeline introduces.
+
 ### A value the column type cannot hold
+
+**This is about `numeric`.** The same three values in a `real` / `double precision` column travel as
+`double_value` and are **kept** end to end — see [A non-finite `double` is kept, and
+quoted](#a-non-finite-double-is-kept-and-quoted) just above; none of the `numeric` rule below
+applies to them.
 
 PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
 `decimal_value` tokens. Parquet DECIMAL is a scaled integer with no representation for any of them,
@@ -1171,9 +1241,9 @@ which that cell is separately NULL. The Bit BI SQL path is **not** a feeder: it 
 cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total number of places
 one source cell was degraded.
 
-**In the Bit BI SQL stream a key column is the exception — the record is skipped, not degraded.** A
-value that cannot be represented cannot address a row, so the WHERE clause would render as
-`col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
+**In the Bit BI SQL stream a `decimal_value` key column is the exception — the record is skipped,
+not degraded.** A value that cannot be represented cannot address a row, so the WHERE clause would
+render as `col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
 the mirror silently diverged. Such a record is dropped with a WARN and
 `sql.generation.delta.records.skipped.unrepresentable_key`.
 
@@ -1182,8 +1252,16 @@ other, so several such rows are indistinguishable in a checkpoint snapshot or a 
 artifact, and the baseline can contain a row the delta stream will never address. Consumers reading
 those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
 
-**What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
-server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
+A `decimal_value` reaches that skip whatever the column is declared as, because this pipeline cannot
+store the value under any decimal declaration. Issue #233 added a second, narrower reason: a
+non-finite arriving as `double_value` or as a non-finite `string_value` is representable and is
+normally rendered — but not when the column it keys is declared `numeric(p,s)`, where the Parquet
+side must write NULL and the two would otherwise disagree about which row the statement addresses.
+See [A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted).
+
+
+**What this does not give you:** for a `numeric` column `NaN` is not `NULL`, so a row-for-row
+comparison of source against server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
 such cell threw out of the mapper, and because every consumer catches per table it cost the table's
 whole delta file, failed its checkpoint snapshot (spending a `materialize_attempts` towards the
 permanent give-up above) and stopped the batch's Bit BI SQL. Storing the value truthfully would mean

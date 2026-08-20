@@ -94,11 +94,14 @@ public final class ValueMapper {
     /**
      * The canonical spelling of a non-finite token, or {@code null} when the token is not one.
      *
-     * <p>Package-private because {@link ChangelogFold} needs the same vocabulary to canonicalise a
-     * decimal key's fold identity, and a second copy of it is what issue #238 was: the identical
-     * sign-handling slip existed in both, and nothing made them agree. A future spelling added
-     * here — or a change to the trim or sign rule — would otherwise leave the fold returning the raw
-     * token as identity for a value this class calls non-finite, folding one source row into two.</p>
+     * <p>Shared rather than copied, because a second copy of it is what issue #238 was: the
+     * identical sign-handling slip existed in both this class and {@link ChangelogFold}, and nothing
+     * made them agree. A future spelling added here — or a change to the trim or sign rule — would
+     * otherwise leave the fold returning the raw token as identity for a value this class calls
+     * non-finite, folding one source row into two. {@link ChangelogFold} canonicalises a decimal
+     * key's fold identity with it; {@code SqlStatementGenerator} decides with it whether a DBF
+     * numeric token has to be quoted to be a PostgreSQL literal at all (issue #233), which is what
+     * widened it from package-private.</p>
      *
      * <p>PostgreSQL has a single NaN and rejects the signed input, so the sign is dropped rather
      * than preserved; for the infinities it decides the answer.</p>
@@ -106,7 +109,7 @@ public final class ValueMapper {
      * @param token the wire token
      * @return {@code "NaN"}, {@code "Infinity"} or {@code "-Infinity"}, or {@code null}
      */
-    static String canonicalNonFinite(String token) {
+    public static String canonicalNonFinite(String token) {
         String trimmed = token.trim();
         boolean negative = trimmed.startsWith("-");
         String unsigned = negative || trimmed.startsWith("+") ? trimmed.substring(1) : trimmed;
@@ -117,6 +120,41 @@ public final class ValueMapper {
             return negative ? "-Infinity" : "Infinity";
         }
         return null;
+    }
+
+    /**
+     * Whether this value is a floating point number the wire carried as {@code double_value} and
+     * IEEE calls non-finite — {@code NaN} or {@code ±Infinity}.
+     *
+     * <p>Unlike the decimal predicates above this is <em>not</em> a loss: {@link #toJava(Value)}
+     * returns the value, protobuf {@code double} carries it, and a column declared {@code real} or
+     * {@code double precision} materialises as Avro FLOAT/DOUBLE, which hold it natively. It is
+     * asked by a caller that must know whether the <em>declared</em> destination can hold it after
+     * all — a column declared {@code numeric(p,s)} whose value nevertheless arrives on this wire
+     * case, which the schema contract forbids and nothing rejects at ingest (issue #233).</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a {@code double_value} of {@code NaN} or {@code ±Infinity}
+     */
+    public static boolean isNonFiniteDouble(Value value) {
+        return value.getVCase() == Value.VCase.DOUBLE_VALUE
+                && !Double.isFinite(value.getDoubleValue());
+    }
+
+    /**
+     * Whether this value is a {@code string_value} spelling one of the three non-finite numbers.
+     *
+     * <p>Like {@link #isNonFiniteDouble(Value)} and unlike the decimal predicates, this is no loss
+     * here: the string is carried as it arrived. It matters only to a caller comparing the value
+     * against the column's <em>declared</em> type, where a {@code numeric(p,s)} destination cannot
+     * store it although this wire case can (issue #233, review round 4).</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a string spelling {@code NaN} or {@code ±Infinity}
+     */
+    public static boolean isNonFiniteString(Value value) {
+        return value.getVCase() == Value.VCase.STRING_VALUE
+                && canonicalNonFinite(value.getStringValue()) != null;
     }
 
     /**
