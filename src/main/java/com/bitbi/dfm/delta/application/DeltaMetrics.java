@@ -65,6 +65,11 @@ import java.util.function.Supplier;
  *       was still pending, same {@code reason} tag, registered at zero (issue #212)</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
+ *   <li>{@code delta.egress.errors} — segment egress attempts that failed and were deferred with a
+ *       backoff, the {@code sql.generation.errors} twin (issue #243), registered at zero</li>
+ *   <li>{@code delta.egress.segments.poisoned} — the subset of those failures on a segment that has
+ *       failed at least {@code delta.egress.poison-after-attempts} times: the standing signal that
+ *       one segment needs an operator, since nothing discards it (issue #243)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
  *       {@code download|write|upload}</li>
  *   <li>{@code delta.batch-parquet.artifacts} — completed-batch artifacts settled, tagged
@@ -109,6 +114,8 @@ public class DeltaMetrics {
     private final Counter sessionOverflowsBytes;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
+    private final Counter egressErrors;
+    private final Counter egressPoisoned;
     private final Counter nonFiniteDecimals;
     private final Counter malformedDecimals;
     private final Counter checkpointNoSchema;
@@ -159,6 +166,14 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressErrors = Counter.builder("delta.egress.errors")
+                .description("Segment egress attempts that failed — the twin of "
+                        + "sql.generation.errors, one count per deferred attempt")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressPoisoned = Counter.builder("delta.egress.segments.poisoned")
+                .description("Failed egress attempts on a segment that has now failed at least "
+                        + "delta.egress.poison-after-attempts times")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.nonFiniteDecimals = unrepresentableDecimals(registry, "non_finite");
         this.malformedDecimals = unrepresentableDecimals(registry, "malformed");
@@ -714,6 +729,37 @@ public class DeltaMetrics {
     /** A changelog segment's delta Parquet egress was materialized. */
     public void segmentEgressed() {
         egressSegments.increment();
+    }
+
+    /**
+     * One segment's egress attempt failed and the segment was deferred (issue #243).
+     *
+     * <p>The {@code sql.generation.errors} twin the delta-SQL queue has had since 026, and the
+     * queue-level series the egress side had none of: a failure here leaves the segment as the
+     * durable queue entry, so the work is not lost — but nothing said it had happened. Every
+     * failure is one count, so this is an arrival rate; a segment failing for ever contributes one
+     * count per cooldown, which past the doubling cap is one an hour.</p>
+     *
+     * <p>Registered at zero, so an alert can predate the first failure.</p>
+     */
+    public void egressFailed() {
+        egressErrors.increment();
+    }
+
+    /**
+     * A failed egress attempt on a segment that has now failed at least
+     * {@code delta.egress.poison-after-attempts} times (issue #243).
+     *
+     * <p>The standing "an operator has to act" signal, and deliberately a <b>subset</b> of
+     * {@link #egressFailed()} rather than a tag value on it: a passing S3 outage moves the errors
+     * series and clears, while a segment reaching the threshold is a declared schema that does not
+     * fit its data, an unreadable object or a ceiling set too low — and it is <em>not</em>
+     * discarded, so nothing else will ever raise its hand. Read it as a census rather than an
+     * arrival rate: the same segment counts again on each retry until the cause is fixed, the
+     * batch is deleted, or batch retention takes it ({@link #retentionPendingSegmentsDeleted}).</p>
+     */
+    public void egressSegmentPoisoned() {
+        egressPoisoned.increment();
     }
 
     private static Counter unrepresentableDecimals(MeterRegistry registry, String reason) {

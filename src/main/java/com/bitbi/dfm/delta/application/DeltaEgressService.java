@@ -2,15 +2,20 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.QueueRetryBackoff;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.TableSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,19 +52,27 @@ public class DeltaEgressService {
     private final S3CheckpointStorage storage;
     private final DeltaMetrics metrics;
     private final DeltaParquetProperties parquetProperties;
+    private final QueueRetryBackoff backoff;
+    private final ApplicationShutdownSignal shutdownSignal;
 
     public DeltaEgressService(ChangelogSegmentRepository segmentRepository,
                               ChangelogSegmentService changelogSegmentService,
                               SiteSchemaService siteSchemaService,
                               S3CheckpointStorage storage,
                               DeltaMetrics metrics,
-                              DeltaParquetProperties parquetProperties) {
+                              DeltaParquetProperties parquetProperties,
+                              @Value("${delta.egress.retry-delay-seconds:60}") int retryDelaySeconds,
+                              @Value("${delta.egress.poison-after-attempts:7}") int poisonAfterAttempts,
+                              ApplicationShutdownSignal shutdownSignal) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.siteSchemaService = siteSchemaService;
         this.storage = storage;
         this.metrics = metrics;
         this.parquetProperties = parquetProperties;
+        this.backoff = new QueueRetryBackoff("delta.egress.retry-delay-seconds", retryDelaySeconds,
+                "delta.egress.poison-after-attempts", poisonAfterAttempts);
+        this.shutdownSignal = shutdownSignal;
     }
 
     /**
@@ -69,15 +82,114 @@ public class DeltaEgressService {
      * repository transaction. A crash between them leaves the segment pending; the sweep
      * retries and overwrites the same keys.</p>
      *
-     * @return {@code true} if a segment was processed, {@code false} when the queue is empty
+     * @return {@code true} when a segment was materialized and the drain should continue;
+     *         {@code false} when there was nothing claimable, when this attempt failed and the
+     *         segment was deferred (issue #243 — the next wake claims another site's head), or when
+     *         the failure was the pod shutting down. {@code false} therefore means "stop draining",
+     *         not "the queue is empty".
      */
     public boolean egressNextPending() {
-        List<ChangelogSegment> next = segmentRepository.findNextPendingEgress(1);
+        refuseInsideTransaction();
+        List<ChangelogSegment> next = segmentRepository.findNextPendingEgress(
+                1, LocalDateTime.now(ZoneOffset.UTC));
         if (next.isEmpty()) {
             return false;
         }
-        egressSegment(next.get(0));
+        ChangelogSegment segment = next.get(0);
+        try {
+            egressSegment(segment);
+        } catch (RuntimeException e) {
+            defer(segment, e);
+            // Stop this drain after one deferral (issue #243, review round 1). Continuing would
+            // walk the whole backlog during a systemic failure — an S3 outage, the database
+            // refusing connections — spending an attempt and a cooldown on every pending segment
+            // of every site, which both drowns the poisoned signal and delays recovery by the
+            // accumulated cooldowns. One deferral per wake is enough to unblock the queue: the
+            // deferred segment is in its cooldown, so the next wake claims a different site's
+            // head and drains it to the end.
+            return false;
+        }
         return true;
+    }
+
+    /**
+     * The #164 guard, checked before the queue claims anything (issue #243, review round 1).
+     *
+     * <p>{@link #egressSegment} refuses the same way, but from inside the try that turns a failure
+     * into this segment's deferral — so a caller that wrapped the drain in a transaction would read
+     * as "every segment in the queue is poison data" instead of as the wiring mistake it is.</p>
+     */
+    private void refuseInsideTransaction() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "Refusing to drain the delta egress queue inside an active transaction: the "
+                            + "S3 download and per-table uploads would hold that transaction's "
+                            + "connection for the length of a network call (issue #164).");
+        }
+    }
+
+    /**
+     * Hold a segment that failed out of the queue for a while, instead of ending the drain on it
+     * (issue #243).
+     *
+     * <p>Before this the exception left {@code DeltaEgressWorker.drain}, and since the claim is the
+     * globally oldest per-site head with {@code LIMIT 1}, the same segment was offered first on
+     * every wake — one unreadable object stopped every other site's delta Parquet. The segment is
+     * still the durable queue entry and nothing is discarded: it comes back after a delay that
+     * doubles per attempt, and the attempt count only escalates how loudly it is reported.</p>
+     *
+     * <p>The attempt count in the log is this claim's snapshot plus one, while the stored count is
+     * incremented in the database — two replicas attempting the same segment at once each add one,
+     * so the row can be ahead of the line logged here.</p>
+     */
+    private void defer(ChangelogSegment segment, RuntimeException failure) {
+        if (shutdownSignal.isShuttingDown()) {
+            // The pod is closing, so the S3 client or the data source may already be gone: this is
+            // the process ending, not the segment failing, and #162's rule is that such an ending
+            // records no verdict. The segment stays pending and the next process claims it.
+            log.info("Delta egress for segment {} ended with the shutdown; it stays pending and "
+                    + "spends no attempt", segment.getId());
+            return;
+        }
+        int attemptsAtClaim = segment.getEgressAttempts();
+        int attempts = attemptsAtClaim + 1;
+        LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
+        int deferred;
+        try {
+            deferred = segmentRepository.deferEgress(segment.getId(), retryAt, attemptsAtClaim);
+        } catch (RuntimeException e) {
+            // The deferral write is the likeliest thing to fail when the segment's own failure was
+            // the database — and this class is the only place that ever logs a top-level egress
+            // failure, so letting the second exception replace the first would lose the incident
+            // entirely (review round 3).
+            e.addSuppressed(failure);
+            throw e;
+        }
+        if (deferred == 0) {
+            // Claim-scoped predicate refused: the work landed on another replica while this attempt
+            // was failing, the row is gone, or its attempt count moved (a peer's deferral, a
+            // reset). Reporting it would send an operator after a segment that is already done
+            // (review round 1) — but the failure itself is still worth one line, since nothing else
+            // logs it (round 3).
+            log.debug("Not deferring segment {}: it is no longer this claim's to defer", segment.getId(),
+                    failure);
+            return;
+        }
+        metrics.egressFailed();
+        if (backoff.isPoisoned(attempts)) {
+            metrics.egressSegmentPoisoned();
+            log.error("Delta egress failed {} times for segment {} of site {} (seq {}..{}, key {}) — "
+                            + "the segment stays queued and is retried at {}, and its site's later "
+                            + "segments wait behind it. Nothing discards it: fix the cause (declared "
+                            + "schema, object, ceilings) or delete the batch. If this fires for many "
+                            + "segments at once the cause is systemic, not the data; "
+                            + "delta.egress.poison-after-attempts sets the threshold",
+                    attempts, segment.getId(), segment.getSiteId(), segment.getFirstSeq(),
+                    segment.getLastSeq(), segment.getS3Key(), retryAt, failure);
+        } else {
+            log.warn("Delta egress failed for segment {} of site {} (attempt {}, retry at {}): {}",
+                    segment.getId(), segment.getSiteId(), attempts, retryAt, failure.toString());
+        }
     }
 
     /**
