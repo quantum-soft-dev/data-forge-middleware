@@ -129,6 +129,34 @@ public class ChangelogSegment {
     private LocalDateTime pluginSqlAt;
 
     /**
+     * Whether the Bit BI delta-SQL queue still owes this segment ({@code plugin_sql_at IS NULL}).
+     *
+     * <p>The domain form of the predicate the queue queries
+     * ({@code findNextPendingPluginSql}), retention's prune
+     * ({@code findBelowCheckpointBySiteId} / {@code deleteByIdIfProcessed}) and the batch-deletion
+     * counts express in SQL — one semantics, stated here beside the {@code mark*} methods that
+     * settle it. A <b>provisional</b> segment (033) answers {@code false} by construction: parking
+     * sets both markers to a sentinel and publication re-{@code NULL}s them, which is what actually
+     * enqueues the work — the sentinel protects the queues, while retention never sees provisional
+     * rows at all because its query excludes them.</p>
+     *
+     * @return {@code true} while the segment is the delta-SQL queue's durable work entry
+     */
+    public boolean isPendingPluginSql() {
+        return pluginSqlAt == null;
+    }
+
+    /**
+     * Whether the delta-Parquet egress still owes this segment ({@code egress_at IS NULL}).
+     * The egress twin of {@link #isPendingPluginSql()}, with the same provisional caveat.
+     *
+     * @return {@code true} while the segment is the egress queue's durable work entry
+     */
+    public boolean isPendingEgress() {
+        return egressAt == null;
+    }
+
+    /**
      * Mark the segment's delta Parquet egress as done (removes it from the pending queue).
      */
     public void markEgressed() {

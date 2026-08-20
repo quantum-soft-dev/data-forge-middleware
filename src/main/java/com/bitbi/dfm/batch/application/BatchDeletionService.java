@@ -4,6 +4,8 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PendingQueueWork;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
@@ -28,15 +30,18 @@ public class BatchDeletionService {
 
     private final BatchRepository batchRepository;
     private final ChangelogSegmentService segmentService;
+    private final ChangelogSegmentRepository segmentRepository;
     private final BatchParquetArtifactRepository artifactRepository;
     private final S3FileStorageService storage;
 
     public BatchDeletionService(BatchRepository batchRepository,
                                 ChangelogSegmentService segmentService,
+                                ChangelogSegmentRepository segmentRepository,
                                 BatchParquetArtifactRepository artifactRepository,
                                 S3FileStorageService storage) {
         this.batchRepository = batchRepository;
         this.segmentService = segmentService;
+        this.segmentRepository = segmentRepository;
         this.artifactRepository = artifactRepository;
         this.storage = storage;
     }
@@ -60,6 +65,17 @@ public class BatchDeletionService {
                 .map(BatchDeletionService::cleanupKey)
                 .toList());
         artifactRepository.deleteByBatchId(batchId);
+        // #212: an operator delete is a legitimate ending of retention's hold-back, but the
+        // override must be informed — say what queue work it is destroying. Logged, deliberately
+        // not counted on delta.retention.segments.deleted-pending, which is reserved for the
+        // scheduled batch-retention horizon.
+        PendingQueueWork pending = segmentRepository.countPendingQueueWorkByBatchId(batchId);
+        if (pending.hasAny()) {
+            log.warn("Deleting batch {} destroys pending queue work: {} segment(s) awaiting plugin "
+                            + "SQL, {} awaiting egress — their SQL/delta Parquet becomes permanently "
+                            + "unproducible (issue #212)",
+                    batchId, pending.getPendingPluginSql(), pending.getPendingEgress());
+        }
         objectKeys.addAll(segmentService.deleteMetadataByBatchId(batchId));
         batchRepository.deleteById(batchId);
 

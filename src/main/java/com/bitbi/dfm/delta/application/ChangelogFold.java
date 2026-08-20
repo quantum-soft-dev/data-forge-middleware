@@ -257,15 +257,11 @@ public final class ChangelogFold {
             } catch (NumberFormatException stillNotANumber) {
                 // genuinely non-finite or malformed: the token itself is the identity
             }
-            String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
-                    ? trimmed.substring(1) : trimmed;
-            if (trimmed.equalsIgnoreCase("nan")) {
-                return "NaN";
-            }
-            if (unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf")) {
-                return trimmed.startsWith("-") ? "-Infinity" : "Infinity";
-            }
-            return trimmed;
+            // One vocabulary, shared with ValueMapper: the duplicate copy that used to live here is
+            // what issue #238 was -- the same sign-handling slip in both, with nothing making them
+            // agree, so "-NaN" was reported non-finite by one and kept its own identity in the other.
+            String canonical = ValueMapper.canonicalNonFinite(trimmed);
+            return canonical != null ? canonical : trimmed;
         }
     }
 

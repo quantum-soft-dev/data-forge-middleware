@@ -251,7 +251,12 @@ ticket grows into one larger, run-sized problem instead of a sibling appearing. 
 is **never reopened**: almost always the observation is simply stale (the fix is already in
 `develop`, your worktree is older — nothing needed, say so and move on), and only a true
 regression, reproducing on current `origin/develop`, gets a new issue linking the old one and
-the fixing commit. Only when the theme has no
+the fixing commit. **A closed match carrying `duplicate` is the exception to "stale"** — it was
+closed by another ticket's work rather than by its own PR, and that other ticket may still be
+open (three of the seventeen labelled closes are today: #192 under #193, #218 under #205, #241
+under #239), so read it as a pointer: take the
+absorber from its closing comment and look at *its* state. Ask the search for labels, not just
+titles (`--json number,title,state,labels,body`). Only when the theme has no
 ticket yet, file one — framed as the **theme** (root cause / subsystem), not a one-symptom
 note, so later findings have a place to land; described, labelled, milestoned, `Backlog` on
 the board, sized so one run fixes it whole. Work on a finding never starts in the current
@@ -306,6 +311,70 @@ rather than trusting it.
 `/github-issue-runner` computes the same overlap at step 2b, and when the ticket says it outright
 that inference becomes a read — the dispatcher sees the clash before it puts two tickets in one
 window rather than two hours into an executor's session.
+
+**A ticket closed as absorbed carries `duplicate`, because `Done` cannot say it.** Folding one
+ticket into another (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item
+closed`** workflow then sets its `Status` to `Done` — so `Done` mixes two different things: a
+ticket closed by **its own** PR, and a ticket closed by **somebody else's**. The backlog pass of
+2026-08-19 read **eight** of the second kind — not all of them, as the census below found — with
+nothing telling them from the first, and for four of the eight the absorber was still open — the sharpest being **#200** (`priority: high`, SQL
+regeneration unfixed in production) sitting in `Done` while #190 was open and `status: blocked`;
+#210 under an open #185, #192 under an open #193, #218 under an open #205. The other four — #143,
+#162, #204, #214 — were absorbed by #142, #149, #186 and #213, whose work *did* land. A person
+reading the board treats all eight as shipped, and for four of them that is false.
+
+The marker is the **`duplicate` label, and it is mandatory** — the decision taken for #230. All
+three options are recorded, the two rejected ones first:
+
+- **A separate column loses to the automation.** The project's workflows are readable, and
+  `Item closed` is enabled:
+
+  ```bash
+  gh api graphql -f query='query{node(id:"PVT_kwDOB7LEnM4BeGrE"){... on ProjectV2{
+    workflows(first:20){nodes{name enabled}}}}}'
+  ```
+
+  It fires on the close event, so a `Duplicate` column would be overwritten by every close and
+  restored only by a manual move nothing enforces — the board would lie exactly as it does now, and
+  lie *invisibly*, a rule appearing to exist. `Auto-close issue` is enabled too, so the column set
+  is load-bearing in the other direction as well; and the columns are anyway the **state machine**
+  this file walks in order, where an outcome is not a state.
+- **"Leave them in `Done`, that is accepted" is what the board already does**, and the eight rows
+  above are what it costs.
+- **The label rides beside the automation instead of fighting it.** It survives the auto-move,
+  `gh issue list --state closed --label duplicate` is the whole query, and it was already the
+  de-facto marker: triage had applied it by hand to #218 and #229 before any rule said so, so this
+  generalizes an existing practice rather than inventing one.
+
+**What the label means is the part that had to be decided, and it is the durable fact:** *this
+ticket was closed by another ticket's work, not by its own PR.* It is **not** "the work is still
+unfixed" — that reading is unimplementable, because the person closing the ticket cannot know it
+and it changes underneath them. #200 is the proof, inside ten days: it was labelled on 2026-08-19
+with a comment saying the work was not done, and #190 merged the day after, so a label meaning
+"still unfixed" was already stale and nobody was going to come back and strip it. So every
+absorbed close is labelled, whatever the absorber's fate, and the live answer to "is it fixed?"
+comes from the absorber — which is why **the closing comment is required beside the label** and
+must name the absorber and say whether it is still open. The label narrows the question; the
+comment answers it.
+
+The **label's own description carries that meaning** — it reads "Closed by another ticket's work,
+not by its own PR — the closing comment names the absorber", replacing GitHub's default "This issue
+or pull request already exists", which states the rejected reading to anyone hovering it in the UI.
+
+So: **whoever closes a ticket as absorbed applies `duplicate` and leaves that comment.** The card
+stays in `Done` — that is the automation's answer and this rule does not fight it. What the label
+buys is that **`Done` minus `duplicate` is the work that closed on its own merits**, and that the
+absorbed set is one query rather than a re-reading of the backlog. **That invariant is only as good
+as the backfill, so the backfill is a census rather than the issue's own list**: #230 named eight,
+and review round 2 found six older folds carrying no label at all — #114 into #112, #123 and #124
+into #122, #160 into #158, #163 into #159, #176 into #164 — plus #241, a duplicate of the **still
+open** #239. Seventeen closes carry the label now (the eight, those seven, and #220/#229 which
+triage had already marked), found by scanning the last comments of every closed issue for the
+folding phrasings this repository uses, since no single wording is standard. A fold from before
+that scan is the one thing the search rule cannot see, which is why the scan was worth doing once. The rule binds all three
+closing sites — `/github-issue` (a finding that absorbs an open ticket), `/merge` (a PR whose issue
+folds another) and `/github-issue-runner` (the dispatcher merging duplicates inside a run) — and
+says nothing about *which* ticket survives, which stays a judgement about where the work is.
 
 ### Running several issues at once
 
@@ -376,6 +445,10 @@ columns in order — jumping is not allowed:
 `Backlog` → `Ready` (`status: ready`) → `In Progress` (`status: in progress`) → `In Review`
 (`status: in review`, then `status: ready to merge` while awaiting the human) → `Done`.
 `Blocked` (`status: blocked`) is the side exit at any point.
+
+`Done` is an outcome-blind column: the built-in `Item closed` workflow puts every closed issue
+there, shipped or absorbed alike. The `duplicate` label is what separates the two — see "A ticket
+closed as absorbed carries `duplicate`" above.
 
 Moving the board needs the `project` token scope — if `gh project` fails with
 `INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
@@ -541,6 +614,240 @@ pages/{feature}/            # Route pages
   only on a spent wait (a probe is not an attempt), and painted contention aborts elevated
   rather than critical. No gRPC, proto, configuration-key, metric-name, S3-key or route change.
   See `docs/delta-client-v2-guide.md` ("A first checkpoint build that keeps failing").
+- absorbed-duplicates-marker: A ticket closed as absorbed carries the **`duplicate`** label, so the
+  board stops reading an unfixed defect as shipped (issue #230, filed from the same backlog pass as
+  #216 and deliberately not folded into it — that ticket is about what a follow-up states *before*
+  filing, this one about what the board shows *after* closing). Folding one ticket into another
+  (`folds #NNN`) closes the absorbed issue, and project 16's built-in **`Item closed`** workflow
+  then sets its `Status` to `Done` — so `Done` mixes a ticket closed by its own PR with one closed
+  by somebody else's. Eight such closes existed on 2026-08-19; for four of them the absorber was
+  still open, the sharpest being **#200** (`priority: high`, SQL regeneration unfixed in
+  production) sitting in `Done` while #190 was open and `status: blocked`, and the board could not
+  tell them from #143, #162, #204 and #214, whose work really had landed with #142, #149, #186 and
+  #213. **The two rejected options are recorded with the chosen one.** A separate column loses to
+  the automation, and this was checked rather than assumed — the project's workflows are readable
+  (`gh api graphql … ProjectV2{workflows(first:20){nodes{name enabled}}}`) and `Item closed` is
+  enabled, so a `Duplicate` column would be overwritten by every close and restored only by a manual
+  move nothing enforces, i.e. the board would lie exactly as it does now but *invisibly*, a rule
+  appearing to exist; `Auto-close issue` is enabled as well, and the columns are anyway the state
+  machine this file walks in order, where an outcome is not a state. "Leave them in `Done`, that is
+  accepted" is what the board already does. The label rides beside the automation instead of
+  fighting it, survives the auto-move, is one query
+  (`gh issue list --state closed --label duplicate`), and was already triage's de-facto marker on
+  #218 and #229 — so this generalizes an existing practice rather than inventing one.
+  **The part that had to be decided is what the label means, and it is the durable fact** — *closed
+  by another ticket's work, not by its own PR* — rather than "still unfixed". The second reading is
+  unimplementable: the person closing cannot know it, and it changes underneath them. #200 proves
+  that inside ten days, having been labelled on 2026-08-19 with a comment saying the work was not
+  done and #190 merging the day after, leaving a label nobody was going to come back and strip. So
+  every absorbed close is labelled whatever the absorber's fate, and the live answer to "is it
+  fixed?" comes from the absorber — which is why the **closing comment is required beside the
+  label** and must name the absorber and say whether it is still open. The label narrows the
+  question; the comment answers it. Backfilled on all eight closes so the label has one meaning:
+  #192, #200, #210, #218 (#220 and #229 already carried it) **and** #143, #162, #204, #214 — the
+  counter-set was left unlabelled by the 2026-08-19 pass under the "still unfixed" reading, and
+  labelling it is the consequence of choosing the other one. `Done` minus `duplicate` is now the
+  work that closed on its own merits. The rule binds all three closing sites — `/github-issue`,
+  `/merge` and `/github-issue-runner` — and says nothing about *which* ticket survives, which stays
+  a judgement about where the work is. The `duplicate` label's **description** was rewritten to
+  carry the same meaning ("Closed by another ticket's work, not by its own PR — the closing comment
+  names the absorber"): GitHub's default text, "This issue or pull request already exists", states
+  the rejected reading to anyone hovering it in the UI. **Review round 1 found the rule's own
+  misreading one step upstream** and that is the finding worth keeping: the follow-ups search rule
+  still told an agent that a *closed* match "almost always" means the fix is already in `develop`,
+  so a `duplicate`-closed #192 or #218 — whose absorbers #193 and #205 are open — would have been
+  read as shipped at the search step, which is #230's defect moved off the board and into
+  `/github-issue`; the closed-match branch now names `duplicate` as the exception and the searches
+  ask for labels. Three more from the same round: the absorbed close strips `status: *` like any
+  other close (a ticket closed in `Done` still carrying `status: blocked` was literally #200); the
+  "do not move the card" instruction was narrowed to "do not move it to another column, but check
+  it reached `Done` and move it there by hand otherwise", since assuming the workflow fired
+  contradicts this file's own "a command that exited 0 is not proof"; and the dispatcher rule had
+  been extended to closes that are **not** absorbed at all — an issue merged by its own PR in the
+  same run, and a finding already fixed in `develop` — which would have broken the very invariant
+  the label buys. **Review round 2 found the invariant itself false at merge time and one prescribed
+  command broken.** The backfill had followed #230's own list, and that list was an August census —
+  six older folds carried no label (#114 into #112, #123 and #124 into #122, #160 into #158, #163
+  into #159, #176 into #164), plus #241, a duplicate of the **still open** #239, so
+  `gh issue list --state closed --label duplicate` was not "the absorbed set" and the new
+  closed-match rule would have misread all seven as stale. Fixed by scanning the last comments of
+  every closed issue for the folding phrasings this repository uses — there is no standard one — and
+  labelling what it found: seventeen closes carry the label now, three of them with the absorber
+  still open. The broken command was round 1's own fix: the label-aware search interpolated
+  `join(\",\")`, a jq parse error, so an agent would have fallen back to the label-blind search —
+  the defect the fix exists to close, shipped as a rule that fails every time. Three more:
+  `/merge`'s trigger keyed on the literal `folds #NNN`, which appears nowhere in this repository
+  (PR #236 says "folding #200"), so the step could never have fired; the absorb-and-close step had
+  no guard against closing a ticket somebody is currently working — a real hazard while the
+  dispatcher keeps three in flight, since closing an issue silently destroys the window of a PR
+  carrying `Closes #<n>` — and no obligation to report the close, the heaviest of the three
+  follow-up actions being the only one leaving no trace; and the dispatcher exclusion was one case
+  too wide, since a deferred review finding fixed by somebody else's PR *is* an absorbed close.
+  Documentation and command files only: no production code, test, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or frontend change (the label description and the
+  backfill are repository metadata, not files).
+- signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
+  identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
+  by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings
+  computed an **unsigned** form and then tested NaN against the **signed** one, so the two signed
+  spellings fell through every non-finite branch. The cost was not the fall-through but where it
+  landed: `isNonFiniteDecimal("-NaN")` was false, `BigDecimal` cannot parse the token, so
+  `isMalformedDecimal` was **true** and the cell was counted
+  `delta.parquet.unrepresentable-decimals{reason=malformed}` — a series `ValueMapper`'s own Javadoc
+  defines as "a client defect somebody has to fix", where the whole point of splitting it from
+  `non_finite` (#215, review round 1) was that the two want opposite responses from an operator. A
+  signed NaN therefore paged someone to chase a bug that does not exist, which is the outcome the
+  split was added to prevent. The second consequence is `ChangelogFold.normalizeDecimal`, which
+  canonicalises `nan`/`NaN` to `"NaN"` so one source row does not fold into two identities — its own
+  comment says so — and returned `trimmed` for the signed spelling, defeating that. PostgreSQL emits
+  `NaN` unsigned, so a faithful `numeric` round trip never reaches this; it is reachable because the
+  token is whatever the client chose to send, which is the premise `isNonFiniteToken`'s own comment
+  states and the reason it strips the sign for infinity in the first place. The fix is one word in
+  each of two places — the NaN spelling is tested against `unsigned`, and PostgreSQL has a single
+  NaN whose sign carries no meaning, so `-NaN` canonicalises to `"NaN"` rather than to `"-NaN"`.
+  **Deliberately not widened**: this is token classification only, not the destination-awareness
+  #240 defers with three rounds of history as its warning — the same coercion path where each round's
+  fix opened a hole in the next place. Both tests were red first
+  (`ValueMapperTest.nonFiniteDecimalDegradesToNullInsteadOfThrowing` and
+  `aSignedNanIsNonFiniteRatherThanMalformed`, `ChangelogFoldTest.nonFiniteKeySpellingsFoldToOneIdentity`),
+  and the metric assertion is the one that pins the ticket's actual cost rather than the predicate.
+  **Review corrected the justification, not the fix**: the first wording said PostgreSQL accepts
+  these "with an optional sign", generalising the accurate "optional sign on infinity" — PostgreSQL
+  rejects `'-NaN'::numeric` outright, so a signed NaN is evidence the *client* formats
+  non-faithfully rather than a value the source held, and an operator reading the guide would
+  otherwise have concluded there was nothing to ask the client about. It still counts as
+  `non_finite`, since it is not a value this pipeline can repair. One pre-existing asymmetry this
+  change widens was traced to #240 rather than fixed: `isNonFiniteToken` trims the token while
+  `parseDecimal` is handed it raw, so a padded *finite* token (`" 1.5 "`, a shape
+  `ChangelogFold.normalizeDecimal` already carries a review-round-3 comment about) is written NULL
+  and counted `malformed` — silent loss of a legal number, and out of scope for a classification fix.
+  **Round 3 removed the duplication that was the defect** rather than only its instance: the
+  vocabulary now lives once, as package-private `ValueMapper.canonicalNonFinite`, with `ChangelogFold`
+  calling it — two copies with nothing asserting they agree is exactly how the identical
+  sign-handling slip came to exist in both, and the next spelling added to one would have left the
+  other returning the raw token as a fold identity for a value the first calls non-finite.
+  `ChangelogFoldTest.everySpellingValueMapperCallsNonFiniteFoldsUnderItsCanonicalIdentity` pins the
+  agreement (proven by mutation: restoring a private copy missing `inf` fails it) and pins that the
+  two infinities stay apart, which the shared canonicalisation must not collapse the way it
+  deliberately collapses the NaN sign. Round 3 also caught this entry's own surfaces contradicting
+  themselves: the guide said a signed NaN "says the client formats non-faithfully" and is "a client
+  to ask about" while **nothing** would tell an operator so — `malformed` no longer moves for it,
+  `non_finite` is documented as "nothing to repair", and no log line prints the token. The
+  invisibility is deliberate and is now stated as such in both the guide and the counter's HELP: the
+  loss is the ordinary one, so a signal of its own would page about a formatting quirk that costs
+  nothing beyond the degradation already reported.
+  No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend
+  change; `delta.parquet.unrepresentable-decimals` keeps both tag values and simply stops
+  misclassifying between them. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
+  hold").
+- retention-holds-pending-work: Changelog retention no longer deletes a segment whose plugin SQL
+  or egress was never generated — pending work is not prunable, and both the hold-back and the one
+  horizon that remains are visible (issue #212, found reviewing #181/PR #209, which it silently
+  bounded). A changelog segment is also the durable entry of two work queues: `plugin_sql_at IS
+  NULL` means the Bit BI delta-SQL queue still owes it, `egress_at IS NULL` the delta-Parquet
+  egress — and both queues retry precisely by leaving the row pending ("a throw leaves the segment
+  pending for the sweep"). `ChangelogRetentionService.prune` deleted such a row like any other once
+  the checkpoint subsumed it and `delta.retention.audit-window-segments` (20) younger
+  below-checkpoint segments accumulated, so the batch's SQL was lost permanently, silently, with no
+  audit row marking the moment of loss — capping the retry guarantee #181 had just established.
+  **The owner fixed the hybrid of the ticket's first two shapes**: the prune skips a
+  below-checkpoint segment with either marker `NULL`
+  (`ChangelogSegment.isPendingPluginSql()`/`isPendingEgress()` own the semantics; the queues' SQL
+  and the prune's mirror them), and the hold-back is counted on
+  **`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`** (registered at
+  zero; only segments the window would actually have pruned; a segment owing both moves both
+  series; a census, not an arrival rate — with the blind spot stated: the prune runs only after a
+  successful build, so a site whose build aborts nightly shows zero here while accumulating, and a
+  reinit re-pends the audit window by design, a benign one-pass spike) plus one WARN per site per
+  pass. The audit window keeps its meaning — held-back segments count toward it and are retained on
+  top of it (pinned by `pendingSegmentsStillCountTowardTheAuditWindow`).
+  **Review round 1 (ten lenses) then reshaped half of it, and its owner addendum moved the
+  contract.** The addendum: "unbounded in time" was never true — `BatchRetentionService` is a
+  second scheduled deleter of segments (rows and S3, per-site `retentionDays`, default 45 days, no
+  marker check), so it is recognized as **the deliberate outer horizon** of the queues' retry, made
+  observable rather than closed: **`delta.retention.segments.deleted-pending{reason=...}`**
+  (registered at zero — a non-zero rate means work sat in a queue for the whole retention window)
+  plus a WARN per batch; the explicit admin batch delete logs the pending count it destroys
+  (informed override, deliberately off the meter); and every contract surface names the endings —
+  queue drains, operator deletes segment or batch, re-baseline/wipe, batch retention. #185 is
+  written in the **future** tense everywhere ("will be closed at source; still open"), since that
+  fail-fast is the no-bound stance's load-bearing justification and it does not exist yet.
+  **Three correctness findings were the round's core, all fixed in-PR.** (A1) The hold-back broke
+  the contiguity proxy `historyPruned` rested on — prune deleted oldest-first unconditionally, so
+  "head at seq 1" proved a lossless refold was possible; retaining an older pending segment while
+  younger processed neighbours are pruned puts a gap *behind* a retained head (a reinit re-pends
+  interleaved segments out of queue order — the concrete route), and a frame-gone site would have
+  silently refolded the gapped history into a truncated checkpoint and advanced the pointer over
+  the loss: `hasSeqGap` now requires contiguity from seq 1 (overlaps tolerated, only strictly
+  uncovered sequences refuse), mutation-proven. (A2) The prune was check-then-act across
+  statements while `clearPluginSqlBySiteId` re-`NULL`s `plugin_sql_at` site-wide, so a reinit
+  committing between the read and the delete had its freshly-pending row deleted — object first:
+  the row delete is now a **single conditional statement** (`deleteByIdIfProcessed`, the marker
+  predicate travels with the DELETE), the object goes only after the row delete reported success
+  (row-first, so a crash leaves an unreferenced object for the #158 sweep), and a refused delete
+  re-reads and counts the row by what it says now. (A3) The hold-back defeated #149's bounded
+  drain — a frame-gone site with one held-back below-pointer segment kept `segments` non-empty for
+  ever, took `lossy_refold` nightly and spent no attempt: a site whose remaining segments all sit
+  at or below the pointer (everything they hold is already inside the lost frame's fold) now takes
+  the #149 drain under the unchanged `lossy_refold` tag — one attempt per retryable row per
+  scheduled night, re-arm on the forced pass, then a **quiet** visit with
+  `delta.checkpoint.tables.given-up` standing — while segments above the pointer keep the
+  never-quiets contract; mutation-proven both ways.
+  **The efficiency findings all trace to the same fact — the below-checkpoint set is unbounded
+  now**: the prune reads a four-column projection instead of hydrating every entity (JSONB stats
+  included), deletes objects in batched 1000-key `DeleteObjects` round trips instead of one per
+  object (#234 keeps only the transaction-boundary half); the checkpoint build reads **seq
+  coverage** (two longs per segment) and hydrates entities only above the fold's seed, so the idle
+  visit — the nightly steady state of a site pinned to the work list by held-back segments, whose
+  per-tick cost the guide now itemizes — loads no entity at all; and the re-baseline reset
+  discards the old baseline with one projection and one bulk DELETE instead of a row-by-row loop
+  under the `site_sync_state` row lock.
+  **Bucket C stayed out by the follow-ups rule**: #243 (one poison segment stalls the whole global
+  delta-SQL queue, and egress equivalently with no error counter — pre-existing, but #212 changed
+  its ending from "self-heals by losing one batch" to "permanent until an operator acts, bounded
+  by batch retention", so per-segment bounds are now their own decision), #244 (the
+  completed-batch Parquet replay is a third durable consumer of raw segments no retention
+  predicate consults — the guide scopes the hold-back guarantee to the two queue markers and names
+  it), #245 (the two queue markers can clobber each other back to NULL — whole-entity saves, no
+  `@Version` — self-healing before, but #212 builds a durability guarantee on those columns).
+  Tests pin both directions and every review fix (mutation-proven: predicate disabled — 4 red;
+  gap check removed — 1 red; drain branch removed — 2 red); the hold-back integration test's
+  assertion messages re-read the markers so an improbable steal of the global queue head diagnoses
+  itself; fixtures whose subject needs pruning mark their segments through one
+  `BaseIntegrationTest.markSegmentsProcessed` helper. No REST, gRPC, proto, DTO, migration (V54
+  still current, V55 free), configuration-key, S3-key or frontend change; both meter names are
+  new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
+  delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
+  `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
+  **Round 2 reviewed what round 1 introduced, and three of its findings cut into round 1's own
+  fixes.** The A3 drain was silencing far more than its justification named: with the default
+  window of 20, retention never emptied a quiet site's below-checkpoint list even before #212, so
+  a frame-gone site holding an ordinary *processed* window — a real, rebuild-recoverable data-loss
+  state #212 did not create — would have gone quiet after five nights; the drain is now scoped to
+  a held-back **pending** segment actually existing below the pointer
+  (`existsCommittedPendingBelowCheckpoint`), the processed-only population keeps the never-quiets
+  contract, and the false convergence claim in the Javadoc is rewritten (mutation-proven). The
+  split of the old single segment read into a coverage read and an entity load opened a window the
+  single read never had — a deleter that bumps no epoch (batch retention's horizon, a sibling
+  replica's prune) removing rows between them would have had the frameless refold fold a silently
+  gapped history — so contiguity is re-verified against the list actually folded, thrown without
+  counting (the read-denial rule: transient, one tick). And the drain message was pass-aware-false:
+  #186 shows it verbatim as `lastRebuildMessage`, and on the forced pass `settleSiteWide` re-arms —
+  the text now says which happened. The rest: a stray diff3 marker the develop sync left in both
+  journal files (deleted); the conditional DELETE's marker predicate — A2's whole fix — was pinned
+  by nothing that reached the real SQL (an integration test now drives the real statement over a
+  pending, half-pending and processed row); `SdkClientException` escaping `deleteObjects` would
+  have rolled the row deletes back *after* earlier chunks' objects were destroyed — rows restored,
+  objects gone, in bulk (caught now, the #158-round-2 gap); `deleted-pending` counted before
+  anything was deleted, inflating the "permanently unproducible" series with phantom losses on
+  every failing night (counted after the segment delete returns; pinned); the re-baseline reset's
+  blanket site-wide DELETE could take a row committed between the key read and the delete
+  (`deleteByIdIn` over exactly the collected refs now) and its afterCommit object deletes went one
+  round trip per key (batched); `findBySiteIdOrderByFirstSeq` — now with zero production callers —
+  carries a do-not-re-adopt Javadoc; the hold-back census counting lives once
+  (`HeldBackTally`); and the informed-override's real surface is stated honestly (a server-side
+  WARN; the delete's HTTP response carries no pending count — a REST change was deliberately
+  avoided, a UI confirmation is its own decision if wanted).
 - sql-generation-config-fail-fast: An out-of-range value anywhere in the `plugin.sql-generation.*`
   block fails the application context at startup, and the dead async generator is gone (issue #185,
   folding **#210** — both hygiene in `SqlGenerationService`, sequenced after #190). **Fail fast over
