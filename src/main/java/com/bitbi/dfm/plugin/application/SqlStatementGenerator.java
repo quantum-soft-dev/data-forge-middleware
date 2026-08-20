@@ -174,12 +174,18 @@ public class SqlStatementGenerator {
      * do, an integral one does not, and there the statement fails either way
      * ({@code invalid input syntax for type integer} in place of {@code column "nan" does not
      * exist}); {@link DbfColumnType#INTEGER} and {@link DbfColumnType#CURRENCY} are quoted with the
-     * rest because a uniform rule is never worse than the bare token, not because it rescues them. It is guarded here rather than argued away because the claim that
-     * a DBF file cannot carry one is a claim about a client this repository cannot see: DBF stores
-     * {@code N}/{@code F} fields as fixed-width ASCII digits, so the extractor has nothing to read
-     * a non-finite value <em>from</em>, and since 032 retired HTTP ingestion no new CSV snapshot
-     * arrives on this path at all — but the whole cost of not relying on that is one comparison
-     * against a vocabulary that already exists (issue #233).</p>
+     * rest because a uniform rule is never worse than the bare token, not because it rescues them.</p>
+     *
+     * <p><strong>This numeric branch is unreachable through the only production caller</strong>, and
+     * that is worth knowing rather than assuming the guard is load-bearing:
+     * {@code DbfSqlGenerationStrategy} passes an <em>empty</em> {@code columnTypes} map, so every
+     * column falls back to {@link DbfColumnType#CHARACTER} and every CSV cell is already quoted and
+     * escaped — a token like {@code NaN} included. The guard belongs to this method's own contract
+     * (the parameter exists, and the branch goes live the moment a caller supplies a real map)
+     * rather than to an observed defect. Two consequences of that empty map are <em>not</em> this
+     * method's to settle and are filed as issue #263: the per-type NULL/{@code 0} handling above is
+     * dead for the same reason, and a non-numeric token reaching a numeric column is returned raw —
+     * unquoted and unescaped — which is latent only because nothing supplies the map.</p>
      */
     private String formatValue(String value, DbfColumnType type) {
         // Handle empty values

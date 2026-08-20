@@ -616,10 +616,13 @@ pages/{feature}/            # Route pages
   claimed. **The DBF path's `formatValue` had the same shape of hole** for a numeric
   token and is guarded too, through `ValueMapper.canonicalNonFinite` — widened from package-private
   rather than copied, since a second copy of that vocabulary is exactly what #238 was. That guard is
-  belt-and-braces by its own admission: DBF stores `N`/`F` fields as fixed-width ASCII digits, so the
-  extractor has nothing to read a non-finite value from, and since 032 no new CSV snapshot arrives on
-  that path at all — but "a client this repository cannot see cannot produce it" is a claim, and one
-  comparison against an existing vocabulary is cheaper than relying on it. Proven by mutation: with
+  belt-and-braces, and review round 2 found the sharper reason: that branch is **unreachable through
+  the only production caller** — `DbfSqlGenerationStrategy` passes an *empty* `columnTypes` map, so
+  every cell falls back to `CHARACTER` and is quoted and escaped already, `NaN` included. The guard
+  is on the method's contract rather than on an observed defect, and the empty map is a finding of
+  its own (**#263**): it also makes the documented per-type NULL/`0` handling dead, and leaves a
+  non-numeric token in a numeric column returned raw — unquoted and unescaped — latent only because
+  nothing supplies the map. Proven by mutation: with
   both branches removed six methods fail across `SqlStatementGeneratorTest` and
   `DeltaSqlGenerationStrategyTest`. No new metric — the value is not degraded, so there is nothing to
   count. No REST, gRPC, proto, DTO, migration, configuration-key,
