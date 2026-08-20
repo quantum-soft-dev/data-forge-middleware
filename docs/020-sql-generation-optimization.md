@@ -484,7 +484,26 @@ generation, and one increment of the new counter
 
 Two neighbouring series still move for both callers, deliberately: `sql.generation.duration` takes
 a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both
-permits. The loser's `SQL_GENERATION_STARTED` entry also stands — it did start.
+permits.
+
+**The loser's `SQL_GENERATION_STARTED` entry stands, and what that looks like is worth stating**
+(raised in review): it did start, so the entry is true — but the adopt path is now the **only** exit
+of `generateSqlForBatch` that leaves a started entry with no terminal companion. Every other one
+pairs it: a failure writes `SQL_GENERATION_FAILED`, an empty diff writes
+`logSqlGenerationCompletedNoChanges`, and #181 deliberately moved `refuseUnderMemoryPressure`
+*above* the started entry precisely so a refusal costs no unterminated row. So a raced batch reads,
+on `GET /api/v1/account/plugins/{pluginId}/logs` and in the Logs tab of My Plugins, as **two
+"Generating SQL..." lines and one "SQL Generated"** — a reader pairing lines by eye sees one
+generation that never finished. That is a flat event log rather than a live status, so nothing
+spins; but it is a shape the log did not contain before, and it is the counter
+`sql.generation.claims.lost` that says the unmatched line was a lost race rather than a crash.
+
+Giving the loser a terminal entry of its own is the right end state and is **deliberately not done
+here**: it needs a new `PluginActionType` value, which is stored data plus a widening of
+`chk_plugin_audit_logs_action_type` — a Flyway migration, for a cosmetic asymmetry on a path that
+only fires when two workers genuinely collide. Reusing an existing value would be worse than the
+gap: `SQL_GENERATION_COMPLETED` is the duplicate this section removes, and
+`SQL_GENERATION_FAILED` is a `success = false` row claiming an error that did not happen.
 
 Pinned by `SqlGenerationConcurrentClaimIntegrationTest` (the real constraint, the race made
 deterministic by a barrier at `storeSqlFile`) and by the mock twin in `SqlGenerationServiceTest`;

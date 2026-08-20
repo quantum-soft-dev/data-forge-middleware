@@ -613,7 +613,20 @@ pages/{feature}/            # Route pages
   neighbouring series still move for both callers and that is deliberate**: `sql.generation.duration`
   takes a sample from each (both really did render the batch) and
   `sql.generation.semaphore.acquired` counts both permits; the loser's `SQL_GENERATION_STARTED`
-  entry stands for the same reason — it did start. **No test can start red against a property that
+  entry stands for the same reason — it did start. **Review named the cost of that last one and it
+  is documented rather than fixed**: the adopt path is now the *only* exit of `generateSqlForBatch`
+  leaving a started entry with no terminal companion (a failure writes `SQL_GENERATION_FAILED`, an
+  empty diff writes `logSqlGenerationCompletedNoChanges`, and #181 moved `refuseUnderMemoryPressure`
+  above the started entry precisely so a refusal costs no unterminated row), so a raced batch reads
+  in the account's Logs tab as **two "Generating SQL..." lines and one "SQL Generated"** — a flat
+  event log, so nothing spins, but a shape the log did not carry before, with `claims.lost` the
+  series that says the unmatched line was a lost race rather than a crash. A terminal entry of its
+  own needs a new `PluginActionType` — stored data plus a widening of
+  `chk_plugin_audit_logs_action_type`, i.e. a migration — for a cosmetic asymmetry on a path that
+  fires only on a genuine collision, and reusing an existing value would be worse than the gap
+  (`SQL_GENERATION_COMPLETED` is the duplicate being removed; `SQL_GENERATION_FAILED` is a
+  `success = false` row claiming an error that did not happen). Filed as the theme **#260**.
+  **No test can start red against a property that
   already holds in the other direction**, so the negative assertions are paired with a winner test
   in the same class (`shouldAuditAndCountTheWinnerOfTheUniqueClaim`, which passes throughout and is
   what stops "never audited" from being satisfied by a service that audits nothing) and both were
