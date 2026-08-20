@@ -251,20 +251,37 @@ old one and the fixing commit) or a stale observation (the fix is already in `de
 needed). Only if nothing matched, file the issue (described, labelled, milestoned, `Backlog` on
 the board) — and do not start work on it in the current cycle.
 
-**A ticket filed from a review says what it will touch.** A keyword search finds a *duplicate*; it
-does not find a *collision*, because two tickets in the same code often share no vocabulary at all —
-#200 was about a unique constraint and #190 about a transaction annotation, they read as unrelated,
-and they were one piece of work that could not be done in either order alone. What they shared was
-the files. So every follow-up states three things, in the body, before it is filed:
+**Every follow-up says what it will touch.** A keyword search finds a *duplicate*; it does not find
+a *collision*, because two tickets in the same code often share no vocabulary at all — #200 was
+about a unique constraint and #190 about a transaction annotation, they read as unrelated, and they
+were one piece of work that could not be done in either order alone. What they shared was the files.
+So every follow-up — from a review, or seen in passing mid-work, which is the commoner case —
+states three things, in the body, before it is filed:
 
 - **the files it expects to touch** — enough for an overlap check, not a plan;
-- **whether it needs a Flyway migration** — the one collision that merges cleanly and breaks
-  startup, so "none" is worth writing down;
-- **which open tickets live in those same files** — named, and "none" is a valid answer.
+- **whether it needs a Flyway migration, and whether it needs a `specs/NNN-*` directory** — the two
+  collisions that merge cleanly and are invisible to git, one breaking startup and the other
+  putting two features on one number, so "neither" is worth writing down;
+- **which open tickets live in those same files** — named, and "none found" is a valid answer.
 
-Three lines. `/github-issue-runner` computes the same overlap at step 2b by inferring it from prose;
-when the ticket says it outright, that inference becomes a read, and the dispatcher sees the clash
-before it puts two tickets in one window rather than two hours into an executor's session.
+**The third line needs a method, because the search this file prescribes elsewhere cannot answer
+it.** `--search` is keyword-based, and the whole point above is that a collision shares no
+vocabulary — an executor who greps "SqlGenerationService" finds neither #185 ("threshold
+validation") nor #210 ("dead async method"), writes "none", and the dispatcher schedules the pair.
+Read the bodies rather than the index:
+
+```bash
+gh issue list --state open --limit 100 --json number,title,body \
+  | grep -iE '<file basename>|<class name>|<config key>'    # one grep per name you expect to touch
+```
+
+Pre-rule tickets carry no file line, so the answer is only ever as good as their prose — which is
+why the line says **"none found"** and not "none", and why the dispatcher re-checks rather than
+trusting it.
+
+`/github-issue-runner` computes the same overlap at step 2b, and when the ticket says it outright
+that inference becomes a read — the dispatcher sees the clash before it puts two tickets in one
+window rather than two hours into an executor's session.
 
 ### Running several issues at once
 
@@ -468,6 +485,43 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- followup-declares-its-files: A follow-up ticket states what it will touch, so a collision is read
+  rather than inferred (issue #216, filed from the backlog pass that untangled #190/#200). **A
+  keyword search finds a duplicate and cannot find a collision**: two tickets in the same code
+  routinely share no vocabulary — #200 was a unique constraint, #190 a transaction annotation, they
+  read as unrelated, and they were one piece of work doable in neither order alone. What they shared
+  was the files. The same pass found three more such pairs (#185/#210 in `SqlGenerationService`,
+  #193/#213 in `CheckpointService`/`CheckpointScheduler`, #213/#215 suspected in the egress render
+  path — that last one later **disproved** by #213's own investigation, which is a fair illustration
+  of how little a suspicion is worth without the file list). Every follow-up now carries three lines
+  in its body: the files it expects to touch, whether it needs a Flyway migration **or a
+  `specs/NNN-*` directory** — the two collisions that merge cleanly and are invisible to git, one
+  breaking startup and the other putting two features on one number — and which open tickets live in
+  those same files.
+  **Review corrected four things about the rule and one claim about the repository.** The third line
+  had **no method**, and the only search this file prescribes is the keyword one the rule's own
+  thesis declares insufficient: an executor greps `SqlGenerationService`, finds neither #185
+  ("threshold validation") nor #210 ("dead async method"), writes "none", and the dispatcher
+  schedules exactly the pair the rule exists to separate — a false negative that reads as a verified
+  answer. So the rule now prescribes reading bodies rather than the index
+  (`gh issue list --state open --json number,title,body | grep …`) and says **"none found"**, since
+  pre-rule tickets carry no file line and the answer is only ever as good as their prose. The
+  **consumer** was never updated either: `CLAUDE.md` promised the dispatcher's inference "becomes a
+  read" while step 2b still described inference only, so 2b now reads the lines when present,
+  **re-checks by grep anyway** (a declared list ages while the code moves) and falls back to
+  inference when absent — a ticket's silence never means "no overlap". The requirement sat in
+  `/github-issue`'s **search** step while every other body requirement lives in the filing step, the
+  natural place to read as the spec for an issue body; it is in both now. And the lead sentence
+  scoped it to "a ticket filed from a review" three lines above "every follow-up states three
+  things" — the mid-work finding is the commoner case, so the narrower reading would have skipped it.
+  **The claim about `AGENTS.md` was simply false**: the PR argued against touching it because adding
+  a rule there "would be worse than the pointer that already exists", and `grep -c 'CLAUDE.md'
+  AGENTS.md` was **0** — no pointer, no follow-up rule, while that file declares itself "the single
+  source of dev rules". An agent whose harness loads only `AGENTS.md` would have filed tickets
+  without the three lines, degrading the dispatcher's promised read to inference for exactly those.
+  It now carries the condensed rule and the pointer.
+  Documentation and command files only — no production code, test, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or frontend change.
 - non-finite-decimal-null: A `NaN` or `+/-Infinity` arriving in a `numeric` column is written as
   NULL and reported, instead of costing the table its delta file, its checkpoint snapshot and its
   Bit BI SQL (issue #215, from the PDE soak on the live stand). PostgreSQL `numeric` holds all three
