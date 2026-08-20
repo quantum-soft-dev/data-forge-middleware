@@ -243,13 +243,19 @@ archives it (or the "Auto-archive on PR close" setting does).
 an "out of date" banner — do not resurrect it on your own initiative. Say "needed" or "not needed"
 for each documentation surface rather than skipping silently.
 
-**Follow-ups are tickets, not notes — but search before filing.** Anything out of scope worth
-doing later: first search **open and closed** issues (`gh issue list --state all --search …`) and
-grep `CLAUDE.md`/`docs/`, because several workspaces work this repo in parallel. An open match
-gets your evidence as a comment; a closed match means either a regression (new issue linking the
-old one and the fixing commit) or a stale observation (the fix is already in `develop` — no ticket
-needed). Only if nothing matched, file the issue (described, labelled, milestoned, `Backlog` on
-the board) — and do not start work on it in the current cycle.
+**Follow-ups: enrich an existing ticket before filing a new one.** Anything out of scope worth
+doing later: first study **open and closed** issues (`gh issue list --state all --search …`,
+plus `CLAUDE.md`/`docs/`) for the same **theme**, not just the same words. An open match —
+including a related-but-not-identical one — gets your evidence as a comment, so the existing
+ticket grows into one larger, run-sized problem instead of a sibling appearing. A closed match
+is **never reopened**: almost always the observation is simply stale (the fix is already in
+`develop`, your worktree is older — nothing needed, say so and move on), and only a true
+regression, reproducing on current `origin/develop`, gets a new issue linking the old one and
+the fixing commit. Only when the theme has no
+ticket yet, file one — framed as the **theme** (root cause / subsystem), not a one-symptom
+note, so later findings have a place to land; described, labelled, milestoned, `Backlog` on
+the board, sized so one run fixes it whole. Work on a finding never starts in the current
+cycle.
 
 **Every follow-up says what it will touch.** A keyword search finds a *duplicate*; it does not find
 a *collision* unless somebody runs it: #190 and #200 were one piece of work, doable in neither order
@@ -330,7 +336,9 @@ files (`CLAUDE.md`, `specs/**/tasks.md`, `docs/`) are not overlap — both sides
 The run stops for the human on an agent reporting blocked, a second dispatcher touching an issue
 in this run's window, an unclear conflict, red CI on `develop`, a missing `project` scope, an issue
 that turned out wider than written, or the same issue coming back blocked twice. Findings mid-run
-become issues for a later run, never additions to the current window. The run scripts are
+follow the follow-ups rule above (enrich an existing ticket, else file the theme), and the
+dispatcher merges duplicates and same-root-cause smalls into one run-sized ticket — findings are
+for a later run, never additions to the current window. The run scripts are
 `nonconcurrent` (one shared docker-compose stack and a fixed 8080), so only one workspace can hold
 the live stand at a time — sequence the tasks that need it.
 
@@ -611,6 +619,82 @@ pages/{feature}/            # Route pages
   (`HeldBackTally`); and the informed-override's real surface is stated honestly (a server-side
   WARN; the delete's HTTP response carries no pending count — a REST change was deliberately
   avoided, a UI confirmation is its own decision if wanted).
+- shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
+  / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
+  **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three
+  axes, because a general "sweep every non-cascading FK by its own relationship" covers 1 and 2
+  and **cannot** cover 3. **(1)** `batches.account_id` and `sites.account_id` (V3 / V2, no cascade).
+  `Batch.start(accountId, siteId)` takes the two independently, so a batch pairing an
+  `%@example.com` account with a foreign-domain site survived the site-keyed `DELETE FROM batches`
+  and blocked the account delete — the #226 symptom one statement later. **(2)**
+  `device_authorizations.site_id` / `.account_id` (V21, no cascade). The fixture had no statement
+  for that table; an approved leftover pointing at a seeded site blocked `DELETE FROM sites`.
+  Live, not hypothetical: `DeviceFlowSessionSupersedeContractTest` hand-deleted its own rows to
+  keep the next `@Sql` from failing, and that private cleanup is now dropped. **(3)** Rows outside
+  the seed identity predicates: `*.test.local` (three integration classes that never hit
+  `%@example.com` / `%.example.com`) and `{uuid}_example.com` (`BatchRetentionIntegrationTest`
+  today — an owned account whose domain uses an underscore where `LIKE '%.example.com'` needs a
+  literal dot, kept off `DELETE FROM accounts` only by a per-method `@Transactional` rollback).
+  Widening `DELETE FROM sites` pulls those sites in, so every site-keyed statement above it
+  (`error_logs` especially — V5, no cascade on `site_id` — plus `checkpoints`, `site_sync_state`
+  and the segment sweep's `site_id` arm) widens in step; `ScriptUtils` splits on `;` and cannot
+  parse a `DO $$` block, so the owned-account / owned-site / owned-batch subqueries are repeated.
+  The same account-keyed batches / device-auth / sites sweep is in
+  `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` and
+  `BatchTerminalTransitionLockingIntegrationTest.tearDown`. Leftover-then-clear guards of
+  #119 / #226 pin each shape, mutation-red against the unfixed fixture (`batches_account_id_fkey`,
+  `device_authorizations_site_id_fkey`, a remaining `*.test.local` account, `error_logs.site_id`
+  blocking the pulled-in site). **#220 is the other half of the same unit of work**:
+  `RunOwnedScratch` called `PropertyPlaceholderHelper(prefix, suffix, separator, boolean)`,
+  `@Deprecated(since = "6.2", forRemoval = true)`, so every `compileTestJava` printed a
+  `[removal]` warning that would become a red compile on the Boot bump that drops it — the same
+  "the build blames the wrong change" complaint #207 and #226 were filed for. The 5-arg form with
+  a null escape character keeps prefix, suffix, value separator and fail-on-unresolvable; the
+  4-arg constructor was only ever that delegate. `ParquetScratchTestProfileTest` still fails when
+  a scratch key is dropped from `application-test.yml`. Test-only — no production code, REST,
+  gRPC, proto, DTO, **no migration (V55 stays free)**, configuration-key, metric, S3-key or
+  frontend change.
+- notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
+  the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
+  cell as NULL and returns a tally so the WARN and
+  `delta.parquet.unrepresentable-decimals` can fire; that only worked when the column was nullable.
+  `ParquetSchemaMapper.toAvroSchema` — the **checkpoint** schema — unioned with null only for a
+  nullable column, so a `NOT NULL` one became a REQUIRED Parquet field, parquet-avro threw
+  `"Null-value for required field"` *before* the tally came back, `CheckpointService` recorded an
+  opaque `tables.unmaterialized{reason=parquet_failed}` that never mentions decimals, the snapshot
+  key was detached (a 404 for Bit BI, Parquet Export and the Delta Sync download) and one
+  `materialize_attempts` was spent, deterministically, until the row gave up permanently (#149).
+  `toDeltaAvroSchema` already forced every declared column nullable, so the delta and completed-batch
+  artifacts were unaffected — **checkpoint-only**.
+  **Option 1 of the ticket**, not 2 or 3: every checkpoint column is a `[null, T]` union with a null
+  default, the declared constraint notwithstanding, sharing one `nullableColumn` helper with the
+  delta mapper so the two artifacts cannot disagree the way they did. Option 2 (union only the
+  decimal columns) is ruled out by a bare `numeric NOT NULL`, which maps to Avro STRING, not to a
+  decimal logical type, yet is still degraded to NULL by `coerceValue` (the wire value, not the
+  destination). Option 3 (skip the row) would have been the SQL-path treatment of a degraded *key*,
+  and is the wrong shape here: a folded `UPDATE` with no prior `INSERT` seeds the row from its key
+  columns plus the carried change, so a declared `NOT NULL` varchar can be legitimately absent —
+  nothing about decimals — and refusing that row would drop it from the snapshot. The constraint is
+  therefore not carried at all rather than carried until it fails; a consumer that needs the source
+  constraint reads it from the schema it submitted, not from the Parquet field's repetition. The
+  gzipped CSV retired by #113 never carried nullability either.
+  Tests first: the two halves of the hazard (degradation; a `NOT NULL` decimal) had each been
+  covered and never met — every #215 case declared the column nullable, every non-nullable decimal
+  in the class was only ever fed a finite value. Four writer tests now put them in one row (scaled
+  `numeric(12,2) NOT NULL` with `NaN` and with a malformed token; bare `numeric NOT NULL` with
+  `Infinity`; a folded row missing a `NOT NULL` varchar) and require the file, the tally and a NULL
+  cell; a mapper test requires every checkpoint field to be a nullable union, and a comparison test
+  requires the checkpoint and delta schemas to agree field-for-field on the declared columns.
+  Mutation: restoring the `if (column.nullable())` branch fails those. **Review round 1** added a
+  fifth writer case that both overflows the declared precision (so `widenDecimalsToFit` actually
+  reconstructs the field) and holds a `NaN` — the four original tests never tripped that pass, and
+  its `: wider` branch is the only remaining production path that can emit a REQUIRED decimal —
+  trimmed the method Javadoc off the ticket chronology, and qualified the guide's "no Parquet field
+  is ever REQUIRED" (delta `_op`/`_seq` stay required). No REST, gRPC, proto, DTO,
+  migration, configuration-key, metric-name, S3-key or frontend change; the Parquet schema of a
+  checkpoint snapshot is the consumer-visible contract, and it is now the same nullable-union rule
+  the other two artifacts already had. See `docs/delta-client-v2-guide.md` ("Schema JSON / type
+  mapping", "A value the column type cannot hold").
 - retire-sql-regeneration: The SQL regeneration path is gone, because it had never worked end to
   end and repairing it would have repaired a path that can serve no live batch (issue #190,
   folding #200 — the two were one piece of work: #190's transaction refusal fired first and #200's
