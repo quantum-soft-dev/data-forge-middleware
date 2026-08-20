@@ -511,6 +511,60 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
+  identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
+  by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings
+  computed an **unsigned** form and then tested NaN against the **signed** one, so the two signed
+  spellings fell through every non-finite branch. The cost was not the fall-through but where it
+  landed: `isNonFiniteDecimal("-NaN")` was false, `BigDecimal` cannot parse the token, so
+  `isMalformedDecimal` was **true** and the cell was counted
+  `delta.parquet.unrepresentable-decimals{reason=malformed}` — a series `ValueMapper`'s own Javadoc
+  defines as "a client defect somebody has to fix", where the whole point of splitting it from
+  `non_finite` (#215, review round 1) was that the two want opposite responses from an operator. A
+  signed NaN therefore paged someone to chase a bug that does not exist, which is the outcome the
+  split was added to prevent. The second consequence is `ChangelogFold.normalizeDecimal`, which
+  canonicalises `nan`/`NaN` to `"NaN"` so one source row does not fold into two identities — its own
+  comment says so — and returned `trimmed` for the signed spelling, defeating that. PostgreSQL emits
+  `NaN` unsigned, so a faithful `numeric` round trip never reaches this; it is reachable because the
+  token is whatever the client chose to send, which is the premise `isNonFiniteToken`'s own comment
+  states and the reason it strips the sign for infinity in the first place. The fix is one word in
+  each of two places — the NaN spelling is tested against `unsigned`, and PostgreSQL has a single
+  NaN whose sign carries no meaning, so `-NaN` canonicalises to `"NaN"` rather than to `"-NaN"`.
+  **Deliberately not widened**: this is token classification only, not the destination-awareness
+  #240 defers with three rounds of history as its warning — the same coercion path where each round's
+  fix opened a hole in the next place. Both tests were red first
+  (`ValueMapperTest.nonFiniteDecimalDegradesToNullInsteadOfThrowing` and
+  `aSignedNanIsNonFiniteRatherThanMalformed`, `ChangelogFoldTest.nonFiniteKeySpellingsFoldToOneIdentity`),
+  and the metric assertion is the one that pins the ticket's actual cost rather than the predicate.
+  **Review corrected the justification, not the fix**: the first wording said PostgreSQL accepts
+  these "with an optional sign", generalising the accurate "optional sign on infinity" — PostgreSQL
+  rejects `'-NaN'::numeric` outright, so a signed NaN is evidence the *client* formats
+  non-faithfully rather than a value the source held, and an operator reading the guide would
+  otherwise have concluded there was nothing to ask the client about. It still counts as
+  `non_finite`, since it is not a value this pipeline can repair. One pre-existing asymmetry this
+  change widens was traced to #240 rather than fixed: `isNonFiniteToken` trims the token while
+  `parseDecimal` is handed it raw, so a padded *finite* token (`" 1.5 "`, a shape
+  `ChangelogFold.normalizeDecimal` already carries a review-round-3 comment about) is written NULL
+  and counted `malformed` — silent loss of a legal number, and out of scope for a classification fix.
+  **Round 3 removed the duplication that was the defect** rather than only its instance: the
+  vocabulary now lives once, as package-private `ValueMapper.canonicalNonFinite`, with `ChangelogFold`
+  calling it — two copies with nothing asserting they agree is exactly how the identical
+  sign-handling slip came to exist in both, and the next spelling added to one would have left the
+  other returning the raw token as a fold identity for a value the first calls non-finite.
+  `ChangelogFoldTest.everySpellingValueMapperCallsNonFiniteFoldsUnderItsCanonicalIdentity` pins the
+  agreement (proven by mutation: restoring a private copy missing `inf` fails it) and pins that the
+  two infinities stay apart, which the shared canonicalisation must not collapse the way it
+  deliberately collapses the NaN sign. Round 3 also caught this entry's own surfaces contradicting
+  themselves: the guide said a signed NaN "says the client formats non-faithfully" and is "a client
+  to ask about" while **nothing** would tell an operator so — `malformed` no longer moves for it,
+  `non_finite` is documented as "nothing to repair", and no log line prints the token. The
+  invisibility is deliberate and is now stated as such in both the guide and the counter's HELP: the
+  loss is the ordinary one, so a signal of its own would page about a formatting quirk that costs
+  nothing beyond the degradation already reported.
+  No REST, gRPC, proto, DTO, migration, configuration-key, metric-**name**, S3-key or frontend
+  change; `delta.parquet.unrepresentable-decimals` keeps both tag values and simply stops
+  misclassifying between them. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
+  hold").
 - retention-holds-pending-work: Changelog retention no longer deletes a segment whose plugin SQL
   or egress was never generated — pending work is not prunable, and both the hold-back and the one
   horizon that remains are visible (issue #212, found reviewing #181/PR #209, which it silently
