@@ -82,7 +82,15 @@ public class ChangelogRetentionService {
 
     private static final Logger log = LoggerFactory.getLogger(ChangelogRetentionService.class);
 
-    /** Keys buffered before an object delete goes out; the chunk {@code deleteObjects} uses. */
+    /**
+     * Keys buffered before an object delete goes out.
+     *
+     * <p>1000 is {@code S3FileStorageService}'s own chunk size today, which is why the flush costs
+     * no extra round trip. The two are deliberately not coupled — that constant is private to
+     * another aggregate's infrastructure — and drift is harmless: a smaller chunk there simply
+     * splits one flush into two, the bound this value exists for (how many objects a pod kill can
+     * strand) being unaffected.</p>
+     */
     private static final int OBJECT_DELETE_CHUNK = 1000;
 
     private final ChangelogSegmentRepository segmentRepository;
@@ -150,7 +158,7 @@ public class ChangelogRetentionService {
                         // Flushed during the pass, not only at the end (review round 4): a pod kill
                         // between a row's commit and the end of the loop strands its object, and
                         // the sweep that would reclaim it ships dry-run, so the exposure is bounded
-                        // at one chunk. Free in round trips — deleteObjects chunks at 1000 anyway.
+                        // at one chunk. No extra round trip: deleteObjects chunks at 1000 too.
                         // A copy, because the buffer is cleared on the next line: deleteObjects
                         // builds subList views over what it is handed (review round 6).
                         deletePrunedObjects(siteId, List.copyOf(pendingObjectDeletes));
@@ -295,8 +303,16 @@ public class ChangelogRetentionService {
     private static void swallowing(Runnable step) {
         try {
             step.run();
-        } catch (RuntimeException ignored) {
-            // Deliberate: the caller is already unwinding and this would replace its exception.
+        } catch (VirtualMachineError fatal) {
+            // The one class that must still win: the JVM is not in a state where finishing this
+            // pass's bookkeeping means anything.
+            throw fatal;
+        } catch (Throwable ignored) {
+            // Deliberate, and Throwable rather than RuntimeException (review round 6): during
+            // context teardown this path can raise a NoClassDefFoundError from an SDK being torn
+            // down under it, which would both replace the loop's exception and escape
+            // CheckpointScheduler's catch (RuntimeException) — ending the whole nightly tick
+            // instead of costing this one site.
         }
     }
 

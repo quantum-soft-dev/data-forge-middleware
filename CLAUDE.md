@@ -676,7 +676,10 @@ pages/{feature}/            # Route pages
   half-emitted alarm arrived at by another route; the WARN no longer claims "the pass completed",
   since `reportPass` also runs while the loop is unwinding; and the flushed chunk is handed over as
   a copy, the buffer being cleared on the next line while `deleteObjects` builds `subList` views
-  over what it is given. Tests were written first and are
+  over what it is given. A last round tightened the swallow to `Throwable` (bar `VirtualMachineError`):
+  during context teardown the finally path can raise a `NoClassDefFoundError` from an SDK being torn
+  down under it, which would both replace the loop's exception and escape `CheckpointScheduler`'s
+  `catch (RuntimeException)` — ending the whole nightly tick instead of costing one site. Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own
