@@ -59,7 +59,10 @@ import java.util.function.Supplier;
  *       have pruned but held back because their queue work is still pending, tagged
  *       {@code reason=pending_plugin_sql|pending_egress} (issue #212). Registered at zero so an
  *       alert can predate the first occurrence. A census, not an arrival rate: the same held-back
- *       segment is counted again on every pass until its queue drains it</li>
+ *       segment is counted again on every pass until one of its endings takes it</li>
+ *   <li>{@code delta.retention.segments.deleted-pending} — segments batch retention (the
+ *       deliberate outer horizon, per-site {@code retentionDays}) deleted while their queue work
+ *       was still pending, same {@code reason} tag, registered at zero (issue #212)</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -129,6 +132,8 @@ public class DeltaMetrics {
     private final Counter checkpointOrphanDeletesFailed;
     private final Counter retentionHeldBackPluginSql;
     private final Counter retentionHeldBackEgress;
+    private final Counter retentionDeletedPendingPluginSql;
+    private final Counter retentionDeletedPendingEgress;
     private final Map<String, Timer> batchParquetPhases;
     private final Map<String, Timer> egressPhases;
     private final Map<String, Timer> checkpointPhases;
@@ -188,6 +193,8 @@ public class DeltaMetrics {
         this.checkpointOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.retentionHeldBackPluginSql = retentionHeldBack(registry, RETENTION_PENDING_PLUGIN_SQL);
         this.retentionHeldBackEgress = retentionHeldBack(registry, RETENTION_PENDING_EGRESS);
+        this.retentionDeletedPendingPluginSql = retentionDeletedPending(registry, RETENTION_PENDING_PLUGIN_SQL);
+        this.retentionDeletedPendingEgress = retentionDeletedPending(registry, RETENTION_PENDING_EGRESS);
         this.batchParquetPhases = phaseTimers(registry, "delta.batch-parquet.duration",
                 "Time spent in one completed-batch Parquet phase", BATCH_PARQUET_PHASES);
         this.egressPhases = phaseTimers(registry, "delta.egress.duration",
@@ -244,6 +251,13 @@ public class DeltaMetrics {
         return Counter.builder("delta.retention.segments.held-back")
                 .description("Below-checkpoint segments retention would have pruned but held back "
                         + "because their queue work is still pending, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
+    private static Counter retentionDeletedPending(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.retention.segments.deleted-pending")
+                .description("Segments batch retention deleted while their queue work was still "
+                        + "pending — the deliberate outer horizon of the queues' retry, by reason")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
     }
 
@@ -484,24 +498,54 @@ public class DeltaMetrics {
      * segment owing <em>both</em> counts on both, so the sum over reasons can exceed the number of
      * held-back segments (the per-consumer honesty of
      * {@code delta.parquet.unrepresentable-decimals}). And read it as a <b>census, not an arrival
-     * rate</b>: nothing removes a held-back segment between passes except its own queue draining
-     * it, so the same segment is counted again on every nightly pass and a rate alert would read a
-     * static backlog as that many new stalls a day (the {@code delta.s3-orphan.candidates}
-     * caveat). Both series are registered at zero, so an alert can predate the first
-     * occurrence.</p>
+     * rate</b>: the same held-back segment is counted again on every pass until one of its endings
+     * takes it — its queue draining it, an operator deleting the segment or its batch, a
+     * re-baseline or wipe replacing the site's history, or the batch-retention horizon
+     * ({@link #retentionPendingSegmentsDeleted}) — so a rate alert would read a static backlog as
+     * that many new stalls a day (the {@code delta.s3-orphan.candidates} caveat). Both series are
+     * registered at zero, so an alert can predate the first occurrence.</p>
+     *
+     * <p><b>One blind spot</b>: retention runs only after a <em>successful</em> checkpoint build
+     * ({@code CheckpointScheduler}), so a site whose build aborts nightly shows zero here while its
+     * backlog accumulates — {@code delta.checkpoint.builds.aborted} covers that state. And a plugin
+     * reinit re-pends a site's audit window by design ({@code clearPluginSqlBySiteId}), so a
+     * one-pass spike after a reinit is benign.</p>
      *
      * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
-     * @param count  how many segments were held back for that reason; ignored when zero
+     * @param count  how many segments were held back for that reason
      */
     public void retentionSegmentsHeldBack(String reason, long count) {
-        Counter counter = switch (reason) {
-            case RETENTION_PENDING_PLUGIN_SQL -> retentionHeldBackPluginSql;
-            case RETENTION_PENDING_EGRESS -> retentionHeldBackEgress;
+        retentionReasonCounter(reason, retentionHeldBackPluginSql, retentionHeldBackEgress)
+                .increment(count);
+    }
+
+    /**
+     * Pending queue work destroyed by batch retention — the deliberate outer horizon of the
+     * queues' retry (issue #212, owner decision).
+     *
+     * <p>{@code BatchRetentionService} deletes a retired batch's segments (rows and objects) after
+     * the site's {@code retentionDays} (default 45) with no marker check — that is the one
+     * scheduled deleter allowed to take pending work, and this series is what keeps it from being
+     * silent: each count here is a segment whose SQL or delta Parquet is now permanently
+     * unproducible. Registered at zero; a non-zero rate means work sat in a queue for the whole
+     * retention window, which is an incident to explain, not routine. The explicit admin batch
+     * delete is deliberately <b>not</b> counted here — it is an informed operator action, logged at
+     * the endpoint instead.</p>
+     *
+     * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
+     * @param count  how many pending segments the batch deletion destroyed for that reason
+     */
+    public void retentionPendingSegmentsDeleted(String reason, long count) {
+        retentionReasonCounter(reason, retentionDeletedPendingPluginSql, retentionDeletedPendingEgress)
+                .increment(count);
+    }
+
+    private static Counter retentionReasonCounter(String reason, Counter pluginSql, Counter egress) {
+        return switch (reason) {
+            case RETENTION_PENDING_PLUGIN_SQL -> pluginSql;
+            case RETENTION_PENDING_EGRESS -> egress;
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         };
-        if (count > 0) {
-            counter.increment(count);
-        }
     }
 
     /** A claim was taken over because its build lease had expired. */

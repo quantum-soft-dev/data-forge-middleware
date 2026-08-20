@@ -2,14 +2,17 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
-import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PrunableSegmentView;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -28,22 +31,36 @@ import java.util.UUID;
  * row is still pending — so deleting it would lose that batch's SQL or delta Parquet permanently,
  * silently, with no audit row marking the moment of loss. Such a segment is skipped, counted on
  * {@code delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}} and named by
- * one WARN per site per pass, so a stuck backlog is visible before it is large. The predicate
- * cannot pin a segment forever by design elsewhere: every segment is egressed regardless of plugin
- * state (tables without a schema are skipped but the segment is still marked), the delta-SQL queue
- * stamps {@code plugin_sql_at} without generating for inactive activations and for
- * {@code FULL_SNAPSHOT} baselines, and provisional parking sets both markers to a sentinel
- * ({@code ChangelogSegment.markProvisional}). Held-back segments still count toward the audit
- * window — the window keeps its meaning ("the most recent N below-checkpoint segments"), and the
- * hold-back retains segments on top of it rather than re-shaping it.</p>
+ * one WARN per site per pass, so a stuck backlog is visible before it is large. The row delete is a
+ * <b>single conditional statement</b> ({@code deleteByIdIfProcessed}) and the S3 object goes only
+ * after it reported success: a plugin reinit re-{@code NULL}s {@code plugin_sql_at} site-wide
+ * ({@code clearPluginSqlBySiteId}), so a check-then-act across statements would delete a
+ * freshly-pending row — and its object first. The predicate cannot pin a segment forever by design
+ * elsewhere: every segment is egressed regardless of plugin state (tables without a schema are
+ * skipped but the segment is still marked), and the delta-SQL queue stamps {@code plugin_sql_at}
+ * without generating for inactive activations and for {@code FULL_SNAPSHOT} baselines. Provisional
+ * segments (033) are not this predicate's concern at all: the query above excludes them, and their
+ * parked sentinel markers protect them from the <em>queues</em>, not from retention. Held-back
+ * segments still count toward the audit window — the window keeps its meaning ("the most recent N
+ * below-checkpoint segments"), and the hold-back retains segments on top of it rather than
+ * re-shaping it.</p>
  *
- * <p><b>Deliberately no age or count bound on the hold-back.</b> The main permanent-stall scenario
- * — a mistyped {@code plugin.sql-generation.heap-threshold-percent} making every generation refuse
- * forever — is closed at source by #185's fail-fast validation, and a deterministic poison batch is
- * already loud through {@code sql.generation.errors} and the #181 audit entries. If storage pinning
- * ever becomes real, a bound is its own decision with its own ticket; the starting point here is
- * "stop losing work silently". The only thing that ends a hold-back besides the queue draining is
- * an operator deleting the segment.</p>
+ * <p><b>Deliberately no age or count bound of this pass's own on the hold-back.</b> The main
+ * permanent-stall scenario — a mistyped {@code plugin.sql-generation.heap-threshold-percent} making
+ * every generation refuse forever — will be closed at source by #185's fail-fast validation (still
+ * open), and a deterministic poison batch is already loud through {@code sql.generation.errors} and
+ * the #181 audit entries. A hold-back therefore ends only when something else legitimately takes
+ * the segment: its queues draining it; an operator deleting the segment or its batch (the admin
+ * batch delete logs the pending count it destroys); a client-initiated re-baseline or history wipe
+ * replacing the site's history; or <b>batch retention — the deliberate outer horizon</b>
+ * ({@code BatchRetentionService}, per-site {@code retentionDays}, default 45 days), which deletes a
+ * retired batch's segments regardless of their markers, counting and WARNing when they still carried
+ * pending work. That horizon is also what bounds the storage a permanently stuck segment can pin.</p>
+ *
+ * <p>This pass runs only after a <em>successful</em> checkpoint build ({@code CheckpointScheduler}),
+ * so the held-back series has a blind spot its readers must know: a site whose build aborts nightly
+ * shows zero here while its backlog accumulates — {@code delta.checkpoint.builds.aborted} is the
+ * series that covers that state.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -54,18 +71,18 @@ public class ChangelogRetentionService {
     private static final Logger log = LoggerFactory.getLogger(ChangelogRetentionService.class);
 
     private final ChangelogSegmentRepository segmentRepository;
-    private final S3ChangelogSegmentStorage segmentStorage;
+    private final S3FileStorageService objectDeleter;
     private final DeltaSyncStateService syncStateService;
     private final DeltaMetrics metrics;
     private final int auditWindowSegments;
 
     public ChangelogRetentionService(ChangelogSegmentRepository segmentRepository,
-                                     S3ChangelogSegmentStorage segmentStorage,
+                                     S3FileStorageService objectDeleter,
                                      DeltaSyncStateService syncStateService,
                                      DeltaMetrics metrics,
                                      @Value("${delta.retention.audit-window-segments:20}") int auditWindowSegments) {
         this.segmentRepository = segmentRepository;
-        this.segmentStorage = segmentStorage;
+        this.objectDeleter = objectDeleter;
         this.syncStateService = syncStateService;
         this.metrics = metrics;
         this.auditWindowSegments = Math.max(0, auditWindowSegments);
@@ -85,47 +102,78 @@ public class ChangelogRetentionService {
             return 0;
         }
 
-        // Below-checkpoint segments, oldest first (findBySiteIdOrderByFirstSeq is ordered by first_seq).
-        List<ChangelogSegment> belowCheckpoint = segmentRepository.findBySiteIdOrderByFirstSeq(siteId).stream()
-                .filter(segment -> segment.getLastSeq() <= checkpointSeq)
-                .toList();
+        // Light projections, oldest first — id, key and the two queue markers, never the entity:
+        // with pending segments held back this set is no longer bounded by the audit window.
+        List<PrunableSegmentView> belowCheckpoint =
+                segmentRepository.findBelowCheckpointBySiteId(siteId, checkpointSeq);
 
         int pruneCount = Math.max(0, belowCheckpoint.size() - auditWindowSegments);
-        int pruned = 0;
+        List<String> prunedKeys = new ArrayList<>();
         int heldBack = 0;
         int pendingPluginSql = 0;
         int pendingEgress = 0;
         for (int i = 0; i < pruneCount; i++) {
-            ChangelogSegment segment = belowCheckpoint.get(i);
-            boolean pluginSqlPending = segment.getPluginSqlAt() == null;
-            boolean egressPending = segment.getEgressAt() == null;
-            if (pluginSqlPending || egressPending) {
+            PrunableSegmentView segment = belowCheckpoint.get(i);
+            if (segment.isPendingPluginSql() || segment.isPendingEgress()) {
                 heldBack++;
-                if (pluginSqlPending) {
+                if (segment.isPendingPluginSql()) {
                     pendingPluginSql++;
                 }
-                if (egressPending) {
+                if (segment.isPendingEgress()) {
                     pendingEgress++;
                 }
                 continue;
             }
-            segmentStorage.delete(segment.getS3Key());
-            segmentRepository.deleteById(segment.getId());
-            pruned++;
+            if (segmentRepository.deleteByIdIfProcessed(segment.getId()) == 1) {
+                // Row first, object after the row delete reported success: a crash in between
+                // leaves an unreferenced object for the #158 orphan sweep, never a row whose
+                // object is gone.
+                prunedKeys.add(segment.getS3Key());
+                continue;
+            }
+            // The row read as processed above but the conditional delete refused it: a reinit
+            // committed in between and re-pended it (or another deleter took it). Re-read and
+            // count it by what the row says now; a row that vanished counts nowhere.
+            Optional<ChangelogSegment> rePended = segmentRepository.findById(segment.getId());
+            if (rePended.isPresent()
+                    && (rePended.get().isPendingPluginSql() || rePended.get().isPendingEgress())) {
+                heldBack++;
+                if (rePended.get().isPendingPluginSql()) {
+                    pendingPluginSql++;
+                }
+                if (rePended.get().isPendingEgress()) {
+                    pendingEgress++;
+                }
+            }
         }
 
+        if (!prunedKeys.isEmpty()) {
+            // One DeleteObjects round trip per 1000 keys instead of one per object. Errors are
+            // summarized, not thrown: the rows are gone, so a failed object delete leaves the same
+            // unreferenced litter the #158 sweep reclaims — while a throw here would roll the row
+            // deletes back and report a healthy prune as a failure. Moving the S3 call out of this
+            // transaction entirely is #234.
+            S3FileStorageService.DeleteObjectsResult result = objectDeleter.deleteObjects(prunedKeys);
+            if (!result.errors().isEmpty()) {
+                log.warn("Pruned {} changelog segment row(s) for site {} but {} object delete(s) "
+                                + "failed — the objects are unreferenced and the S3 orphan sweep "
+                                + "reclaims them (issue #158)",
+                        prunedKeys.size(), siteId, result.errors().size());
+            }
+        }
+
+        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, pendingPluginSql);
+        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, pendingEgress);
         if (heldBack > 0) {
-            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, pendingPluginSql);
-            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, pendingEgress);
             log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
                             + "{} awaiting plugin SQL, {} awaiting egress; retention does not delete "
-                            + "unprocessed work (issue #212)",
+                            + "unprocessed queue work (issue #212)",
                     heldBack, siteId, pendingPluginSql, pendingEgress);
         }
-        if (pruned > 0) {
+        if (!prunedKeys.isEmpty()) {
             log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
-                    pruned, checkpointSeq, siteId, auditWindowSegments);
+                    prunedKeys.size(), checkpointSeq, siteId, auditWindowSegments);
         }
-        return pruned;
+        return prunedKeys.size();
     }
 }

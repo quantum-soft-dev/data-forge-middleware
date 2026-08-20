@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.domain;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -15,6 +16,8 @@ public interface ChangelogSegmentRepository {
     ChangelogSegment save(ChangelogSegment segment);
 
     void deleteById(UUID id);
+
+    Optional<ChangelogSegment> findById(UUID id);
 
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
 
@@ -148,6 +151,102 @@ public interface ChangelogSegmentRepository {
      * @return number of segments deleted
      */
     int deleteBySiteId(UUID siteId);
+
+    /**
+     * The S3 keys of a site's <b>committed</b> segments only — the set a re-baseline discards
+     * (033: never the provisional snapshot replacing it). The projection twin of
+     * {@link #findBySiteIdOrderByFirstSeq}, for a caller that needs keys and nothing else.
+     *
+     * @param siteId site identifier
+     * @return object keys of the site's committed segments
+     */
+    List<String> findCommittedS3KeysBySiteId(UUID siteId);
+
+    /**
+     * Bulk-delete a site's committed segments, sparing provisional ones (issue #212 review: the
+     * re-baseline reset used to delete an unbounded backlog row by row inside the
+     * {@code SessionEnd} commit, under the {@code site_sync_state} row lock).
+     *
+     * @param siteId site identifier
+     * @return number of segments deleted
+     */
+    int deleteCommittedBySiteId(UUID siteId);
+
+    /**
+     * A light projection of a site's committed below-checkpoint segments, in sequence order —
+     * retention's whole input (issue #212). Only the columns the prune decision reads: the row id,
+     * the object key and the two queue markers. Deliberately not the entity — the below-checkpoint
+     * set is unbounded now that pending segments are held back, and hydrating whole entities
+     * (JSONB stats included) for a decision over four columns is what the #212 review removed.
+     * Excludes provisional segments, like {@link #findBySiteIdOrderByFirstSeq}.
+     *
+     * @param siteId        site identifier
+     * @param checkpointSeq the site's durable checkpoint pointer
+     * @return below-checkpoint segments ({@code last_seq <= checkpointSeq}), oldest first
+     */
+    List<PrunableSegmentView> findBelowCheckpointBySiteId(UUID siteId, long checkpointSeq);
+
+    /**
+     * Delete one segment only if its queue work is done — a single-statement conditional delete
+     * (issue #212). The marker predicate travels <em>with</em> the DELETE, so a reinit re-pending
+     * the row between retention's read and its delete ({@code clearPluginSqlBySiteId} re-NULLs
+     * {@code plugin_sql_at} site-wide) makes the delete a no-op instead of destroying a
+     * freshly-pending queue entry; the caller deletes the S3 object only after this reported 1.
+     *
+     * @param id segment identifier
+     * @return 1 if the row was deleted, 0 if it was pending again (or already gone)
+     */
+    int deleteByIdIfProcessed(UUID id);
+
+    /**
+     * How much pending queue work a batch's committed segments still carry (issue #212). Read by
+     * the batch deleters — batch retention (the deliberate outer horizon of the queues' retry) and
+     * the explicit admin delete — so destroying pending work is counted and logged rather than
+     * silent. Provisional segments are excluded: their markers are parked at a sentinel, not owed.
+     *
+     * @param batchId batch identifier
+     * @return pending counts per queue, both zero for a fully processed batch
+     */
+    PendingQueueWork countPendingQueueWorkByBatchId(UUID batchId);
+
+    /**
+     * The queue markers of a site's committed below-checkpoint segments, projected without the
+     * entity (issue #212). {@code isPending*} mirror {@link ChangelogSegment#isPendingPluginSql()}
+     * / {@link ChangelogSegment#isPendingEgress()}, which own the semantics.
+     */
+    interface PrunableSegmentView {
+
+        UUID getId();
+
+        String getS3Key();
+
+        LocalDateTime getPluginSqlAt();
+
+        LocalDateTime getEgressAt();
+
+        /** @see ChangelogSegment#isPendingPluginSql() */
+        default boolean isPendingPluginSql() {
+            return getPluginSqlAt() == null;
+        }
+
+        /** @see ChangelogSegment#isPendingEgress() */
+        default boolean isPendingEgress() {
+            return getEgressAt() == null;
+        }
+    }
+
+    /** Pending-queue-work counts of one batch's committed segments (issue #212). */
+    interface PendingQueueWork {
+
+        long getPendingPluginSql();
+
+        long getPendingEgress();
+
+        /** @return {@code true} when deleting the batch would destroy work a queue still owes */
+        default boolean hasAny() {
+            return getPendingPluginSql() > 0 || getPendingEgress() > 0;
+        }
+    }
 
     /**
      * Mark a site's still-pending {@code FULL_SNAPSHOT} segments as processed for plugin SQL,
