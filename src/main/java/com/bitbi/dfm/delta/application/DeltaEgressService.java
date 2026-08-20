@@ -82,7 +82,11 @@ public class DeltaEgressService {
      * repository transaction. A crash between them leaves the segment pending; the sweep
      * retries and overwrites the same keys.</p>
      *
-     * @return {@code true} if a segment was processed, {@code false} when the queue is empty
+     * @return {@code true} when a segment was materialized and the drain should continue;
+     *         {@code false} when there was nothing claimable, when this attempt failed and the
+     *         segment was deferred (issue #243 — the next wake claims another site's head), or when
+     *         the failure was the pod shutting down. {@code false} therefore means "stop draining",
+     *         not "the queue is empty".
      */
     public boolean egressNextPending() {
         refuseInsideTransaction();
@@ -147,13 +151,28 @@ public class DeltaEgressService {
                     + "spends no attempt", segment.getId());
             return;
         }
-        int attempts = segment.getEgressAttempts() + 1;
+        int attemptsAtClaim = segment.getEgressAttempts();
+        int attempts = attemptsAtClaim + 1;
         LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
-        if (segmentRepository.deferEgress(segment.getId(), retryAt) == 0) {
-            // The marker predicate refused: the work landed on another replica while this attempt
-            // was failing, or the row is gone. Reporting it would send an operator after a segment
-            // that is already done (review round 1).
-            log.debug("Not deferring segment {}: it is no longer pending egress", segment.getId());
+        int deferred;
+        try {
+            deferred = segmentRepository.deferEgress(segment.getId(), retryAt, attemptsAtClaim);
+        } catch (RuntimeException e) {
+            // The deferral write is the likeliest thing to fail when the segment's own failure was
+            // the database — and this class is the only place that ever logs a top-level egress
+            // failure, so letting the second exception replace the first would lose the incident
+            // entirely (review round 3).
+            e.addSuppressed(failure);
+            throw e;
+        }
+        if (deferred == 0) {
+            // Claim-scoped predicate refused: the work landed on another replica while this attempt
+            // was failing, the row is gone, or its attempt count moved (a peer's deferral, a
+            // reset). Reporting it would send an operator after a segment that is already done
+            // (review round 1) — but the failure itself is still worth one line, since nothing else
+            // logs it (round 3).
+            log.debug("Not deferring segment {}: it is no longer this claim's to defer", segment.getId(),
+                    failure);
             return;
         }
         metrics.egressFailed();

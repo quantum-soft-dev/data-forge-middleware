@@ -29,6 +29,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.contains;
@@ -155,7 +156,7 @@ class DeltaSqlQueueMemoryPressureTest {
         // and it spends no attempt: the refusal belongs to the pod, not to this segment, so it must
         // never walk a segment towards the poisoned report (#243, the #150/#162/#178 rule that a
         // transient overload does not become a permanent verdict)
-        verify(segmentRepository, never()).deferPluginSql(any(), any());
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
         // and nothing was generated or written on the way out
         verifyNoInteractions(deltaStrategy);

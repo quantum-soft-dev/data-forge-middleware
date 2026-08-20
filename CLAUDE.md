@@ -604,6 +604,23 @@ pages/{feature}/            # Route pages
   pod-level condition raised before any work — is deferred like a data failure and can walk healthy
   heads to the poisoned ERROR; giving it a type means editing `SqlGenerationService`, which #246
   held in the same window, and the limit is stated in the guide rather than left implied.
+  **Round 3** tightened three things and declined two. The deferral write is now **claim-scoped** —
+  it requires the attempt count to still be the one the claim saw — because the marker predicate
+  alone did not hold the property the comment claimed: `clearPluginSqlBySiteId` zeroes the count and
+  re-`NULL`s the marker, so a straggler that started before an operator's reinit satisfied
+  `plugin_sql_at IS NULL` and undid the reset. The residual is written down instead of implied (a
+  reinit of a head already at zero attempts is indistinguishable from no reinit, and costs it one
+  cooldown). The original failure is no longer lost when the deferral write **itself** throws —
+  likeliest exactly when the segment's failure was the database — since this class is the only
+  place that logs a top-level egress failure at all: the second exception carries the first as
+  suppressed, and the refused-deferral branch logs the original with its DEBUG line. And both
+  `@return` contracts said `false` meant "the queue is empty", which stopped being true when a
+  deferral began ending the drain. **Declined, with the arithmetic rather than a promise**: a
+  poisoned head costs one wake per cooldown, so K permanently poisoned heads waste ~K wakes an hour
+  against a floor of ~60 (the sweep) on a quiet fleet — the reviewer's suggested re-wake after a
+  deferral is precisely the round-1 defect, one systemic outage walking the whole backlog in a
+  chain, so the trade is documented in the guide instead. The semaphore-timeout exemption was raised
+  again and stays #261 for the same reason as in round 2.
 - signed-nan-classification: `+NaN` and `-NaN` are classified `non_finite` and fold under the same
   identity as `NaN` (issue #238, found by review while finishing PR #217 and reported a second time
   by an independent findings pass). Both places that recognise PostgreSQL's non-finite spellings

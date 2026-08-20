@@ -2237,9 +2237,21 @@ lasts would meet it: it spends no attempt, moves neither counter, and the next w
 Deferring it would walk healthy segments towards the poisoned report and let a transient overload
 become a verdict on the data — the rule #150, #162 and #178 already hold elsewhere.
 
+**What one poison costs the rest of the fleet, stated in numbers** (review round 3): a drain that
+meets a poisoned head spends that wake on it and stops, and at the doubling cap each such head is
+claimable once an hour — so K permanently poisoned per-site heads waste roughly K wakes an hour. On
+a busy fleet wakes are plentiful (one per `BATCH_COMPLETED` on top of the sweep); on a quiet one the
+floor is the 60 s sweep, i.e. ~60 an hour, so healthy sites are only materially starved once K
+approaches that, by which point `*.segments.poisoned` has been shouting for a long time. The
+alternative — re-waking after each deferral — is deliberately not taken: it re-creates exactly the
+round-1 defect, where one systemic outage walks the whole backlog in a single chain.
+
 **A plugin reinit clears the retry state** along with the marker (`clearPluginSqlBySiteId`): the
 operator is saying the cause is gone, so the site's segments are claimable at once rather than
-sitting out the cooldown their old failures earned.
+sitting out the cooldown their old failures earned. The deferral write is **claim-scoped** so a
+straggler cannot undo that reset — it requires the attempt count to still be the one its claim saw
+— with one residual stated rather than implied: a reinit of a site whose head was already at zero
+attempts is indistinguishable from no reinit, and costs that head one cooldown.
 
 ### Objects no row references are reclaimed (issue #158)
 

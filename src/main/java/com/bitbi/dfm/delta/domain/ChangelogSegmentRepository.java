@@ -182,23 +182,27 @@ public interface ChangelogSegmentRepository {
 
     /**
      * Record a failed delta-SQL attempt and hold the segment out of the queue until {@code retryAt}
-     * (issue #243). Increments the attempt count in the database rather than from the caller's
-     * claimed snapshot, and does nothing when the segment is no longer pending.
+     * (issue #243). Increments the attempt count in the database rather than writing the caller's
+     * snapshot, and is <b>claim-scoped</b>: it does nothing when the segment is no longer pending,
+     * or when its attempt count has moved since the claim — a peer's deferral, or a reinit's reset
+     * (review round 3).
      *
-     * @param id      segment identifier
-     * @param retryAt when the segment may be claimed again (UTC)
-     * @return 1 if the segment was deferred, 0 if its work had already landed
+     * @param id              segment identifier
+     * @param retryAt         when the segment may be claimed again (UTC)
+     * @param attemptsAtClaim the attempt count this claim saw
+     * @return 1 if the segment was deferred, 0 if its work had landed or its state moved
      */
-    int deferPluginSql(UUID id, LocalDateTime retryAt);
+    int deferPluginSql(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
 
     /**
-     * The egress twin of {@link #deferPluginSql(UUID, LocalDateTime)} (issue #243).
+     * The egress twin of {@link #deferPluginSql(UUID, LocalDateTime, int)} (issue #243).
      *
-     * @param id      segment identifier
-     * @param retryAt when the segment may be claimed again (UTC)
-     * @return 1 if the segment was deferred, 0 if it had already been egressed
+     * @param id              segment identifier
+     * @param retryAt         when the segment may be claimed again (UTC)
+     * @param attemptsAtClaim the attempt count this claim saw
+     * @return 1 if the segment was deferred, 0 if it had been egressed or its state moved
      */
-    int deferEgress(UUID id, LocalDateTime retryAt);
+    int deferEgress(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
 
     /**
      * Every S3 object of a site's changelog, published and provisional alike — the collection step

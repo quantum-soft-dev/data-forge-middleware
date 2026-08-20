@@ -106,8 +106,11 @@ public class DeltaSqlQueueService {
     /**
      * Claim and process the next pending segment.
      *
-     * @return {@code true} if a segment was processed (keep draining), {@code false} if the
-     *         queue is empty
+     * @return {@code true} when a segment was processed and the drain should continue;
+     *         {@code false} when there was nothing claimable, when this attempt failed and the
+     *         segment was deferred (issue #243 — the next wake claims another site's head), or when
+     *         the failure was the pod shutting down. {@code false} therefore means "stop draining",
+     *         not "the queue is empty".
      */
     public boolean processNextPending() {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
@@ -206,13 +209,25 @@ public class DeltaSqlQueueService {
                     + "and spends no attempt", segment.getId());
             return;
         }
-        int attempts = segment.getPluginSqlAttempts() + 1;
+        int attemptsAtClaim = segment.getPluginSqlAttempts();
+        int attempts = attemptsAtClaim + 1;
         LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
-        if (segmentRepository.deferPluginSql(segment.getId(), retryAt) == 0) {
-            // The marker predicate refused: the work landed on another replica while this attempt
-            // was failing, or a reinit/retention moved the row. Reporting it would send an operator
-            // after a segment that is already done (review round 1).
-            log.debug("Not deferring segment {}: it is no longer pending plugin SQL", segment.getId());
+        int deferred;
+        try {
+            deferred = segmentRepository.deferPluginSql(segment.getId(), retryAt, attemptsAtClaim);
+        } catch (RuntimeException e) {
+            // Keep the original failure when the deferral write fails too — likeliest exactly when
+            // the segment's own failure was the database (review round 3).
+            e.addSuppressed(failure);
+            throw e;
+        }
+        if (deferred == 0) {
+            // Claim-scoped predicate refused: the work landed on another replica while this attempt
+            // was failing, or its attempt count moved under it — a peer's deferral, or a reinit
+            // resetting the site. Reporting it would send an operator after a segment that is
+            // already done (round 1); the failure still gets its line (round 3).
+            log.debug("Not deferring segment {}: it is no longer this claim's to defer", segment.getId(),
+                    failure);
             return;
         }
         meterRegistry.counter(DEFERRED_METRIC).increment();

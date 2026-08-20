@@ -153,23 +153,29 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit, java.time.LocalDateTime now);
 
     // Targeted UPDATEs, not a save of the claimed entity: the claim lock is released before the
-    // work (#164), so two replicas can attempt one segment at once and the increment has to happen
-    // in the database. The marker predicate travels with the statement for the #212 reason — a
-    // segment whose work landed (or which a reinit re-enqueued) must not be pushed into a cooldown
-    // by a straggler's failure.
+    // work (#164), so two replicas can attempt one segment at once and the write has to happen in
+    // the database rather than from a snapshot. The statement is **claim-scoped** (review round 3):
+    // the marker predicate is the #212 one — a segment whose work has since landed must not be
+    // pushed into a cooldown by a straggler — and the attempt count must still be the one this
+    // claim saw, so a peer's deferral or a reinit's reset (clearPluginSqlBySiteId zeroes the count)
+    // is not undone by a failure that started before it. The residual is stated rather than
+    // implied: a reinit of a site whose head was at zero attempts is indistinguishable from no
+    // reinit at all, and costs that head one cooldown.
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.pluginSqlAttempts = s.pluginSqlAttempts + 1, "
-            + "s.pluginSqlRetryAt = :retryAt WHERE s.id = :id AND s.pluginSqlAt IS NULL")
-    int deferPluginSql(UUID id, java.time.LocalDateTime retryAt);
+            + "s.pluginSqlRetryAt = :retryAt WHERE s.id = :id AND s.pluginSqlAt IS NULL "
+            + "AND s.pluginSqlAttempts = :attemptsAtClaim")
+    int deferPluginSql(UUID id, java.time.LocalDateTime retryAt, int attemptsAtClaim);
 
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.egressAttempts = s.egressAttempts + 1, "
-            + "s.egressRetryAt = :retryAt WHERE s.id = :id AND s.egressAt IS NULL")
-    int deferEgress(UUID id, java.time.LocalDateTime retryAt);
+            + "s.egressRetryAt = :retryAt WHERE s.id = :id AND s.egressAt IS NULL "
+            + "AND s.egressAttempts = :attemptsAtClaim")
+    int deferEgress(UUID id, java.time.LocalDateTime retryAt, int attemptsAtClaim);
 
     @Override
     @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId")

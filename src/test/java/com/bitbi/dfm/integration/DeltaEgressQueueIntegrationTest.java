@@ -104,7 +104,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         segment(SITE_B, BATCH_B, 1L, 3L);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5)));
+        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5), 0));
 
         List<ChangelogSegment> pending = repository.findNextPendingEgress(10, now);
         assertEquals(Set.of(SITE_B + "@1"),
@@ -134,7 +134,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         // the egress worker defers it while the delta-SQL worker still holds its claim-time snapshot
-        repository.deferEgress(claimed.getId(), now.plusMinutes(4));
+        repository.deferEgress(claimed.getId(), now.plusMinutes(4), 0);
 
         claimed.markPluginSqlProcessed();
         repository.save(claimed);
@@ -152,6 +152,27 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
                 "still inside its cooldown rather than immediately claimable again");
     }
 
+    /**
+     * The deferral is claim-scoped (issue #243, review round 3): a straggler whose attempt started
+     * before a peer's deferral — or before a reinit reset the site's retry state — must not undo
+     * it.
+     */
+    @Test
+    void doesNotDeferOnBehalfOfAClaimWhoseAttemptCountHasMoved() {
+        ChangelogSegment poison = segment(SITE_A, BATCH_A, 1L, 5L);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5), 0));
+
+        assertEquals(0, repository.deferEgress(poison.getId(), now.plusMinutes(90), 0),
+                "the second claim saw 0 attempts, the row is at 1 — its deferral is not this one's");
+
+        entityManager.flush();
+        entityManager.clear();
+        ChangelogSegment reloaded = repository.findById(poison.getId()).orElseThrow();
+        assertEquals(1, reloaded.getEgressAttempts());
+        assertEquals(now.plusMinutes(5), reloaded.getEgressRetryAt());
+    }
+
     /** A deferral is refused once the work landed (issue #243, the #212 marker-predicate shape). */
     @Test
     void doesNotDeferASegmentThatIsAlreadyEgressed() {
@@ -159,7 +180,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         done.markEgressed();
         repository.save(done);
 
-        assertEquals(0, repository.deferEgress(done.getId(), LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5)));
+        assertEquals(0, repository.deferEgress(done.getId(), LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), 0));
         assertEquals(0, repository.findById(done.getId()).orElseThrow().getEgressAttempts());
     }
 }

@@ -126,7 +126,7 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
             seedSegment(OTHER_SITE, 1, 3);
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-            assertEquals(1, segmentRepository.deferPluginSql(poison.getId(), now.plusMinutes(5)));
+            assertEquals(1, segmentRepository.deferPluginSql(poison.getId(), now.plusMinutes(5), 0));
 
             List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(10, now);
             assertEquals(1, claimed.size(), "only the other site's head is claimable");
@@ -144,7 +144,7 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
         transactionTemplate.executeWithoutResult(tx -> {
             ChangelogSegment poison = seedSegment(SITE, 40, 45);
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-            segmentRepository.deferPluginSql(poison.getId(), now.plusHours(1));
+            segmentRepository.deferPluginSql(poison.getId(), now.plusHours(1), 0);
 
             segmentRepository.clearPluginSqlBySiteId(SITE);
 

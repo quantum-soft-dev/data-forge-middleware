@@ -34,6 +34,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -225,7 +226,7 @@ class DeltaSqlQueueServiceTest {
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
-        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(1);
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
 
         assertThat(queueService.processNextPending())
                 .as("this drain stops after one deferral; the next wake claims another site's head, "
@@ -233,7 +234,7 @@ class DeltaSqlQueueServiceTest {
                 .isFalse();
 
         ArgumentCaptor<LocalDateTime> retryAt = ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(segmentRepository).deferPluginSql(eq(segment.getId()), retryAt.capture());
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), retryAt.capture(), eq(0));
         assertThat(retryAt.getValue()).isAfter(before.plusSeconds(59));
         assertThat(segment.getPluginSqlAt()).as("still the durable queue entry").isNull();
         verify(segmentRepository, never()).save(segment);
@@ -249,7 +250,7 @@ class DeltaSqlQueueServiceTest {
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
-        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(1);
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
 
         assertThat(queueService.processNextPending()).isFalse();
 
@@ -263,11 +264,11 @@ class DeltaSqlQueueServiceTest {
         ChangelogSegment segment = segment("DELTA", Map.of());
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(siteRepository.findById(SITE_ID)).thenReturn(Optional.empty());
-        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(1);
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
 
         assertThat(queueService.processNextPending()).isFalse();
 
-        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any());
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any(), anyInt());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
     }
 
@@ -282,7 +283,7 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(queueService.processNextPending()).isFalse();
 
-        verify(segmentRepository, never()).deferPluginSql(any(), any());
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
     }
 
@@ -293,7 +294,7 @@ class DeltaSqlQueueServiceTest {
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
         when(sqlGenerationService.generateSqlForBatch(any(), any()))
                 .thenThrow(new RuntimeException("boom"));
-        when(segmentRepository.deferPluginSql(any(), any())).thenReturn(0);
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(0);
 
         assertThat(queueService.processNextPending()).isFalse();
 
@@ -309,7 +310,7 @@ class DeltaSqlQueueServiceTest {
             assertThatThrownBy(() -> queueService.processNextPending())
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("#164");
-            verify(segmentRepository, never()).deferPluginSql(any(), any());
+            verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
         } finally {
             TransactionSynchronizationManager.setActualTransactionActive(false);
         }

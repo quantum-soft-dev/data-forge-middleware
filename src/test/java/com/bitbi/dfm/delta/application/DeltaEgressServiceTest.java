@@ -33,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -149,7 +150,7 @@ class DeltaEgressServiceTest {
                         + "which is what keeps a systemic failure from walking the whole backlog");
 
         ArgumentCaptor<LocalDateTime> retryAt = ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(segmentRepository).deferEgress(eq(segment.getId()), retryAt.capture());
+        verify(segmentRepository).deferEgress(eq(segment.getId()), retryAt.capture(), eq(0));
         assertTrue(retryAt.getValue().isAfter(before.plusSeconds(59)),
                 "the first failure waits the base delay: " + retryAt.getValue());
         assertNull(segment.getEgressAt(), "the segment stays the durable queue entry");
@@ -183,7 +184,7 @@ class DeltaEgressServiceTest {
 
         assertFalse(service.egressNextPending());
 
-        verify(segmentRepository, never()).deferEgress(any(), any());
+        verify(segmentRepository, never()).deferEgress(any(), any(), anyInt());
         assertEquals(0.0, registry.get("delta.egress.errors").counter().count());
     }
 
@@ -195,7 +196,7 @@ class DeltaEgressServiceTest {
     @Test
     void shouldNotReportADeferralThatMatchedNoRow() {
         failingSegmentIsClaimed();
-        when(segmentRepository.deferEgress(any(), any())).thenReturn(0);
+        when(segmentRepository.deferEgress(any(), any(), anyInt())).thenReturn(0);
 
         assertFalse(service.egressNextPending());
 
@@ -205,7 +206,7 @@ class DeltaEgressServiceTest {
 
     private void failingSegmentIsClaimed() {
         when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
-        when(segmentRepository.deferEgress(any(), any())).thenReturn(1);
+        when(segmentRepository.deferEgress(any(), any(), anyInt())).thenReturn(1);
         when(changelogSegmentService.readRecords("changelog/key"))
                 .thenThrow(new RuntimeException("object unreadable"));
     }
