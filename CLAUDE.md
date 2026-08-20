@@ -534,9 +534,13 @@ pages/{feature}/            # Route pages
   projections and on bulk health; `lastCheckpointBuildMessage` on the **admin** projection only, the
   same split as `lastRebuildMessage`. On the frontend the field is `z.string()`, not `z.enum`, and
   `getSyncStatus` reads it as `first-checkpoint-failed`: the chip says **Checkpoint failed**, the
-  pill **Checkpoint failed · 1.2k**, the card names the abort. Stalled still wins. No gRPC, proto,
-  configuration-key, metric-name, S3-key or route change. See `docs/delta-client-v2-guide.md`
-  ("A first checkpoint build that keeps failing").
+  pill **Checkpoint failed · 1.2k**, the card names the abort. Stalled still wins.
+  **Review round 1** wrapped the persist so a flush error cannot escape the per-site catch and
+  end the tick, split prune out of that catch (a retention failure is not a first-checkpoint
+  abort; a shutdown-ended build returns an empty fold and does not throw), recorded `DEFERRED`
+  only on a spent wait (a probe is not an attempt), and painted contention aborts elevated
+  rather than critical. No gRPC, proto, configuration-key, metric-name, S3-key or route change.
+  See `docs/delta-client-v2-guide.md` ("A first checkpoint build that keeps failing").
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three

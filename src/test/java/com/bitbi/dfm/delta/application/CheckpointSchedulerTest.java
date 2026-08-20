@@ -393,6 +393,67 @@ class CheckpointSchedulerTest {
     }
 
     @Test
+    void doesNotRecordADeferralProbeAsAnAbort() {
+        // Issue #224 / #178: after one spent wait the rest of the pass probes without waiting.
+        // Those probes are not "a deferral past fold-wait-seconds", and the retry pass still
+        // owes the site a real wait. Recording DEFERRED on them paints a designed miss as
+        // "the first build already failed".
+        UUID probe = UUID.randomUUID();
+        UUID spent = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(spent, probe));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(spent), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(spent, 600_000L, false, true));
+        when(checkpointService.buildCheckpoint(eq(probe), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(probe, 600_000L, false, false));
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService, atLeastOnce()).recordCheckpointBuildAbort(
+                eq(spent), eq(CheckpointBuildAbort.DEFERRED), any());
+        verify(syncStateService, never()).recordCheckpointBuildAbort(
+                eq(probe), any(), any());
+    }
+
+    @Test
+    void aThrowingAbortWriteDoesNotStopTheSweep() {
+        // The per-site catch exists so one failure does not end the tick. The new persist is a
+        // @Transactional write inside that catch: if it throws, the rest of the night is skipped.
+        UUID failing = UUID.randomUUID();
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(failing, ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(failing), anyBoolean()))
+                .thenThrow(new RuntimeException("boom"));
+        doThrow(new RuntimeException("flush failed"))
+                .when(syncStateService).recordCheckpointBuildAbort(eq(failing), any(), any());
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(eq(ok), anyBoolean());
+        verify(retentionService).prune(ok);
+    }
+
+    @Test
+    void aPruneFailureIsNotAFirstCheckpointAbort() {
+        // buildCheckpoint returned normally (a shutdown-ended build returns an empty fold and
+        // does not throw, #162). prune throwing used to share the RuntimeException catch; with
+        // the abort persist in that catch it would stamp FAILED on a site whose build did not fail.
+        UUID site = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(site));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        doThrow(new RuntimeException("prune failed")).when(retentionService).prune(site);
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService, never()).recordCheckpointBuildAbort(any(), any(), any());
+        verify(checkpointService).buildCheckpoint(eq(site), anyBoolean());
+    }
+
+    @Test
     void doesNotRecordADiscardOrAShutdownDeferral() {
         // A wipe or re-baseline under the build zeroes the pointer itself; recording DISCARDED
         // would then make the new baseline read as already-failed. A deferral cut short by

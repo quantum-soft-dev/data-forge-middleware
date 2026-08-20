@@ -1627,8 +1627,12 @@ by shutdown are not recorded (#162). The values sit beside `lastRebuildOutcome`:
 `FOLD_TOO_LARGE`, `FRAME_TOO_LARGE`, `SCRATCH_FULL`, `FRAME_UNAVAILABLE`, `DEFERRED`. Both
 projections carry the reason and its time; the diagnosis string is admin-only, the same split as
 `lastRebuildMessage`. Bulk health carries the reason so the site-list pill can switch. On the
-frontend that is `first-checkpoint-failed`: the chip says **Checkpoint failed**, the pill
-**Checkpoint failed · 1.2k**, and the card names the abort instead of "Still missing a day later?".
+frontend that is `first-checkpoint-failed`: a refusal that never repairs itself
+(`FOLD_TOO_LARGE`, `FRAME_TOO_LARGE`, `FAILED`, `FRAME_UNAVAILABLE`) paints the chip
+**Checkpoint failed** in critical, a contention abort (`DEFERRED`, `SCRATCH_FULL`) takes the
+abort's own elevated label, and the pill keeps the count either way. The card names the abort
+instead of "Still missing a day later?". Only a spent wait is recorded as `DEFERRED` — a
+non-spent probe is not an attempt (#178).
 The durable alarms are unchanged (`delta.checkpoint.builds.aborted`,
 `delta.checkpoint.tables.given-up`, `delta.seq.lag`). Building a checkpoint on the ingest path when a
 site's first snapshot commits was the alternative and was **not** taken: it moves a whole-site fold

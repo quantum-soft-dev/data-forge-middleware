@@ -132,7 +132,6 @@ public class CheckpointScheduler {
             try {
                 checkpointService.buildCheckpoint(siteId, !foldBudgetIsContended);
                 foldBudgetIsContended = false;
-                retentionService.prune(siteId);
             } catch (CheckpointFoldBudget.BuildDeferredException e) {
                 // Another build held the process's fold budget (issue #178) — a forced rebuild
                 // beside this sweep, in practice. The site was not visited, so retention is
@@ -147,11 +146,14 @@ public class CheckpointScheduler {
                 } else {
                     log.debug("Deferring site {} this tick: {}", siteId, e.getMessage());
                 }
-                // A deferral cut short by shutdown has not finished (#162). Any other deferral
-                // is a scheduled visit that produced nothing — the fact #224 persists.
-                if (!e.endedEarly()) {
+                // A deferral cut short by shutdown has not finished (#162). A non-spent probe is
+                // not an attempt — the rest of the pass skipped the wait on purpose (#178) and
+                // the retry pass still owes the site a real one. Only a spent wait is "a
+                // deferral past fold-wait-seconds", which is the abort #224 persists.
+                if (e.waitWasSpent()) {
                     recordCheckpointBuildAbort(siteId, CheckpointBuildAbort.DEFERRED, e.getMessage());
                 }
+                continue;
             } catch (CheckpointService.FramePresenceUnknownException e) {
                 // Not a failure of this site: S3 would not say whether its seed frame is there,
                 // so the build declined to conclude anything (issue #157). Logged apart from
@@ -168,6 +170,7 @@ public class CheckpointScheduler {
                 foldBudgetIsContended = false;
                 log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
                 recordCheckpointBuildAbort(siteId, CheckpointBuildAbort.FRAME_UNAVAILABLE, e.getMessage());
+                continue;
             } catch (CheckpointService.BuildDiscardedException e) {
                 // The site's baseline was replaced under the build (#136/#142) — a wipe or a
                 // re-baseline, both routine. It used to reach here as a silent empty fold, and it
@@ -185,10 +188,21 @@ public class CheckpointScheduler {
                 // the budget.
                 foldBudgetIsContended = false;
                 log.info("Skipping site {} this tick: {}", siteId, e.getMessage());
+                continue;
             } catch (RuntimeException e) {
                 foldBudgetIsContended = false;
-                log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
+                log.warn("Checkpoint build failed for site {}: {}", siteId, e.getMessage());
                 recordCheckpointBuildAbort(siteId, classifyAbort(e), e.getMessage());
+                continue;
+            }
+            try {
+                retentionService.prune(siteId);
+            } catch (RuntimeException e) {
+                // Prune is not a first-checkpoint abort: the build already returned. A throw
+                // here used to share the catch above, so a retention failure on a site still
+                // at lastCheckpointSeq == 0 (a shutdown-ended build returns an empty fold
+                // and does not throw, #162) would have been persisted as FAILED.
+                log.warn("Checkpoint retention failed for site {}: {}", siteId, e.getMessage());
             }
         }
         if (!deferred.isEmpty()) {
@@ -204,7 +218,15 @@ public class CheckpointScheduler {
      * does not take a write, and a healthy build never reaches this method at all.
      */
     private void recordCheckpointBuildAbort(UUID siteId, CheckpointBuildAbort abort, String message) {
-        syncStateService.recordCheckpointBuildAbort(siteId, abort, message);
+        try {
+            syncStateService.recordCheckpointBuildAbort(siteId, abort, message);
+        } catch (RuntimeException e) {
+            // The per-site catch exists so one failure does not end the tick. This write must
+            // not undo that: a flush error on the abort columns is not a reason to skip every
+            // remaining site's build and freeze retention for the rest of the night.
+            log.warn("Could not persist the checkpoint-build abort for site {}: {}",
+                    siteId, e.getMessage());
+        }
     }
 
     /**

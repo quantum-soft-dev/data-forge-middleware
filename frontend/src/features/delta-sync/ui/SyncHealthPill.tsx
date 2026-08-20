@@ -50,7 +50,7 @@ export function SyncHealthPill({ health, isLoading, now = new Date() }: SyncHeal
     },
     now,
   );
-  const sev = syncStatusTone(status);
+  const sev = syncStatusTone(status, health.lastCheckpointBuildAbort);
 
   const label =
     status === 'stalled'
@@ -59,7 +59,7 @@ export function SyncHealthPill({ health, isLoading, now = new Date() }: SyncHeal
       // the list wearing an amber "Lag 1.2k" for a checkpoint that is not due yet (#213). The tone
       // changes and the count does not: how much is waiting is exactly what this pill is for.
       : status === 'first-checkpoint-failed'
-        ? `Checkpoint failed · ${formatLagShort(lag)}`
+        ? `${sev.label} · ${formatLagShort(lag)}`
         : status === 'awaiting-first-checkpoint'
           ? `No checkpoint · ${formatLagShort(lag)}`
           : status === 'healthy'

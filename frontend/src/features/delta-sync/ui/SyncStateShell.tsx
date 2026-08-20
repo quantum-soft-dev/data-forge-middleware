@@ -35,7 +35,7 @@ const TICK_10K = lagTrackPercent(10_000);
 export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps) {
   const lag = computeLag(state);
   const status = getSyncStatus(state, now);
-  const sev = syncStatusTone(status);
+  const sev = syncStatusTone(status, state.lastCheckpointBuildAbort);
   const stalled = isStalled(state.updatedAt, now);
   const fillPercent = lagTrackPercent(lag);
   // Checkpoints come from one nightly cron, so a site ingested during the day has none until it

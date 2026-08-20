@@ -7,13 +7,11 @@
  * mapping has to answer for a value it has never seen as well.
  */
 
-import type { SyncSeverity } from './severity';
-
 export interface CheckpointBuildAbortDescription {
   /** Chip / note text. */
   label: string;
   /** Which severity token the reason is painted with. */
-  severity: SyncSeverity;
+  severity: 'critical' | 'elevated';
 }
 
 const KNOWN: Record<string, CheckpointBuildAbortDescription> = {

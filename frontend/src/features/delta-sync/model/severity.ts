@@ -8,6 +8,7 @@
  */
 
 import { monitoringTokens, severityTokens, type SeverityToken } from '@/shared/ui/tokens';
+import { describeCheckpointBuildAbort } from './checkpointBuildAbort';
 
 export type SyncSeverity = 'healthy' | 'elevated' | 'critical' | 'stalled';
 
@@ -137,8 +138,9 @@ const AWAITING_FIRST_CHECKPOINT_TONE: SeverityToken = {
 
 /**
  * Alarm tone for a first checkpoint the scheduled build already tried and failed to produce
- * (issue #224). Critical rather than the wait's grey: the wait is a designed gap until 02:00,
- * this is a visit that produced nothing. The count stays on both surfaces.
+ * (issue #224). Critical for a refusal that never repairs itself (`FOLD_TOO_LARGE`, …);
+ * elevated for contention (`DEFERRED`, `SCRATCH_FULL`) — #213 already refused to call a
+ * fold-budget miss "the build is failing". The wait's grey is gone either way.
  */
 const FIRST_CHECKPOINT_FAILED_TONE: SeverityToken = {
   ...severityTokens.critical,
@@ -149,9 +151,17 @@ const FIRST_CHECKPOINT_FAILED_TONE: SeverityToken = {
  * Chip colors and label for a status, so every sync surface paints the same verdict the same way.
  *
  * @param status the verdict from {@link getSyncStatus}
+ * @param abort  `lastCheckpointBuildAbort` when {@code status} is `first-checkpoint-failed`
  */
-export function syncStatusTone(status: SyncStatus): SeverityToken {
+export function syncStatusTone(status: SyncStatus, abort?: string | null): SeverityToken {
   if (status === 'awaiting-first-checkpoint') return AWAITING_FIRST_CHECKPOINT_TONE;
-  if (status === 'first-checkpoint-failed') return FIRST_CHECKPOINT_FAILED_TONE;
+  if (status === 'first-checkpoint-failed') {
+    const described = describeCheckpointBuildAbort(abort);
+    if (!described) return FIRST_CHECKPOINT_FAILED_TONE;
+    return {
+      ...severityTokens[described.severity],
+      label: described.severity === 'critical' ? 'Checkpoint failed' : described.label,
+    };
+  }
   return severityTokens[status];
 }
