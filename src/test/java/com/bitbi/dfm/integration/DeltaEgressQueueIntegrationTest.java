@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -160,7 +161,10 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
     @Test
     void doesNotDeferOnBehalfOfAClaimWhoseAttemptCountHasMoved() {
         ChangelogSegment poison = segment(SITE_A, BATCH_A, 1L, 5L);
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        // Truncated to microseconds because that is what a PostgreSQL `timestamp` keeps: the JVM
+        // clock is nanosecond-resolution on Linux (micros on macOS), so the round trip would
+        // otherwise fail the equality below on CI and pass locally.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
         assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5), 0));
 
         assertEquals(0, repository.deferEgress(poison.getId(), now.plusMinutes(90), 0),
