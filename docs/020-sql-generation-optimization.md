@@ -454,6 +454,44 @@ not delete unprocessed work").
 
 ---
 
+### Losing the unique claim is not a second success (#246)
+
+Two workers can race `generateSqlForBatch` for one batch since #164 dropped the transaction that
+used to serialize them: the idempotency guard (`existsBySourceBatchId`) runs before the S3 write
+and the INSERT after it, so both can pass the guard and only the V11 unique
+`uk_sql_gen_source_batch` decides the race. The loser catches the
+`DataIntegrityViolationException`, deletes the object **it** uploaded, and adopts the winner's row
+— so both callers return the same generation, which is correct and unchanged.
+
+What was wrong is what the loser did **afterwards**. It carried on down the success path and:
+
+- wrote a second `SQL_GENERATION_COMPLETED` audit entry whose `s3Key` was the key it had just
+  deleted, so the account saw two completed generations for one batch on
+  `GET /api/v1/account/plugins/{pluginId}/logs`, one of them pointing at a dead object;
+- incremented `sql.generation.statements.{inserts,updates,deletes}` a second time for the same
+  batch — those series describe the batch, so a raced batch was double-counted on every dashboard
+  reading them.
+
+`persistOrAdoptExisting` now returns *how* the caller came by the generation, and an adopted one
+returns early: no completion audit entry, no statement counters, one INFO line naming the adopted
+generation, and one increment of the new counter
+
+- **`sql.generation.claims.lost`** — registered at zero, so an alert can predate the first
+  occurrence. It counts *attempts that rendered and uploaded SQL for a batch another worker had
+  already claimed*: wasted work, not a failure — the batch has its SQL either way. A steady rate
+  means the delta-SQL queue is handing one segment to two workers; a single increment beside a
+  completed batch is the unique doing its job.
+
+Two neighbouring series still move for both callers, deliberately: `sql.generation.duration` takes
+a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both
+permits. The loser's `SQL_GENERATION_STARTED` entry also stands — it did start.
+
+Pinned by `SqlGenerationConcurrentClaimIntegrationTest` (the real constraint, the race made
+deterministic by a barrier at `storeSqlFile`) and by the mock twin in `SqlGenerationServiceTest`;
+both go red when the adopted branch is removed.
+
+---
+
 ### Task 6: Reduce Thread Pool Sizes for SQL Generation
 
 **Priority**: MEDIUM (quick config change)

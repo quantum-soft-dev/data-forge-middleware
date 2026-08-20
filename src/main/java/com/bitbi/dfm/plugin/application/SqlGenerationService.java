@@ -149,6 +149,12 @@ public class SqlGenerationService {
         // pressure episode increments this once per queue wake. Read it as a rate ("the pod is
         // refusing work") and the SQL_GENERATION_FAILED audit entries for which batches.
         meterRegistry.counter("sql.generation.aborted.memory_pressure");
+        // Registered at zero for the same reason (issue #246). It counts attempts that rendered
+        // and uploaded SQL for a batch another worker had already claimed: wasted work, not a
+        // failure — the batch has its SQL either way. A steady rate means the delta-SQL queue is
+        // handing one segment to two workers, which is worth an alert of its own; a single
+        // increment beside a completed batch is the unique doing its job.
+        meterRegistry.counter("sql.generation.claims.lost");
         log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}, "
                         + "heapThresholdPercent={} ({})",
                 maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent,
@@ -300,8 +306,23 @@ public class SqlGenerationService {
             // race here (#164 dropped the queue TX that used to serialize them); the unique
             // on source_batch_id is the durable claim.
             long durationMs = timer.stop(meterRegistry.timer("sql.generation.duration"));
-            PluginSqlGeneration generation = persistOrAdoptExisting(
+            ClaimOutcome claim = persistOrAdoptExisting(
                     accountPluginId, batchData, s3Key, fileSize, result.stats(), durationMs);
+
+            if (claim.adopted()) {
+                // This caller lost the unique claim: the row is the winner's, and the object this
+                // attempt uploaded has just been deleted. Its success-path side effects belong to
+                // the winner and must not be repeated (issue #246) — a second
+                // SQL_GENERATION_COMPLETED entry would name a dead S3 key on the account's plugin
+                // log, and the statement counters describe the batch rather than the attempt.
+                log.info("Lost the unique claim for batch {}: adopting generation {} written by "
+                                + "the winning worker. Its completion audit entry and statement "
+                                + "counters stand for this batch; this attempt records neither.",
+                        batchId, claim.generation().getId());
+                meterRegistry.counter("sql.generation.claims.lost").increment();
+                return Optional.of(claim.generation());
+            }
+            PluginSqlGeneration generation = claim.generation();
 
             log.info("SQL generation completed: batchId={}, statements={}, duration={}ms",
                     batchId, result.stats().total(), durationMs / 1_000_000);
@@ -520,11 +541,26 @@ public class SqlGenerationService {
     }
 
     /**
+     * How a caller came by the generation it returns: it wrote the row, or it lost the race for
+     * the unique claim and adopted the row the winner wrote.
+     *
+     * <p>The distinction is what keeps the success-path side effects single (issue #246). Both
+     * callers legitimately return the same generation, but only one of them produced it, so only
+     * one may write the {@code SQL_GENERATION_COMPLETED} audit entry and move
+     * {@code sql.generation.statements.*}.</p>
+     *
+     * @param generation the surviving generation for the batch — the winner's on either branch
+     * @param adopted    {@code true} when this caller lost the claim and adopted the winner's row
+     */
+    private record ClaimOutcome(PluginSqlGeneration generation, boolean adopted) {
+    }
+
+    /**
      * Persist the generation, or adopt the row another worker already wrote for this batch.
      * The unique on {@code source_batch_id} is the durable claim now that the queue no longer
      * holds {@code SKIP LOCKED} across S3 (issue #164).
      */
-    private PluginSqlGeneration persistOrAdoptExisting(
+    private ClaimOutcome persistOrAdoptExisting(
             Long accountPluginId,
             SqlGenerationPersistence.BatchData batchData,
             String s3Key,
@@ -532,11 +568,13 @@ public class SqlGenerationService {
             SqlGenerationStats stats,
             long durationNanos) {
         try {
-            return persistence.saveGenerationRecord(
-                    accountPluginId, batchData, s3Key, fileSize, stats, durationNanos);
+            return new ClaimOutcome(persistence.saveGenerationRecord(
+                    accountPluginId, batchData, s3Key, fileSize, stats, durationNanos), false);
         } catch (DataIntegrityViolationException e) {
             cleanupOrphanedS3File(s3Key);
-            return persistence.findBySourceBatchId(batchData.batch().getId()).orElseThrow(() -> e);
+            return new ClaimOutcome(
+                    persistence.findBySourceBatchId(batchData.batch().getId()).orElseThrow(() -> e),
+                    true);
         }
     }
 

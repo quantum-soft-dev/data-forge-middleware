@@ -361,6 +361,8 @@ class SqlGenerationServiceTest {
         private final Long accountPluginId = 7L;
 
         private SqlGenerationService deltaService;
+        /** The registry {@link #deltaService} was built on, so the counters can be read back. */
+        private SimpleMeterRegistry deltaRegistry;
         private Batch batch;
         private Site site;
         private AccountPlugin accountPlugin;
@@ -368,7 +370,8 @@ class SqlGenerationServiceTest {
 
         @BeforeEach
         void setUpDelta() {
-            deltaService = newService(new SimpleMeterRegistry(), dbfStrategy, 2, 120, 100);
+            deltaRegistry = new SimpleMeterRegistry();
+            deltaService = newService(deltaRegistry, dbfStrategy, 2, 120, 100);
             deltaService.init();
 
             batch = mock(Batch.class);
@@ -440,6 +443,53 @@ class SqlGenerationServiceTest {
 
             assertThat(result).contains(existing);
             verify(s3SqlFileStorageService).deleteFile("plugins/bit-bi/x.sql");
+        }
+
+        @Test
+        @DisplayName("should not audit or count the generation it only adopted (#246)")
+        void shouldNotAuditOrCountTheAdoptedGeneration() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+            PluginSqlGeneration existing = PluginSqlGeneration.create(
+                    accountPluginId, siteId, batchId, null, "plugins/bit-bi/winner.sql", 10L,
+                    new SqlGenerationStats(1, 0, 0, 1), 1L);
+            when(sqlGenerationRepository.save(any())).thenThrow(
+                    new org.springframework.dao.DataIntegrityViolationException("uk_sql_gen_source_batch"));
+            when(sqlGenerationRepository.findBySourceBatchId(batchId)).thenReturn(Optional.of(existing));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).contains(existing);
+            // The winner already wrote the completion entry, and this caller's own key was just
+            // deleted — a second entry would name a dead object on the account's plugin log.
+            verify(pluginAuditService, never()).logSqlGenerationCompleted(
+                    anyString(), any(), any(), any(), any(), anyString(), anyLong());
+            // Statement counters describe the batch, not the attempt: the winner counted them.
+            assertThat(deltaRegistry.counter("sql.generation.statements.inserts").count()).isZero();
+            assertThat(deltaRegistry.counter("sql.generation.statements.updates").count()).isZero();
+            assertThat(deltaRegistry.counter("sql.generation.statements.deletes").count()).isZero();
+            // The lost race is reported as itself rather than as a second success.
+            assertThat(deltaRegistry.counter("sql.generation.claims.lost").count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("should audit and count the winner of the unique claim exactly once (#246)")
+        void shouldAuditAndCountTheWinnerOfTheUniqueClaim() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(3, 2, 1, 1)));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isPresent();
+            verify(pluginAuditService).logSqlGenerationCompleted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId), any(),
+                    eq("plugins/bit-bi/x.sql"), anyLong());
+            assertThat(deltaRegistry.counter("sql.generation.statements.inserts").count()).isEqualTo(3.0);
+            assertThat(deltaRegistry.counter("sql.generation.statements.updates").count()).isEqualTo(2.0);
+            assertThat(deltaRegistry.counter("sql.generation.statements.deletes").count()).isEqualTo(1.0);
+            assertThat(deltaRegistry.counter("sql.generation.claims.lost").count()).isZero();
         }
 
         @Test
