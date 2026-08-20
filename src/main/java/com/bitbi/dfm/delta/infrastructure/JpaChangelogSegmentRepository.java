@@ -149,6 +149,58 @@ public interface JpaChangelogSegmentRepository
     @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId")
     java.util.List<String> findAllS3KeysBySiteId(UUID siteId);
 
+    @Override
+    @Query("SELECT s.id AS id, s.s3Key AS s3Key, s.pluginSqlAt AS pluginSqlAt, s.egressAt AS egressAt "
+            + "FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false "
+            + "AND s.lastSeq <= :checkpointSeq ORDER BY s.firstSeq")
+    java.util.List<PrunableSegmentView> findBelowCheckpointBySiteId(UUID siteId, long checkpointSeq);
+
+    @Override
+    @Query("SELECT s.firstSeq AS firstSeq, s.lastSeq AS lastSeq FROM ChangelogSegment s "
+            + "WHERE s.siteId = :siteId AND s.provisional = false ORDER BY s.firstSeq")
+    java.util.List<SegmentSeqRange> findSeqRangesBySiteIdOrderByFirstSeq(UUID siteId);
+
+    @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false "
+            + "AND s.firstSeq > :afterSeq ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findBySiteIdAndFirstSeqGreaterThanOrderByFirstSeq(UUID siteId, long afterSeq);
+
+    // The marker predicate travels with the DELETE (issue #212): a reinit committing between
+    // retention's read and this statement re-NULLs plugin_sql_at site-wide, and the freshly
+    // re-pended row must survive. flushAutomatically for the same reason the sibling bulk
+    // statements carry it; no clearAutomatically — retention loads projections, never entities.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM ChangelogSegment s WHERE s.id = :id "
+            + "AND s.pluginSqlAt IS NOT NULL AND s.egressAt IS NOT NULL")
+    int deleteByIdIfProcessed(UUID id);
+
+    @Override
+    @Query("SELECT COUNT(s) > 0 FROM ChangelogSegment s WHERE s.siteId = :siteId "
+            + "AND s.provisional = false AND s.lastSeq <= :checkpointSeq "
+            + "AND (s.pluginSqlAt IS NULL OR s.egressAt IS NULL)")
+    boolean existsCommittedPendingBelowCheckpoint(UUID siteId, long checkpointSeq);
+
+    @Override
+    @Query("SELECT COALESCE(SUM(CASE WHEN s.pluginSqlAt IS NULL THEN 1 ELSE 0 END), 0) AS pendingPluginSql, "
+            + "COALESCE(SUM(CASE WHEN s.egressAt IS NULL THEN 1 ELSE 0 END), 0) AS pendingEgress "
+            + "FROM ChangelogSegment s WHERE s.batchId = :batchId AND s.provisional = false")
+    PendingQueueWork countPendingQueueWorkByBatchId(UUID batchId);
+
+    @Override
+    @Query("SELECT s.id AS id, s.s3Key AS s3Key FROM ChangelogSegment s "
+            + "WHERE s.siteId = :siteId AND s.provisional = false")
+    java.util.List<CommittedSegmentRef> findCommittedRefsBySiteId(UUID siteId);
+
+    // No clearAutomatically, like deleteBySiteId above: the re-baseline reset keeps its locked
+    // SiteSyncState managed across the whole sequence of deletes and mutates it at the end.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM ChangelogSegment s WHERE s.id IN :ids")
+    int deleteByIdIn(java.util.List<UUID> ids);
+
     // No clearAutomatically: the wipe keeps its locked SiteSyncState managed across the whole
     // sequence of bulk deletes and mutates it at the end.
     @Override

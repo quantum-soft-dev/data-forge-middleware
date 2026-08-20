@@ -29,7 +29,14 @@ import java.util.Set;
  * (issue #164): the claim query, the skip/snapshot path and the {@code plugin_sql_at} write
  * are short repository transactions, and generation — which first waits on the SQL semaphore
  * and then talks to S3 — runs with nothing open. A failure before the mark leaves the
- * segment pending and the sweep retries. Segments of accounts without an active bit-bi
+ * segment pending and the sweep retries. <b>That retry's horizon (issue #212):</b>
+ * {@code ChangelogRetentionService} holds a pending segment back from pruning, so the retry is no
+ * longer silently bounded by changelog retention. What ends it is the segment being processed, an
+ * operator deleting the segment or its batch, a client-initiated re-baseline or history wipe
+ * replacing the site's history — or <b>batch retention, the deliberate outer horizon</b>
+ * ({@code BatchRetentionService}, per-site {@code retentionDays}, default 45 days), which deletes
+ * a retired batch's segments regardless of their markers and counts what it destroys on
+ * {@code delta.retention.segments.deleted-pending}. Segments of accounts without an active bit-bi
  * activation are marked processed without generating (they must not accumulate).</p>
  *
  * <p>{@code FULL_SNAPSHOT} segments (source-side rebaseline) emit no SQL: the site's per-table
