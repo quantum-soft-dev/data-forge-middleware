@@ -85,20 +85,18 @@ public class DeltaRebaselineService {
         SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(siteId)
                 .orElseGet(() -> SiteSyncState.initial(siteId));
 
-        // 033: findBySiteIdOrderByFirstSeq returns committed segments only. A large re-baseline seals
-        // its own segments as provisional before SessionEnd gets here, so they are excluded by
-        // construction — this deletes the baseline being replaced, never the snapshot replacing it.
+        // 033: both statements are committed-only. A large re-baseline seals its own segments as
+        // provisional before SessionEnd gets here, so they are excluded by construction — this
+        // deletes the baseline being replaced, never the snapshot replacing it.
         // Delete the metadata rows in-transaction, but defer the S3 object deletes to afterCommit:
         // if the enclosing commit (the new snapshot segment persist + watermark advance) rolls back,
         // the old rows are restored and their S3 objects must still exist. Deferring keeps the old
         // baseline fully intact until the new one is durably committed (review r4).
-        List<String> s3Keys = new ArrayList<>();
-        int segments = 0;
-        for (ChangelogSegment segment : segmentRepository.findBySiteIdOrderByFirstSeq(siteId)) {
-            s3Keys.add(segment.getS3Key());
-            segmentRepository.deleteById(segment.getId());
-            segments++;
-        }
+        // One projection query and one bulk DELETE, not a row-by-row loop (issue #212 review):
+        // the backlog this discards is unbounded — held-back pending segments included — and it
+        // runs inside the SessionEnd commit under the site_sync_state row lock taken above.
+        List<String> s3Keys = segmentRepository.findCommittedS3KeysBySiteId(siteId);
+        int segments = segmentRepository.deleteCommittedBySiteId(siteId);
 
         int checkpoints = 0;
         for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {

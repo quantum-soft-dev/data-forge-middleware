@@ -36,11 +36,9 @@ class DeltaRebaselineServiceTest {
 
     @Test
     void resetClearsSegmentsCheckpointsAndResetsWatermarkKeepingSchema() {
-        UUID segId = UUID.randomUUID();
-        ChangelogSegment segment = mock(ChangelogSegment.class);
-        when(segment.getId()).thenReturn(segId);
-        when(segment.getS3Key()).thenReturn("delta/site/segments/old.pb.gz");
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
+        when(segmentRepository.findCommittedS3KeysBySiteId(SITE))
+                .thenReturn(List.of("delta/site/segments/old.pb.gz"));
+        when(segmentRepository.deleteCommittedBySiteId(SITE)).thenReturn(1);
 
         UUID cpId = UUID.randomUUID();
         Checkpoint checkpoint = mock(Checkpoint.class);
@@ -56,7 +54,11 @@ class DeltaRebaselineServiceTest {
         service.reset(SITE, 200L);
 
         verify(segmentStorage).delete("delta/site/segments/old.pb.gz");
-        verify(segmentRepository).deleteById(segId);
+        // One bulk statement, not one DELETE per segment (issue #212 review): the backlog this
+        // runs over is unbounded and the statement executes inside the SessionEnd commit under
+        // the site_sync_state row lock.
+        verify(segmentRepository).deleteCommittedBySiteId(SITE);
+        verify(segmentRepository, never()).deleteById(any());
         verify(checkpointRepository).deleteById(cpId);
 
         ArgumentCaptor<SiteSyncState> saved = ArgumentCaptor.forClass(SiteSyncState.class);
@@ -79,7 +81,7 @@ class DeltaRebaselineServiceTest {
         // as a plain read leaves it — a guarded write can slip between the checkpoint deletes and
         // the epoch bump and outlive the reset.
         InOrder order = inOrder(syncStateRepository, checkpointRepository, segmentRepository);
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(segmentRepository.findCommittedS3KeysBySiteId(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
         when(syncStateRepository.findBySiteIdForUpdate(SITE))
                 .thenReturn(Optional.of(SiteSyncState.initial(SITE)));
@@ -87,7 +89,7 @@ class DeltaRebaselineServiceTest {
         service.reset(SITE, 10L);
 
         order.verify(syncStateRepository).findBySiteIdForUpdate(SITE);
-        order.verify(segmentRepository).findBySiteIdOrderByFirstSeq(SITE);
+        order.verify(segmentRepository).findCommittedS3KeysBySiteId(SITE);
         order.verify(checkpointRepository).findBySiteId(SITE);
         verify(syncStateRepository, never()).findBySiteId(SITE);
     }
@@ -97,13 +99,15 @@ class DeltaRebaselineServiceTest {
         // 033: a large re-baseline seals its own segments before SessionEnd calls reset. Those are
         // provisional, and reset must source its delete set from the committed-only query — sweeping
         // them too would destroy the very snapshot that is replacing the baseline.
-        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(segmentRepository.findCommittedS3KeysBySiteId(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
         when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
 
         service.reset(SITE, 10L);
 
-        verify(segmentRepository).findBySiteIdOrderByFirstSeq(SITE);
+        verify(segmentRepository).findCommittedS3KeysBySiteId(SITE);
+        verify(segmentRepository).deleteCommittedBySiteId(SITE);
+        verify(segmentRepository, never()).deleteBySiteId(any());
         verify(segmentRepository, never()).findProvisionalBySiteId(any());
     }
 
