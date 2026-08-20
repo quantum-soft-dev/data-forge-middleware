@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V55**, next is **V56**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V56**, next is **V57**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -581,7 +581,7 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
+- Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
 - failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
@@ -596,7 +596,7 @@ pages/{feature}/            # Route pages
   critical on day one, which is the defect #213 removed. **Shape 2 of the ticket**, not 1: a
   persisted abort of the scheduled visit (the forced rebuild already has `lastRebuildOutcome` —
   #186), not a `created_at` from which "the last scheduled occurrence has passed" would be inferred.
-  V55 adds nullable `site_sync_state.last_checkpoint_build_abort` / `_abort_at` / `_message`.
+  V56 adds nullable `site_sync_state.last_checkpoint_build_abort` / `_abort_at` / `_message`.
   `CheckpointScheduler` writes them from its catch, and `DeltaSyncStateService.recordCheckpointBuildAbort`
   no-ops once `lastCheckpointSeq` is past zero, so a healthy build still writes nothing and a later
   abort of an already-checkpointed site does not take a column. Values: `FAILED`, `FOLD_TOO_LARGE`,
@@ -614,6 +614,183 @@ pages/{feature}/            # Route pages
   only on a spent wait (a probe is not an attempt), and painted contention aborts elevated
   rather than critical. No gRPC, proto, configuration-key, metric-name, S3-key or route change.
   See `docs/delta-client-v2-guide.md` ("A first checkpoint build that keeps failing").
+- double-nan-sql-literal: A non-finite `double` reaches Bit BI as a quoted literal, so the SQL it is
+  handed is valid PostgreSQL (issue #233). `SqlStatementGenerator.formatJsonValue` rendered every
+  `Number` through `toString()`, and PostgreSQL `real`/`double precision` legitimately hold `NaN` and
+  `±Infinity` — which the extractor sends as `double_value`, a real IEEE double — so the statement
+  read `SET price = NaN`, where a bare `NaN` is an **identifier**, not a literal:
+  `ERROR: column "nan" does not exist`. **The failure was invisible on this side**, which is what
+  separates it from #215: generation succeeded, the file went to S3, the batch was marked processed,
+  and the error surfaced only when Bit BI applied the file — taking the rest of it with it wherever a
+  file is applied as one transaction. The three values are emitted as `'NaN'`, `'Infinity'`,
+  `'-Infinity'`, which PostgreSQL coerces to the column's own type.
+  **Quoted rather than NULLed, and the asymmetry with #215 is the decision worth keeping.** For a
+  `numeric` column NULL is right because Parquet DECIMAL is a scaled integer and cannot hold the
+  value at all, so nulling keeps the Parquet artifacts and the SQL stream saying the same thing about
+  that cell. Parquet DOUBLE holds it natively, so here NULL would *create* that disagreement — the
+  checkpoint baseline keeping a value the delta stream dropped — and would discard a value both
+  consumers can carry. The same property normally removes any need for a key exception: PostgreSQL
+  compares `NaN` equal to itself, so `WHERE reading = 'NaN'` addresses the row.
+  **One combination is the exception, and review round 3 found that quoting turned its worst case
+  from loud to silent**: the rendering keys on the wire case while the Parquet writers key on the
+  **declared** type, so a column declared `numeric(p,s)` whose value arrives as `double_value` —
+  which the wire contract forbids and nothing rejects at ingest — is NULL in every Parquet artifact
+  and `'NaN'` in the SQL. As a *key* that used to be harmless precisely because the SQL was invalid
+  and Bit BI rejected the file; `WHERE k = 'NaN'` applies cleanly against a baseline row whose key
+  cell is NULL, matches nothing and diverges the mirror silently — the outcome the key guard exists
+  to prevent. So `hasUnrepresentableKey` becomes `unaddressableKeyReason` (it now returns *why*, so
+  the WARN can name the column and the reason) and also skips a non-finite `double_value` **whose declared column materialises as a
+  Parquet DECIMAL**, asking `ParquetSchemaMapper.rendersAsParquetDecimal` — the field the writers
+  actually build — rather than parsing the type name a second time, which would have got a **bare**
+  `numeric` wrong (Avro STRING, carries the token losslessly, nothing to skip); a declaration Avro
+  refuses though PostgreSQL accepts it (`numeric(2,5)`, `numeric(5,-2)`, `numeric(0)`) answers *no*
+  rather than throwing, since that table has already lost its Parquet and a throw here would fail the
+  whole batch's SQL. **Round 4 then widened the same guard to `string_value`** — the identical silent
+  divergence one wire case over, and this half was never loud even before #233, which corrects this
+  entry's earlier claim that "a string is quoted anyway" settled it: quoting settles SQL *validity*,
+  not which row the statement *addresses*. An unparseable string needs no guard for the mirror
+  reason — its SQL fails loudly at apply time — and an `INSERT` is skipped with the rest, since a row
+  whose key this stream will always skip is one it could create and never address again.
+  **The counter deliberately stays one series.** `sql.generation.delta.records.skipped.unrepresentable_key`
+  is unchanged and untagged: the two reasons have different remedies (fix the source data / fix the
+  client's `SubmitSchema` or its wire encoding) and the WARN names which, but the *alert* is the same
+  one either way — a client is sending keys this pipeline cannot address — and a tag added to an
+  existing untagged series is a contract change that breaks the dashboards reading it. The **data**
+  cells of the forbidden combination are also newly silent rather than loud (`SET price = 'NaN'`
+  applies where `SET price = NaN` was rejected), and that half is **not** guarded here: nulling them
+  is coercion, which is #240's subject and the thing PR #232 reverted three times. Recorded there
+  rather than argued in a commit message. The counter and WARN
+  are the existing ones. The **data** cells of that combination still differ; that is coercion, which
+  is #240's subject on both sides, and this ticket must not run in parallel with it. **Nor does the fix repair a file
+  already written**: `/sql-changes` returns the stored objects, so a pre-fix batch comes back
+  byte-identical — the recoveries are delete + generate (with its documented re-delivery caveat) or
+  `reinit`, which is what the guide now says instead of the "just re-fetch" this entry first
+  claimed. **The DBF path's `formatValue` had the same shape of hole** for a numeric
+  token and is guarded too, through `ValueMapper.canonicalNonFinite` — widened from package-private
+  rather than copied, since a second copy of that vocabulary is exactly what #238 was. That guard is
+  belt-and-braces, and review round 2 found the sharper reason: that branch is **unreachable through
+  the only production caller** — `DbfSqlGenerationStrategy` passes an *empty* `columnTypes` map, so
+  every cell falls back to `CHARACTER` and is quoted and escaped already, `NaN` included. The guard
+  is on the method's contract rather than on an observed defect, and the empty map is a finding of
+  its own (**#263**): it also makes the documented per-type NULL/`0` handling dead, and leaves a
+  non-numeric token in a numeric column returned raw — unquoted and unescaped — latent only because
+  nothing supplies the map. Proven by mutation: with
+  both branches removed six methods fail across `SqlStatementGeneratorTest` and
+  `DeltaSqlGenerationStrategyTest`. No new metric — the value is not degraded, so there is nothing to
+  count. No REST, gRPC, proto, DTO, migration, configuration-key,
+  metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A non-finite `double` is
+  kept, and quoted"), `docs/bitbi-integration.md`.
+- poison-segment-backoff: One deterministically failing segment no longer stalls every other site's
+  queue work, and the egress queue has an error counter for the first time (issue #243, filed by
+  review round 1 of PR #235 and sequenced after #212 and #185). Both segment queues claim the
+  **globally** oldest per-site head with `LIMIT 1` (`findNextPendingPluginSql`,
+  `findNextPendingEgress`), and the drain ended on the first `RuntimeException` — so a segment whose
+  work always throws was offered first on every wake and nothing else in the fleet was produced.
+  #212 changed that stall's ending rather than its mechanism: pending segments are no longer pruned,
+  so what used to self-heal in days by silently losing one batch became permanent, bounded only by
+  batch retention. **V55** adds `plugin_sql_attempts`/`plugin_sql_retry_at` and
+  `egress_attempts`/`egress_retry_at`; a failed attempt records a deferral and the drain moves on to
+  another site. The backoff filter applies to the **candidate row only** — the head-of-line
+  `NOT EXISTS` is deliberately untouched, so the failing segment still blocks *its own* site, which
+  is the per-site seq contract `/sql-changes` and the per-table delta files depend on. The delay
+  starts at 60 s and doubles per attempt to 64x, the `delta.batch-parquet.retry-delay-seconds`
+  shape.
+  **The DoD's poison-skip was weighed and rejected, and that is the decision to review.** A skip
+  (stamp the marker, move on) discards that batch's SQL or delta file permanently — a segment is
+  the durable queue entry and nothing re-drives it once the marker is stamped — while the usual
+  causes are operator-repairable: a declared schema that does not fit the data, an unreadable
+  object, a ceiling set too low, all fixable, after which the retry succeeds. Skipping would turn a
+  repairable stall into exactly the silent, unrecoverable loss #212 had just stopped. So the attempt
+  count escalates **reporting** instead of taking a verdict, and the one bounded ending stays batch
+  retention (`delta.retention.segments.deleted-pending`, #212's owner decision).
+  **Loudness, since a skip is not what bounds it**: every failed attempt increments
+  `sql.generation.delta.segments.deferred` or **`delta.egress.errors`** (the DoD's second item — the
+  `sql.generation.errors` twin the egress side never had) with a WARN; past
+  `*-poison-after-attempts` (7 ≈ an hour with the doubling, so a passing outage never reaches it)
+  the line becomes an ERROR naming segment, site, seq range and next retry, and
+  `delta.egress.segments.poisoned` / `sql.generation.delta.segments.poisoned` move. Those two are a
+  **census, not an arrival rate** — the same segment counts again on every retry, once an hour past
+  the cap — the `delta.retention.segments.held-back` caveat verbatim. All four series registered at
+  zero.
+  **The memory-pressure refusal is exempt** and still ends the drain: `MemoryPressureAbortedException`
+  (#181) reads the *pod's* heap before any work, so every segment claimed during an episode would
+  meet it — deferring it would walk healthy segments towards the poisoned report and let a transient
+  overload become a verdict on the data, the rule #150/#162/#178 already hold. Pinned in
+  `DeltaSqlQueueMemoryPressureTest`: no `deferPluginSql`, no counter movement.
+  **Two smaller decisions.** The deferral is a **targeted UPDATE** carrying the marker predicate
+  (`deferPluginSql`/`deferEgress`), not a save of the claimed entity: since #164 the claim lock is
+  released before the work, so two replicas can attempt one segment and the increment has to happen
+  in the database, and a segment whose work landed (or which a reinit re-enqueued) must not be
+  pushed into a cooldown by a straggler — which also means these columns do not widen #245's
+  whole-entity clobber on the write path that matters. And `clearPluginSqlBySiteId` resets the retry
+  state with the marker: a reinit is the operator saying the cause is gone. New keys
+  `delta.egress.{retry-delay-seconds,poison-after-attempts}` and
+  `plugin.sql-generation.delta-{retry-delay-seconds,poison-after-attempts}`, validated in their
+  consuming beans and named in the refusal (#185's rule, one shared `QueueRetryBackoff`). Proven by
+  mutation: with the deferral put back to a rethrow, four unit tests fail across the two queues. No
+  REST, gRPC, proto, DTO, configuration-key **rename**, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("One failing segment does not stall the other sites", Metrics),
+  `docs/020-sql-generation-optimization.md`.
+  **Review round 1 changed the blast radius, not the design.** A drain now stops after **one**
+  deferral: continuing would walk the whole backlog during a *systemic* failure — an S3 outage, the
+  database refusing connections, sustained semaphore contention — spending an attempt and a cooldown
+  on every pending segment of every site, drowning the poisoned signal and delaying recovery by the
+  accumulated cooldowns; one deferral per wake unblocks the queue, since the deferred segment is
+  inside its cooldown and the next wake claims a different site's head (and wakes are per
+  `BATCH_COMPLETED`, not only the 60 s sweep). A failure while the pod is **shutting down** spends
+  no attempt either — the S3 client or the data source may already be closed, so it is the process
+  ending, #162's rule again. The #164 "no transaction across S3" guard is checked **before** the
+  queue claims anything, because swallowed into a deferral a caller that wrapped the drain in a
+  transaction would read as "every segment in the queue is poison data" rather than as the wiring
+  mistake it is. A deferral whose UPDATE matches **no row** (the work landed on another replica
+  while this attempt was failing, or a reinit/retention moved it) is not reported at all, so the
+  counters never send an operator after a segment that is already done. The guide gained the reading
+  rule this implies — one segment climbing is that segment's data, many at once is systemic — and
+  the honest caveat that an outage outlasting the whole doubling window does reach the threshold for
+  every site's head. Two smaller ones: the ERROR names the configuration key that sets the
+  threshold, and the unused `poisonAfterAttempts()` accessor is gone. **The entity Javadoc's claim
+  was corrected rather than left standing**: the deferral write is targeted, but the new columns are
+  still carried by the entity, so the success path's whole-entity `save` can write a stale
+  `*_attempts`/`*_retry_at` back — #245's clobber now has four more columns, which is recorded there
+  as evidence with the note that its targeted-UPDATE option is the one these two statements already
+  demonstrate.
+  **Round 2 found the same clobber one degree worse and closed that half inside this ticket**: the
+  success path's whole-entity `save` does not merely write a stale count, it can **erase a live
+  deferral** — the SQL queue finishing minutes after its claim writes the egress columns back as
+  they were then, restarting the escalation from zero and making the poison immediately claimable,
+  i.e. #245's clobber reaching the one bound this queue has. All four retry columns are therefore
+  `updatable = false`: Hibernate leaves them out of the entity's own UPDATE while the bulk JPQL
+  statements still write them, so the markers stay #245's work and the retry state is out of its
+  reach. Pinned by an integration test that reads the **row** rather than the persistence context,
+  since merge copies the detached values onto the managed instance whatever the mapping says and
+  only the generated UPDATE leaves them out (red without the flag). Round 2 also moved the site and
+  activation lookups and the mark write **inside** the try: `orElseThrow("Site not found")` for a
+  segment whose `sites` row is gone was this ticket's own defect reached through the three
+  statements the deferral did not wrap — no attempt, no cooldown, offered first on every wake. And
+  both worker Javadocs and `docs/020` still described the pre-round-1 behaviour ("the drain moves on
+  to another site"), which the guide contradicted three paragraphs later. **One finding is not fixed
+  here and is #261**: only the memory-pressure refusal has a type, so a semaphore timeout — a
+  pod-level condition raised before any work — is deferred like a data failure and can walk healthy
+  heads to the poisoned ERROR; giving it a type means editing `SqlGenerationService`, which #246
+  held in the same window, and the limit is stated in the guide rather than left implied.
+  **Round 3** tightened three things and declined two. The deferral write is now **claim-scoped** —
+  it requires the attempt count to still be the one the claim saw — because the marker predicate
+  alone did not hold the property the comment claimed: `clearPluginSqlBySiteId` zeroes the count and
+  re-`NULL`s the marker, so a straggler that started before an operator's reinit satisfied
+  `plugin_sql_at IS NULL` and undid the reset. The residual is written down instead of implied (a
+  reinit of a head already at zero attempts is indistinguishable from no reinit, and costs it one
+  cooldown). The original failure is no longer lost when the deferral write **itself** throws —
+  likeliest exactly when the segment's failure was the database — since this class is the only
+  place that logs a top-level egress failure at all: the second exception carries the first as
+  suppressed, and the refused-deferral branch logs the original with its DEBUG line. And both
+  `@return` contracts said `false` meant "the queue is empty", which stopped being true when a
+  deferral began ending the drain. **Declined, with the arithmetic rather than a promise**: a
+  poisoned head costs one wake per cooldown, so K permanently poisoned heads waste ~K wakes an hour
+  against a floor of ~60 (the sweep) on a quiet fleet — the reviewer's suggested re-wake after a
+  deferral is precisely the round-1 defect, one systemic outage walking the whole backlog in a
+  chain, so the trade is documented in the guide instead. The semaphore-timeout exemption was raised
+  again and stays #261 for the same reason as in round 2.
+
 - adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the
   winner's success as its own (issue #246, a pre-existing defect promoted out of the withdrawn
   findings inbox #242 after #190/PR #236 made the race deterministic in a test). Since #164 two

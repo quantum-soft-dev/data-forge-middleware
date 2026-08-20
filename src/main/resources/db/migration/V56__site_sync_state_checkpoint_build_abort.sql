@@ -1,4 +1,4 @@
--- V55: give a scheduled checkpoint build that aborted a verdict the UI can read (issue #224)
+-- V56: give a scheduled checkpoint build that aborted a verdict the UI can read (issue #224)
 --
 -- Since #213 a site with last_checkpoint_seq = 0 and records applied reads as a neutral
 -- "No checkpoint yet" — right for the case it was written for (the first nightly build has

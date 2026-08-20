@@ -284,6 +284,15 @@ plugin:
     # interval (>= 1 ms), both validated in DeltaSqlSweepWorker (#185)
     delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}
     delta-sweep-ms: ${PLUGIN_SQL_GENERATION_DELTA_SWEEP_MS:60000}
+    # A segment whose generation fails is held out of the queue for this long, doubling per attempt
+    # (capped at 64x), so one poison segment cannot stall every other site's SQL (issue #243).
+    # >= 1 second, validated in DeltaSqlQueueService. Nothing discards the segment: it keeps its
+    # place in its own site's order for ever, and batch retention stays the outer horizon (#212).
+    delta-retry-delay-seconds: ${PLUGIN_SQL_GENERATION_DELTA_RETRY_DELAY_SECONDS:60}
+    # Failed attempts after which the segment is reported as poisoned — an ERROR naming it and
+    # sql.generation.delta.segments.poisoned — rather than merely retried; >= 1. With the doubling
+    # above, 7 attempts span roughly an hour, so a transient outage does not reach it.
+    delta-poison-after-attempts: ${PLUGIN_SQL_GENERATION_DELTA_POISON_AFTER_ATTEMPTS:7}
 
 plugins:
   bitbi:
@@ -498,6 +507,13 @@ delta:
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
     # Fallback sweep interval (ms) picking up segments missed by the commit-time wake
     sweep-ms: ${DELTA_EGRESS_SWEEP_MS:60000}
+    # The delta-SQL queue's twin (issue #243): a segment whose egress fails is held out of the queue
+    # for this long, doubling per attempt (capped at 64x), so one unreadable object cannot stall
+    # every other site. >= 1 second, validated in DeltaEgressService.
+    retry-delay-seconds: ${DELTA_EGRESS_RETRY_DELAY_SECONDS:60}
+    # Failed attempts after which the segment is reported as poisoned — an ERROR naming it and
+    # delta.egress.segments.poisoned — rather than merely retried; >= 1.
+    poison-after-attempts: ${DELTA_EGRESS_POISON_AFTER_ATTEMPTS:7}
   batch-parquet:
     # Completed-session artifacts are separate from the realtime per-segment egress above.
     max-concurrent: ${DELTA_BATCH_PARQUET_MAX_CONCURRENT:2}

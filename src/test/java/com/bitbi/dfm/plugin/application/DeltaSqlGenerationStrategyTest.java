@@ -67,6 +67,10 @@ class DeltaSqlGenerationStrategyTest {
         return Value.newBuilder().setIntValue(v).build();
     }
 
+    private static Value dbl(double v) {
+        return Value.newBuilder().setDoubleValue(v).build();
+    }
+
     private static ChangeRecord record(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
         ChangeRecord.Builder builder = ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq);
         if (key != null) builder.putAllKey(key);
@@ -239,5 +243,96 @@ class DeltaSqlGenerationStrategyTest {
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")), schemas, Map.of());
 
         assertThat(result).isNull();
+    }
+
+    /**
+     * The {@code double_value} sibling of the decimal case above, and it settles the opposite way
+     * (issue #233). PostgreSQL {@code real} / {@code double precision} hold {@code NaN} and
+     * {@code +/-Infinity}, Parquet DOUBLE carries them natively, and PostgreSQL compares
+     * {@code NaN} equal to itself — so the value is representable end to end and the record is
+     * rendered rather than skipped. What it needs is the quoting: bare, {@code NaN} is an
+     * identifier and the whole SQL file fails when Bit BI applies it.
+     */
+    @Test
+    @DisplayName("should render a non-finite double as a quoted literal instead of skipping it")
+    void shouldRenderNonFiniteDoubleAsQuotedLiteral() throws IOException {
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("orders", Op.UPDATE, 1, Map.of("id", intVal(1)),
+                        Map.of("total", dbl(Double.NaN))),
+                record("orders", Op.DELETE, 2,
+                        Map.of("id", dbl(Double.NEGATIVE_INFINITY)), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 2, "DELTA")),
+                schemas, Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .contains("UPDATE orders SET total = 'NaN' WHERE id = 1")
+                .contains("DELETE FROM orders WHERE id = '-Infinity'");
+        assertThat(result.stats().updates()).isEqualTo(1);
+        assertThat(result.stats().deletes()).isEqualTo(1);
+    }
+
+    /**
+     * The declared type decides where the wire case cannot (issue #233, review round 3). A
+     * {@code numeric(p,s)} column materialises as a Parquet DECIMAL, which holds no non-finite
+     * value, so every artifact writes that key cell NULL — a quoted {@code 'NaN'} in the WHERE
+     * clause would then be valid SQL addressing a baseline row whose key is NULL: applied, matching
+     * nothing, mirror silently diverged. Sending a {@code numeric} column as {@code double_value}
+     * violates the wire contract and nothing rejects it at ingest, so the skip is the guard.
+     *
+     * <p>A column declared {@code double precision} is the control: same wire case, same value,
+     * representable at the destination, therefore rendered.</p>
+     */
+    @Test
+    @DisplayName("should skip a non-finite double key only when its column materialises as a decimal")
+    void shouldSkipNonFiniteDoubleKeyOnlyInDecimalColumn() throws IOException {
+        Map<String, TableSchema> typed = Map.of(
+                "priced", new TableSchema(
+                        List.of(new TableSchema.ColumnDefinition("id", "numeric(10,2)", true),
+                                new TableSchema.ColumnDefinition("label", "varchar", true)),
+                        List.of("id"), List.of()),
+                "measured", new TableSchema(
+                        List.of(new TableSchema.ColumnDefinition("id", "double precision", true),
+                                new TableSchema.ColumnDefinition("label", "varchar", true)),
+                        List.of("id"), List.of()));
+
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("priced", Op.DELETE, 1, Map.of("id", dbl(Double.NaN)), Map.of()),
+                // the same hazard one wire case over: a string spelling, quoted just as legally
+                record("priced", Op.DELETE, 3, Map.of("id", str("Infinity")), Map.of()),
+                record("measured", Op.DELETE, 2, Map.of("id", dbl(Double.NaN)), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 2, "DELTA")),
+                typed, Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .doesNotContain("DELETE FROM priced")
+                .contains("DELETE FROM measured WHERE id = 'NaN'");
+        assertThat(result.stats().deletes()).isEqualTo(1);
+    }
+
+    /**
+     * A <em>bare</em> {@code numeric} is Avro STRING, not DECIMAL — it carries the token losslessly —
+     * so it is not the skipping case, and a guard written against the type <em>name</em> rather than
+     * against the field the writers build would get this wrong.
+     */
+    @Test
+    @DisplayName("should render a non-finite double key in a bare numeric column")
+    void shouldRenderNonFiniteDoubleKeyInBareNumericColumn() throws IOException {
+        Map<String, TableSchema> typed = Map.of(
+                "priced", new TableSchema(
+                        List.of(new TableSchema.ColumnDefinition("id", "numeric", true)),
+                        List.of("id"), List.of()));
+
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("priced", Op.DELETE, 1, Map.of("id", dbl(Double.POSITIVE_INFINITY)), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")),
+                typed, Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent()).contains("DELETE FROM priced WHERE id = 'Infinity'");
     }
 }

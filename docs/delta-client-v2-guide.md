@@ -1120,7 +1120,77 @@ volume was busy, so:
   something this budget introduced, but it is the reason to size the key with headroom rather than
   to the exact worst case.
 
+### A non-finite `double` is kept, and quoted
+
+`real` and `double precision` travel as `double_value` — a real IEEE double — and where the column
+is **declared** as one of those two, Parquet DOUBLE carries `NaN` and `±Infinity` natively, so the
+per-segment delta file, the completed-batch artifact and the checkpoint snapshot all hold the value
+the source had. **No degradation, no counter, nothing to configure.**
+
+The Bit BI SQL stream renders those three as **quoted literals** — `'NaN'`, `'Infinity'`,
+`'-Infinity'` — which PostgreSQL coerces to the column's own type. Unquoted they are identifiers,
+not literals, so until issue #233 the generated statement read `SET price = NaN` and the server
+applying it answered `ERROR: column "nan" does not exist`. That failure was invisible on this side:
+generation succeeded, the file was uploaded, the batch was marked processed, and the error surfaced
+only in Bit BI — taking the rest of the file with it where a file is applied as one transaction.
+
+**A file already written is not repaired by this fix, and re-fetching it does not help.**
+`/sql-changes` concatenates the objects `plugin_sql_generations` names, so the same bytes with the
+bare `NaN` come back. The recoveries are the ones the SQL tab already offers: **delete + generate**
+for that batch — with the re-delivery caveat documented there, since the new row gets a new
+`created_at` and the SQL is not idempotent — or `reinit` for a batch a client has already fetched.
+The records themselves were never lost, so no re-baseline of the *source* is involved.
+
+**Why quoted and not NULL, when the `numeric` path below nulls the same three values.** The
+trade-off runs the other way for each. Parquet DECIMAL is a scaled integer and cannot hold a
+non-finite value at all, so NULL is what keeps the Parquet artifacts and the SQL stream saying the
+same thing about that cell; Parquet DOUBLE *can* hold it, so nulling it in SQL alone would create
+exactly the disagreement the `numeric` rule exists to prevent, and would drop a value both consumers
+can carry. A `double` key needs no exception either: PostgreSQL compares `NaN` equal to itself, so
+`WHERE reading = 'NaN'` addresses the row.
+
+**The declared type is what decides on the Parquet side, and the wire case is what decides here** —
+so one combination still disagrees, and it is the combination the schema contract already forbids. A
+client that declares a column `numeric(p,s)` and nevertheless sends the value as `double_value` — or
+as a `string_value` spelling one of the three (see [Value typing](#value-typing): *never send these
+as `double_value`*) — has that cell written NULL by every Parquet writer, since `toBigDecimal`
+cannot render a non-finite into a DECIMAL whatever Java type it arrived as, counted on
+`delta.parquet.unrepresentable-decimals{reason=non_finite}`, while the SQL stream renders `'NaN'`.
+
+The **key** is guarded: quoting the literal would have turned a loud failure into a silent one —
+before #233 the bare `NaN` was invalid SQL that Bit BI rejected, whereas `col = 'NaN'` applies
+cleanly against a baseline row whose key cell is NULL and matches nothing — so such a record is
+skipped, on the same WARN and `sql.generation.delta.records.skipped.unrepresentable_key` as the
+`decimal_value` case. The `string_value` spelling is guarded with it: that one was never loud in the
+first place — a quoted string has always been valid SQL — so it is the same silent divergence one
+wire case over. An *unparseable* string such as `abc` in the same column needs no guard: Parquet
+nulls it too, but its SQL fails at apply time with `invalid input syntax for type numeric`, and only
+a value both sides consider legal can diverge quietly. An `INSERT` is skipped by the same rule, on
+purpose — PostgreSQL would create the row, but every later `UPDATE` and `DELETE` carrying that key
+is skipped, so it would be a row this stream can create and never address again. The **data** cells of that combination still differ (NULL in Parquet,
+`'NaN'` in SQL), as they did before with the SQL merely invalid on top; teaching the SQL path the
+destination type for those is a decision of its own and belongs to issue #240, which owns the
+question for both sides.
+
+A *bare* `numeric` is not in this at all: it maps to Avro STRING to carry the token losslessly, so
+nothing is degraded and nothing is skipped. The guard asks
+`ParquetSchemaMapper.rendersAsParquetDecimal`, i.e. the field the writers actually build, rather
+than reading the type name a second time — and a declaration Avro refuses although PostgreSQL
+accepts it (`numeric(2,5)`, `numeric(5,-2)`, `numeric(0)`) answers *no* rather than throwing: such a
+table has already lost its Parquet artifacts entirely, and failing here would fail the whole batch's
+SQL generation for it.
+
+**Comparison caveat.** `'Infinity'` and `1e400` are not the same cell: the wire value is an IEEE
+double, so a magnitude the source held in a `numeric` and cast to `double precision` may already be
+infinite before it leaves the client. That is ordinary float behaviour and not something this
+pipeline introduces.
+
 ### A value the column type cannot hold
+
+**This is about `numeric`.** The same three values in a `real` / `double precision` column travel as
+`double_value` and are **kept** end to end — see [A non-finite `double` is kept, and
+quoted](#a-non-finite-double-is-kept-and-quoted) just above; none of the `numeric` rule below
+applies to them.
 
 PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
 `decimal_value` tokens. Parquet DECIMAL is a scaled integer with no representation for any of them,
@@ -1171,9 +1241,9 @@ which that cell is separately NULL. The Bit BI SQL path is **not** a feeder: it 
 cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total number of places
 one source cell was degraded.
 
-**In the Bit BI SQL stream a key column is the exception — the record is skipped, not degraded.** A
-value that cannot be represented cannot address a row, so the WHERE clause would render as
-`col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
+**In the Bit BI SQL stream a `decimal_value` key column is the exception — the record is skipped,
+not degraded.** A value that cannot be represented cannot address a row, so the WHERE clause would
+render as `col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
 the mirror silently diverged. Such a record is dropped with a WARN and
 `sql.generation.delta.records.skipped.unrepresentable_key`.
 
@@ -1182,8 +1252,16 @@ other, so several such rows are indistinguishable in a checkpoint snapshot or a 
 artifact, and the baseline can contain a row the delta stream will never address. Consumers reading
 those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
 
-**What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
-server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
+A `decimal_value` reaches that skip whatever the column is declared as, because this pipeline cannot
+store the value under any decimal declaration. Issue #233 added a second, narrower reason: a
+non-finite arriving as `double_value` or as a non-finite `string_value` is representable and is
+normally rendered — but not when the column it keys is declared `numeric(p,s)`, where the Parquet
+side must write NULL and the two would otherwise disagree about which row the statement addresses.
+See [A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted).
+
+
+**What this does not give you:** for a `numeric` column `NaN` is not `NULL`, so a row-for-row
+comparison of source against server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
 such cell threw out of the mapper, and because every consumer catches per table it cost the table's
 whole delta file, failed its checkpoint snapshot (spending a `materialize_attempts` towards the
 permanent give-up above) and stopped the batch's Bit BI SQL. Storing the value truthfully would mean
@@ -1640,7 +1718,7 @@ at zero, so thirty failed nights used to carry byte-for-byte the payload of a si
 afternoon. Bounding it by lag magnitude was the obvious answer and is still the wrong one — a first
 `FULL_SNAPSHOT` is unbounded, so that bound would report the largest sites as critical on day one,
 which is the defect #213 removed. What separates the two payloads is a persisted abort on
-`site_sync_state` (V55: `last_checkpoint_build_abort` / `_abort_at` / `_message`), written where
+`site_sync_state` (V56: `last_checkpoint_build_abort` / `_abort_at` / `_message`), written where
 `CheckpointScheduler` catches the abort and **only while `last_checkpoint_seq` is still 0**. A
 healthy build does not touch those columns — it advances the pointer. A wipe and a re-baseline drop
 them, because both zero the pointer and an abort about the discarded baseline would then read as
@@ -2122,10 +2200,8 @@ explain, not routine.
 permanent-stall scenario — a mistyped `plugin.sql-generation.heap-threshold-percent` making every
 generation refuse forever — is closed at source by #185's fail-fast validation (an out-of-range
 value in the `plugin.sql-generation.*` block fails the context at startup), and a deterministic
-poison batch is already loud through `sql.generation.errors` and the
-#181 audit entries (the egress queue has no error counter yet — #243 tracks per-segment retry
-bounds and poison-skip for both queues, which is where a sharper bound would live if one is ever
-wanted).
+poison batch is loud through `sql.generation.errors`, the #181 audit entries and, since #243,
+`delta.egress.errors` plus the two poisoned counters below.
 
 **What the hold-back guarantee covers, exactly**: the two queue markers. A third durable consumer
 of raw segments exists — the completed-batch Parquet replay (`batch_parquet_artifacts`, 036/038
@@ -2162,6 +2238,111 @@ tick re-reads and classifies).
 The queues' retry contract (`DeltaSqlQueueService` Javadoc) states the horizon out loud: no longer
 silently bounded by changelog retention — bounded by the endings above, of which batch retention
 is the scheduled one.
+
+### One failing segment does not stall the other sites (issue #243)
+
+Both segment queues claim work the same way: `findNextPendingPluginSql` and `findNextPendingEgress`
+return the **globally** oldest per-site head with `LIMIT 1`. So a segment whose work throws
+deterministically — an object the bucket will not return, data the declared schema cannot render,
+a ceiling set below what the segment needs — used to be offered first on every wake, the drain
+ended on it, and *no other site's* SQL or delta Parquet was produced until an operator noticed.
+Before #212 that ended by itself, badly: retention eventually deleted the pending segment and the
+work was silently lost. With retention holding it back, the stall became permanent.
+
+A failed attempt now **defers that one segment**: `changelog_segments` carries
+`plugin_sql_attempts` / `plugin_sql_retry_at` and `egress_attempts` / `egress_retry_at` (V55), the
+claim query skips a segment inside its cooldown, and the next wake claims another site's head. The
+cooldown starts at `delta.egress.retry-delay-seconds` /
+`plugin.sql-generation.delta-retry-delay-seconds` (60 s) and doubles per attempt to 64x, the shape
+`delta.batch-parquet.retry-delay-seconds` already uses.
+
+**A drain stops after one deferral** (review round 1). Continuing would walk the whole backlog
+during a *systemic* failure — an S3 outage, the database refusing connections — spending an attempt
+and a cooldown on every pending segment of every site, which both drowns the poisoned signal and
+delays recovery by the accumulated cooldowns. One deferral per wake is enough to unblock the queue:
+the deferred segment is inside its cooldown, so the next wake claims a different site's head and
+drains it to the end. Wakes are frequent — every `BATCH_COMPLETED`, every plugin reinit, plus the
+60 s sweep — so this costs latency measured in seconds, not in sweeps.
+
+**The deferral is per segment, not per site.** The backoff applies to the candidate row only; the
+head-of-line rule is untouched, so the failing segment still blocks *its own* site's later
+segments. That is deliberate — a site's SQL generations and delta files publish in `first_seq`
+order, and skipping past a failing head would break the contract `/sql-changes` and the per-table
+delta files depend on.
+
+**Nothing is discarded, and that is the decision worth arguing.** The ticket allowed a poison-skip
+(stamp the marker, move on) and it is not what shipped: a segment is the durable queue entry, no
+route re-drives it once its marker is stamped, and the usual causes are operator-repairable — fix
+the declared schema, restore the object, raise the ceiling, reinit the plugin. A skip would turn a
+repairable stall into permanent, unrecoverable loss of that batch's SQL, which is exactly what
+#212 had just stopped. The attempt count therefore escalates **reporting** instead of taking a
+verdict, and the one bounded ending stays batch retention (`delta.retention.segments.deleted-pending`).
+
+**Two failures are exempt and still end the drain rather than being deferred.** The
+memory-pressure refusal (below), and a failure while the pod is shutting down — the S3 client or
+the data source may already be closed, so that is the process ending rather than the segment
+failing, and #162's rule is that such an ending records no verdict. The #164 "no transaction across
+S3" guard is checked *before* the queue claims anything, for the same reason: swallowed into a
+deferral, a caller that wrapped the drain in a transaction would read as "every segment in the
+queue is poison data" instead of as the wiring mistake it is.
+
+**What the escalation looks like.** Every failed attempt increments
+`sql.generation.delta.segments.deferred` (SQL) or `delta.egress.errors` (egress — the
+`sql.generation.errors` twin that side never had) and logs a WARN. Once a segment has failed
+`delta.egress.poison-after-attempts` / `plugin.sql-generation.delta-poison-after-attempts` times
+(7, roughly an hour with the doubling, so a passing outage does not reach it) the line becomes an
+ERROR naming the segment, its site, its seq range and its next retry, and
+`delta.egress.segments.poisoned` / `sql.generation.delta.segments.poisoned` moves. Read those two
+as a **census, not an arrival rate**: the same segment counts again on every retry — past the cap
+once an hour — until the cause is fixed or the batch is deleted. All four series are registered at
+zero, so an alert can predate the first failure.
+
+**How to read them**: one segment climbing is that segment's data or object. *Many* segments
+poisoned at once is systemic — the bucket, the database, a ceiling — and the ERROR line says so.
+An outage that outlasts the whole doubling window (roughly an hour) does reach the threshold for
+every site's head, which is the honest reading rather than a false promise: at that length it is an
+incident either way, and nothing is lost — every one of those segments is still queued, and each
+retries once its cooldown ends. A deferral whose UPDATE matches no row — the work landed on another
+replica while this attempt was failing, or the row is gone — is not reported at all, so the
+counters never send an operator after a segment that is already done.
+
+**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
+claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
+own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
+any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
+failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
+prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
+"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+
+**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
+claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
+own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
+any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
+failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
+prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
+"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+
+**The memory-pressure refusal is exempt** and still ends the drain. `MemoryPressureAbortedException`
+(#181) is a reading of the *pod's* heap taken before any work, so every segment claimed while it
+lasts would meet it: it spends no attempt, moves neither counter, and the next wake starts over.
+Deferring it would walk healthy segments towards the poisoned report and let a transient overload
+become a verdict on the data — the rule #150, #162 and #178 already hold elsewhere.
+
+**What one poison costs the rest of the fleet, stated in numbers** (review round 3): a drain that
+meets a poisoned head spends that wake on it and stops, and at the doubling cap each such head is
+claimable once an hour — so K permanently poisoned per-site heads waste roughly K wakes an hour. On
+a busy fleet wakes are plentiful (one per `BATCH_COMPLETED` on top of the sweep); on a quiet one the
+floor is the 60 s sweep, i.e. ~60 an hour, so healthy sites are only materially starved once K
+approaches that, by which point `*.segments.poisoned` has been shouting for a long time. The
+alternative — re-waking after each deferral — is deliberately not taken: it re-creates exactly the
+round-1 defect, where one systemic outage walks the whole backlog in a single chain.
+
+**A plugin reinit clears the retry state** along with the marker (`clearPluginSqlBySiteId`): the
+operator is saying the cause is gone, so the site's segments are claimable at once rather than
+sitting out the cooldown their old failures earned. The deferral write is **claim-scoped** so a
+straggler cannot undo that reset — it requires the attempt count to still be the one its claim saw
+— with one residual stated rather than implied: a reinit of a site whose head was already at zero
+attempts is indistinguishable from no reinit, and costs that head one cooldown.
 
 ### Objects no row references are reclaimed (issue #158)
 
@@ -2441,6 +2622,8 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`,
 `delta.retention.segments.deleted-pending{reason=pending_plugin_sql|pending_egress}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
+`delta.egress.errors`, `delta.egress.segments.poisoned`,
+`sql.generation.delta.segments.deferred`, `sql.generation.delta.segments.poisoned`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
 
@@ -2477,6 +2660,10 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.reconciliation.failures` | `delta_reconciliation_failures_total` |
 | `delta.egress.segments` | `delta_egress_segments_total` |
 | `delta.egress.pending` | `delta_egress_pending` |
+| `delta.egress.errors` | `delta_egress_errors_total` |
+| `delta.egress.segments.poisoned` | `delta_egress_segments_poisoned_total` |
+| `sql.generation.delta.segments.deferred` | `sql_generation_delta_segments_deferred_total` |
+| `sql.generation.delta.segments.poisoned` | `sql_generation_delta_segments_poisoned_total` |
 | `delta.egress.duration{phase=...}` (timer) | `delta_egress_duration_seconds_count` / `_sum` / `_max` |
 | `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
 | `delta.batch-parquet.duration{phase=...}` (timer) | `delta_batch_parquet_duration_seconds_count` / `_sum` / `_max` |

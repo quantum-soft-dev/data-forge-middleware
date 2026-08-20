@@ -75,6 +75,41 @@ public class ChangelogSegment {
     private LocalDateTime egressAt;
 
     /**
+     * Consecutive failed delta-Parquet egress attempts (issue #243). Advisory: it drives the
+     * backoff and the poisoned reporting, never a decision to discard work.
+     *
+     * <p>A failure is <em>recorded</em> by a targeted
+     * {@code UPDATE ... SET egress_attempts = egress_attempts + 1}, not by saving this entity, so
+     * two replicas attempting the same segment both count.</p>
+     *
+     * <p>All four retry columns are {@code updatable = false}, and that is load-bearing rather than
+     * decorative (review round 2). Both queues finish with {@code markX(); save(segment)} on the
+     * snapshot taken at claim time, and a merge writes every updatable field — so the SQL queue's
+     * success, minutes after its own claim, would otherwise write the egress columns back as they
+     * were then, <em>erasing</em> a deferral the egress worker recorded in between and restarting
+     * its escalation from zero. That is issue #245's marker clobber reaching the one bound this
+     * queue has. Hibernate applies {@code updatable} to the entity's own UPDATE only, so the bulk
+     * JPQL statements still write these columns; nothing else ever should.</p>
+     */
+    @Column(name = "egress_attempts", nullable = false, updatable = false)
+    private int egressAttempts;
+
+    /**
+     * Not claimable by the egress queue before this instant; {@code null} = claimable now
+     * (issue #243).
+     */
+    @Column(name = "egress_retry_at", updatable = false)
+    private LocalDateTime egressRetryAt;
+
+    /** The delta-SQL twin of {@link #egressAttempts} (issue #243). */
+    @Column(name = "plugin_sql_attempts", nullable = false, updatable = false)
+    private int pluginSqlAttempts;
+
+    /** The delta-SQL twin of {@link #egressRetryAt} (issue #243). */
+    @Column(name = "plugin_sql_retry_at", updatable = false)
+    private LocalDateTime pluginSqlRetryAt;
+
+    /**
      * Whether this segment belongs to a re-baseline snapshot that is still streaming (033).
      *
      * <p>A snapshot too large to buffer is sealed into bounded segments as it arrives. Those
