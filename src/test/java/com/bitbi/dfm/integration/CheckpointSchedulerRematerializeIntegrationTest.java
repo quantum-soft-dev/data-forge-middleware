@@ -95,6 +95,10 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
                         data("id", intVal(1), "name", strVal("Ann"))),
                 rec("customers", Op.INSERT, FIRST_SEQ + 1, key("id", intVal(2)),
                         data("id", intVal(2), "name", strVal("Bob")))));
+        // The fixture path leaves both queue markers NULL, and since issue #212 retention holds a
+        // pending segment back. This test's subject is the pruned-to-nothing work list (#137), so
+        // the segment must be prunable: mark its queue work done before the tick.
+        markSegmentsProcessed();
 
         scheduler.buildCheckpoints();
 
@@ -170,6 +174,14 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         assertNotNull(recovered.getS3KeyParquet(), "the forced rebuild materializes from the frame");
         assertEquals(0, recovered.materializeAttempts(), "a snapshot clears the attempt count");
         assertFalse(recovered.hasGivenUpMaterializing(cap), "and puts the row back in the population");
+    }
+
+    private void markSegmentsProcessed() {
+        segmentRepository.findBySiteIdOrderByFirstSeq(SITE).forEach(segment -> {
+            segment.markEgressed();
+            segment.markPluginSqlProcessed();
+            segmentRepository.save(segment);
+        });
     }
 
     private void awaitMaterialized() {
