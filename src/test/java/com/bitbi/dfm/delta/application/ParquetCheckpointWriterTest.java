@@ -159,6 +159,179 @@ class ParquetCheckpointWriterTest {
         assertTrue(Files.size(out) > 0);
     }
 
+    /**
+     * A {@code NOT NULL} decimal used to be a REQUIRED Parquet field, so the NULL #215 writes for a
+     * non-finite cell threw before the tally returned and the table lost its snapshot.
+     */
+    @Test
+    void nonFiniteDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(12,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> degradedRow = new LinkedHashMap<>();
+        degradedRow.put("id", intVal(1));
+        degradedRow.put("price", decVal("NaN"));
+        Map<String, Value> finiteRow = new LinkedHashMap<>();
+        finiteRow.put("id", intVal(2));
+        finiteRow.put("price", decVal("12.50"));
+
+        Path file = tempDir.resolve("not-null-non-finite.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(degradedRow, finiteRow), Long.MAX_VALUE, ROW_GROUP_BYTES,
+                TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount(), "the tally is returned rather than lost to a throw");
+        assertEquals(0L, degraded.malformedCount());
+        assertTrue(Files.size(file) > 0, "the table keeps its snapshot");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            assertNull(first.get("price"), "the unrepresentable cell is NULL, not the row's absence");
+            assertEquals(1L, first.get("id"), "and the rest of the row survives");
+            assertEquals(new BigDecimal("12.50"), reader.read().get("price"),
+                    "the other rows of the same column are unaffected");
+        }
+    }
+
+    /** Same as the non-finite case; counted apart because only this one is a client defect. */
+    @Test
+    void malformedDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(12,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("price", decVal("12,50"));
+
+        Path file = tempDir.resolve("not-null-malformed.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.malformedCount(), "counted as a client defect");
+        assertEquals(0L, degraded.nonFiniteCount());
+        assertTrue(Files.size(file) > 0, "the table keeps its snapshot");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertNull(reader.read().get("price"), "the unparseable cell is NULL, not a lost row");
+        }
+    }
+
+    /**
+     * A bare {@code numeric NOT NULL} maps to Avro STRING, not to a decimal logical type, yet is
+     * still degraded to NULL. Unioning only decimal-typed fields would leave this one throwing.
+     */
+    @Test
+    void nonFiniteInANotNullBareNumericColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("amount", "numeric", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("amount", decVal("Infinity"));
+
+        Path file = tempDir.resolve("not-null-bare-numeric.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount());
+        assertTrue(Files.size(file) > 0, "a string-typed destination is degraded too, so it must tolerate NULL");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertNull(reader.read().get("amount"),
+                    "the STRING destination is NULL, which a REQUIRED string field would have refused");
+        }
+    }
+
+    /**
+     * A folded {@code UPDATE} with no prior {@code INSERT} can omit a declared {@code NOT NULL}
+     * column; the snapshot still materializes with a null cell rather than losing the table.
+     */
+    @Test
+    void aFoldedRowMissingANotNullColumnStillMaterializesTheTable() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("name", "varchar(255)", false),
+                col("price", "numeric(12,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> partial = new LinkedHashMap<>();   // an UPDATE with no prior INSERT
+        partial.put("id", intVal(1));
+        partial.put("price", decVal("3.00"));
+
+        Path file = tempDir.resolve("partial-row.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(partial), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount(),
+                "an absent column is not a degraded cell and must not be counted as one");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord row = reader.read();
+            assertNull(row.get("name"), "the absent column is a null cell, not a lost row");
+            assertEquals(new BigDecimal("3.00"), row.get("price"));
+        }
+    }
+
+    /**
+     * {@code widenDecimalsToFit} reconstructs decimal fields and is the only remaining path that
+     * can emit a REQUIRED decimal ({@code UNION ? [null, wider] : wider}). The cases above never
+     * overflow the declared precision, so that reconstruction is a no-op for them.
+     */
+    @Test
+    void aWidenedNotNullDecimalStillAcceptsADegradedCell() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> oversized = new LinkedHashMap<>();
+        oversized.put("id", intVal(1));
+        oversized.put("price", decVal("1234567.89"));
+        Map<String, Value> nan = new LinkedHashMap<>();
+        nan.put("id", intVal(2));
+        nan.put("price", decVal("NaN"));
+
+        Path file = tempDir.resolve("widened-not-null-nan.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(oversized, nan), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount());
+        assertTrue(Files.size(file) > 0, "the table keeps its snapshot after the type widens");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            assertEquals(new BigDecimal("1234567.89"), first.get("price"));
+            Schema priceSchema = first.getSchema().getField("price").schema();
+            assertEquals(Schema.Type.UNION, priceSchema.getType(),
+                    "widenDecimalsToFit must keep the nullable union, not emit a REQUIRED wider decimal");
+            LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(first.getSchema(), "price").getLogicalType();
+            assertEquals(9, decimal.getPrecision(), "declared precision widened to fit the data");
+            assertEquals(2, decimal.getScale());
+            assertNull(reader.read().get("price"), "the degraded cell is NULL on the widened field");
+        }
+    }
+
     @Test
     void writesTypedParquetCoercingValuesByDeclaredType() throws Exception {
         TableSchema schema = new TableSchema(List.of(

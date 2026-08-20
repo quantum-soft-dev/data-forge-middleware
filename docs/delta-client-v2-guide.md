@@ -512,8 +512,22 @@ Parquet (via Avro logical types) as:
 | `bytea` | bytes |
 | *anything else* | string (lossless fallback) |
 
-`nullable: true` columns become a nullable union. Column and table names must be valid PostgreSQL identifiers
-(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`).
+**Every declared column is a nullable union in every artifact the server writes**, `nullable: false`
+included. `_op` and `_seq` on the delta and completed-batch files stay REQUIRED — a row always has an
+op and a seq — but no column from `site_schemas` is a REQUIRED Parquet field. The delta and
+completed-batch files have always been that way for declared columns (a keyed `DELETE` carries only
+its key columns and a keyed `UPDATE` only its after-image); since issue #237 the **checkpoint
+snapshot** is too. The `nullable` flag you submit is not ignored — it still describes your source
+table and it is what a consumer should read the constraint from — but the artifact does not enforce
+it, because the server has two ordinary ways of producing a null cell in a column you declared
+`NOT NULL`: a non-finite or malformed `numeric` (see *A value the column type cannot hold* below),
+and a row the server has only ever seen through an `UPDATE`, which carries its key columns plus the
+changed ones and nothing else. When the field was REQUIRED, either of those cost the **whole table**
+its snapshot — permanently, after five nights (#149) — instead of costing one cell its value. A
+consumer that needs the source constraint should take it from the schema it submitted, not from the
+Parquet field's repetition.
+
+Column and table names must be valid PostgreSQL identifiers (`^[A-Za-z_][A-Za-z0-9_]{0,62}$`).
 
 Declare `numeric(p,s)` truthfully: values are rescaled to the declared scale on write, and if a value needs
 more precision than declared, the server **widens the Parquet decimal type to fit** (logged server-side as a
@@ -1108,6 +1122,16 @@ the value travels in its on-the-wire form, and `double precision` maps to Avro D
 Bit BI SQL path disagree about the same cell (the checkpoint keeping a value the delta stream
 nulled), and the coercion it needed narrowed a non-finite into a `bigint` column as `0`. One rule
 for every column is what ships; keeping more is its own piece of work.
+
+**A `NOT NULL` column is not an exception to that**, and until issue #237 it was — expensively. The
+checkpoint snapshot mapped a `NOT NULL` column to a REQUIRED Parquet field, so the NULL above made
+parquet-avro throw *before* the write returned its tally: the WARN and both counters below were lost
+for precisely the case that needed them, `CheckpointService` recorded an opaque
+`tables.unmaterialized{reason=parquet_failed}` that never mentions decimals, the table's snapshot key
+was detached (a 404 for Bit BI, Parquet Export and the Delta Sync download), and — the cell being
+there every night — the row gave up permanently after five attempts. Every checkpoint column is a
+nullable union now, exactly as the delta and completed-batch artifacts already were; see
+[Schema JSON / type mapping](#schema-json--type-mapping).
 
 The loss is reported rather than silent. Each rendered table logs one WARN naming the table and how
 many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the rate, tagged by
