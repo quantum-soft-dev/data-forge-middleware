@@ -389,12 +389,14 @@ segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet —
 leaves the work recoverable, but it is a stall with no bound of its own. Validating the key is
 #185's job.
 
-**And "recoverable" has a horizon**: `ChangelogRetentionService.prune` deletes below-checkpoint
-segments past `delta.retention.audit-window-segments` (20) without regard for `plugin_sql_at IS
-NULL`, so a segment left pending long enough is eventually deleted with its S3 object and the
-batch's SQL is lost after all — silently, and without the audit row that marks a refusal. That is
-not introduced here (it applies to any generation that keeps failing, which is what "stays pending
-for the sweep" has always meant) but it bounds the retry window, and it is **#212**.
+**And "recoverable" no longer has a silent horizon (#212)**: `ChangelogRetentionService.prune`
+used to delete below-checkpoint segments past `delta.retention.audit-window-segments` (20) without
+regard for `plugin_sql_at IS NULL`, so a segment left pending long enough was deleted with its S3
+object and the batch's SQL was lost after all — silently, and without the audit row that marks a
+refusal. Retention now **holds a pending segment back** (pending egress alike), counts it on
+`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}` and WARNs once per
+site per pass, so the retry window is bounded only by the segment being processed or an operator
+deleting it. See `docs/delta-client-v2-guide.md` ("Retention does not delete unprocessed work").
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary

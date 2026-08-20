@@ -1999,6 +1999,49 @@ compensating delete in the caller is deliberately *not* how, because an exceptio
 the transaction committed (an `AFTER_COMMIT` listener throwing) and the delete would then destroy a
 live segment.
 
+### Retention does not delete unprocessed work (issue #212)
+
+`ChangelogRetentionService.prune` reclaims below-checkpoint segments past
+`delta.retention.audit-window-segments` (20) — but a segment is also the durable entry of two work
+queues: `egress_at IS NULL` means the delta-Parquet egress still owes it, `plugin_sql_at IS NULL`
+means the Bit BI SQL queue does. Those queues retry precisely by leaving the row pending ("a throw
+leaves the segment pending for the sweep"), and until #212 retention deleted such a row like any
+other: once the nightly checkpoint subsumed it and twenty younger below-checkpoint segments
+accumulated, the row and its object were gone, `findNextPendingPluginSql` could never offer it
+again, and the batch's SQL (or its delta file) was lost permanently, silently, with no audit row
+marking the moment of loss. On a busy site that window is short, and it silently bounded the retry
+guarantee #181 established for the memory-pressure abort.
+
+**Pending work is not prunable.** The prune skips a below-checkpoint segment whose
+`plugin_sql_at` or `egress_at` is still `NULL`. The predicate cannot pin a segment forever by
+design elsewhere: every segment is egressed regardless of plugin state (tables without a schema are
+skipped but the segment is still marked egressed), the delta-SQL queue stamps `plugin_sql_at`
+without generating for accounts with no active bit-bi activation and for `FULL_SNAPSHOT` baseline
+segments, and provisional parking (033) sets both markers to a sentinel until publication resets
+them to `NULL`. Held-back segments still count toward the audit window — it keeps its meaning of
+"the most recent N below-checkpoint segments are retained", and the hold-back retains segments on
+top of it rather than re-shaping it, so a pending segment does not shield an older processed one
+from the window.
+
+**The hold-back is counted and logged, not silent in the other direction.**
+`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}` counts, per pass,
+the segments the window would have pruned but the predicate retained; both series are registered
+at zero so an alert can predate the first occurrence. Read each `reason` independently — "is this
+queue stalling retention" — a segment owing both moves both, so the sum over reasons can exceed
+the number of held-back segments. And read it as a **census, not an arrival rate**: nothing
+removes a held-back segment between passes except its own queue draining it, so the same segment
+is counted again every night. One WARN per site per pass names the counts — the one-line-per-prefix
+discipline the other sweeps use.
+
+**Deliberately no age or count bound on the hold-back.** The main permanent-stall scenario — a
+mistyped `plugin.sql-generation.heap-threshold-percent` making every generation refuse forever —
+is closed at source by #185's fail-fast validation, and a deterministic poison batch is already
+loud through `sql.generation.errors` and the #181 audit entries. If storage pinning ever becomes
+real, a bound is its own decision with its own ticket; the starting point is "stop losing work
+silently". The queue's retry contract therefore states its horizon: unbounded in time, ended only
+by the segment being processed or by an operator deleting it — no longer silently bounded by
+retention.
+
 ### Objects no row references are reclaimed (issue #158)
 
 Every object under `delta/{siteId}/segments/` and `checkpoints/{siteId}/` is written **before**, or
@@ -2274,6 +2317,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.s3-orphan.candidates{prefix=segments|checkpoints}`,
 `delta.s3-orphan.reclaimed{prefix=segments|checkpoints}`,
 `delta.s3-orphan.delete-failed{prefix=segments|checkpoints}`,
+`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
@@ -2326,6 +2370,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.s3-orphan.candidates{prefix=segments\|checkpoints}` | `delta_s3_orphan_candidates_total{prefix=...}` |
 | `delta.s3-orphan.reclaimed{prefix=segments\|checkpoints}` | `delta_s3_orphan_reclaimed_total{prefix=...}` |
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
+| `delta.retention.segments.held-back{reason=pending_plugin_sql\|pending_egress}` | `delta_retention_segments_held_back_total{reason=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
 | `delta.parquet.unrepresentable-decimals{reason=non_finite\|malformed}` | `delta_parquet_unrepresentable_decimals_total{reason=...}` |
