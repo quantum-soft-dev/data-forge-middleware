@@ -582,7 +582,6 @@ pages/{feature}/            # Route pages
   new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
   delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
   `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
-||||||| 83e2f7bd
 - retire-sql-regeneration: The SQL regeneration path is gone, because it had never worked end to
   end and repairing it would have repaired a path that can serve no live batch (issue #190,
   folding #200 — the two were one piece of work: #190's transaction refusal fired first and #200's
