@@ -511,6 +511,17 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- docs-recent-changes-drifts: Documentation now reflects the repository it describes (issue #205,
+  folding #218). `README.md` names the supported unit-and-contract gate instead of a nonexistent
+  `contractTest` task; the connection-pool guide was already correct on current `develop` at five
+  `Cost.LONG` ticks, so it is deliberately not churned; and the obsolete Bit BI residual risk that
+  claimed queue workers hold a database connection across S3 is removed because #164 made both
+  claim/mark transactions short. `AGENTS.md` restores the missing `prefix-walk-paged` journal entry
+  and drops its stale duplicate `split-scratch-ceilings` entry. A cross-document journal guard is
+  deliberately not added: the two journals have intentionally different historical coverage, so a
+  fixed comparison boundary would itself be a second hand-maintained convention; the existing review
+  check of the fresh block remains the proportionate control. Documentation only: no product code,
+  migration, API, configuration, metric, S3-key, protobuf, or frontend change.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
   cell as NULL and returns a tally so the WARN and
