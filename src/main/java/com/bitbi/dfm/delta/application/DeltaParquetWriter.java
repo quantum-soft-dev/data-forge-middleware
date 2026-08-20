@@ -98,8 +98,12 @@ public final class DeltaParquetWriter {
             }
             rows.add(row);
         }
+        // After the write, not before it: a failed write is caught by DeltaEgressService, which
+        // skips the table and never counts -- leaving a WARN describing a file that was never
+        // written (review round 3).
+        byte[] encoded = ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
         ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
-        return ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
+        return encoded;
     }
 
     /**

@@ -133,10 +133,12 @@ public class DeltaEgressService {
             metrics.timeEgressPhase("upload", () -> storage.uploadDelta(
                     segment.getSiteId(), table, segment.getFirstSeq(),
                     segment.getLastSeq(), parquet));
-            // After the upload, not before it (issue #215, review round 2): a failed upload leaves
-            // the segment unmarked and the sweep re-renders the whole thing, so counting earlier
-            // would report the same source cells once per attempt -- the discipline the
-            // completed-batch path already documents.
+            // After the upload, not before it (issue #215, review round 2). It buys less than the
+            // completed-batch path's equivalent, and the difference is worth stating: uploadDelta
+            // sits outside the per-table catch, so a failure on a later table propagates, the
+            // segment is never marked, and the sweep re-renders every table -- re-counting the ones
+            // that already uploaded. The ordering removes the re-count for the failing table only
+            // (review round 3).
             metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
             metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
         });

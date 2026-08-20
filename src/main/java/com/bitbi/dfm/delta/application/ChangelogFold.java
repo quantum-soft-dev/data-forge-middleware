@@ -249,6 +249,14 @@ public final class ChangelogFold {
             return new java.math.BigDecimal(token).stripTrailingZeros().toPlainString();
         } catch (NumberFormatException e) {
             String trimmed = token.trim();
+            try {
+                // BigDecimal rejects surrounding whitespace, so " 1.0" reached this fallback and
+                // folded as its own identity beside "1.0" -- one source row becoming two (review
+                // round 3). Retried trimmed before falling back to the token.
+                return new java.math.BigDecimal(trimmed).stripTrailingZeros().toPlainString();
+            } catch (NumberFormatException stillNotANumber) {
+                // genuinely non-finite or malformed: the token itself is the identity
+            }
             String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
                     ? trimmed.substring(1) : trimmed;
             if (trimmed.equalsIgnoreCase("nan")) {

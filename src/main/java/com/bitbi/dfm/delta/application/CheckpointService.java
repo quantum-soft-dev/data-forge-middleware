@@ -996,12 +996,13 @@ public class CheckpointService {
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
-                // After the upload (issue #215, review round 2): a failed upload leaves the table
-                // unmaterialized and a later build re-renders it, so counting before would report
-                // the same source cells once per attempt.
+                epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
+                // After the epoch guard, not merely after the upload (review round 3): a wipe or
+                // re-baseline landing mid-build makes the guard throw and discards everything the
+                // build produced, so counting earlier credited cells to an artifact that was never
+                // published -- and the next build re-renders and counts them again.
                 metrics.unrepresentableDecimalsDegraded(nonFinite.get().nonFiniteCount(), false);
                 metrics.unrepresentableDecimalsDegraded(nonFinite.get().malformedCount(), true);
-                epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
             } catch (CheckpointEpochGuard.EpochChangedException e) {
                 // A replaced baseline is not a fact about this table: nothing this build produced
                 // may be published, so it must escape the per-table skip below and end the build.

@@ -148,82 +148,26 @@ public final class ParquetCheckpointWriter {
      * @return the coerced value, or {@code null} when absent, NULL or unrepresentable
      */
     static Object coerceValue(Value value, Schema fieldSchema, DecimalDegradeTally nonFinite) {
-        Schema destination = branch(fieldSchema);
         if (value != null && ValueMapper.isUnrepresentable(value)) {
-            return coerceUnrepresentable(value, destination, nonFinite);
-        }
-        return coerce(value, destination, nonFinite);
-    }
-
-    /**
-     * A decimal token {@link BigDecimal} cannot parse, placed against the column that has to hold it
-     * (issue #215, review round 2).
-     *
-     * <p>Whether anything is lost depends on the <b>destination</b>, not on the token: a bare
-     * {@code numeric}/{@code decimal} column is mapped to Avro STRING precisely so the value travels
-     * losslessly in its on-the-wire form ({@code ParquetSchemaMapper}), and {@code double precision}
-     * maps to Avro DOUBLE, which carries {@code NaN} and {@code ±Infinity} natively. Degrading at the
-     * mapper — before the destination is known — wrote NULL over both, which is avoidable loss on a
-     * column type that can hold the value. Only a DECIMAL destination genuinely cannot, and only that
-     * is counted.</p>
-     */
-    private static Object coerceUnrepresentable(Value value, Schema destination,
-                                                DecimalDegradeTally tally) {
-        String token = value.getDecimalValue().trim();
-        boolean nonFinite = ValueMapper.isNonFiniteDecimal(value);
-        if (destination.getLogicalType() == null) {
-            switch (destination.getType()) {
-                case STRING -> {
-                    return token;
-                }
-                case DOUBLE -> {
-                    if (nonFinite) {
-                        return nonFiniteDouble(token);
-                    }
-                }
-                case FLOAT -> {
-                    if (nonFinite) {
-                        return (float) nonFiniteDouble(token);
-                    }
-                }
-                default -> {
-                    // LONG, INT, BOOLEAN, BYTES and the logical types below hold none of these.
-                }
+            // NaN, +/-Infinity and a token BigDecimal cannot parse are all written NULL, whatever
+            // the destination (issue #215).
+            //
+            // A destination-aware rule preserves more -- a bare `numeric` maps to Avro STRING and
+            // could carry the token verbatim, `double precision` maps to DOUBLE and holds NaN
+            // natively -- and is deliberately NOT done here. It was tried in review round 2 and
+            // taken back out: it made the Parquet writers disagree with the SQL path about the same
+            // cell (checkpoint keeps the value, delta stream nulls it), and the coercion changes it
+            // required narrowed a non-finite into a bigint column as 0. Its own ticket.
+            if (ValueMapper.isMalformedDecimal(value)) {
+                nonFinite.malformed();
+            } else {
+                nonFinite.nonFinite();
             }
+            return null;
         }
-        if (nonFinite) {
-            tally.nonFinite();
-        } else {
-            tally.malformed();
-        }
-        return null;
+        return coerce(value, branch(fieldSchema), nonFinite);
     }
 
-    /**
-     * Built from the token rather than {@code Double.parseDouble}, which rejects spellings
-     * PostgreSQL accepts (it takes {@code inf}, and {@link ValueMapper} matches it).
-     */
-    private static double nonFiniteDouble(String token) {
-        if (token.equalsIgnoreCase("nan")) {
-            return Double.NaN;
-        }
-        return token.startsWith("-") ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
-    }
-
-    /**
-     * Widen declared decimal columns whose data does not fit their declared precision (a client
-     * schema understating its data would otherwise fail the whole file: "Cannot encode decimal
-     * with precision N as max precision M"). The declared scale is kept — values are rescaled to
-     * it on write regardless — and the precision grows to the widest value actually present
-     * (measured after that rescale). Shared by the checkpoint and delta writers.
-     *
-     * <p>The rows are traversed <b>once</b>, and not at all when no column declares a decimal, so a
-     * caller may hand over a lazily iterated view of its state instead of a materialized list.</p>
-     *
-     * @param recordSchema the schema typed from the declared columns
-     * @param rows         each row's column → wire value
-     * @return the same schema, or a rebuilt one with widened decimal columns
-     */
     static Schema widenDecimalsToFit(Schema recordSchema, Iterable<Map<String, Value>> rows) {
         Map<String, LogicalTypes.Decimal> declared = new java.util.LinkedHashMap<>();
         for (Schema.Field field : recordSchema.getFields()) {
@@ -328,8 +272,12 @@ public final class ParquetCheckpointWriter {
                 // cannot see, which is why the guard lives at the destination type.
                 // Classified by the token, not by the Java type it arrived as: a legal PostgreSQL
                 // NaN sent as a string_value is still non_finite, and calling it "malformed" would
-                // page someone to chase a client defect that does not exist (review round 2).
-                if (isNonFiniteText(java)) {
+                // page someone to chase a client defect that does not exist.
+                if (java instanceof CharSequence text
+                        && ValueMapper.isNonFiniteDecimal(Value.newBuilder()
+                                .setDecimalValue(text.toString()).build())) {
+                    nonFinite.nonFinite();
+                } else if (java instanceof Double || java instanceof Float) {
                     nonFinite.nonFinite();
                 } else {
                     nonFinite.malformed();
@@ -432,25 +380,7 @@ public final class ParquetCheckpointWriter {
         if (java instanceof Number n) {
             return n;
         }
-        if (isNonFiniteText(java)) {
-            // A `double precision` / `real` column can hold this; before #215's round 2 the
-            // BigDecimal below threw and cost the table its file.
-            return nonFiniteDouble(java.toString().trim());
-        }
         return new BigDecimal(java.toString());
-    }
-
-    /** Whether this value is one of PostgreSQL's non-finite spellings carried as text. */
-    private static boolean isNonFiniteText(Object java) {
-        if (!(java instanceof CharSequence text)) {
-            return java instanceof Double d ? !Double.isFinite(d)
-                    : java instanceof Float f && !Float.isFinite(f);
-        }
-        String trimmed = text.toString().trim();
-        String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
-                ? trimmed.substring(1) : trimmed;
-        return trimmed.equalsIgnoreCase("nan")
-                || unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf");
     }
 
     private static byte[] toBytes(Object java) {
