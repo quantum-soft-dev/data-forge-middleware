@@ -43,7 +43,7 @@ public final class RunOwnedScratch {
 
     /** Resolves {@code ${key:default}} the way the Spring {@code Environment} would. */
     private static final PropertyPlaceholderHelper PLACEHOLDERS =
-            new PropertyPlaceholderHelper("${", "}", ":", false);
+            new PropertyPlaceholderHelper("${", "}", ":", null, false);
 
     private RunOwnedScratch() {
     }

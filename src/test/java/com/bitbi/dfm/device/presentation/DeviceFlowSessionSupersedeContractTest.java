@@ -42,7 +42,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class DeviceFlowSessionSupersedeContractTest extends BaseIntegrationTest {
 
     /**
-     * Suffix matters: test-data.sql purges sites with this domain suffix before each test.
+     * Suffix matters: test-data.sql purges sites with this domain suffix before each test,
+     * and (issue #228) the leftover {@code device_authorizations} rows that used to block
+     * that {@code DELETE FROM sites}.
      */
     private static final String SITE_NAME = "device-flow-supersede.example.com";
 
@@ -54,24 +56,10 @@ class DeviceFlowSessionSupersedeContractTest extends BaseIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @Autowired
-    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
-
     /**
      * One completed Device Authorization Flow.
      */
     private record DeviceSession(UUID siteId, String refreshToken) {
-    }
-
-    /**
-     * device_authorizations references sites(id) without a cascade, so the rows this test creates
-     * would block test-data.sql from purging the site before the next test method.
-     */
-    @org.junit.jupiter.api.AfterEach
-    void purgeDeviceAuthorizations() {
-        jdbcTemplate.update(
-                "DELETE FROM device_authorizations WHERE site_id IN (SELECT id FROM sites WHERE site_name = ?)",
-                SITE_NAME);
     }
 
     @Test

@@ -511,6 +511,87 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- sql-generation-config-fail-fast: An out-of-range value anywhere in the `plugin.sql-generation.*`
+  block fails the application context at startup, and the dead async generator is gone (issue #185,
+  folding **#210** — both hygiene in `SqlGenerationService`, sequenced after #190). **Fail fast over
+  a startup WARN is an owner decision recorded on the ticket**; the argued form lives in one place —
+  `docs/020-sql-generation-optimization.md`, "One caveat on 'unbounded retry is safe'" — and in
+  short: a GKE rolling update keeps old replicas serving while the rollout goes red, the WARN
+  channel is proven unread (#174's "abort disabled" line), and the silent failures are the
+  expensive ones (`800` disables the heap guard, a negative value is an endless retry loop, #181,
+  ending in silent data loss once retention passes the pending segments, #212; clamping was ruled
+  out by the ticket). **All five keys, two consuming constructors** — review round 1 caught the
+  first cut validating three keys while the docs claimed the block: `SqlGenerationService` holds
+  `heap-threshold-percent` ∈ [1..100], `max-concurrent` >= 1, `semaphore-timeout-seconds` >= 1, and
+  `DeltaSqlSweepWorker` holds `delta-max-concurrent` >= 1 (0 used to crash-loop through
+  `ArrayBlockingQueue`'s message-less `IllegalArgumentException`, the exact anonymous failure
+  fail-fast replaces) and `delta-sweep-ms` >= 1 (0 was *accepted* by Spring and busy-looped the
+  fallback sweep), through shared package-private `PluginConfigValidation` — deliberately not
+  shared wider: the delta packages keep their own constructor checks. **The heap floor is 1, not
+  the 0 first shipped** (round 1's F1): a live JVM's ceiling-rounded reading is never 0, so a
+  strict `> 0` refuses every generation exactly like the `-1` beside it — a pathological value
+  blessed by validation one unit above the cut, and a collision with this deployment's own
+  "0 disables" convention (`delta.parquet.max-scratch-bytes`); 100 stays #174's documented
+  off-switch, still pinned by `SqlGenerationStreamingTest`. Round 1 also killed the consequence
+  text "0 permits deadlock the semaphore outright", which had been copied into five surfaces and
+  was wrong in kind — `acquireSemaphore` uses a bounded `tryAcquire`, so the real signature is
+  120-second timeouts retried for ever, a different incident to chase. The refusal names the key
+  **and the value** ("but was N" — pinned literally, after round 1 showed `hasMessageContaining("0")`
+  satisfied by static text), and the promise is scoped: it holds for a well-formed integer, while a
+  value Spring cannot convert (`"80%"`, or an env var present but empty — `${VAR:80}` does not
+  default for `""`) dies earlier in `@Value` conversion naming the constructor parameter, said in
+  the yaml comment and docs/020 rather than closed with String-parsing constructors. Tests pin both
+  boundaries of every range as `@ParameterizedTest`s in the two consumers' test classes.
+  **Part 2**: `generateSqlForBatchAsync` is deleted — one grep hit in `src/`, the declaration; its
+  Javadoc described the reinit flow that was removed (`PluginHistoryService`'s "SQL generation no
+  longer triggered for reinit" comment stays as the record); as a correctly-qualified `@Async` site
+  the #195 guard kept it alive while readers of the #161 inventory counted it as a `pluginExecutor`
+  consumer. Round 1 then swept the prose the deletion left stale: `docs/reinit.md` documented the
+  async regeneration as live down to a `sqlGenerationTriggered: true` example (it is always
+  `false`), `AccountPluginsController`'s 202 comment promised background generation,
+  `BackgroundConnectionDemandTest` still classified the deleted entry point,
+  `AsyncExecutorQualifierTest`'s failure message counted 15-of-18 `@Async` sites (13 of 15 now),
+  `PluginHistoryServiceTest`'s T017 display name asserted the deleted behaviour, and `PLUGIN_ID`
+  carried the Javadoc of a max-files constant deleted long ago. No migration (**V55 stays free**),
+  no REST, gRPC, proto, DTO, metric, S3-key, configuration-key-**name** or frontend change; key
+  names and defaults are untouched — only an out-of-range value's fate changes.
+  See `docs/020-sql-generation-optimization.md`.
+||||||| 3a58ba79
+- shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
+  / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
+  **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three
+  axes, because a general "sweep every non-cascading FK by its own relationship" covers 1 and 2
+  and **cannot** cover 3. **(1)** `batches.account_id` and `sites.account_id` (V3 / V2, no cascade).
+  `Batch.start(accountId, siteId)` takes the two independently, so a batch pairing an
+  `%@example.com` account with a foreign-domain site survived the site-keyed `DELETE FROM batches`
+  and blocked the account delete — the #226 symptom one statement later. **(2)**
+  `device_authorizations.site_id` / `.account_id` (V21, no cascade). The fixture had no statement
+  for that table; an approved leftover pointing at a seeded site blocked `DELETE FROM sites`.
+  Live, not hypothetical: `DeviceFlowSessionSupersedeContractTest` hand-deleted its own rows to
+  keep the next `@Sql` from failing, and that private cleanup is now dropped. **(3)** Rows outside
+  the seed identity predicates: `*.test.local` (three integration classes that never hit
+  `%@example.com` / `%.example.com`) and `{uuid}_example.com` (`BatchRetentionIntegrationTest`
+  today — an owned account whose domain uses an underscore where `LIKE '%.example.com'` needs a
+  literal dot, kept off `DELETE FROM accounts` only by a per-method `@Transactional` rollback).
+  Widening `DELETE FROM sites` pulls those sites in, so every site-keyed statement above it
+  (`error_logs` especially — V5, no cascade on `site_id` — plus `checkpoints`, `site_sync_state`
+  and the segment sweep's `site_id` arm) widens in step; `ScriptUtils` splits on `;` and cannot
+  parse a `DO $$` block, so the owned-account / owned-site / owned-batch subqueries are repeated.
+  The same account-keyed batches / device-auth / sites sweep is in
+  `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` and
+  `BatchTerminalTransitionLockingIntegrationTest.tearDown`. Leftover-then-clear guards of
+  #119 / #226 pin each shape, mutation-red against the unfixed fixture (`batches_account_id_fkey`,
+  `device_authorizations_site_id_fkey`, a remaining `*.test.local` account, `error_logs.site_id`
+  blocking the pulled-in site). **#220 is the other half of the same unit of work**:
+  `RunOwnedScratch` called `PropertyPlaceholderHelper(prefix, suffix, separator, boolean)`,
+  `@Deprecated(since = "6.2", forRemoval = true)`, so every `compileTestJava` printed a
+  `[removal]` warning that would become a red compile on the Boot bump that drops it — the same
+  "the build blames the wrong change" complaint #207 and #226 were filed for. The 5-arg form with
+  a null escape character keeps prefix, suffix, value separator and fail-on-unresolvable; the
+  4-arg constructor was only ever that delegate. `ParquetScratchTestProfileTest` still fails when
+  a scratch key is dropped from `application-test.yml`. Test-only — no production code, REST,
+  gRPC, proto, DTO, **no migration (V55 stays free)**, configuration-key, metric, S3-key or
+  frontend change.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
   cell as NULL and returns a tally so the WARN and
