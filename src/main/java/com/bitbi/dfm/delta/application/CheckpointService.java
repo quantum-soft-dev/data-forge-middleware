@@ -992,11 +992,15 @@ public class CheckpointService {
                         nonFinite.set(ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
                                 dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
                                 lease)));
-                metrics.unrepresentableDecimalsDegraded(nonFinite.get().nonFiniteCount(), false);
-                metrics.unrepresentableDecimalsDegraded(nonFinite.get().malformedCount(), true);
+
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
+                // After the upload (issue #215, review round 2): a failed upload leaves the table
+                // unmaterialized and a later build re-renders it, so counting before would report
+                // the same source cells once per attempt.
+                metrics.unrepresentableDecimalsDegraded(nonFinite.get().nonFiniteCount(), false);
+                metrics.unrepresentableDecimalsDegraded(nonFinite.get().malformedCount(), true);
                 epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
             } catch (CheckpointEpochGuard.EpochChangedException e) {
                 // A replaced baseline is not a fact about this table: nothing this build produced

@@ -200,7 +200,7 @@ public class DeltaSqlGenerationStrategy {
      * {@code NaN} and {@code +/-Infinity}; {@code new BigDecimal} used to throw on all three, and
      * the throw reached the queue rather than this row -- so one such cell cost Bit BI the whole
      * batch. Logged at DEBUG per record because a CDC workload writing these produces one per
-     * change: the rate lives on {@code delta.parquet.non-finite-decimals}, and the Parquet writers
+     * change: the rate lives on {@code delta.parquet.unrepresentable-decimals}, and the Parquet writers
      * log the per-table summary.
      */
     private boolean hasUnrepresentableKey(ChangeRecord record) {

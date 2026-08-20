@@ -148,17 +148,66 @@ public final class ParquetCheckpointWriter {
      * @return the coerced value, or {@code null} when absent, NULL or unrepresentable
      */
     static Object coerceValue(Value value, Schema fieldSchema, DecimalDegradeTally nonFinite) {
+        Schema destination = branch(fieldSchema);
         if (value != null && ValueMapper.isUnrepresentable(value)) {
-            // Degraded by the mapper before the destination type was known -- counted here, since
-            // coerce() only sees the null it already became.
-            if (ValueMapper.isMalformedDecimal(value)) {
-                nonFinite.malformed();
-            } else {
-                nonFinite.nonFinite();
-            }
-            return null;
+            return coerceUnrepresentable(value, destination, nonFinite);
         }
-        return coerce(value, branch(fieldSchema), nonFinite);
+        return coerce(value, destination, nonFinite);
+    }
+
+    /**
+     * A decimal token {@link BigDecimal} cannot parse, placed against the column that has to hold it
+     * (issue #215, review round 2).
+     *
+     * <p>Whether anything is lost depends on the <b>destination</b>, not on the token: a bare
+     * {@code numeric}/{@code decimal} column is mapped to Avro STRING precisely so the value travels
+     * losslessly in its on-the-wire form ({@code ParquetSchemaMapper}), and {@code double precision}
+     * maps to Avro DOUBLE, which carries {@code NaN} and {@code ±Infinity} natively. Degrading at the
+     * mapper — before the destination is known — wrote NULL over both, which is avoidable loss on a
+     * column type that can hold the value. Only a DECIMAL destination genuinely cannot, and only that
+     * is counted.</p>
+     */
+    private static Object coerceUnrepresentable(Value value, Schema destination,
+                                                DecimalDegradeTally tally) {
+        String token = value.getDecimalValue().trim();
+        boolean nonFinite = ValueMapper.isNonFiniteDecimal(value);
+        if (destination.getLogicalType() == null) {
+            switch (destination.getType()) {
+                case STRING -> {
+                    return token;
+                }
+                case DOUBLE -> {
+                    if (nonFinite) {
+                        return nonFiniteDouble(token);
+                    }
+                }
+                case FLOAT -> {
+                    if (nonFinite) {
+                        return (float) nonFiniteDouble(token);
+                    }
+                }
+                default -> {
+                    // LONG, INT, BOOLEAN, BYTES and the logical types below hold none of these.
+                }
+            }
+        }
+        if (nonFinite) {
+            tally.nonFinite();
+        } else {
+            tally.malformed();
+        }
+        return null;
+    }
+
+    /**
+     * Built from the token rather than {@code Double.parseDouble}, which rejects spellings
+     * PostgreSQL accepts (it takes {@code inf}, and {@link ValueMapper} matches it).
+     */
+    private static double nonFiniteDouble(String token) {
+        if (token.equalsIgnoreCase("nan")) {
+            return Double.NaN;
+        }
+        return token.startsWith("-") ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
     }
 
     /**
@@ -277,10 +326,13 @@ public final class ParquetCheckpointWriter {
                 // caller's tally rather than thrown (issue #215). Reached by a non-finite double or
                 // an unparseable string bound for a decimal column -- routes the wire-case check
                 // cannot see, which is why the guard lives at the destination type.
-                if (java instanceof CharSequence) {
-                    nonFinite.malformed();
-                } else {
+                // Classified by the token, not by the Java type it arrived as: a legal PostgreSQL
+                // NaN sent as a string_value is still non_finite, and calling it "malformed" would
+                // page someone to chase a client defect that does not exist (review round 2).
+                if (isNonFiniteText(java)) {
                     nonFinite.nonFinite();
+                } else {
+                    nonFinite.malformed();
                 }
                 return null;
             }
@@ -380,7 +432,25 @@ public final class ParquetCheckpointWriter {
         if (java instanceof Number n) {
             return n;
         }
+        if (isNonFiniteText(java)) {
+            // A `double precision` / `real` column can hold this; before #215's round 2 the
+            // BigDecimal below threw and cost the table its file.
+            return nonFiniteDouble(java.toString().trim());
+        }
         return new BigDecimal(java.toString());
+    }
+
+    /** Whether this value is one of PostgreSQL's non-finite spellings carried as text. */
+    private static boolean isNonFiniteText(Object java) {
+        if (!(java instanceof CharSequence text)) {
+            return java instanceof Double d ? !Double.isFinite(d)
+                    : java instanceof Float f && !Float.isFinite(f);
+        }
+        String trimmed = text.toString().trim();
+        String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
+                ? trimmed.substring(1) : trimmed;
+        return trimmed.equalsIgnoreCase("nan")
+                || unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf");
     }
 
     private static byte[] toBytes(Object java) {

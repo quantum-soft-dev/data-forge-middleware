@@ -130,11 +130,15 @@ public class DeltaEgressService {
                         table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
                 return;
             }
-            metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
-            metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
             metrics.timeEgressPhase("upload", () -> storage.uploadDelta(
                     segment.getSiteId(), table, segment.getFirstSeq(),
                     segment.getLastSeq(), parquet));
+            // After the upload, not before it (issue #215, review round 2): a failed upload leaves
+            // the segment unmarked and the sweep re-renders the whole thing, so counting earlier
+            // would report the same source cells once per attempt -- the discipline the
+            // completed-batch path already documents.
+            metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
+            metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
         });
 
         segment.markEgressed();

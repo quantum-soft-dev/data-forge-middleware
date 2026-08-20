@@ -110,6 +110,59 @@ class ParquetCheckpointWriterTest {
     }
 
     /**
+     * Whether anything is lost depends on the destination, not on the token. `ParquetSchemaMapper`
+     * maps a **bare** `numeric` to Avro STRING precisely so the value travels losslessly in its
+     * on-the-wire form, and `double precision` to Avro DOUBLE, which carries NaN natively — so
+     * degrading at the mapper, before the destination was known, wrote NULL over a column that
+     * could hold the value (review round 2).
+     */
+    @Test
+    void aColumnThatCanHoldTheValueKeepsIt() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("exact", "numeric", true),
+                col("approx", "double precision", true)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("exact", decVal("Infinity"));
+        row.put("approx", decVal("NaN"));
+
+        Path out = tempDir.resolve("holdable.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount(),
+                "nothing was lost, so nothing may be counted as lost");
+        assertTrue(Files.size(out) > 0);
+    }
+
+    /**
+     * A legal PostgreSQL `NaN` that arrived as a `string_value` is still non-finite. Classifying it
+     * `malformed` — which the guide defines as "a client defect somebody has to fix" — would page
+     * someone to chase a bug that does not exist (review round 2).
+     */
+    @Test
+    void aNonFiniteSentAsTextIsNotCalledAClientDefect() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("numeric_edge", "numeric(10,2)", true)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("numeric_edge", strVal("NaN"));
+
+        Path out = tempDir.resolve("text-nan.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount());
+        assertEquals(0L, degraded.malformedCount(), "a legal source value is not a client defect");
+    }
+
+    /**
      * A token {@code BigDecimal} cannot parse at all is a client defect, not a value this pipeline
      * cannot store, and the two are counted apart because their remedies differ. Before #215 it
      * threw and was therefore loud; degrading it silently would have traded one defect for a

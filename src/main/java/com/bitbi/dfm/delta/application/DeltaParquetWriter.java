@@ -321,10 +321,36 @@ public final class DeltaParquetWriter {
                     : change.getKeyMap().get(field.name());
             Object java = value == null ? null : ValueMapper.toJava(value);
             if (java != null) {
-                int required = new BigDecimal(java.toString())
-                        .setScale(decimal.getScale(), RoundingMode.HALF_UP).precision();
-                precisions.merge(field.name(), required, Math::max);
+                // Skips what it cannot measure rather than throwing (issue #215, review round 2).
+                // The `java != null` guard alone does not cover it: a non-finite double or a "NaN"
+                // string bound for a decimal column is non-null and still has no BigDecimal form,
+                // and here the throw costs a build attempt towards ABANDONED. Mirrors
+                // ParquetCheckpointWriter.widenDecimalsToFit, its twin.
+                BigDecimal measurable = measurableDecimal(java);
+                if (measurable != null) {
+                    precisions.merge(field.name(),
+                            measurable.setScale(decimal.getScale(), RoundingMode.HALF_UP).precision(),
+                            Math::max);
+                }
             }
+        }
+    }
+
+    /** The decimal envelope this value contributes, or {@code null} when it has none. */
+    private static BigDecimal measurableDecimal(Object java) {
+        if (java instanceof BigDecimal bd) {
+            return bd;
+        }
+        if (java instanceof Double d && !Double.isFinite(d)) {
+            return null;
+        }
+        if (java instanceof Float f && !Float.isFinite(f)) {
+            return null;
+        }
+        try {
+            return new BigDecimal(java.toString());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
