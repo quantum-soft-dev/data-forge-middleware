@@ -466,8 +466,9 @@ pages/{feature}/            # Route pages
   `delta.checkpoint.max-materialize-attempts` nights gives the table up **permanently** (#149); and
   `DeltaSqlGenerationStrategy` threw into the SQL queue, so Bit BI never received that batch's SQL.
   A fourth throw site the ticket did not list — `DeltaParquetWriter`'s decimal-envelope scan — dies
-  the same way, and all three secondary parses turn out to be guarded by `java == null`, so closing
-  the mapper closes every path.
+  the same way, and the three secondary parses are guarded by `java == null`. That was written as
+  "closing the mapper closes every path" and **review proved it false twice** — see the rounds
+  below: the mapper is not the only thing on this path that parses a decimal.
   **Parquet DECIMAL is a scaled integer with no representation for any of the three**, so the DoD's
   first branch ("land correctly in parquet") is not available for the declared column type, and its
   second (reject at ingest) would need an `ErrorCode` in `delta-ingestion.proto` against a shipped
@@ -494,6 +495,27 @@ pages/{feature}/            # Route pages
   to `Supplier`, which `CheckpointServiceTest` pins as part of the #111 phase guard; which overload
   times a phase is incidental to this change, so the timing shape was restored rather than the guard
   rewritten. No REST, gRPC, proto, DTO, migration, configuration-key, S3-key or frontend change.
+  **Three review rounds then changed what this ships, and the history is the part worth keeping.**
+  Round 1 found two regressions the fix had introduced: a degraded **key** column rendered
+  `WHERE col = NULL`, which is never true, so a DELETE for a row keyed on a `NaN` numeric (a usable
+  key — PostgreSQL compares `NaN` equal to itself) was emitted, applied, matched nothing and left the
+  Bit BI mirror silently diverged, worse than the throw being removed; such a record is skipped now,
+  loudly. And the guard was keyed on the **wire case**, so a `double_value` NaN — protobuf `double`
+  carries it natively — still threw, i.e. "closing the mapper closes every path" was false.
+  **Round 2 found the fix had a larger blast radius than the bug**: `ChangelogFold.encode` parses
+  decimal keys with a bare `new BigDecimal` and runs *before* any Parquet writing, so a `NaN` key
+  aborted the **whole site's** checkpoint build, deterministically, every night, with the pointer and
+  retention frozen — where the original defect cost one table one file. That guard stays whatever
+  else changes. Round 2 also made the writers destination-aware, keeping the token for a bare
+  `numeric` (Avro STRING) and the double for `double precision` (Avro DOUBLE).
+  **Round 3 found that destination rule had introduced silent corruption** — a non-finite narrowed
+  into a `bigint` wrote `0`, uncounted — and it was **reverted** rather than patched again: two
+  rounds running, a fix here had opened a hole elsewhere on the same coercion path. So the shipped
+  rule is the simple one, NULL for every destination, with the Parquet and SQL paths agreeing; the
+  two column types that could keep the value are a **deferred** piece of work, recorded with that
+  history as its warning. The cost of the revert is stated rather than hidden: `NaN != NULL` now
+  holds for *every* column type, so soak #39's source-vs-server comparison differs on more cells
+  than the destination-aware form would have left.
   See `docs/delta-client-v2-guide.md` ("A value the column type cannot hold", Metrics).
 - fixture-clears-by-batch: The suite's shared-database cleanups clear `changelog_segments` by the
   relationship the constraint actually uses, not only by `site_id` (issue #226, filed by the

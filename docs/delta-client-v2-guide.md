@@ -1098,9 +1098,16 @@ volume was busy, so:
 ### A value the column type cannot hold
 
 PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
-`decimal_value` tokens. Parquet DECIMAL is a scaled integer and has no representation for any of
-them, so the cell is written **NULL** — under the column's declared type there is nowhere else to
-put it.
+`decimal_value` tokens. Parquet DECIMAL is a scaled integer with no representation for any of them,
+so the cell is written **NULL** — and it is written NULL **whatever the destination column is**,
+which is a deliberate simplification rather than a necessity.
+
+Two declared types could keep the value: a bare `numeric`/`decimal` maps to Avro STRING precisely so
+the value travels in its on-the-wire form, and `double precision` maps to Avro DOUBLE, which carries
+`NaN` natively. Storing it there was tried and taken back out — it made the Parquet writers and the
+Bit BI SQL path disagree about the same cell (the checkpoint keeping a value the delta stream
+nulled), and the coercion it needed narrowed a non-finite into a `bigint` column as `0`. One rule
+for every column is what ships; keeping more is its own piece of work.
 
 The loss is reported rather than silent. Each rendered table logs one WARN naming the table and how
 many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the rate, tagged by
@@ -1118,11 +1125,16 @@ which that cell is separately NULL. The Bit BI SQL path is **not** a feeder: it 
 cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total number of places
 one source cell was degraded.
 
-**A key column is the exception, and it is not degraded — the record is skipped.** A value that
-cannot be represented cannot address a row, so the WHERE clause would render as `col = NULL`, which
-is never true: the statement would be emitted, applied, match nothing, and leave the mirror
-silently diverged. Such a record is dropped with a WARN and
+**In the Bit BI SQL stream a key column is the exception — the record is skipped, not degraded.** A
+value that cannot be represented cannot address a row, so the WHERE clause would render as
+`col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
+the mirror silently diverged. Such a record is dropped with a WARN and
 `sql.generation.delta.records.skipped.unrepresentable_key`.
+
+That exception is **the SQL path's alone.** Both Parquet writers write a key cell NULL like any
+other, so several such rows are indistinguishable in a checkpoint snapshot or a completed-batch
+artifact, and the baseline can contain a row the delta stream will never address. Consumers reading
+those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
 
 **What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
 server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
