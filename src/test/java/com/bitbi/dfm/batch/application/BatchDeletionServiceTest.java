@@ -31,11 +31,34 @@ class BatchDeletionServiceTest {
 
     private final BatchRepository batchRepository = mock(BatchRepository.class);
     private final ChangelogSegmentService segmentService = mock(ChangelogSegmentService.class);
+    private final com.bitbi.dfm.delta.domain.ChangelogSegmentRepository segmentRepository =
+            mock(com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.class);
     private final BatchParquetArtifactRepository artifactRepository =
             mock(BatchParquetArtifactRepository.class);
     private final S3FileStorageService storage = mock(S3FileStorageService.class);
     private final BatchDeletionService service = new BatchDeletionService(
-            batchRepository, segmentService, artifactRepository, storage);
+            batchRepository, segmentService, segmentRepository, artifactRepository, storage);
+
+    {
+        // Every delete reaches the #212 pending-work count; no pending work unless a test says so.
+        when(segmentRepository.countPendingQueueWorkByBatchId(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(pendingWork(0, 0));
+    }
+
+    private static com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PendingQueueWork pendingWork(
+            long pluginSql, long egress) {
+        return new com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PendingQueueWork() {
+            @Override
+            public long getPendingPluginSql() {
+                return pluginSql;
+            }
+
+            @Override
+            public long getPendingEgress() {
+                return egress;
+            }
+        };
+    }
 
     @Test
     void deletesTheThreeDatabaseAggregatesAtomicallyThenCleansObjectsAfterCommit() throws Exception {
@@ -141,5 +164,35 @@ class BatchDeletionServiceTest {
         assertTrue(service.deleteBatch(batchId));
 
         verify(storage).deleteObjects(List.of(recordedKey));
+    }
+
+    @Test
+    void warnsWhenAnOperatorDeleteDestroysPendingQueueWork() {
+        // #212: an operator delete is a legitimate ending of retention's hold-back, but the
+        // override must be informed. Logged only — the deleted-pending meter is reserved for the
+        // scheduled batch-retention horizon.
+        UUID batchId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getSiteId()).thenReturn(siteId);
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
+        when(segmentService.deleteMetadataByBatchId(batchId)).thenReturn(List.of());
+        when(storage.listAllKeys(org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
+        when(storage.deleteObjects(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(0, List.of()));
+        when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
+                .thenReturn(pendingWork(3, 0));
+
+        try (com.bitbi.dfm.util.LogCapture capture =
+                     com.bitbi.dfm.util.LogCapture.attachTo(BatchDeletionService.class)) {
+            service.deleteBatch(batchId);
+
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    capture.messagesAt(ch.qos.logback.classic.Level.WARN).stream()
+                            .anyMatch(message -> message.contains("pending queue work")
+                                    && message.contains("3 segment(s) awaiting plugin SQL")),
+                    "the override must be informed of the work it destroys");
+        }
     }
 }

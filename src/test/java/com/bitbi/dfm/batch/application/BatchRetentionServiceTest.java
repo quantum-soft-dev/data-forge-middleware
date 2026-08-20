@@ -3,6 +3,9 @@ package com.bitbi.dfm.batch.application;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.DeltaMetrics;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
@@ -54,7 +57,28 @@ class BatchRetentionServiceTest {
     @Mock
     private BatchParquetArtifactRepository artifactRepository;
 
+    @Mock
+    private ChangelogSegmentRepository segmentRepository;
+
+    private SimpleMeterRegistry meterRegistry;
+    private DeltaMetrics deltaMetrics;
+
     private BatchRetentionService service;
+
+    /** A {@code PendingQueueWork} literal — the projection is an interface, so tests build it. */
+    private static ChangelogSegmentRepository.PendingQueueWork pendingWork(long pluginSql, long egress) {
+        return new ChangelogSegmentRepository.PendingQueueWork() {
+            @Override
+            public long getPendingPluginSql() {
+                return pluginSql;
+            }
+
+            @Override
+            public long getPendingEgress() {
+                return egress;
+            }
+        };
+    }
 
     private UUID siteId;
     private UUID accountId;
@@ -62,6 +86,8 @@ class BatchRetentionServiceTest {
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
+        deltaMetrics = new DeltaMetrics(meterRegistry);
         service = new BatchRetentionService(
                 batchRepository,
                 siteRepository,
@@ -69,11 +95,16 @@ class BatchRetentionServiceTest {
                 sqlGenerationRepository,
                 s3FileStorageService,
                 changelogSegmentService,
-                artifactRepository
+                segmentRepository,
+                artifactRepository,
+                deltaMetrics
         );
         siteId = UUID.randomUUID();
         accountId = UUID.randomUUID();
         batchId = UUID.randomUUID();
+        // Every deleting test reaches the #212 pending-work count; no pending work by default.
+        lenient().when(segmentRepository.countPendingQueueWorkByBatchId(any()))
+                .thenReturn(pendingWork(0, 0));
     }
 
     @Test
@@ -259,5 +290,68 @@ class BatchRetentionServiceTest {
         assertThat(summary.deletedBatches()).isEqualTo(1);
         assertThat(summary.errors()).isNotEmpty();
         verify(batchRepository).deleteById(batchId);
+    }
+
+    @Test
+    @DisplayName("deleting a batch that still carries pending queue work is counted and warned (issue #212)")
+    void countsAndWarnsWhenDeletingABatchWithPendingQueueWork() throws Exception {
+        // Batch retention is the deliberate outer horizon of the queues' retry: changelog
+        // retention holds a pending segment back, and this is the one scheduled deleter allowed to
+        // take it — after site.retentionDays. The loss must have a moment and a number.
+        Site site = mock(Site.class);
+        Batch batch = mock(Batch.class);
+        when(site.getId()).thenReturn(siteId);
+        when(site.getRetentionDays()).thenReturn(45);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
+                .thenReturn(List.of(batch));
+        when(batch.getId()).thenReturn(batchId);
+        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
+        when(s3FileStorageService.listAllKeys(any())).thenReturn(List.of());
+        when(s3FileStorageService.deleteObjects(any()))
+                .thenReturn(new DeleteObjectsResult(0, List.of()));
+        when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
+                .thenReturn(pendingWork(2, 1));
+
+        try (com.bitbi.dfm.util.LogCapture capture =
+                     com.bitbi.dfm.util.LogCapture.attachTo(BatchRetentionService.class)) {
+            service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
+                    siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+
+            assertThat(capture.messagesAt(ch.qos.logback.classic.Level.WARN))
+                    .anyMatch(message -> message.contains("pending queue work")
+                            && message.contains(batchId.toString()));
+        }
+
+        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_plugin_sql").counter().count()).isEqualTo(2.0);
+        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_egress").counter().count()).isEqualTo(1.0);
+        verify(changelogSegmentService).deleteByBatchId(batchId);
+    }
+
+    @Test
+    @DisplayName("a dry run neither deletes nor counts pending queue work as destroyed")
+    void dryRunDoesNotCountPendingWorkAsDestroyed() {
+        Site site = mock(Site.class);
+        Batch batch = mock(Batch.class);
+        when(site.getId()).thenReturn(siteId);
+        when(site.getRetentionDays()).thenReturn(45);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
+                .thenReturn(List.of(batch));
+        when(batch.getId()).thenReturn(batchId);
+        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
+
+        service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
+                siteId, null, null, LocalDateTime.now().minusDays(1), 10, true));
+
+        verify(segmentRepository, never()).countPendingQueueWorkByBatchId(any());
+        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_plugin_sql").counter().count()).isEqualTo(0.0);
     }
 }
