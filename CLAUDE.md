@@ -243,13 +243,19 @@ archives it (or the "Auto-archive on PR close" setting does).
 an "out of date" banner — do not resurrect it on your own initiative. Say "needed" or "not needed"
 for each documentation surface rather than skipping silently.
 
-**Follow-ups are tickets, not notes — but search before filing.** Anything out of scope worth
-doing later: first search **open and closed** issues (`gh issue list --state all --search …`) and
-grep `CLAUDE.md`/`docs/`, because several workspaces work this repo in parallel. An open match
-gets your evidence as a comment; a closed match means either a regression (new issue linking the
-old one and the fixing commit) or a stale observation (the fix is already in `develop` — no ticket
-needed). Only if nothing matched, file the issue (described, labelled, milestoned, `Backlog` on
-the board) — and do not start work on it in the current cycle.
+**Follow-ups: enrich an existing ticket before filing a new one.** Anything out of scope worth
+doing later: first study **open and closed** issues (`gh issue list --state all --search …`,
+plus `CLAUDE.md`/`docs/`) for the same **theme**, not just the same words. An open match —
+including a related-but-not-identical one — gets your evidence as a comment, so the existing
+ticket grows into one larger, run-sized problem instead of a sibling appearing. A closed match
+is **never reopened**: almost always the observation is simply stale (the fix is already in
+`develop`, your worktree is older — nothing needed, say so and move on), and only a true
+regression, reproducing on current `origin/develop`, gets a new issue linking the old one and
+the fixing commit. Only when the theme has no
+ticket yet, file one — framed as the **theme** (root cause / subsystem), not a one-symptom
+note, so later findings have a place to land; described, labelled, milestoned, `Backlog` on
+the board, sized so one run fixes it whole. Work on a finding never starts in the current
+cycle.
 
 **Every follow-up says what it will touch.** A keyword search finds a *duplicate*; it does not find
 a *collision* unless somebody runs it: #190 and #200 were one piece of work, doable in neither order
@@ -330,7 +336,9 @@ files (`CLAUDE.md`, `specs/**/tasks.md`, `docs/`) are not overlap — both sides
 The run stops for the human on an agent reporting blocked, a second dispatcher touching an issue
 in this run's window, an unclear conflict, red CI on `develop`, a missing `project` scope, an issue
 that turned out wider than written, or the same issue coming back blocked twice. Findings mid-run
-become issues for a later run, never additions to the current window. The run scripts are
+follow the follow-ups rule above (enrich an existing ticket, else file the theme), and the
+dispatcher merges duplicates and same-root-cause smalls into one run-sized ticket — findings are
+for a later run, never additions to the current window. The run scripts are
 `nonconcurrent` (one shared docker-compose stack and a fixed 8080), so only one workspace can hold
 the live stand at a time — sequence the tasks that need it.
 
