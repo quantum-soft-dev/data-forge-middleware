@@ -529,8 +529,9 @@ public class PluginAuditService {
      * @param accountId the account ID
      * @param deletedGenerations number of SQL generation records deleted
      * @param deletedS3Files number of S3 files deleted
-     * @param sqlGenerationTriggered whether SQL generation was triggered
-     * @param batchId the batch used for regeneration (may be null if no batches exist)
+     * @param sqlGenerationTriggered always {@code false} — reinit no longer triggers SQL
+     *                                generation (recorded for the audit row's shape)
+     * @param batchId the batch set as the new baseline (may be null if no batches exist)
      */
     public void logReinit(
             String pluginId,
