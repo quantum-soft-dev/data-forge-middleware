@@ -24,6 +24,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * A low-frequency sweep re-wakes the pool for segments left pending by a crash or a failed
  * drain (a failed segment is not marked egressed, so it stays queued).</p>
  *
+ * <p>Since issue #243 a failed segment does not end the drain either: it is deferred with a
+ * backoff and the drain continues with another site, so one unreadable object cannot stop every
+ * other site's delta Parquet.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -71,7 +75,10 @@ public class DeltaEgressWorker {
                 // keep draining until the queue is empty
             }
         } catch (RuntimeException e) {
-            log.warn("Delta egress drain failed; the segment stays pending for the sweep: {}", e.getMessage());
+            // Per-segment failures are deferred by the service (issue #243); anything reaching
+            // here escaped that path and is worth the same conservative ending as before.
+            log.warn("Delta egress drain ended early; the segment stays pending for the sweep: {}",
+                    e.getMessage());
         }
     }
 

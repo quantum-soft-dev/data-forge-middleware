@@ -55,7 +55,7 @@ class DeltaSqlQueueOutsideTransactionTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, mock(PluginDeltaBaselineRepository.class),
-                mock(PluginAuditService.class), new SimpleMeterRegistry());
+                mock(PluginAuditService.class), new SimpleMeterRegistry(), 60, 7);
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);

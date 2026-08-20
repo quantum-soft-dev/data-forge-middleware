@@ -108,7 +108,7 @@ class DeltaSqlQueueMemoryPressureTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                meterRegistry);
+                meterRegistry, 60, 7);
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -151,6 +151,11 @@ class DeltaSqlQueueMemoryPressureTest {
         // once the pod's heap recovers. This is the whole of #181 at this level.
         assertThat(segment.getPluginSqlAt()).isNull();
         verify(segmentRepository, never()).save(any());
+        // and it spends no attempt: the refusal belongs to the pod, not to this segment, so it must
+        // never walk a segment towards the poisoned report (#243, the #150/#162/#178 rule that a
+        // transient overload does not become a permanent verdict)
+        verify(segmentRepository, never()).deferPluginSql(any(), any());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
         // and nothing was generated or written on the way out
         verifyNoInteractions(deltaStrategy);
         verify(s3SqlFileStorageService, never()).storeSqlFile(any(), any(), any());

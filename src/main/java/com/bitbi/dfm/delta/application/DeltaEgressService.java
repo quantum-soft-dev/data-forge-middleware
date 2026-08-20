@@ -2,12 +2,14 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.QueueRetryBackoff;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -49,19 +51,24 @@ public class DeltaEgressService {
     private final S3CheckpointStorage storage;
     private final DeltaMetrics metrics;
     private final DeltaParquetProperties parquetProperties;
+    private final QueueRetryBackoff backoff;
 
     public DeltaEgressService(ChangelogSegmentRepository segmentRepository,
                               ChangelogSegmentService changelogSegmentService,
                               SiteSchemaService siteSchemaService,
                               S3CheckpointStorage storage,
                               DeltaMetrics metrics,
-                              DeltaParquetProperties parquetProperties) {
+                              DeltaParquetProperties parquetProperties,
+                              @Value("${delta.egress.retry-delay-seconds:60}") int retryDelaySeconds,
+                              @Value("${delta.egress.poison-after-attempts:7}") int poisonAfterAttempts) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.siteSchemaService = siteSchemaService;
         this.storage = storage;
         this.metrics = metrics;
         this.parquetProperties = parquetProperties;
+        this.backoff = new QueueRetryBackoff("delta.egress.retry-delay-seconds", retryDelaySeconds,
+                "delta.egress.poison-after-attempts", poisonAfterAttempts);
     }
 
     /**
@@ -79,8 +86,46 @@ public class DeltaEgressService {
         if (next.isEmpty()) {
             return false;
         }
-        egressSegment(next.get(0));
+        ChangelogSegment segment = next.get(0);
+        try {
+            egressSegment(segment);
+        } catch (RuntimeException e) {
+            defer(segment, e);
+        }
         return true;
+    }
+
+    /**
+     * Hold a segment that failed out of the queue for a while, instead of ending the drain on it
+     * (issue #243).
+     *
+     * <p>Before this the exception left {@code DeltaEgressWorker.drain}, and since the claim is the
+     * globally oldest per-site head with {@code LIMIT 1}, the same segment was offered first on
+     * every wake — one unreadable object stopped every other site's delta Parquet. The segment is
+     * still the durable queue entry and nothing is discarded: it comes back after a delay that
+     * doubles per attempt, and the attempt count only escalates how loudly it is reported.</p>
+     *
+     * <p>The attempt count in the log is this claim's snapshot plus one, while the stored count is
+     * incremented in the database — two replicas attempting the same segment at once each add one,
+     * so the row can be ahead of the line logged here.</p>
+     */
+    private void defer(ChangelogSegment segment, RuntimeException failure) {
+        int attempts = segment.getEgressAttempts() + 1;
+        LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
+        segmentRepository.deferEgress(segment.getId(), retryAt);
+        metrics.egressFailed();
+        if (backoff.isPoisoned(attempts)) {
+            metrics.egressSegmentPoisoned();
+            log.error("Delta egress failed {} times for segment {} of site {} (seq {}..{}, key {}) — "
+                            + "the segment stays queued and is retried at {}, and its site's later "
+                            + "segments wait behind it. Nothing discards it: fix the cause (declared "
+                            + "schema, object, ceilings) or delete the batch",
+                    attempts, segment.getId(), segment.getSiteId(), segment.getFirstSeq(),
+                    segment.getLastSeq(), segment.getS3Key(), retryAt, failure);
+        } else {
+            log.warn("Delta egress failed for segment {} of site {} (attempt {}, retry at {}): {}",
+                    segment.getId(), segment.getSiteId(), attempts, retryAt, failure.toString());
+        }
     }
 
     /**

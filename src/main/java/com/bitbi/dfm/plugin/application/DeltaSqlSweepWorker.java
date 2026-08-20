@@ -23,6 +23,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code /sql-changes} (ordered by {@code created_at}) streams them correctly. A low-frequency
  * sweep re-wakes the pool for segments left pending by a crash or a failed generation.</p>
  *
+ * <p>A failed generation no longer ends the drain (issue #243): the queue service defers that one
+ * segment with a backoff and the drain moves on to another site. What still ends a drain is a
+ * condition that would meet the next claim too — the memory-pressure refusal of #181.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -101,7 +105,10 @@ public class DeltaSqlSweepWorker {
                 // keep draining until the queue is empty
             }
         } catch (RuntimeException e) {
-            log.warn("Delta SQL drain failed; the segment stays pending for the sweep: {}", e.getMessage());
+            // What reaches here is systemic rather than one segment's own failure (issue #243) —
+            // today the #181 memory-pressure refusal, which the next claim would meet as well.
+            log.warn("Delta SQL drain ended early; the segment stays pending for the sweep: {}",
+                    e.getMessage());
         }
     }
 

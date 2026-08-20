@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.QueueRetryBackoff;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
@@ -11,6 +12,7 @@ import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
@@ -56,6 +58,11 @@ public class DeltaSqlQueueService {
 
     private static final String PLUGIN_ID = "bit-bi";
 
+    /** One count per failed attempt on a claimed segment (issue #243). */
+    private static final String DEFERRED_METRIC = "sql.generation.delta.segments.deferred";
+    /** The subset of those on a segment that has failed at least the configured number of times. */
+    private static final String POISONED_METRIC = "sql.generation.delta.segments.poisoned";
+
     private final ChangelogSegmentRepository segmentRepository;
     private final SiteRepository siteRepository;
     private final AccountPluginRepository accountPluginRepository;
@@ -63,6 +70,7 @@ public class DeltaSqlQueueService {
     private final PluginDeltaBaselineRepository baselineRepository;
     private final PluginAuditService pluginAuditService;
     private final MeterRegistry meterRegistry;
+    private final QueueRetryBackoff backoff;
 
     public DeltaSqlQueueService(ChangelogSegmentRepository segmentRepository,
                                 SiteRepository siteRepository,
@@ -70,7 +78,11 @@ public class DeltaSqlQueueService {
                                 SqlGenerationService sqlGenerationService,
                                 PluginDeltaBaselineRepository baselineRepository,
                                 PluginAuditService pluginAuditService,
-                                MeterRegistry meterRegistry) {
+                                MeterRegistry meterRegistry,
+                                @Value("${plugin.sql-generation.delta-retry-delay-seconds:60}")
+                                int retryDelaySeconds,
+                                @Value("${plugin.sql-generation.delta-poison-after-attempts:7}")
+                                int poisonAfterAttempts) {
         this.segmentRepository = segmentRepository;
         this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -78,6 +90,12 @@ public class DeltaSqlQueueService {
         this.baselineRepository = baselineRepository;
         this.pluginAuditService = pluginAuditService;
         this.meterRegistry = meterRegistry;
+        this.backoff = new QueueRetryBackoff(
+                "plugin.sql-generation.delta-retry-delay-seconds", retryDelaySeconds,
+                "plugin.sql-generation.delta-poison-after-attempts", poisonAfterAttempts);
+        // Registered at zero so an alert on either can predate the first failure.
+        meterRegistry.counter(DEFERRED_METRIC).increment(0);
+        meterRegistry.counter(POISONED_METRIC).increment(0);
     }
 
     /**
@@ -101,24 +119,76 @@ public class DeltaSqlQueueService {
                 .findByAccountIdAndPluginId(site.getAccountId(), PLUGIN_ID)
                 .filter(AccountPlugin::isActive);
 
-        if (activation.isEmpty()) {
-            log.debug("No active bit-bi activation for account {} — marking segment {} processed",
-                    site.getAccountId(), segment.getId());
-            meterRegistry.counter("sql.generation.delta.segments.skipped.inactive").increment();
-        } else if (DeltaSqlGenerationStrategy.MODE_FULL_SNAPSHOT.equals(segment.getMode())) {
-            suspendBaselines(segment, site, activation.get());
-        } else {
-            // throws on failure → mark is skipped → segment stays pending for the sweep. Since
-            // #181 the memory-pressure abort is one such failure (it used to return an empty
-            // Optional, indistinguishable from "no changes", and the segment was consumed with
-            // its SQL never generated); the condition belongs to the pod rather than the batch,
-            // so the next sweep generates normally once the heap recovers.
-            sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
+        try {
+            if (activation.isEmpty()) {
+                log.debug("No active bit-bi activation for account {} — marking segment {} processed",
+                        site.getAccountId(), segment.getId());
+                meterRegistry.counter("sql.generation.delta.segments.skipped.inactive").increment();
+            } else if (DeltaSqlGenerationStrategy.MODE_FULL_SNAPSHOT.equals(segment.getMode())) {
+                suspendBaselines(segment, site, activation.get());
+            } else {
+                // throws on failure → mark is skipped → the segment stays the durable queue entry.
+                // Since #181 the memory-pressure abort is one such failure (it used to return an
+                // empty Optional, indistinguishable from "no changes", and the segment was consumed
+                // with its SQL never generated); the condition belongs to the pod rather than the
+                // batch, so the next sweep generates normally once the heap recovers.
+                sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
+            }
+        } catch (SqlGenerationService.MemoryPressureAbortedException e) {
+            // Deliberately not deferred and not counted as this segment's attempt (issue #243).
+            // The refusal is a reading of the pod's heap taken before any work, so it is systemic
+            // and self-repairing: every segment claimed while it lasts would meet it, and walking
+            // this one towards the poisoned report would turn a transient overload into a verdict
+            // on the data — the rule #150/#162/#178 already hold elsewhere. Ending the drain is
+            // also the right answer here, since the next claim would be refused too.
+            throw e;
+        } catch (RuntimeException e) {
+            deferSegment(segment, site, e);
+            return true;
         }
 
         segment.markPluginSqlProcessed();
         segmentRepository.save(segment);
         return true;
+    }
+
+    /**
+     * Hold a segment whose generation failed out of the queue for a while, instead of ending the
+     * drain on it (issue #243).
+     *
+     * <p>{@code findNextPendingPluginSql} orders per-site heads <em>globally</em> and takes one, so
+     * before this a batch whose SQL deterministically threw was offered first on every wake and no
+     * other site's SQL was ever generated. Deferring costs that site its own order (its later
+     * segments still queue behind it, which is the per-site seq contract {@code /sql-changes}
+     * depends on) and frees every other site.</p>
+     *
+     * <p>Nothing is discarded — there is no attempt ceiling that gives up. A segment is the durable
+     * queue entry and nothing can re-drive it once its marker is stamped, while the usual causes
+     * (an unreadable object, data the declared schema cannot render, a ceiling set too low) are
+     * repairable; so the attempt count escalates the reporting instead. The outer horizon stays
+     * batch retention (#212, {@code delta.retention.segments.deleted-pending}).</p>
+     *
+     * <p>The attempt count logged here is this claim's snapshot plus one; the stored count is
+     * incremented in the database, so with two replicas attempting one segment the row can be
+     * ahead of the line logged here.</p>
+     */
+    private void deferSegment(ChangelogSegment segment, Site site, RuntimeException failure) {
+        int attempts = segment.getPluginSqlAttempts() + 1;
+        LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
+        segmentRepository.deferPluginSql(segment.getId(), retryAt);
+        meterRegistry.counter(DEFERRED_METRIC).increment();
+        if (backoff.isPoisoned(attempts)) {
+            meterRegistry.counter(POISONED_METRIC).increment();
+            log.error("Bit BI delta SQL failed {} times for segment {} of site {} (batch {}, seq {}..{}) "
+                            + "— the segment stays queued and is retried at {}, and its site's later "
+                            + "segments wait behind it. Nothing discards it: fix the cause, reinit the "
+                            + "plugin, or delete the batch",
+                    attempts, segment.getId(), site.getId(), segment.getBatchId(),
+                    segment.getFirstSeq(), segment.getLastSeq(), retryAt, failure);
+        } else {
+            log.warn("Bit BI delta SQL failed for segment {} of site {} (attempt {}, retry at {}): {}",
+                    segment.getId(), site.getId(), attempts, retryAt, failure.toString());
+        }
     }
 
     /**

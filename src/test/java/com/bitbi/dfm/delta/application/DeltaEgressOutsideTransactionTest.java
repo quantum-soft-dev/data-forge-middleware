@@ -54,7 +54,7 @@ class DeltaEgressOutsideTransactionTest {
     void setUp() {
         service = new DeltaEgressService(segmentRepository, changelogSegmentService,
                 siteSchemaService, storage, new DeltaMetrics(new SimpleMeterRegistry()),
-                new DeltaParquetProperties(8L * 1024 * 1024));
+                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7);
         segment = ChangelogSegment.create(SITE, UUID.randomUUID(), 1L, 1L, 1L,
                 "hash", "changelog/key", "DELTA", null);
     }
