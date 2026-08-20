@@ -511,6 +511,32 @@ pages/{feature}/            # Route pages
 - Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
 
 ## Recent Changes
+- failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
+  payload as one that is not due yet (issue #224, the bound #213 left open). Since #213 a site with
+  `last_checkpoint_seq = 0` and records applied reads as a neutral **"No checkpoint yet"** — right
+  for an afternoon ingest waiting on `delta.checkpoint.cron`. Every whole-site abort
+  (`frame_too_large`, a fold over `max-fold-bytes`, a deferral, an S3 read denial) writes no
+  `checkpoints` row and leaves the pointer at zero, so thirty failed nights carried byte-for-byte
+  that payload; `nextCheckpointBuildAt` cannot separate them either, being the next cron occurrence
+  recomputed per request. Bounding it by lag magnitude was the obvious answer and is still the wrong
+  one — a first `FULL_SNAPSHOT` is unbounded, so that bound would report the largest sites as
+  critical on day one, which is the defect #213 removed. **Shape 2 of the ticket**, not 1: a
+  persisted abort of the scheduled visit (the forced rebuild already has `lastRebuildOutcome` —
+  #186), not a `created_at` from which "the last scheduled occurrence has passed" would be inferred.
+  V55 adds nullable `site_sync_state.last_checkpoint_build_abort` / `_abort_at` / `_message`.
+  `CheckpointScheduler` writes them from its catch, and `DeltaSyncStateService.recordCheckpointBuildAbort`
+  no-ops once `lastCheckpointSeq` is past zero, so a healthy build still writes nothing and a later
+  abort of an already-checkpointed site does not take a column. Values: `FAILED`, `FOLD_TOO_LARGE`,
+  `FRAME_TOO_LARGE`, `SCRATCH_FULL`, `FRAME_UNAVAILABLE`, `DEFERRED`. A discard under the build and a
+  deferral cut short by shutdown are not recorded (#162). A wipe and a re-baseline drop the abort,
+  because both zero the pointer and an abort about the discarded baseline would then read as "the
+  first build of the new one already failed". Additive DTO: reason and time on both sync-state
+  projections and on bulk health; `lastCheckpointBuildMessage` on the **admin** projection only, the
+  same split as `lastRebuildMessage`. On the frontend the field is `z.string()`, not `z.enum`, and
+  `getSyncStatus` reads it as `first-checkpoint-failed`: the chip says **Checkpoint failed**, the
+  pill **Checkpoint failed · 1.2k**, the card names the abort. Stalled still wins. No gRPC, proto,
+  configuration-key, metric-name, S3-key or route change. See `docs/delta-client-v2-guide.md`
+  ("A first checkpoint build that keeps failing").
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
   cell as NULL and returns a tally so the WARN and

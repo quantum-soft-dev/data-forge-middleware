@@ -259,6 +259,18 @@ pages/{feature}/            # Route pages
 - Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
 
 ## Recent Changes
+- failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
+  payload as one that is not due yet (issue #224, the bound #213 left open). Every whole-site abort
+  left `last_checkpoint_seq` at 0 with no `checkpoints` row, so thirty failed nights carried
+  byte-for-byte the "No checkpoint yet" payload of an afternoon ingest. Bounding by lag magnitude
+  would have reported the largest first `FULL_SNAPSHOT` as critical on day one. **Shape 2**: V55
+  adds nullable `last_checkpoint_build_abort` / `_abort_at` / `_message`, written from
+  `CheckpointScheduler`'s catch only while the pointer is still 0. A healthy build writes nothing;
+  a wipe and a re-baseline drop it. Discard and shutdown-cut deferral are not recorded. Both
+  sync-state projections and bulk health carry the reason; the diagnosis is admin-only. Frontend
+  `first-checkpoint-failed` leaves the neutral wait (chip **Checkpoint failed**, pill
+  **Checkpoint failed · 1.2k**). No gRPC, proto, configuration-key, metric-name, S3-key or route
+  change. See `docs/delta-client-v2-guide.md`.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the cell NULL and
   returns a tally; `toAvroSchema` still mapped a `NOT NULL` column to a REQUIRED Parquet field, so

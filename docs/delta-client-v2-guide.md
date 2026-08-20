@@ -1516,7 +1516,7 @@ ownership, admin routes require ROLE_ADMIN):
 
 | Endpoint | Method | Access | Purpose |
 |---|---|---|---|
-| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags and `nextCheckpointBuildAt` (when the scheduled build next runs — #213); 404 until the client first connects |
+| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags, `nextCheckpointBuildAt` (when the scheduled build next runs — #213) and `lastCheckpointBuildAbort`/`At` (why a scheduled visit of a site that still has no checkpoint produced nothing — #224; `lastCheckpointBuildMessage` is admin-only); 404 until the client first connects |
 | `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with the `hasParquet` presence flag (`hasCsv` removed — #113) |
 | `.../delta/checkpoints/{table}/download?format=parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click. `format=csv` answers `410 Gone`: the snapshot is no longer produced |
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while an attempt is queued, running or pending retry (`PENDING`/`BUILDING`/`FAILED`); `404` when absent or abandoned after `max-attempts` (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
@@ -1526,7 +1526,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`; released with a `lastRebuildOutcome` verdict when the attempt finishes — #186) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
 | `.../delta/rebaseline` | DELETE | owner · admin | Takes a pending request back (issue #84): clears `rebaseline_requested` only — watermark, checkpoints and segments untouched → `GetSyncState` answers `PROCEED` again. Idempotent, always `200`, `status` says what it achieved: `cancelled` (called off before the client was told), `snapshot-in-progress` (a FULL_SNAPSHOT is uploading and still replaces the baseline), `client-notified` (the client already holds NEED_REBASELINE and may start at any moment), `not-requested` (nothing was pending) |
-| `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
+| `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll), including `lastCheckpointBuildAbort` so a failed first build is not painted as a wait (#224) |
 
 All endpoints are documented in the OpenAPI spec (`/v3/api-docs`, Swagger UI).
 
@@ -1608,24 +1608,33 @@ a day is both more actionable and independent of whether a checkpoint exists. **
 applied is not in this state at all**: an all-zero row — what a wipe leaves, and what a re-baseline
 requested for a client that never connected creates — is on neither of `CheckpointScheduler`'s work
 lists (segments, unmaterialized `checkpoints` rows), so promising it a build would be a promise
-nothing keeps, and there is nothing waiting either. And the state says *no checkpoint exists*, not
-*the build is healthy*: it **cannot age itself out**, because nothing persisted says how long a site
-has been waiting — `site_sync_state` has no creation timestamp, and every whole-site abort
-(`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`, a deferral) leaves
-no `checkpoints` row either, so a first build that has failed thirty nights carries byte-for-byte the
-payload of a site ingested this afternoon. It is deliberately **not** bounded by lag magnitude: a
-first FULL_SNAPSHOT is unbounded, so that bound would report the largest sites as critical on day one,
-which is the defect this removes. What is done instead — both surfaces keep the count, and the card
-names the build the state should not outlive ("Still missing a day later? The build is not
-completing" — a day rather than "after that", because the sweep walks sites serially and a build
-deferred behind the fold budget of #178 is a designed miss that repairs itself next tick) — with the
-durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
-`delta.checkpoint.tables.given-up`, `delta.seq.lag`); separating the two payloads needs persisted
-state and a migration, filed as **#224**. Building a checkpoint on the ingest path when a site's first
-snapshot commits was the alternative and was **not** taken: it moves a whole-site fold onto the
-commit that the nightly cron exists to keep off it, and it would have to queue behind the same fold
-budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to introduce, since
-what was wrong was the reporting rather than the schedule.
+nothing keeps, and there is nothing waiting either. And the wait says *no checkpoint exists*, not
+*the build is healthy*.
+
+**A first checkpoint build that keeps failing (issue #224)**. The wait cannot age itself out on
+`lastCheckpointSeq == 0` alone: every whole-site abort (`frame_too_large`, a fold over
+`max-fold-bytes`, a deferral, an S3 read denial) writes no `checkpoints` row and leaves the pointer
+at zero, so thirty failed nights used to carry byte-for-byte the payload of a site ingested this
+afternoon. Bounding it by lag magnitude was the obvious answer and is still the wrong one — a first
+`FULL_SNAPSHOT` is unbounded, so that bound would report the largest sites as critical on day one,
+which is the defect #213 removed. What separates the two payloads is a persisted abort on
+`site_sync_state` (V55: `last_checkpoint_build_abort` / `_abort_at` / `_message`), written where
+`CheckpointScheduler` catches the abort and **only while `last_checkpoint_seq` is still 0**. A
+healthy build does not touch those columns — it advances the pointer. A wipe and a re-baseline drop
+them, because both zero the pointer and an abort about the discarded baseline would then read as
+"the first build of the new one already failed". A discard under the build and a deferral cut short
+by shutdown are not recorded (#162). The values sit beside `lastRebuildOutcome`: `FAILED`,
+`FOLD_TOO_LARGE`, `FRAME_TOO_LARGE`, `SCRATCH_FULL`, `FRAME_UNAVAILABLE`, `DEFERRED`. Both
+projections carry the reason and its time; the diagnosis string is admin-only, the same split as
+`lastRebuildMessage`. Bulk health carries the reason so the site-list pill can switch. On the
+frontend that is `first-checkpoint-failed`: the chip says **Checkpoint failed**, the pill
+**Checkpoint failed · 1.2k**, and the card names the abort instead of "Still missing a day later?".
+The durable alarms are unchanged (`delta.checkpoint.builds.aborted`,
+`delta.checkpoint.tables.given-up`, `delta.seq.lag`). Building a checkpoint on the ingest path when a
+site's first snapshot commits was the alternative and was **not** taken: it moves a whole-site fold
+onto the commit that the nightly cron exists to keep off it, and it would have to queue behind the
+same fold budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to
+introduce, since what was wrong was the reporting rather than the schedule.
 
 **The Upload History File column is the same defect, not an egress delay (issue #214, folded in)**:
 the **File** pill on a delta batch serves the unified completed-batch artifact of 036
