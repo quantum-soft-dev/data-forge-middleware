@@ -2037,9 +2037,11 @@ pruned fifty segments rather than none. That is the intended direction (a pruned
 work, not a step of one atomic pass), and it is also why a failed object delete is still summarized
 rather than thrown — the rows are already gone. For the same reason the object delete runs in a
 `finally`: a failure inside the loop (a lock timeout on one row, a pool timeout, a failover) leaves
-those rows deleted, so their keys go to S3 anyway before the exception leaves `prune`. The #158
-orphan sweep is the backstop for a crash, not the plan for an ordinary exception — it ships
-`delta.s3-orphan.dry-run: true`, so its reclaim is inert until an operator turns it on. The pass's
+those rows deleted, so their keys go to S3 anyway before the exception leaves `prune`. The keys are also flushed to S3 **every 1000** during the loop rather than only at the end, so a pod
+kill mid-pass strands at most one chunk of objects — free in round trips, since `deleteObjects`
+chunks at 1000 anyway. The #158 orphan sweep is the backstop for a crash, not the plan for an
+ordinary exception — it ships `delta.s3-orphan.dry-run: true`, so its reclaim is inert until an
+operator turns it on. The pass's
 **reporting** is in that `finally` too: the held-back counters, their WARN and the `Pruned N` INFO
 describe work that is now durable, so an aborted pass says what it did instead of reading as
 "nothing happened" behind `CheckpointScheduler`'s per-site failure line — and

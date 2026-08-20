@@ -82,6 +82,9 @@ public class ChangelogRetentionService {
 
     private static final Logger log = LoggerFactory.getLogger(ChangelogRetentionService.class);
 
+    /** Keys buffered before an object delete goes out; the chunk {@code deleteObjects} uses. */
+    private static final int OBJECT_DELETE_CHUNK = 1000;
+
     private final ChangelogSegmentRepository segmentRepository;
     private final S3FileStorageService objectDeleter;
     private final DeltaSyncStateService syncStateService;
@@ -121,8 +124,10 @@ public class ChangelogRetentionService {
                 segmentRepository.findBelowCheckpointBySiteId(siteId, checkpointSeq);
 
         int pruneCount = Math.max(0, belowCheckpoint.size() - auditWindowSegments);
-        List<String> prunedKeys = new ArrayList<>();
+        List<String> pendingObjectDeletes = new ArrayList<>();
         HeldBackTally heldBack = new HeldBackTally();
+        int prunedRows = 0;
+        boolean unwinding = true;
         // The delete is in a finally because the pass is no longer one transaction (issue #234,
         // review round 1): a failure inside the loop — a lock timeout on one row, a pool timeout, a
         // failover — leaves every row deleted so far committed, and their keys would otherwise
@@ -139,7 +144,16 @@ public class ChangelogRetentionService {
                     // Row first, object after the row delete reported success: a crash in between
                     // leaves an unreferenced object for the #158 orphan sweep, never a row whose
                     // object is gone.
-                    prunedKeys.add(segment.getS3Key());
+                    pendingObjectDeletes.add(segment.getS3Key());
+                    prunedRows++;
+                    if (pendingObjectDeletes.size() >= OBJECT_DELETE_CHUNK) {
+                        // Flushed during the pass, not only at the end (review round 4): a pod kill
+                        // between a row's commit and the end of the loop strands its object, and
+                        // the sweep that would reclaim it ships dry-run, so the exposure is bounded
+                        // at one chunk. Free in round trips — deleteObjects chunks at 1000 anyway.
+                        deletePrunedObjects(siteId, pendingObjectDeletes);
+                        pendingObjectDeletes.clear();
+                    }
                     continue;
                 }
                 // The row read as processed above but the conditional delete refused it: a reinit
@@ -148,17 +162,18 @@ public class ChangelogRetentionService {
                 segmentRepository.findById(segment.getId()).ifPresent(rePended ->
                         heldBack.countIfPending(rePended.isPendingPluginSql(), rePended.isPendingEgress()));
             }
+            unwinding = false;
         } finally {
             // Everything this pass did is reported from the finally, because everything it did is
             // durable (issue #234, review round 2): a throw mid-loop leaves rows deleted and their
             // objects deleted with them, so leaving the counters and the lines past the throw would
             // make an aborted pass read as "nothing happened" — and the #212 stuck-backlog alarm
             // would read zero for a pass that did observe held-back segments.
-            deletePrunedObjects(siteId, prunedKeys);
-            reportPass(siteId, checkpointSeq, prunedKeys.size(), heldBack);
+            deletePrunedObjects(siteId, pendingObjectDeletes);
+            reportPass(siteId, checkpointSeq, prunedRows, heldBack, unwinding);
         }
 
-        return prunedKeys.size();
+        return prunedRows;
     }
 
     /**
@@ -203,9 +218,13 @@ public class ChangelogRetentionService {
      * rollout would otherwise reach {@code CheckpointScheduler}'s catch, which logs the message
      * alone, and the lock timeout that actually ended the pass would be gone. There is nowhere left
      * to report a failure of the reporting itself, so it is swallowed deliberately rather than
-     * logged from inside its own broken path.</p>
+     * logged from inside its own broken path. On a pass that <em>succeeded</em> nothing is in
+     * flight to protect, so the failure is this pass's own and is thrown (review round 4).</p>
+     *
+     * @param unwinding whether the loop is already ending on an exception
      */
-    private void reportPass(UUID siteId, long checkpointSeq, int prunedCount, HeldBackTally heldBack) {
+    private void reportPass(UUID siteId, long checkpointSeq, int prunedCount, HeldBackTally heldBack,
+                            boolean unwinding) {
         try {
             metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
             metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
@@ -219,8 +238,16 @@ public class ChangelogRetentionService {
                 log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
                         prunedCount, checkpointSeq, siteId, auditWindowSegments);
             }
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException e) {
+            if (!unwinding) {
+                // Nothing is in flight to protect, so a broken meter or appender is this pass's
+                // failure and must not be silent (review round 4): swallowing it here would leave
+                // the #212 alarm half-emitted with no error anywhere.
+                throw e;
+            }
             // Deliberately swallowed: see above.
+            log.debug("Reporting the retention pass for site {} failed while it was already "
+                    + "unwinding", siteId, e);
         }
     }
 

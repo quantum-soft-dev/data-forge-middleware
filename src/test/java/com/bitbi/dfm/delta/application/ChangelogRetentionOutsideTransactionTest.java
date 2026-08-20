@@ -15,6 +15,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,8 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -153,6 +156,64 @@ class ChangelogRetentionOutsideTransactionTest {
         assertEquals(1.0, registry.get("delta.retention.segments.held-back")
                         .tag("reason", "pending_plugin_sql").counter().count(),
                 "the hold-back this pass observed is counted even though the pass aborted");
+    }
+
+    @Test
+    void aFullChunkOfKeysIsDeletedDuringThePassRatherThanOnlyAtTheEnd() {
+        // Review round 4: a pod kill between a row's commit and the end of the loop strands its
+        // object, and the #158 sweep that would reclaim it ships dry-run — so the exposure is
+        // bounded at one chunk. Free in round trips, since deleteObjects chunks at 1000 anyway.
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        List<PrunableSegmentView> views = new ArrayList<>();
+        for (int i = 0; i < 1001; i++) {
+            views.add(new View(UUID.randomUUID(), "delta/s/" + i + ".pb.gz", DONE, DONE));
+        }
+        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(views);
+        when(segmentRepository.deleteByIdIfProcessed(any())).thenReturn(1);
+        List<Integer> chunkSizes = new ArrayList<>();
+        when(objectDeleter.deleteObjects(anyList())).thenAnswer(invocation -> {
+            chunkSizes.add(((List<?>) invocation.getArgument(0)).size());
+            return new S3FileStorageService.DeleteObjectsResult(1, List.of());
+        });
+
+        assertEquals(1001, service.prune(SITE));
+
+        assertEquals(List.of(1000, 1), chunkSizes, "a full chunk goes out during the pass");
+    }
+
+    @Test
+    void aBrokenMeterOnASuccessfulPassIsThisPassesFailure() {
+        // Review round 4: the swallow exists so the reporting cannot replace an exception the loop
+        // is unwinding with. On a pass that succeeded there is nothing to protect, and swallowing
+        // would leave the #212 alarm half-emitted with no error anywhere.
+        DeltaMetrics brokenMetrics = mock(DeltaMetrics.class);
+        doThrow(new IllegalStateException("meter conflict"))
+                .when(brokenMetrics).retentionSegmentsHeldBack(any(), org.mockito.ArgumentMatchers.anyLong());
+        ChangelogRetentionService withBrokenMetrics = new ChangelogRetentionService(
+                segmentRepository, objectDeleter, syncStateService, brokenMetrics, 0);
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of());
+
+        assertThrows(IllegalStateException.class, () -> withBrokenMetrics.prune(SITE));
+    }
+
+    @Test
+    void aBrokenMeterDoesNotReplaceTheFailureThatEndedThePass() {
+        DeltaMetrics brokenMetrics = mock(DeltaMetrics.class);
+        doThrow(new IllegalStateException("meter conflict"))
+                .when(brokenMetrics).retentionSegmentsHeldBack(any(), org.mockito.ArgumentMatchers.anyLong());
+        ChangelogRetentionService withBrokenMetrics = new ChangelogRetentionService(
+                segmentRepository, objectDeleter, syncStateService, brokenMetrics, 0);
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
+        View failing = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
+        when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(failing));
+        when(segmentRepository.deleteByIdIfProcessed(failing.id()))
+                .thenThrow(new CannotAcquireLockException("lock timeout"));
+
+        assertThrows(CannotAcquireLockException.class, () -> withBrokenMetrics.prune(SITE));
     }
 
     private record View(UUID id, String key, LocalDateTime pluginSqlAt, LocalDateTime egressAt)

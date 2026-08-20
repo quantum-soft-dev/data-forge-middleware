@@ -642,7 +642,21 @@ pages/{feature}/            # Route pages
   hold drops, the *number* of transactions rises to one per pruned segment, so a large-backlog
   site's nightly visit takes longer in wall-clock terms with each acquisition independently subject
   to the 30 s `connection-timeout` — the deliberate trade of this shape everywhere it is used
-  (#147, #164). Tests were written first and are
+  (#147, #164). **Round 4** was two more of the same asymmetry and one deferral. The swallow added
+  in round 3 was unconditional, so on a *successful* pass a broken meter (Micrometer raises on a
+  name/tag conflict, and this series is registered from more than one place) would have left the
+  #212 alarm half-emitted — the first counter moved, the second not, both log lines lost — and
+  `prune` returning normally with the error nowhere; it now swallows only while the loop is already
+  unwinding and throws otherwise. And the object keys are flushed **every 1000 during the loop**
+  rather than only at the end: a pod kill mid-pass strands at most one chunk instead of everything
+  the pass had deleted, which matters precisely because the reclaim path ships dry-run. It costs
+  nothing — `deleteObjects` chunks at 1000 anyway. The finding that was **not** taken is the
+  transaction *count*: one `begin`/`commit` and one pool acquisition per pruned segment over an
+  unbounded set, serially, under `CheckpointScheduler`'s `buildLock`, so a ~10^5-segment first
+  prune after an outage can starve the later sites of that tick — a chunked conditional delete
+  (`DELETE ... IN (...) ... RETURNING id`) needs a new repository method and native SQL, a wider
+  decision than "take the S3 call out of the transaction", and the blast radius belongs with
+  **#193**, which is exactly that theme and now carries the evidence. Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own
