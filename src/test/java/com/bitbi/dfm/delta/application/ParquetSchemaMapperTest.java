@@ -64,16 +64,7 @@ class ParquetSchemaMapperTest {
         assertEquals(Schema.Type.BYTES, branch(avro, "blob").getType());
     }
 
-    /**
-     * Every checkpoint column is a nullable union, the declared constraint notwithstanding — the
-     * same rule {@link ParquetSchemaMapper#toDeltaAvroSchema} has always applied, and for the same
-     * reason: this pipeline cannot promise a non-null cell. A {@code NOT NULL} column used to be
-     * mapped to a bare type (a REQUIRED Parquet field) and the promise was broken by two ordinary
-     * routes — a non-finite or malformed decimal, which #215 writes as NULL, and a folded row that
-     * an {@code UPDATE} with no prior {@code INSERT} seeded with its key columns alone. Breaking it
-     * cost the whole table its snapshot (#237), so the constraint is not carried at all rather than
-     * carried until it fails.
-     */
+    /** Every checkpoint column is a nullable union, {@code NOT NULL} included. */
     @Test
     void everyColumnBecomesUnionWithNullWhateverTheDeclaredConstraint() {
         TableSchema schema = new TableSchema(List.of(
@@ -99,10 +90,8 @@ class ParquetSchemaMapperTest {
     }
 
     /**
-     * The two artifacts used to disagree on this, and that disagreement <em>was</em> #237: a
-     * {@code NOT NULL} decimal was OPTIONAL in the delta file and REQUIRED in the checkpoint
-     * snapshot, so the same NULL #215 writes was fine in one and fatal in the other. They share
-     * {@code nullableColumn} now; this comparison is what fails if they ever fork again.
+     * Declared columns share {@code nullableColumn}; this comparison fails if the two artifacts
+     * fork again.
      */
     @Test
     void checkpointAndDeltaSchemasAgreeThatEveryDeclaredColumnIsANullableUnion() {

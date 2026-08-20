@@ -160,15 +160,8 @@ class ParquetCheckpointWriterTest {
     }
 
     /**
-     * The degradation and the {@code NOT NULL} declaration are the two halves of one hazard, and
-     * before #237 they had never met in a test: every degradation case above declares its decimal
-     * column nullable, while the non-nullable decimals elsewhere in this class are only ever fed
-     * finite values. A {@code NOT NULL} column used to be mapped to a bare Avro type, i.e. a
-     * REQUIRED Parquet field, so the NULL #215 writes for a non-finite cell made parquet-avro throw
-     * {@code "Null-value for required field"} out of {@link ParquetCheckpointWriter#writeParquet} —
-     * before the tally was returned, so the WARN and both
-     * {@code delta.parquet.unrepresentable-decimals} counters were lost too, and the table took
-     * exactly the outcome #215 was opened to remove.
+     * A {@code NOT NULL} decimal used to be a REQUIRED Parquet field, so the NULL #215 writes for a
+     * non-finite cell threw before the tally returned and the table lost its snapshot.
      */
     @Test
     void nonFiniteDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
@@ -205,12 +198,7 @@ class ParquetCheckpointWriterTest {
         }
     }
 
-    /**
-     * The malformed half of the same hazard: a token {@link BigDecimal} cannot parse degrades to
-     * NULL exactly like a non-finite one (#215), so a {@code NOT NULL} column used to cost the
-     * table its snapshot for that route as well. It stays counted apart, since only this one is a
-     * client defect.
-     */
+    /** Same as the non-finite case; counted apart because only this one is a client defect. */
     @Test
     void malformedDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
         TableSchema schema = new TableSchema(List.of(
@@ -239,12 +227,8 @@ class ParquetCheckpointWriterTest {
     }
 
     /**
-     * A bare {@code numeric NOT NULL} — an ordinary PostgreSQL declaration — is the case that rules
-     * out unioning "the decimal columns" alone: it maps to Avro <b>STRING</b>, not to a decimal
-     * logical type (rounding would be silent, see
-     * {@code bareNumericWithoutScaleMapsToStringToAvoidRounding}), yet a {@code NaN} token in it is
-     * still degraded to NULL by {@code coerceValue}, which keys on the wire value and not on the
-     * destination. A fix aimed at decimal-typed fields would leave this one throwing.
+     * A bare {@code numeric NOT NULL} maps to Avro STRING, not to a decimal logical type, yet is
+     * still degraded to NULL. Unioning only decimal-typed fields would leave this one throwing.
      */
     @Test
     void nonFiniteInANotNullBareNumericColumnStillMaterializesTheTable() throws Exception {
@@ -274,12 +258,8 @@ class ParquetCheckpointWriterTest {
     }
 
     /**
-     * The second route to a null cell in a {@code NOT NULL} column, and the reason the constraint is
-     * one the snapshot was never in a position to keep: {@link ChangelogFold} seeds a row whose
-     * {@code UPDATE} has no prior {@code INSERT} in the fold with its <em>key columns plus the
-     * carried change</em>, so a folded row can legitimately lack a declared column altogether —
-     * {@code toRecord} then reads {@code null} for it. Nothing about decimals is involved; the
-     * REQUIRED field cost the table its snapshot here too.
+     * A folded {@code UPDATE} with no prior {@code INSERT} can omit a declared {@code NOT NULL}
+     * column; the snapshot still materializes with a null cell rather than losing the table.
      */
     @Test
     void aFoldedRowMissingANotNullColumnStillMaterializesTheTable() throws Exception {
@@ -307,6 +287,48 @@ class ParquetCheckpointWriterTest {
             GenericRecord row = reader.read();
             assertNull(row.get("name"), "the absent column is a null cell, not a lost row");
             assertEquals(new BigDecimal("3.00"), row.get("price"));
+        }
+    }
+
+    /**
+     * {@code widenDecimalsToFit} reconstructs decimal fields and is the only remaining path that
+     * can emit a REQUIRED decimal ({@code UNION ? [null, wider] : wider}). The cases above never
+     * overflow the declared precision, so that reconstruction is a no-op for them.
+     */
+    @Test
+    void aWidenedNotNullDecimalStillAcceptsADegradedCell() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+
+        Map<String, Value> oversized = new LinkedHashMap<>();
+        oversized.put("id", intVal(1));
+        oversized.put("price", decVal("1234567.89"));
+        Map<String, Value> nan = new LinkedHashMap<>();
+        nan.put("id", intVal(2));
+        nan.put("price", decVal("NaN"));
+
+        Path file = tempDir.resolve("widened-not-null-nan.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(oversized, nan), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.nonFiniteCount());
+        assertTrue(Files.size(file) > 0, "the table keeps its snapshot after the type widens");
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            assertEquals(new BigDecimal("1234567.89"), first.get("price"));
+            Schema priceSchema = first.getSchema().getField("price").schema();
+            assertEquals(Schema.Type.UNION, priceSchema.getType(),
+                    "widenDecimalsToFit must keep the nullable union, not emit a REQUIRED wider decimal");
+            LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(first.getSchema(), "price").getLogicalType();
+            assertEquals(9, decimal.getPrecision(), "declared precision widened to fit the data");
+            assertEquals(2, decimal.getScale());
+            assertNull(reader.read().get("price"), "the degraded cell is NULL on the widened field");
         }
     }
 

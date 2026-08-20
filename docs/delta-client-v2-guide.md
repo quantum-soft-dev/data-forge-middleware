@@ -512,17 +512,20 @@ Parquet (via Avro logical types) as:
 | `bytea` | bytes |
 | *anything else* | string (lossless fallback) |
 
-**Every column is a nullable union in every artifact the server writes**, `nullable: false` included, so no
-Parquet field is ever REQUIRED. The delta and completed-batch files have always been that way (a keyed
-`DELETE` carries only its key columns and a keyed `UPDATE` only its after-image); since issue #237 the
-**checkpoint snapshot** is too. The `nullable` flag you submit is not ignored — it still describes your source
-table and it is what a consumer should read the constraint from — but the artifact does not enforce it,
-because the server has two ordinary ways of producing a null cell in a column you declared `NOT NULL`: a
-non-finite or malformed `numeric` (see *A value the column type cannot hold* below), and a row the server has
-only ever seen through an `UPDATE`, which carries its key columns plus the changed ones and nothing else. When
-the field was REQUIRED, either of those cost the **whole table** its snapshot — permanently, after five nights
-(#149) — instead of costing one cell its value. A consumer that needs the source constraint should take it
-from the schema it submitted, not from the Parquet field's repetition.
+**Every declared column is a nullable union in every artifact the server writes**, `nullable: false`
+included. `_op` and `_seq` on the delta and completed-batch files stay REQUIRED — a row always has an
+op and a seq — but no column from `site_schemas` is a REQUIRED Parquet field. The delta and
+completed-batch files have always been that way for declared columns (a keyed `DELETE` carries only
+its key columns and a keyed `UPDATE` only its after-image); since issue #237 the **checkpoint
+snapshot** is too. The `nullable` flag you submit is not ignored — it still describes your source
+table and it is what a consumer should read the constraint from — but the artifact does not enforce
+it, because the server has two ordinary ways of producing a null cell in a column you declared
+`NOT NULL`: a non-finite or malformed `numeric` (see *A value the column type cannot hold* below),
+and a row the server has only ever seen through an `UPDATE`, which carries its key columns plus the
+changed ones and nothing else. When the field was REQUIRED, either of those cost the **whole table**
+its snapshot — permanently, after five nights (#149) — instead of costing one cell its value. A
+consumer that needs the source constraint should take it from the schema it submitted, not from the
+Parquet field's repetition.
 
 Column and table names must be valid PostgreSQL identifiers (`^[A-Za-z_][A-Za-z0-9_]{0,62}$`).
 

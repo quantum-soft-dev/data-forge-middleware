@@ -542,7 +542,12 @@ pages/{feature}/            # Route pages
   `Infinity`; a folded row missing a `NOT NULL` varchar) and require the file, the tally and a NULL
   cell; a mapper test requires every checkpoint field to be a nullable union, and a comparison test
   requires the checkpoint and delta schemas to agree field-for-field on the declared columns.
-  Mutation: restoring the `if (column.nullable())` branch fails those. No REST, gRPC, proto, DTO,
+  Mutation: restoring the `if (column.nullable())` branch fails those. **Review round 1** added a
+  fifth writer case that both overflows the declared precision (so `widenDecimalsToFit` actually
+  reconstructs the field) and holds a `NaN` — the four original tests never tripped that pass, and
+  its `: wider` branch is the only remaining production path that can emit a REQUIRED decimal —
+  trimmed the method Javadoc off the ticket chronology, and qualified the guide's "no Parquet field
+  is ever REQUIRED" (delta `_op`/`_seq` stay required). No REST, gRPC, proto, DTO,
   migration, configuration-key, metric-name, S3-key or frontend change; the Parquet schema of a
   checkpoint snapshot is the consumer-visible contract, and it is now the same nullable-union rule
   the other two artifacts already had. See `docs/delta-client-v2-guide.md` ("Schema JSON / type
