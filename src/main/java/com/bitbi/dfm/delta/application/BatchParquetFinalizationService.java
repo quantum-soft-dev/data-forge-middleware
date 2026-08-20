@@ -489,7 +489,6 @@ public class BatchParquetFinalizationService {
                 String tableName = entry.getKey();
                 Claim claim = claimsByTable.get(tableName);
                 DeltaParquetWriter.FileWriteResult result = entry.getValue();
-                metrics.nonFiniteDecimalsDegraded(result.nonFiniteDecimals());
                 try {
                     OptionalLong expectedRows = expectedRowCount(segments, tableName);
                     if (expectedRows.isPresent() && result.rowCount() != expectedRows.getAsLong()) {
@@ -499,6 +498,13 @@ public class BatchParquetFinalizationService {
                     String s3Key = metrics.timeBatchParquetPhase("upload", () ->
                             storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
                                     tableName, claim.token(), tempFiles.get(tableName)));
+                    // Counted only once the artifact is accepted (issue #215, review round 1): a
+                    // table whose row count is rejected is retried up to max-attempts, and counting
+                    // per attempt would report more degraded source cells than exist.
+                    metrics.unrepresentableDecimalsDegraded(
+                            result.degradedDecimals().nonFiniteCount(), false);
+                    metrics.unrepresentableDecimalsDegraded(
+                            result.degradedDecimals().malformedCount(), true);
                     SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
                             s3Key, result.rowCount(), result.fileSize(), result.checksum(),

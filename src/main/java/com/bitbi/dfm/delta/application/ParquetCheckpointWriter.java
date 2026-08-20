@@ -80,10 +80,10 @@ public final class ParquetCheckpointWriter {
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross {@code maxBytes}
      * @throws ScratchBudgetExceededException     when the shared scratch directory has no room
      */
-    public static long writeParquet(Path output, String tableName, TableSchema tableSchema,
+    public static DecimalDegradeTally writeParquet(Path output, String tableName, TableSchema tableSchema,
                                     Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes,
                                     ScratchLease lease) {
-        java.util.concurrent.atomic.AtomicLong nonFinite = new java.util.concurrent.atomic.AtomicLong();
+        DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
                         new FileOutputFile(output, maxBytes, lease))
@@ -99,12 +99,8 @@ public final class ParquetCheckpointWriter {
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
         }
-        if (nonFinite.get() > 0) {
-            log.warn("Checkpoint table {}: {} decimal cell(s) written as NULL -- the value is NaN or "
-                    + "+/-Infinity, which Parquet DECIMAL cannot represent (issue #215)",
-                    tableName, nonFinite.get());
-        }
-        return nonFinite.get();
+        warnDegraded(tableName, nonFinite);
+        return nonFinite;
     }
 
     /**
@@ -133,7 +129,7 @@ public final class ParquetCheckpointWriter {
      * Coerce a wire value to the (possibly nullable-union) field schema's declared type.
      */
     static Object coerceValue(Value value, Schema fieldSchema) {
-        return coerce(value, branch(fieldSchema));
+        return coerceValue(value, fieldSchema, new DecimalDegradeTally());
     }
 
     /**
@@ -151,11 +147,18 @@ public final class ParquetCheckpointWriter {
      * @param nonFinite   tally incremented once per degraded cell
      * @return the coerced value, or {@code null} when absent, NULL or unrepresentable
      */
-    static Object coerceValue(Value value, Schema fieldSchema, java.util.concurrent.atomic.AtomicLong nonFinite) {
-        if (value != null && ValueMapper.isNonFiniteDecimal(value)) {
-            nonFinite.incrementAndGet();
+    static Object coerceValue(Value value, Schema fieldSchema, DecimalDegradeTally nonFinite) {
+        if (value != null && ValueMapper.isUnrepresentable(value)) {
+            // Degraded by the mapper before the destination type was known -- counted here, since
+            // coerce() only sees the null it already became.
+            if (ValueMapper.isMalformedDecimal(value)) {
+                nonFinite.malformed();
+            } else {
+                nonFinite.nonFinite();
+            }
+            return null;
         }
-        return coerceValue(value, fieldSchema);
+        return coerce(value, branch(fieldSchema), nonFinite);
     }
 
     /**
@@ -192,7 +195,11 @@ public final class ParquetCheckpointWriter {
                 if (java == null) {
                     continue;
                 }
-                needed.merge(column.getKey(), toBigDecimal(java)
+                BigDecimal measurable = toBigDecimal(java);
+                if (measurable == null) {
+                    continue;
+                }
+                needed.merge(column.getKey(), measurable
                         .setScale(column.getValue().getScale(), RoundingMode.HALF_UP).precision(), Math::max);
             }
         }
@@ -246,27 +253,38 @@ public final class ParquetCheckpointWriter {
     }
 
     private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, Map<String, Value> row,
-                                          java.util.concurrent.atomic.AtomicLong nonFinite) {
+                                          DecimalDegradeTally nonFinite) {
         GenericRecord record = new GenericData.Record(avro);
         for (ColumnDefinition column : tableSchema.columns()) {
             Schema fieldType = branch(avro.getField(column.name()).schema());
             Value cell = row.get(column.name());
-            if (cell != null && ValueMapper.isNonFiniteDecimal(cell)) {
-                nonFinite.incrementAndGet();
-            }
-            record.put(column.name(), coerce(cell, fieldType));
+            record.put(column.name(), coerceValue(cell, fieldType, nonFinite));
         }
         return record;
     }
 
-    private static Object coerce(Value value, Schema type) {
+    private static Object coerce(Value value, Schema type,
+                                 DecimalDegradeTally nonFinite) {
         Object java = value == null ? null : ValueMapper.toJava(value);
         if (java == null) {
             return null;
         }
         LogicalType logical = type.getLogicalType();
         if (logical instanceof LogicalTypes.Decimal decimal) {
-            return toBigDecimal(java).setScale(decimal.getScale(), RoundingMode.HALF_UP);
+            BigDecimal exact = toBigDecimal(java);
+            if (exact == null) {
+                // Present, but with no DECIMAL representation: stored NULL and reported by the
+                // caller's tally rather than thrown (issue #215). Reached by a non-finite double or
+                // an unparseable string bound for a decimal column -- routes the wire-case check
+                // cannot see, which is why the guard lives at the destination type.
+                if (java instanceof CharSequence) {
+                    nonFinite.malformed();
+                } else {
+                    nonFinite.nonFinite();
+                }
+                return null;
+            }
+            return exact.setScale(decimal.getScale(), RoundingMode.HALF_UP);
         }
         if (logical instanceof LogicalTypes.Date) {
             return toLocalDate(java);
@@ -283,6 +301,26 @@ public final class ParquetCheckpointWriter {
             case BYTES -> ByteBuffer.wrap(toBytes(java));
             default -> java.toString();
         };
+    }
+
+    /**
+     * One line per rendered table, not per cell: the workload that produces these writes them
+     * continuously (a PostgreSQL numeric column cycling through NaN / +/-Infinity), so a line per
+     * value would bury the log. The two reasons are reported separately because their remedies
+     * differ -- see {@link DecimalDegradeTally}.
+     */
+    static void warnDegraded(String tableName, DecimalDegradeTally tally) {
+        if (tally.nonFiniteCount() > 0) {
+            log.warn("Table {}: {} decimal cell(s) written as NULL -- the value is NaN or "
+                    + "+/-Infinity, which Parquet DECIMAL cannot represent (issue #215)",
+                    tableName, tally.nonFiniteCount());
+        }
+        if (tally.malformedCount() > 0) {
+            log.warn("Table {}: {} decimal cell(s) written as NULL -- the token could not be parsed "
+                    + "as a decimal at all, which is a client defect rather than a value this "
+                    + "pipeline cannot store (issue #215)",
+                    tableName, tally.malformedCount());
+        }
     }
 
     private static Schema branch(Schema schema) {
@@ -308,9 +346,32 @@ public final class ParquetCheckpointWriter {
         };
     }
 
+    /**
+     * The decimal a column of that declared type can hold, or {@code null} when the value has no
+     * DECIMAL representation at all (issue #215, review round 1).
+     *
+     * <p>The check belongs here rather than at the wire type: a non-finite value reaches a decimal
+     * column by more routes than {@code decimal_value}. Protobuf {@code double} carries
+     * {@code NaN} and {@code +/-Infinity} natively, and a {@code string_value} of {@code "NaN"} is
+     * equally possible, so guarding only the decimal token left both of those throwing out of the
+     * writer and costing the table its file -- the exact blast radius #215 exists to close.</p>
+     */
     private static BigDecimal toBigDecimal(Object java) {
         if (java instanceof BigDecimal bd) {
             return bd;
+        }
+        if (java instanceof Double d && !Double.isFinite(d)) {
+            return null;
+        }
+        if (java instanceof Float f && !Float.isFinite(f)) {
+            return null;
+        }
+        if (java instanceof CharSequence text) {
+            try {
+                return new BigDecimal(text.toString());
+            } catch (NumberFormatException e) {
+                return null;
+            }
         }
         return new BigDecimal(java.toString());
     }

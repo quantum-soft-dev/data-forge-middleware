@@ -136,7 +136,20 @@ public class DeltaSqlGenerationStrategy {
      */
     private JsonlChangeRecord mapRecord(ChangeRecord record, TableSchema schema, String tableName) {
         int lineNumber = (int) Math.min(record.getSeq(), Integer.MAX_VALUE);
-        warnNonFiniteDecimals(record, tableName);
+        reportUnrepresentableDecimals(record, tableName);
+        if (hasUnrepresentableKey(record)) {
+            // A key column this pipeline cannot represent addresses no row: rendered as SQL the
+            // WHERE clause becomes `col = NULL`, which is never true, so an UPDATE or DELETE would
+            // be emitted, applied, match nothing, and leave the Bit BI mirror silently diverged
+            // (issue #215, review round 1). Skipping is lossy in the same way -- but loudly, and
+            // without writing a statement that claims to have done something.
+            log.warn("Table '{}' seq {}: {} record skipped -- a key column holds a decimal this "
+                            + "pipeline cannot represent (NaN, +/-Infinity or a malformed token), so "
+                            + "its SQL would match no row",
+                    tableName, record.getSeq(), record.getOp());
+            meterRegistry.counter("sql.generation.delta.records.skipped.unrepresentable_key").increment();
+            return null;
+        }
         Map<String, Object> key = ValueMapper.toMap(record.getKeyMap());
 
         return switch (record.getOp()) {
@@ -190,14 +203,45 @@ public class DeltaSqlGenerationStrategy {
      * change: the rate lives on {@code delta.parquet.non-finite-decimals}, and the Parquet writers
      * log the per-table summary.
      */
-    private void warnNonFiniteDecimals(ChangeRecord record, String tableName) {
+    private boolean hasUnrepresentableKey(ChangeRecord record) {
+        for (com.bitbi.dfm.delta.grpc.v2.Value cell : record.getKeyMap().values()) {
+            if (ValueMapper.isUnrepresentable(cell)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A decimal cell this pipeline cannot store under its declared type is rendered as SQL NULL
+     * rather than aborting the batch's SQL (issue #215). PostgreSQL {@code numeric} holds
+     * {@code NaN} and {@code +/-Infinity}; {@code new BigDecimal} used to throw on all three, and
+     * the throw reached the queue rather than this row -- so one such cell cost Bit BI the whole
+     * batch.
+     *
+     * <p>Both maps are walked, not only {@code data}: a DELETE carries no data at all, so scanning
+     * one map logged nothing for exactly the records whose key is the interesting part (review
+     * round 1). DEBUG per cell because a CDC workload writing these produces one per change; the
+     * rate lives on {@code delta.parquet.unrepresentable-decimals} and the Parquet writers log the
+     * per-table summary.</p>
+     */
+    private void reportUnrepresentableDecimals(ChangeRecord record, String tableName) {
         if (!log.isDebugEnabled()) {
             return;
         }
-        for (Map.Entry<String, com.bitbi.dfm.delta.grpc.v2.Value> cell : record.getDataMap().entrySet()) {
+        debugUnrepresentable(record.getKeyMap(), tableName, record.getSeq(), "key");
+        debugUnrepresentable(record.getDataMap(), tableName, record.getSeq(), "data");
+    }
+
+    private void debugUnrepresentable(Map<String, com.bitbi.dfm.delta.grpc.v2.Value> cells,
+                                      String tableName, long seq, String where) {
+        for (Map.Entry<String, com.bitbi.dfm.delta.grpc.v2.Value> cell : cells.entrySet()) {
             if (ValueMapper.isNonFiniteDecimal(cell.getValue())) {
-                log.debug("Table {} column {} at seq {}: non-finite decimal rendered as SQL NULL",
-                        tableName, cell.getKey(), record.getSeq());
+                log.debug("Table {} {} column {} at seq {}: non-finite decimal rendered as SQL NULL",
+                        tableName, where, cell.getKey(), seq);
+            } else if (ValueMapper.isMalformedDecimal(cell.getValue())) {
+                log.debug("Table {} {} column {} at seq {}: malformed decimal token rendered as SQL NULL",
+                        tableName, where, cell.getKey(), seq);
             }
         }
     }

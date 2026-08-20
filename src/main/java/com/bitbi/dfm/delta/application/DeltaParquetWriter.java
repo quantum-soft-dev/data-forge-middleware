@@ -65,12 +65,12 @@ public final class DeltaParquetWriter {
      */
     public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
                                         long rowGroupBytes) {
-        return toDeltaParquet(tableName, tableSchema, records, rowGroupBytes, new AtomicLong());
+        return toDeltaParquet(tableName, tableSchema, records, rowGroupBytes, new DecimalDegradeTally());
     }
 
     /** As above, reporting the cells degraded to NULL (issue #215) into {@code nonFinite}. */
     public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
-                                        long rowGroupBytes, AtomicLong nonFinite) {
+                                        long rowGroupBytes, DecimalDegradeTally nonFinite) {
         List<Map<String, Value>> cellRows = new ArrayList<>(records.size());
         for (ChangeRecord change : records) {
             Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
@@ -98,7 +98,7 @@ public final class DeltaParquetWriter {
             }
             rows.add(row);
         }
-        warnNonFinite(tableName, nonFinite.get());
+        ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
         return ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
     }
 
@@ -118,7 +118,7 @@ public final class DeltaParquetWriter {
         Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
         Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
         AtomicLong rowCount = new AtomicLong();
-        AtomicLong nonFinite = new AtomicLong();
+        DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         AtomicLong previousSeq = new AtomicLong(Long.MIN_VALUE);
 
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
@@ -150,9 +150,9 @@ public final class DeltaParquetWriter {
         }
 
         try {
-            warnNonFinite(tableName, nonFinite.get());
+            ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
             return new FileWriteResult(rowCount.get(), Files.size(output), sha256(output),
-                    nonFinite.get());
+                    nonFinite);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to inspect Parquet file for table " + tableName, e);
         }
@@ -351,7 +351,7 @@ public final class DeltaParquetWriter {
     }
 
     private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, ChangeRecord change,
-                                          AtomicLong nonFinite) {
+                                          DecimalDegradeTally nonFinite) {
         GenericRecord row = new GenericData.Record(avro);
         row.put("_op", change.getOp().name());
         row.put("_seq", change.getSeq());
@@ -400,26 +400,13 @@ public final class DeltaParquetWriter {
         void forEach(Consumer<ChangeRecord> consumer);
     }
 
-    /**
-     * @param nonFiniteDecimals cells written NULL because the value is NaN or +/-Infinity, which
-     *                          Parquet DECIMAL cannot represent (issue #215)
-     */
-    /**
-     * One line per rendered table, not per cell: the workload that produces these writes them
-     * continuously (a PostgreSQL numeric column cycling through NaN / +/-Infinity), so a line per
-     * value would bury the log. The count and the table are what an operator acts on; the column is
-     * visible in the file as a NULL, and {@code delta.parquet.non-finite-decimals} carries the rate.
-     */
-    private static void warnNonFinite(String tableName, long cells) {
-        if (cells > 0) {
-            log.warn("Table {}: {} decimal cell(s) written as NULL -- the value is NaN or "
-                    + "+/-Infinity, which Parquet DECIMAL cannot represent (issue #215)",
-                    tableName, cells);
-        }
-    }
 
+    /**
+     * @param degradedDecimals cells written NULL because the value has no Parquet DECIMAL
+     *                         representation, split by reason (issue #215)
+     */
     public record FileWriteResult(long rowCount, long fileSize, String checksum,
-                                  long nonFiniteDecimals) {
+                                  DecimalDegradeTally degradedDecimals) {
     }
 
     /**
@@ -464,7 +451,7 @@ public final class DeltaParquetWriter {
         private final Schema avro;
         private final ParquetWriter<GenericRecord> writer;
         private long rowCount;
-        private final AtomicLong nonFinite = new AtomicLong();
+        private final DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         private long previousSeq = Long.MIN_VALUE;
 
         private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes,
@@ -498,9 +485,9 @@ public final class DeltaParquetWriter {
 
         private FileWriteResult result() {
             try {
-                warnNonFinite(tableName, nonFinite.get());
+                ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
                 return new FileWriteResult(rowCount, Files.size(request.output()), sha256(request.output()),
-                        nonFinite.get());
+                        nonFinite);
             } catch (IOException e) {
                 throw new UncheckedIOException("Failed to inspect Parquet file for table " + tableName, e);
             }

@@ -87,6 +87,43 @@ public final class ValueMapper {
         return unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf");
     }
 
+    /**
+     * Whether this value is a decimal token {@link BigDecimal} cannot parse and which is <em>not</em>
+     * one of PostgreSQL's non-finite spellings — i.e. a client sending nonsense (issue #215, review
+     * round 1).
+     *
+     * <p>Split from {@link #isNonFiniteDecimal(Value)} because the two want opposite responses: a
+     * non-finite value is legal at the source and this pipeline simply cannot store it, while a
+     * malformed one is a client defect somebody has to fix. Before #215 a malformed token threw and
+     * was therefore loud; degrading it to NULL without a signal of its own would have traded one
+     * defect for a quieter one.</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a decimal token that is neither parseable nor non-finite
+     */
+    public static boolean isMalformedDecimal(Value value) {
+        return value.getVCase() == Value.VCase.DECIMAL_VALUE
+                && !isNonFiniteToken(value.getDecimalValue())
+                && parseDecimal(value.getDecimalValue()) == null;
+    }
+
+    /**
+     * Whether this value was present on the wire but has no representation this pipeline can store,
+     * so {@link #toJava(Value)} degraded it to {@code null}.
+     *
+     * <p>The union of {@link #isNonFiniteDecimal(Value)} and {@link #isMalformedDecimal(Value)}, and
+     * the predicate a caller wants when the distinction between "absent", "SQL NULL" and "we lost
+     * it" decides correctness rather than reporting — the key columns of a CDC statement, where a
+     * degraded value silently produces a {@code WHERE col = NULL} that matches no row.</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a present decimal this pipeline cannot store
+     */
+    public static boolean isUnrepresentable(Value value) {
+        return value.getVCase() == Value.VCase.DECIMAL_VALUE
+                && parseDecimal(value.getDecimalValue()) == null;
+    }
+
     private static BigDecimal parseDecimal(String token) {
         try {
             return new BigDecimal(token);

@@ -98,6 +98,7 @@ public class DeltaMetrics {
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
     private final Counter nonFiniteDecimals;
+    private final Counter malformedDecimals;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
     private final Counter checkpointFrameTooLarge;
@@ -143,11 +144,8 @@ public class DeltaMetrics {
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
-        this.nonFiniteDecimals = Counter.builder("delta.parquet.non-finite-decimals")
-                .description("Decimal cells degraded to NULL because the value is NaN or +/-Infinity, "
-                        + "which Parquet DECIMAL cannot represent (issue #215)")
-                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
-        this.nonFiniteDecimals.increment(0.0);
+        this.nonFiniteDecimals = unrepresentableDecimals(registry, "non_finite");
+        this.malformedDecimals = unrepresentableDecimals(registry, "malformed");
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
@@ -606,24 +604,41 @@ public class DeltaMetrics {
         egressSegments.increment();
     }
 
+    private static Counter unrepresentableDecimals(MeterRegistry registry, String reason) {
+        Counter counter = Counter.builder("delta.parquet.unrepresentable-decimals")
+                .description("Decimal cells written as NULL because the value has no Parquet DECIMAL "
+                        + "representation: non_finite = NaN or +/-Infinity (legal in PostgreSQL), "
+                        + "malformed = a token BigDecimal cannot parse (issue #215)")
+                .tag("reason", reason)
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        counter.increment(0.0);
+        return counter;
+    }
+
     /**
-     * Decimal cells that could not be stored under their declared type and were written as NULL
-     * (issue #215): PostgreSQL {@code numeric} holds {@code NaN} and {@code +/-Infinity}, and
-     * Parquet DECIMAL -- a scaled integer -- has no representation for any of them.
+     * Decimal cells written as NULL because the value has no Parquet DECIMAL representation
+     * (issue #215).
      *
-     * <p>Registered at zero, so an alert can predate the first occurrence. Read it as <b>cells</b>,
-     * not rows or files: one row with two such columns counts twice, and the same source cell is
-     * counted again by each consumer that renders it (per-segment egress, the completed-batch
-     * artifact, the nightly checkpoint, Bit BI SQL), because each writes a separate artifact in
-     * which that cell is separately NULL. A steady rate is the client legitimately holding values
-     * this pipeline cannot store -- not a fault to repair here -- and the log line beside it names
-     * the table and column.</p>
+     * <p>Both series are registered at zero, so an alert can predate the first occurrence, and the
+     * {@code reason} tag separates two conditions with opposite remedies: {@code non_finite} is
+     * PostgreSQL {@code numeric} holding {@code NaN} or {@code +/-Infinity}, which is legal at the
+     * source and simply has no DECIMAL encoding — nothing to repair here — while {@code malformed}
+     * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix.</p>
      *
-     * @param cells how many cells were degraded in one render; ignored when zero
+     * <p>Read it as <b>cells</b>, not rows or files: one row with two such columns counts twice,
+     * and the same source cell is counted again by each <em>Parquet</em> consumer that renders it
+     * (per-segment egress, the completed-batch artifact, the nightly checkpoint), because each
+     * writes a separate artifact in which that cell is separately NULL. The Bit BI SQL path is
+     * <b>not</b> a feeder — it logs per cell at DEBUG instead — so this series undercounts the total
+     * number of places one source cell was degraded. The WARN beside it names the table and the
+     * count, not the column; the column is visible in the artifact as a NULL.</p>
+     *
+     * @param cells     how many cells were degraded in one render; ignored when zero
+     * @param malformed {@code true} to count them as unparseable rather than non-finite
      */
-    public void nonFiniteDecimalsDegraded(long cells) {
+    public void unrepresentableDecimalsDegraded(long cells, boolean malformed) {
         if (cells > 0) {
-            nonFiniteDecimals.increment(cells);
+            (malformed ? malformedDecimals : nonFiniteDecimals).increment(cells);
         }
     }
 }

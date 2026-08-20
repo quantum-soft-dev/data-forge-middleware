@@ -114,7 +114,7 @@ public class DeltaEgressService {
                 return;
             }
             byte[] parquet;
-            java.util.concurrent.atomic.AtomicLong nonFinite = new java.util.concurrent.atomic.AtomicLong();
+            DecimalDegradeTally nonFinite = new DecimalDegradeTally();
             try {
                 parquet = metrics.timeEgressPhase("write",
                         () -> DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords,
@@ -130,7 +130,8 @@ public class DeltaEgressService {
                         table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
                 return;
             }
-            metrics.nonFiniteDecimalsDegraded(nonFinite.get());
+            metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
+            metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
             metrics.timeEgressPhase("upload", () -> storage.uploadDelta(
                     segment.getSiteId(), table, segment.getFirstSeq(),
                     segment.getLastSeq(), parquet));

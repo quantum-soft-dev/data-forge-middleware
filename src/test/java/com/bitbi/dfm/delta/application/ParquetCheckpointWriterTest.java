@@ -70,11 +70,69 @@ class ParquetCheckpointWriterTest {
         rows.add(finite);
 
         Path out = tempDir.resolve("non-finite.parquet");
-        long degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema, rows,
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema, rows,
                 Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
 
-        assertEquals(3L, degraded, "one per non-finite cell, and only those");
+        assertEquals(3L, degraded.nonFiniteCount(), "one per non-finite cell, and only those");
+        assertEquals(0L, degraded.malformedCount(), "a legal source value is not a client defect");
         assertTrue(Files.size(out) > 0, "the file is written rather than the table skipped");
+    }
+
+    /**
+     * The same logical value reaches a decimal column by more routes than {@code decimal_value}:
+     * protobuf {@code double} carries {@code NaN} and {@code ±Infinity} natively, and a
+     * {@code string_value} of {@code "NaN"} is equally possible. Guarding only the decimal token
+     * left both of those throwing out of the writer and costing the table its file — #215's blast
+     * radius, reached by a door the first fix did not close (review round 1).
+     */
+    @Test
+    void nonFiniteReachingADecimalColumnByAnotherWireTypeIsAlsoDegraded() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("numeric_edge", "numeric(10,2)", true)),
+                List.of("id"), List.of());
+
+        Map<String, Value> viaDouble = new LinkedHashMap<>();
+        viaDouble.put("id", intVal(1));
+        viaDouble.put("numeric_edge", dblVal(Double.NaN));
+        Map<String, Value> viaString = new LinkedHashMap<>();
+        viaString.put("id", intVal(2));
+        viaString.put("numeric_edge", strVal("-Infinity"));
+
+        Path out = tempDir.resolve("cross-wire.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema,
+                List.of(viaDouble, viaString), Long.MAX_VALUE, ROW_GROUP_BYTES,
+                TestScratchLeases.unbounded());
+
+        assertEquals(2L, degraded.nonFiniteCount() + degraded.malformedCount(),
+                "both wire shapes degrade rather than throwing");
+        assertTrue(Files.size(out) > 0, "the file is written rather than the table skipped");
+    }
+
+    /**
+     * A token {@code BigDecimal} cannot parse at all is a client defect, not a value this pipeline
+     * cannot store, and the two are counted apart because their remedies differ. Before #215 it
+     * threw and was therefore loud; degrading it silently would have traded one defect for a
+     * quieter one (review round 1).
+     */
+    @Test
+    void aMalformedDecimalIsCountedApartFromANonFiniteOne() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("numeric_edge", "numeric(10,2)", true)),
+                List.of("id"), List.of());
+
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("numeric_edge", decVal("12,50"));
+
+        Path out = tempDir.resolve("malformed.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(out, "t", schema,
+                List.of(row), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.malformedCount(), "counted as a client defect");
+        assertEquals(0L, degraded.nonFiniteCount(), "and not as a legal-but-unstorable value");
+        assertTrue(Files.size(out) > 0);
     }
 
     @Test

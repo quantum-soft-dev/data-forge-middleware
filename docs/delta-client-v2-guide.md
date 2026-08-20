@@ -1103,13 +1103,26 @@ them, so the cell is written **NULL** — under the column's declared type there
 put it.
 
 The loss is reported rather than silent. Each rendered table logs one WARN naming the table and how
-many cells it degraded, and `delta.parquet.non-finite-decimals` carries the rate. Read that series
-as **cells, not rows or files**: a row with two such columns counts twice, and the same source cell
-is counted again by every consumer that renders it — per-segment egress, the completed-batch
-artifact, the nightly checkpoint — because each writes a separate artifact in which that cell is
-separately NULL. A steady rate is the client legitimately holding values this pipeline cannot store,
-not a fault to repair here; the Bit BI SQL path renders the same cell as SQL NULL and logs it per
-cell at DEBUG.
+many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the rate, tagged by
+`reason`:
+
+- **`non_finite`** — `NaN` or `±Infinity`. Legal at the source; nothing to repair in this pipeline.
+- **`malformed`** — a token `BigDecimal` cannot parse at all. A client defect somebody has to fix.
+  Before this change it threw and was therefore loud, so it keeps a signal of its own rather than
+  disappearing into the same NULL as the legal case.
+
+Read the series as **cells, not rows or files**: a row with two such columns counts twice, and the
+same source cell is counted again by every *Parquet* consumer that renders it — per-segment egress,
+the completed-batch artifact, the nightly checkpoint — because each writes a separate artifact in
+which that cell is separately NULL. The Bit BI SQL path is **not** a feeder: it renders the same
+cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total number of places
+one source cell was degraded.
+
+**A key column is the exception, and it is not degraded — the record is skipped.** A value that
+cannot be represented cannot address a row, so the WHERE clause would render as `col = NULL`, which
+is never true: the statement would be emitted, applied, match nothing, and leave the mirror
+silently diverged. Such a record is dropped with a WARN and
+`sql.generation.delta.records.skipped.unrepresentable_key`.
 
 **What this does not give you:** `NaN` is not `NULL`, so a row-for-row comparison of source against
 server will still differ on those cells. What changed (issue #215) is the blast radius — before, one
@@ -2303,7 +2316,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
-| `delta.parquet.non-finite-decimals` | `delta_parquet_non_finite_decimals_total` |
+| `delta.parquet.unrepresentable-decimals{reason=non_finite\|malformed}` | `delta_parquet_unrepresentable_decimals_total{reason=...}` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:

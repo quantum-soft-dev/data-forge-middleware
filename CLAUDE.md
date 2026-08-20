@@ -475,8 +475,8 @@ pages/{feature}/            # Route pages
   degradation is made loud in three registers, each sized to its own noise floor: one WARN per
   rendered table naming the table and the count (the workload that produces these writes one every
   two seconds, so a line per cell would bury the log), per-cell DEBUG in the SQL strategy where the
-  column and seq are known, and **`delta.parquet.non-finite-decimals`**, registered at zero so an
-  alert predates the first occurrence. Read that series as **cells, not rows or files**: a row with
+  column and seq are known, and **`delta.parquet.unrepresentable-decimals{reason=non_finite|malformed}`**, registered at zero so
+  an alert predates the first occurrence. Read that series as **cells, not rows or files**: a row with
   two such columns counts twice, and the same source cell is counted again by each consumer that
   renders it, because each writes a separate artifact in which it is separately NULL.
   `isNonFiniteDecimal` is deliberately **narrower** than "`toJava` returned null" — a real SQL NULL,

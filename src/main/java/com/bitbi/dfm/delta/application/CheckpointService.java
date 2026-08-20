@@ -987,12 +987,13 @@ public class CheckpointService {
                 // Captured rather than returned through timeCheckpointPhase so the phase keeps
                 // being timed as a Runnable: which overload times a phase is incidental to this
                 // change, and CheckpointServiceTest pins the shape as part of the #111 phase guard.
-                java.util.concurrent.atomic.AtomicLong nonFinite = new java.util.concurrent.atomic.AtomicLong();
+                java.util.concurrent.atomic.AtomicReference<DecimalDegradeTally> nonFinite = new java.util.concurrent.atomic.AtomicReference<>();
                 metrics.timeCheckpointPhase("parquet", () ->
                         nonFinite.set(ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
                                 dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
                                 lease)));
-                metrics.nonFiniteDecimalsDegraded(nonFinite.get());
+                metrics.unrepresentableDecimalsDegraded(nonFinite.get().nonFiniteCount(), false);
+                metrics.unrepresentableDecimalsDegraded(nonFinite.get().malformedCount(), true);
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
