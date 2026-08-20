@@ -11,6 +11,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
@@ -28,6 +29,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * T3.5b — changelog retention prunes segments at/below the durable checkpoint (DB row + S3 object),
  * honoring the audit window. With the window set to 0, every below-checkpoint segment is pruned; a
  * subsequent build still reconstructs correctly because it seeds from the checkpoint frame (T3.5a).
+ *
+ * <p>Since issue #212 "prunable" additionally requires the segment's queue work to be done:
+ * {@code plugin_sql_at} and {@code egress_at} both set. The fixture path
+ * ({@code ChangelogSegmentService.persist}) leaves both {@code NULL} — pending — so each method
+ * marks its segments processed before expecting a prune, and the hold-back method relies on
+ * exactly that pending state surviving.</p>
  */
 @TestPropertySource(properties = "delta.retention.audit-window-segments=0")
 class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
@@ -54,6 +61,9 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private CheckpointRepository checkpointRepository;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     @Test
     void prunesBelowCheckpointSegmentsAndKeepsReconstructionCorrect() {
         // Segment 1 (seq 1..2), then a checkpoint@2 (frame@2 written) — segment 1 is now below checkpoint.
@@ -65,6 +75,7 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         ChangelogSegment seg1 = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
         String seg1Key = seg1.getS3Key();
         assertTrue(segmentStorage.exists(seg1Key), "segment object exists before prune");
+        markProcessed(seg1);
 
         int pruned = retentionService.prune(SITE);
 
@@ -81,6 +92,55 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         Checkpoint cp = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertEquals(4L, cp.getSeq());
         assertEquals(2L, cp.getRowCount(), "Ann (frame) + Cleo (delta); Bob deleted");
+    }
+
+    /**
+     * Issue #212 — a below-checkpoint segment whose plugin SQL or egress was never generated
+     * survives the prune (and is counted), until its queues drain it; then it is pruned as before.
+     *
+     * <p>The counters are read as deltas: the registry is shared with every other class of this
+     * cached context, so absolute values belong to nobody (#175's discipline).</p>
+     */
+    @Test
+    void holdsBackAPendingSegmentPastTheAuditWindowUntilItsWorkIsDone() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        checkpointService.buildCheckpoint(SITE);
+
+        ChangelogSegment pending = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
+        String pendingKey = pending.getS3Key();
+        double sqlBefore = heldBack("pending_plugin_sql");
+        double egressBefore = heldBack("pending_egress");
+
+        int held = retentionService.prune(SITE);
+
+        assertEquals(0, held, "a segment with pending queue work is not prunable (issue #212)");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent(),
+                "the pending segment's row survives the prune");
+        assertTrue(segmentStorage.exists(pendingKey), "the pending segment's S3 object survives the prune");
+        assertEquals(1.0, heldBack("pending_plugin_sql") - sqlBefore,
+                "the hold-back is counted for the pending plugin SQL");
+        assertEquals(1.0, heldBack("pending_egress") - egressBefore,
+                "the hold-back is counted for the pending egress");
+
+        // Once both queues have drained the segment, retention reclaims it exactly as before.
+        markProcessed(pending);
+        int pruned = retentionService.prune(SITE);
+
+        assertEquals(1, pruned, "the same segment is pruned once its work is done");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
+        assertFalse(segmentStorage.exists(pendingKey), "segment S3 object pruned");
+    }
+
+    private double heldBack(String reason) {
+        return meterRegistry.get("delta.retention.segments.held-back")
+                .tag("reason", reason).counter().count();
+    }
+
+    private void markProcessed(ChangelogSegment segment) {
+        segment.markEgressed();
+        segment.markPluginSqlProcessed();
+        segmentRepository.save(segment);
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {

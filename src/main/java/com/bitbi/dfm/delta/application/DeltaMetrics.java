@@ -55,6 +55,11 @@ import java.util.function.Supplier;
  *       deleted or could not delete, tagged {@code prefix=segments|checkpoints} (issue #158).
  *       Alert on {@code candidates}: it is the only one of the three that moves while
  *       {@code delta.s3-orphan.dry-run} is on, which is the shipped default</li>
+ *   <li>{@code delta.retention.segments.held-back} — below-checkpoint segments retention would
+ *       have pruned but held back because their queue work is still pending, tagged
+ *       {@code reason=pending_plugin_sql|pending_egress} (issue #212). Registered at zero so an
+ *       alert can predate the first occurrence. A census, not an arrival rate: the same held-back
+ *       segment is counted again on every pass until its queue drains it</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -83,6 +88,10 @@ public class DeltaMetrics {
     public static final String ORPHAN_PREFIX_SEGMENTS = "segments";
     /** Tag value for {@code checkpoints/{siteId}/}. */
     public static final String ORPHAN_PREFIX_CHECKPOINTS = "checkpoints";
+    /** Held back because {@code plugin_sql_at IS NULL} — the delta-SQL queue still owes the segment. */
+    public static final String RETENTION_PENDING_PLUGIN_SQL = "pending_plugin_sql";
+    /** Held back because {@code egress_at IS NULL} — the delta-Parquet egress queue still owes it. */
+    public static final String RETENTION_PENDING_EGRESS = "pending_egress";
     static final String PHASE_TOTAL = "total";
     static final Set<String> BATCH_PARQUET_PHASES =
             Set.of("download", "decode", "decimal_scan", "write", "upload", PHASE_TOTAL);
@@ -118,6 +127,8 @@ public class DeltaMetrics {
     private final Counter checkpointOrphansReclaimed;
     private final Counter segmentOrphanDeletesFailed;
     private final Counter checkpointOrphanDeletesFailed;
+    private final Counter retentionHeldBackPluginSql;
+    private final Counter retentionHeldBackEgress;
     private final Map<String, Timer> batchParquetPhases;
     private final Map<String, Timer> egressPhases;
     private final Map<String, Timer> checkpointPhases;
@@ -175,6 +186,8 @@ public class DeltaMetrics {
         this.checkpointOrphansReclaimed = orphansReclaimed(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.segmentOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_SEGMENTS);
         this.checkpointOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_CHECKPOINTS);
+        this.retentionHeldBackPluginSql = retentionHeldBack(registry, RETENTION_PENDING_PLUGIN_SQL);
+        this.retentionHeldBackEgress = retentionHeldBack(registry, RETENTION_PENDING_EGRESS);
         this.batchParquetPhases = phaseTimers(registry, "delta.batch-parquet.duration",
                 "Time spent in one completed-batch Parquet phase", BATCH_PARQUET_PHASES);
         this.egressPhases = phaseTimers(registry, "delta.egress.duration",
@@ -225,6 +238,13 @@ public class DeltaMetrics {
         return Counter.builder("delta.s3-orphan.delete-failed")
                 .description("Unreferenced S3 objects the bucket would not delete, by prefix")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag(ORPHAN_PREFIX_TAG, prefix).register(registry);
+    }
+
+    private static Counter retentionHeldBack(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.retention.segments.held-back")
+                .description("Below-checkpoint segments retention would have pruned but held back "
+                        + "because their queue work is still pending, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
     }
 
     private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
@@ -448,6 +468,40 @@ public class DeltaMetrics {
             case ORPHAN_PREFIX_CHECKPOINTS -> checkpoints;
             default -> throw new IllegalArgumentException("Unknown prefix: " + prefix);
         };
+    }
+
+    /**
+     * Below-checkpoint segments the retention pass would have pruned but held back because their
+     * queue work is still pending (issue #212).
+     *
+     * <p>A segment whose {@code plugin_sql_at} or {@code egress_at} is {@code NULL} is the durable
+     * entry of a work queue, so deleting it loses that batch's SQL or delta Parquet permanently —
+     * retention skips it and this series is how the resulting backlog is seen before it is large.
+     * Only segments the audit window would actually have pruned are counted: a pending segment
+     * still inside the window is retained by the window, not by the predicate.</p>
+     *
+     * <p>Read each {@code reason} series independently — "is this queue stalling retention": a
+     * segment owing <em>both</em> counts on both, so the sum over reasons can exceed the number of
+     * held-back segments (the per-consumer honesty of
+     * {@code delta.parquet.unrepresentable-decimals}). And read it as a <b>census, not an arrival
+     * rate</b>: nothing removes a held-back segment between passes except its own queue draining
+     * it, so the same segment is counted again on every nightly pass and a rate alert would read a
+     * static backlog as that many new stalls a day (the {@code delta.s3-orphan.candidates}
+     * caveat). Both series are registered at zero, so an alert can predate the first
+     * occurrence.</p>
+     *
+     * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
+     * @param count  how many segments were held back for that reason; ignored when zero
+     */
+    public void retentionSegmentsHeldBack(String reason, long count) {
+        Counter counter = switch (reason) {
+            case RETENTION_PENDING_PLUGIN_SQL -> retentionHeldBackPluginSql;
+            case RETENTION_PENDING_EGRESS -> retentionHeldBackEgress;
+            default -> throw new IllegalArgumentException("Unknown reason: " + reason);
+        };
+        if (count > 0) {
+            counter.increment(count);
+        }
     }
 
     /** A claim was taken over because its build lease had expired. */
