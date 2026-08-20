@@ -60,6 +60,33 @@ export interface RetryableAxiosConfig extends InternalAxiosRequestConfig {
 }
 
 /**
+ * Mark a rejection as already considered by a toast interceptor.
+ *
+ * Axios feeds a rejected promise from one response interceptor into the next,
+ * and a successful refresh retries via `apiClient.request`, which re-enters
+ * the whole chain. Without a mark, the same failure toasts twice — once on
+ * the inner request and once on the outer rejection (issue #239 route 4).
+ * The 401 interceptor also marks a failed refresh so the global handler does
+ * not fill its silence (expired-token logout) or stack a network toast on a
+ * named refresh failure (routes 2–3).
+ */
+export function markErrorToastHandled(error: unknown): void {
+  if (typeof error === 'object' && error !== null) {
+    const handled = error as { errorToastHandled?: boolean }
+    handled.errorToastHandled = true
+  }
+}
+
+/** Whether {@link markErrorToastHandled} has already run for this rejection. */
+export function isErrorToastHandled(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { errorToastHandled?: boolean }).errorToastHandled === true
+  )
+}
+
+/**
  * Auth0 error object structure.
  * Thrown by getAccessTokenSilently when refresh fails.
  */

@@ -259,6 +259,16 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- error-toast-401: The global error toast handler no longer speaks out of turn on
+  every 401 path (issue #239, the four routes #225 documented rather than closed).
+  A failed refresh rejects the original Axios 401, not the Auth0 error
+  (`error.cause`), so `.response` and `.config` survive and `suppressErrorToast`
+  holds. The 401 interceptor owns the refresh-attempt taxonomy (named reason, or
+  silence + logout on expired token) and marks the rejection; leftover 401s
+  (refresh not initialized, or already retried) toast "Your session is no longer
+  valid. Please sign in again." A successful refresh still retries via
+  `apiClient.request`, but the inner pass toasts once and the outer pass sees the
+  mark. Frontend only; no `App.tsx` change. See `CLAUDE.md`.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the cell NULL and
   returns a tally; `toAvroSchema` still mapped a `NOT NULL` column to a REQUIRED Parquet field, so

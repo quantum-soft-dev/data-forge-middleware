@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios'
+import { toast } from 'sonner'
 import { apiClient } from './client'
 import {
   setupInterceptors,
@@ -7,11 +8,20 @@ import {
   clearResponseInterceptor,
 } from './interceptors'
 import * as tokenRefresh from './token-refresh'
+import { isErrorToastHandled } from './types'
+import type { Auth0Error, RetryableAxiosConfig } from './types'
 
 // Mock token-refresh module
 vi.mock('./token-refresh', () => ({
   refreshTokenWithLock: vi.fn(),
   isTokenRefreshInitialized: vi.fn(() => true),
+}))
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
 }))
 
 // Mock logger to reduce noise
@@ -27,9 +37,11 @@ vi.mock('../lib/logger', () => ({
 describe('interceptors - response interceptor', () => {
   const mockTokenGetter = vi.fn()
   const mockRefreshTokenWithLock = vi.mocked(tokenRefresh.refreshTokenWithLock)
+  const mockIsTokenRefreshInitialized = vi.mocked(tokenRefresh.isTokenRefreshInitialized)
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockIsTokenRefreshInitialized.mockReturnValue(true)
     // Setup request interceptor
     setupInterceptors(mockTokenGetter)
   })
@@ -181,6 +193,73 @@ describe('interceptors - response interceptor', () => {
         await expect(ourInterceptor.rejected(error)).rejects.toBeDefined()
         expect(mockRefreshTokenWithLock).not.toHaveBeenCalled()
       }
+    })
+  })
+
+  /**
+   * A failed refresh used to reject the Auth0 error, which has no `.response`
+   * and no `.config`. The global toast handler then read it as a network
+   * failure and lost `suppressErrorToast` (issue #239 routes 2–3). The
+   * interceptor now rejects the original 401, marks it handled, and honours
+   * the opt-out on its own toasts.
+   */
+  describe('failed refresh rejection (issue #239)', () => {
+    async function rejectedOf(error: AxiosError): Promise<unknown> {
+      setupResponseInterceptor()
+      const interceptors = (apiClient.interceptors.response as unknown as {
+        handlers: Array<{ rejected?: (error: AxiosError) => Promise<unknown> }>
+      }).handlers
+      const ourInterceptor = interceptors[interceptors.length - 1]
+      if (!ourInterceptor?.rejected) {
+        throw new Error('401 interceptor was not registered')
+      }
+      return ourInterceptor.rejected(error)
+    }
+
+    function auth0Error(code: string): Auth0Error {
+      const err = new Error(code) as Auth0Error
+      err.error = code
+      return err
+    }
+
+    it('rejects the original 401, not the Auth0 error, so .response and .config survive', async () => {
+      const original = createAxiosError(401)
+      const refreshErr = auth0Error('invalid_grant')
+      mockRefreshTokenWithLock.mockRejectedValueOnce(refreshErr)
+
+      await expect(rejectedOf(original)).rejects.toBe(original)
+      expect(original.response?.status).toBe(401)
+      expect(original.config).toBeDefined()
+      expect(original.cause).toBe(refreshErr)
+      expect(isErrorToastHandled(original)).toBe(true)
+      expect(toast.error).not.toHaveBeenCalled()
+    })
+
+    it('toasts a named refresh failure once and still rejects the original 401', async () => {
+      const original = createAxiosError(401)
+      mockRefreshTokenWithLock.mockRejectedValueOnce(new Error('boom'))
+
+      await expect(rejectedOf(original)).rejects.toBe(original)
+      expect(toast.error).toHaveBeenCalledTimes(1)
+      expect(toast.error).toHaveBeenCalledWith('Failed to refresh session. Please try again.')
+      expect(isErrorToastHandled(original)).toBe(true)
+    })
+
+    it('honours suppressErrorToast on a named refresh failure', async () => {
+      const original = createAxiosError(401, { suppressErrorToast: true } as Partial<RetryableAxiosConfig>)
+      mockRefreshTokenWithLock.mockRejectedValueOnce(new Error('boom'))
+
+      await expect(rejectedOf(original)).rejects.toBe(original)
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(isErrorToastHandled(original)).toBe(true)
+    })
+
+    it('honours suppressErrorToast on a network error during refresh', async () => {
+      const original = createAxiosError(401, { suppressErrorToast: true } as Partial<RetryableAxiosConfig>)
+      mockRefreshTokenWithLock.mockRejectedValueOnce(new Error('Network Error'))
+
+      await expect(rejectedOf(original)).rejects.toBe(original)
+      expect(toast.error).not.toHaveBeenCalled()
     })
   })
 })

@@ -511,6 +511,35 @@ pages/{feature}/            # Route pages
 - Migrations current at **V54**; next migration is **V55** (do not reuse numbers)
 
 ## Recent Changes
+- error-toast-401: The global error toast handler no longer speaks out of turn on
+  every 401 path (issue #239, the four routes #225 documented rather than closed).
+  None of them is about interceptor registration count. **The decision the ticket
+  asked for:** a failed refresh rejects the original Axios 401, not the Auth0
+  error, so `.response` and `.config` survive (`suppressErrorToast`,
+  `getServerErrorStatus`); the Auth0 error is the recovery attempt and travels as
+  `error.cause`. Rejecting the Auth0 error looked cheaper and would have closed
+  routes 2–3 together, but it changes what every downstream caller receives from a
+  failed refresh into something that is neither a 401 nor their request.
+  **What a failed refresh says, and who says it.** Refresh succeeds and the retry
+  succeeds → no toast (already pinned by #225). Refresh succeeds and the retry
+  fails → one toast from the inner pass; both interceptors mark the rejection so
+  the outer chain (re-entered by `apiClient.request`) stays quiet. Refresh fails
+  for a named reason → that reason's toast alone (network during refresh, Auth0
+  unavailable, or "Failed to refresh session"), owned by `interceptors.ts`, which
+  now honours `suppressErrorToast` on its own toasts. Refresh fails on the
+  expired-refresh-token branch → silence, so the logout redirect stays quiet, and
+  the mark stops this handler filling that silence with "check your connection".
+  Refresh not initialized / already retried → one leftover-401 toast, chosen
+  deliberately: "Your session is no longer valid. Please sign in again." A 401 is
+  never a network error and never the generic unexpected-error default. Tests
+  first over all four routes; `error-handler.test.ts` already wired
+  `setupResponseInterceptor` beside the handler. No `App.tsx` change (registration
+  order was already correct). Frontend only: no backend, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or route change. The "exactly one
+  toast" claim in `docs/delta-client-v2-guide.md` is about download pills whose
+  presign requests suppress the global toast, so it was true throughout and stays
+  true — and `suppressErrorToast` now actually holds on the 401 path those
+  callers can also hit.
 - notnull-decimal-snapshot: A non-finite or malformed decimal in a `NOT NULL` column no longer costs
   the table its checkpoint snapshot (issue #237, residue of #215). #215 writes the unrepresentable
   cell as NULL and returns a tally so the WARN and
