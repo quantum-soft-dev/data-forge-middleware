@@ -15,7 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * T4.2a — the PG-type → Avro/Parquet schema mapper turns a site's stored {@code site_schemas}
  * table definition into a typed Avro record: scalar types map to the matching Avro type/logical type
- * and nullable columns become unions. This is the typing the Parquet egress (T4.2b) writes against.
+ * and every column is a nullable union, the declared constraint notwithstanding (issue #237).
+ * This is the typing the Parquet writers (T4.2b / T8) write against.
  */
 class ParquetSchemaMapperTest {
 
@@ -63,8 +64,9 @@ class ParquetSchemaMapperTest {
         assertEquals(Schema.Type.BYTES, branch(avro, "blob").getType());
     }
 
+    /** Every checkpoint column is a nullable union, {@code NOT NULL} included. */
     @Test
-    void nullableColumnsBecomeUnionWithNull() {
+    void everyColumnBecomesUnionWithNullWhateverTheDeclaredConstraint() {
         TableSchema schema = new TableSchema(List.of(
                 col("id", "bigint", false),
                 col("name", "varchar(50)", true)),
@@ -72,15 +74,46 @@ class ParquetSchemaMapperTest {
 
         Schema avro = ParquetSchemaMapper.toAvroSchema("t", schema);
 
-        Schema idField = avro.getField("id").schema();
-        assertEquals(Schema.Type.LONG, idField.getType(), "non-null column is not a union");
+        for (String field : List.of("id", "name")) {
+            Schema fieldSchema = avro.getField(field).schema();
+            assertEquals(Schema.Type.UNION, fieldSchema.getType(), field + " is a union");
+            assertTrue(fieldSchema.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL),
+                    field + " union contains null");
+            assertEquals(Schema.Type.NULL, fieldSchema.getTypes().get(0).getType(),
+                    field + " unions null first, so the null default is legal");
+            assertEquals(org.apache.avro.JsonProperties.NULL_VALUE, avro.getField(field).defaultVal(),
+                    field + " defaults to null");
+        }
 
-        Schema nameField = avro.getField("name").schema();
-        assertEquals(Schema.Type.UNION, nameField.getType(), "nullable column is a union");
-        assertTrue(nameField.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL),
-                "union contains null");
-        assertTrue(nameField.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.STRING),
-                "union contains the value type");
+        assertEquals(Schema.Type.LONG, branch(avro, "id").getType(), "the value branch keeps the declared type");
+        assertEquals(Schema.Type.STRING, branch(avro, "name").getType());
+    }
+
+    /**
+     * Declared columns share {@code nullableColumn}; this comparison fails if the two artifacts
+     * fork again.
+     */
+    @Test
+    void checkpointAndDeltaSchemasAgreeThatEveryDeclaredColumnIsANullableUnion() {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(12,2)", false),
+                col("amount", "numeric", false),
+                col("name", "varchar(50)", true)),
+                List.of("id"), List.of());
+
+        Schema checkpoint = ParquetSchemaMapper.toAvroSchema("t", schema);
+        Schema delta = ParquetSchemaMapper.toDeltaAvroSchema("t", schema);
+
+        for (String field : List.of("id", "price", "amount", "name")) {
+            assertEquals(checkpoint.getField(field).schema(), delta.getField(field).schema(),
+                    field + " must be the same nullable union in both artifacts");
+            assertEquals(org.apache.avro.JsonProperties.NULL_VALUE, checkpoint.getField(field).defaultVal());
+            assertEquals(org.apache.avro.JsonProperties.NULL_VALUE, delta.getField(field).defaultVal());
+        }
+        assertEquals(Schema.Type.STRING, delta.getField("_op").schema().getType(),
+                "service columns stay required: a delta row always has an op");
+        assertEquals(Schema.Type.LONG, delta.getField("_seq").schema().getType());
     }
 
     @Test

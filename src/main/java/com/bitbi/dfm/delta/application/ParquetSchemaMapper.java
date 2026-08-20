@@ -13,10 +13,10 @@ import java.util.Locale;
  * Maps a site's stored PostgreSQL table schema ({@code site_schemas}) to a typed Avro record schema
  * for Parquet egress (Delta Client v2 — 022, Task 4).
  *
- * <p>Scalar PG types map to the matching Avro type / logical type; nullable columns become a
- * {@code [null, T]} union with a null default. Unknown types fall back to {@code string} (lossless,
- * since values are also carried as strings). The Avro schema is the typing the Parquet writer (T4.2b)
- * and Power BI read against.</p>
+ * <p>Scalar PG types map to the matching Avro type / logical type; every declared column becomes a
+ * {@code [null, T]} union with a null default, whatever its declared constraint
+ * ({@link #toAvroSchema}). Unknown types fall back to {@code string} (lossless, since values are also
+ * carried as strings). The Avro schema is the typing the Parquet writers and Power BI read against.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -29,7 +29,13 @@ public final class ParquetSchemaMapper {
     }
 
     /**
-     * Build an Avro record schema for a table from its column definitions.
+     * Build an Avro record schema for a checkpoint table snapshot.
+     *
+     * <p>Every column is a {@code [null, T]} union with a null default, a {@code NOT NULL}
+     * declaration notwithstanding. This pipeline cannot promise a non-null cell: a non-finite
+     * or malformed decimal is written NULL, and a folded {@code UPDATE} with no prior
+     * {@code INSERT} can omit a declared column. A REQUIRED field turns either into the loss of
+     * the table's snapshot (issue #237).</p>
      *
      * @param tableName   table name (a valid PG / Avro identifier)
      * @param tableSchema the stored schema
@@ -38,22 +44,16 @@ public final class ParquetSchemaMapper {
     public static Schema toAvroSchema(String tableName, TableSchema tableSchema) {
         List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size());
         for (ColumnDefinition column : tableSchema.columns()) {
-            Schema valueSchema = avroType(column.type());
-            if (column.nullable()) {
-                Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), valueSchema);
-                fields.add(new Schema.Field(column.name(), union, null, Schema.Field.NULL_DEFAULT_VALUE));
-            } else {
-                fields.add(new Schema.Field(column.name(), valueSchema, null, null));
-            }
+            fields.add(nullableColumn(column));
         }
         return Schema.createRecord(tableName, null, NAMESPACE, false, fields);
     }
 
     /**
-     * Build the Avro record schema for a <b>delta</b> Parquet file (Task 8): non-null {@code _op}
-     * (INSERT/UPDATE/DELETE) and {@code _seq} service columns first, then every declared column —
-     * all forced nullable regardless of the declared constraint, because a keyed DELETE carries
-     * only its key columns and a keyed UPDATE only its after-image.
+     * Build the Avro record schema for a delta Parquet file: non-null {@code _op} and {@code _seq}
+     * first, then every declared column as a nullable union via {@link #nullableColumn} (shared
+     * with {@link #toAvroSchema}). A keyed DELETE carries only its key columns and a keyed UPDATE
+     * only its after-image.
      *
      * @param tableName   table name (a valid PG / Avro identifier)
      * @param tableSchema the stored schema
@@ -70,10 +70,18 @@ public final class ParquetSchemaMapper {
         Schema nullableString = Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.STRING));
         fields.add(new Schema.Field("_changed", nullableString, null, Schema.Field.NULL_DEFAULT_VALUE));
         for (ColumnDefinition column : tableSchema.columns()) {
-            Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), avroType(column.type()));
-            fields.add(new Schema.Field(column.name(), union, null, Schema.Field.NULL_DEFAULT_VALUE));
+            fields.add(nullableColumn(column));
         }
         return Schema.createRecord(tableName, null, NAMESPACE, false, fields);
+    }
+
+    /**
+     * One {@code [null, T]} field. Shared by both artifacts so a {@code NOT NULL} declaration cannot
+     * make only the checkpoint snapshot REQUIRED (issue #237).
+     */
+    private static Schema.Field nullableColumn(ColumnDefinition column) {
+        Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), avroType(column.type()));
+        return new Schema.Field(column.name(), union, null, Schema.Field.NULL_DEFAULT_VALUE);
     }
 
     private static Schema avroType(String pgType) {
