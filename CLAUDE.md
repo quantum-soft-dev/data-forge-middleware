@@ -646,8 +646,8 @@ pages/{feature}/            # Route pages
   in round 3 was unconditional, so on a *successful* pass a broken meter (Micrometer raises on a
   name/tag conflict, and this series is registered from more than one place) would have left the
   #212 alarm half-emitted — the first counter moved, the second not, both log lines lost — and
-  `prune` returning normally with the error nowhere; it now swallows only while the loop is already
-  unwinding and throws otherwise. And the object keys are flushed **every 1000 during the loop**
+  `prune` returning normally with the error nowhere; it swallows only while the loop is
+  already unwinding — round 5 then settled what it does otherwise, see below. And the object keys are flushed **every 1000 during the loop**
   rather than only at the end: a pod kill mid-pass strands at most one chunk instead of everything
   the pass had deleted, which matters precisely because the reclaim path ships dry-run. It costs
   nothing — `deleteObjects` chunks at 1000 anyway. The finding that was **not** taken is the
@@ -664,13 +664,19 @@ pages/{feature}/            # Route pages
   whose checkpoint was built and whose rows were pruned — an operator sent to a healthy site
   (round 5's). A reporting failure is now logged **as a reporting failure** and the pass returns
   what it did. The masking route the round-3 comment claimed to have closed was still open in two
-  places, both reached from the `finally`: the `log.debug` in `reportPass`'s catch and the WARN in
+  places, both reached from the `finally`: the log line in `reportPass`'s catch and the WARN in
   `deletePrunedObjects`'s, either of which would replace the exception on its way out if the
   appender were the thrower — while unwinding, both now run through one `swallowing(Runnable)`
   helper instead. And the object-delete lines counted **this chunk** while reading "Pruned N
   changelog segment row(s)", so a 2500-row pass whose first chunk reported errors told an operator
   it had pruned 1000 — misreporting exactly the large backlogs this ticket is about; the wording is
-  chunk-accurate now. Tests were written first and are
+  chunk-accurate now. **Round 6** was three consequences of round 5's own edits and one stale
+  sentence in this entry: the reporting is attempted **step by step**, because one `try` around all
+  four meant a throw from the first counter still skipped the second and both lines — the
+  half-emitted alarm arrived at by another route; the WARN no longer claims "the pass completed",
+  since `reportPass` also runs while the loop is unwinding; and the flushed chunk is handed over as
+  a copy, the buffer being cleared on the next line while `deleteObjects` builds `subList` views
+  over what it is given. Tests were written first and are
   red against the old shape: `ChangelogRetentionOutsideTransactionTest` (fast gate) pins the absent
   annotation, the refusal and the row-before-object order, while the wired half lives in
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own

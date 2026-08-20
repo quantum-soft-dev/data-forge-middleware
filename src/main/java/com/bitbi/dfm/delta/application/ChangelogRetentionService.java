@@ -151,7 +151,9 @@ public class ChangelogRetentionService {
                         // between a row's commit and the end of the loop strands its object, and
                         // the sweep that would reclaim it ships dry-run, so the exposure is bounded
                         // at one chunk. Free in round trips — deleteObjects chunks at 1000 anyway.
-                        deletePrunedObjects(siteId, pendingObjectDeletes);
+                        // A copy, because the buffer is cleared on the next line: deleteObjects
+                        // builds subList views over what it is handed (review round 6).
+                        deletePrunedObjects(siteId, List.copyOf(pendingObjectDeletes));
                         pendingObjectDeletes.clear();
                     }
                     continue;
@@ -226,8 +228,9 @@ public class ChangelogRetentionService {
     /**
      * Report what the pass did — the #212 counters and the two lines (issue #234, review round 3).
      *
-     * <p>A failure of the reporting itself — a Micrometer name/tag conflict, a failing appender
-     * during a rollout — is a reporting failure and is logged as one. It is deliberately neither
+     * <p>Each step is attempted independently, and a failure of the reporting itself — a Micrometer
+     * name/tag conflict, a failing appender during a rollout — is a reporting failure and is logged
+     * as one. It is deliberately neither
      * silent (half an emitted alarm with no error anywhere is worse than a loud one, review round 4)
      * nor rethrown (that reached {@code CheckpointScheduler}'s catch, which logs "Checkpoint
      * build/retention failed" for a site whose checkpoint was built and whose rows were pruned,
@@ -236,27 +239,51 @@ public class ChangelogRetentionService {
      * exception on its way out.</p>
      */
     private void reportPass(UUID siteId, long checkpointSeq, int prunedCount, HeldBackTally heldBack) {
-        try {
-            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql);
-            metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress);
-            if (heldBack.segments > 0) {
-                log.warn("Held back {} below-checkpoint segment(s) with pending work for site {} — "
-                                + "{} awaiting plugin SQL, {} awaiting egress; retention does not "
-                                + "delete unprocessed queue work (issue #212)",
-                        heldBack.segments, siteId, heldBack.pendingPluginSql, heldBack.pendingEgress);
+        // Step by step, so one broken step does not take the rest with it: a throw from the first
+        // counter used to skip the second one and both lines, which is the "half-emitted alarm"
+        // round 4 objected to, reached by a different route (review round 6).
+        List<Runnable> steps = List.of(
+                () -> metrics.retentionSegmentsHeldBack(
+                        DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql),
+                () -> metrics.retentionSegmentsHeldBack(
+                        DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress),
+                () -> {
+                    if (heldBack.segments > 0) {
+                        log.warn("Held back {} below-checkpoint segment(s) with pending work for "
+                                        + "site {} — {} awaiting plugin SQL, {} awaiting egress; "
+                                        + "retention does not delete unprocessed queue work "
+                                        + "(issue #212)",
+                                heldBack.segments, siteId, heldBack.pendingPluginSql,
+                                heldBack.pendingEgress);
+                    }
+                },
+                () -> {
+                    if (prunedCount > 0) {
+                        log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} "
+                                        + "(audit window {})",
+                                prunedCount, checkpointSeq, siteId, auditWindowSegments);
+                    }
+                });
+
+        RuntimeException failure = null;
+        for (Runnable step : steps) {
+            try {
+                step.run();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                }
             }
-            if (prunedCount > 0) {
-                log.info("Pruned {} changelog segment(s) below checkpoint@{} for site {} (audit window {})",
-                        prunedCount, checkpointSeq, siteId, auditWindowSegments);
-            }
-        } catch (RuntimeException e) {
+        }
+        if (failure != null) {
             // Not silent (review round 4: half an alarm with no error anywhere is worse than a
             // loud one) and not this site's retention failure either (review round 5: rethrowing
             // reached CheckpointScheduler's catch, which logs "Checkpoint build/retention failed"
-            // for a pass that built the checkpoint and pruned its rows). A broken meter or
-            // appender is a reporting failure and says so.
-            log.warn("Reporting the retention pass for site {} failed; the pass itself completed "
-                    + "and pruned {} segment(s)", siteId, prunedCount, e);
+            // for a site whose checkpoint was built and whose rows were pruned). The wording does
+            // not claim the pass completed: this also runs while the loop is unwinding (round 6).
+            RuntimeException reported = failure;
+            swallowing(() -> log.warn("Reporting the retention pass for site {} failed; {} "
+                    + "segment(s) had been pruned by that point", siteId, prunedCount, reported));
         }
     }
 
