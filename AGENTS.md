@@ -260,6 +260,11 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- dbf-column-types: DBF SQL generation receives column types from the site's `TableSchema`
+  (`DbfColumnType.fromSqlType`) instead of `Map.of()`, so empty `I`/`Y` become `0` and a
+  non-numeric cell in a numeric column is quoted rather than emitted raw (issue #263).
+  Without a schema the column stays Character. No migration (V57 free). See
+  `docs/bitbi-integration.md`.
 - liveness-teardown-fk: `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` no longer loses a
   race against its own ingestion (issue #265). #226/#228 already swept the two non-cascade FKs
   onto `batches` by the relationship each uses; a session commit landing between those
