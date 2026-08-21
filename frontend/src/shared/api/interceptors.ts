@@ -161,7 +161,8 @@ export function setupResponseInterceptor(): void {
 
         // For token expiry errors, logout is handled by refreshTokenWithLock.
         // Stay silent so the redirect is the only signal — and mark handled
-        // so the global handler does not fill that silence with a network toast.
+        // so the global handler does not fill that silence with a leftover-401
+        // session toast.
         if (isAuth0Error(refreshError) && isTokenExpiredError(refreshError.error)) {
           return finish(null)
         }

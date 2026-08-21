@@ -601,7 +601,8 @@ pages/{feature}/            # Route pages
   unavailable, or "Failed to refresh session"), owned by `interceptors.ts`, which
   now honours `suppressErrorToast` on its own toasts. Refresh fails on the
   expired-refresh-token branch → silence, so the logout redirect stays quiet, and
-  the mark stops this handler filling that silence with "check your connection".
+  the mark stops this handler filling that silence with the leftover-401 session
+  toast.
   Refresh not initialized / already retried → one leftover-401 toast, chosen
   deliberately: "Your session is no longer valid. Please sign in again." A 401 is
   never a network error and never the generic unexpected-error default. Tests
@@ -619,6 +620,9 @@ pages/{feature}/            # Route pages
   `suppressErrorToast` on Auth0-unavailable and the handler's Auth0 leak
   guard, and noted that `return apiClient.request` is deliberately not
   awaited so a rejected retry cannot enter the refresh-failure catch.
+  **Review round 2** corrected the expired-token comment (and this entry) that
+  still named a network toast: after rejecting the original 401, an unmarked
+  pass would hit leftover `case 401`, not the no-response branch.
 - failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
   payload as one that is not due yet (issue #224, the bound #213 left open). Since #213 a site with
   `last_checkpoint_seq = 0` and records applied reads as a neutral **"No checkpoint yet"** — right
