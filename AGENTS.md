@@ -266,6 +266,17 @@ pages/{feature}/            # Route pages
   held the segment back from pruning. Targeted `UPDATE ... SET plugin_sql_at` /
   `egress_at WHERE id = ?` — no migration, V57 stays free. A mark of A also leaves B's
   retry columns intact. See `docs/delta-client-v2-guide.md`.
+- liveness-teardown-fk: `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` no longer loses a
+  race against its own ingestion (issue #265). #226/#228 already swept the two non-cascade FKs
+  onto `batches` by the relationship each uses; a session commit landing between those
+  statements still blocked `DELETE FROM batches` as an opaque `DataIntegrityViolationException`
+  of the class's own `@AfterEach`. **The constraint is `changelog_segments_batch_id_fkey`**
+  (V30); the twin is `fk_account_plugins_baseline_batch` (V25 RESTRICT);
+  `error_logs.batch_id` is not a blocker (V22 CASCADE). Shape: quiesce the in-process gRPC
+  server **and** retry the teardown once after re-sweeping; a remaining failure names
+  `SQLSTATE` and the constraint. `SeededSiteTeardown`, tests first outside
+  `**/integration/**`. Test-only — no production code, REST, gRPC, proto, DTO, migration
+  (**V57 stays free**), configuration-key, metric, S3-key or frontend change.
 - sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
   failure (issue #261). Shared parent `PodLevelAbortedException`: the queue rethrows every
   subclass, spends no attempt, moves neither `deferred` nor `poisoned`. Semaphore timeout is
