@@ -11,6 +11,7 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.grpc.v2.*;
+import com.bitbi.dfm.delta.infrastructure.SeededSiteTeardown;
 import com.bitbi.dfm.delta.presentation.DeltaAuthInterceptor;
 import com.bitbi.dfm.delta.presentation.DeltaIngestionService;
 import io.grpc.*;
@@ -380,11 +381,39 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
                 .build()
                 .start();
         ManagedChannel channel = InProcessChannelBuilder.forName(name).directExecutor().build();
+        Exception thrown = null;
         try {
             body.accept(DeltaIngestionGrpc.newStub(channel));
+        } catch (Exception e) {
+            thrown = e;
         } finally {
             channel.shutdownNow();
             server.shutdownNow();
+            try {
+                boolean channelDown = channel.awaitTermination(15, TimeUnit.SECONDS);
+                boolean serverDown = server.awaitTermination(15, TimeUnit.SECONDS);
+                if (!channelDown || !serverDown) {
+                    IllegalStateException quiesce = new IllegalStateException(
+                            "ingestion gRPC did not quiesce before teardown: channelTerminated="
+                                    + channel.isTerminated() + " serverTerminated="
+                                    + server.isTerminated());
+                    if (thrown != null) {
+                        thrown.addSuppressed(quiesce);
+                    } else {
+                        thrown = quiesce;
+                    }
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                if (thrown != null) {
+                    thrown.addSuppressed(interrupted);
+                } else {
+                    thrown = interrupted;
+                }
+            }
+        }
+        if (thrown != null) {
+            throw thrown;
         }
     }
 
@@ -398,52 +427,20 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
      * genuinely global — {@code findNextPendingPluginSql} claims one pending head <em>per site</em>
      * across all sites, so leaking committed segments here makes an unrelated test see extra rows.
      * Tests that seed their own sites must take them away again.
+     *
+     * <p>The child sweeps of #226/#228 are necessary and not sufficient: a gRPC commit still in
+     * flight (or a sibling context's worker) can insert a new referencing row between those
+     * statements, and {@code DELETE FROM batches} then fails as an opaque
+     * {@code DataIntegrityViolationException} (issue #265). {@link SeededSiteTeardown} retries
+     * once after re-sweeping, and a remaining failure names {@code SQLSTATE} and the constraint.
      */
     @AfterEach
     void cleanUpSeededData() {
         for (UUID siteId : createdSites) {
-            jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", siteId);
-            // Both relationships, not just site_id (issue #226): changelog_segments_batch_id_fkey
-            // carries no cascade, and a segment's batch need not belong to the segment's site, so a
-            // site_id-only sweep can leave a row that blocks the DELETE FROM batches below.
-            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ? OR batch_id IN "
-                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId, siteId);
-            jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", siteId);
-            jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", siteId);
-            // The second non-cascading reference to batches: fk_account_plugins_baseline_batch is
-            // ON DELETE RESTRICT (V25). Cleared by the same batch relationship, so this method is
-            // symmetric with the fixture's own sweep rather than fixing one of the two.
-            jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
-                    + "(SELECT id FROM batches WHERE site_id = ?)", siteId);
-            jdbc.update("DELETE FROM device_authorizations WHERE site_id = ?", siteId);
-            jdbc.update("DELETE FROM batches WHERE site_id = ?", siteId);
-            jdbc.update("DELETE FROM sites WHERE id = ?", siteId);
+            SeededSiteTeardown.cleanSite(jdbc, siteId);
         }
         for (UUID accountId : createdAccounts) {
-            // Sites / batches / device_authorizations keyed by this account but not by a site in
-            // createdSites (issue #228): Batch.start takes the two ids independently, and
-            // sites.account_id / device_authorizations have no cascade, so a site_id-only sweep
-            // leaves a row that blocks DELETE FROM accounts. The children of those leftover
-            // sites have to go first — error_logs.site_id (V5) and batches.site_id have no
-            // cascade either, so DELETE FROM sites WHERE account_id = ? is otherwise the next
-            // ScriptStatementFailedException. Checkpoints / site_sync_state / site_schemas
-            // cascade from sites and stay implicit.
-            jdbc.update("DELETE FROM device_authorizations WHERE account_id = ? OR site_id IN "
-                    + "(SELECT id FROM sites WHERE account_id = ?)", accountId, accountId);
-            jdbc.update("DELETE FROM error_logs WHERE site_id IN "
-                    + "(SELECT id FROM sites WHERE account_id = ?)", accountId);
-            jdbc.update("DELETE FROM changelog_segments WHERE site_id IN "
-                    + "(SELECT id FROM sites WHERE account_id = ?) OR batch_id IN "
-                    + "(SELECT id FROM batches WHERE account_id = ? OR site_id IN "
-                    + "(SELECT id FROM sites WHERE account_id = ?))",
-                    accountId, accountId, accountId);
-            jdbc.update("DELETE FROM account_plugins WHERE baseline_batch_id IN "
-                    + "(SELECT id FROM batches WHERE account_id = ? OR site_id IN "
-                    + "(SELECT id FROM sites WHERE account_id = ?))", accountId, accountId);
-            jdbc.update("DELETE FROM batches WHERE account_id = ? OR site_id IN "
-                    + "(SELECT id FROM sites WHERE account_id = ?)", accountId, accountId);
-            jdbc.update("DELETE FROM sites WHERE account_id = ?", accountId);
-            jdbc.update("DELETE FROM accounts WHERE id = ?", accountId);
+            SeededSiteTeardown.cleanAccount(jdbc, accountId);
         }
         createdSites.clear();
         createdAccounts.clear();
