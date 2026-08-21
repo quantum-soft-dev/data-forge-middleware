@@ -360,6 +360,9 @@ class DeltaSqlQueueServiceTest {
                 .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
                 .isInstanceOf(SqlGenerationService.PodLevelAbortedException.class);
 
+        assertThat(segment.getPluginSqlAt()).isNull();
+        verify(segmentRepository, never()).save(segment);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
         verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();

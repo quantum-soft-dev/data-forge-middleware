@@ -132,6 +132,7 @@ class DeltaEgressServiceTest {
         assertThrows(RuntimeException.class, () -> service.egressSegment(segment),
                 "transient upload failure must roll the segment back for the sweep");
         assertNull(segment.getEgressAt());
+        verify(segmentRepository, never()).markEgressed(any());
     }
 
     /**
