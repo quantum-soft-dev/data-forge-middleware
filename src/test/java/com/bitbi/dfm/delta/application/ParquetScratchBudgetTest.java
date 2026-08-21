@@ -12,7 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The directory-wide scratch budget (issue #150) — the first bound on the <em>sum</em> of the
- * file-backed Parquet scratch, where every ceiling before it bounded one file.
+ * file-backed Parquet scratch, where every ceiling before it bounded one file — and the
+ * reserved share that keeps a completed-batch backlog from starving the nightly checkpoint
+ * (issue #193).
  */
 class ParquetScratchBudgetTest {
 
@@ -27,6 +29,10 @@ class ParquetScratchBudgetTest {
 
     private ParquetScratchBudget budget(long maxBytes) {
         return new ParquetScratchBudget(registry, maxBytes);
+    }
+
+    private ParquetScratchBudget budget(long maxBytes, long checkpointReserveBytes) {
+        return new ParquetScratchBudget(registry, maxBytes, checkpointReserveBytes);
     }
 
     @Test
@@ -223,6 +229,140 @@ class ParquetScratchBudgetTest {
                         "a directory held by a neighbour must not read as a whole free budget: "
                                 + refused.getMessage());
             }
+        }
+    }
+
+    @Test
+    void batchWritersCannotConsumeTheBytesReservedForACheckpointFrame() {
+        // Issue #193. Two ten-table batches can fill the deployed 5 GiB on their own, and a
+        // backlog keeps them there for the length of the 02:00 sweep — which then aborts every
+        // site at its first write, the frame. Batch may use at most budget minus the frame
+        // ceiling, so that file always has somewhere to land.
+        ParquetScratchBudget budget = budget(8 * MIB, 3 * MIB);
+
+        try (ScratchLease first = budget.open("batch_artifact")) {
+            first.charge(5 * MIB);
+            try (ScratchLease second = budget.open("batch_artifact")) {
+                assertThrows(ScratchBudgetExceededException.class, () -> second.charge(1),
+                        "the reserved share is not leftover slack a second batch writer may take");
+            }
+            try (ScratchLease frame = budget.open("checkpoint_frame")) {
+                frame.charge(3 * MIB);
+            }
+        }
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
+    void aTableSnapshotCanUseTheSameReservedShareAfterTheFrameIsGone() {
+        // The checkpoint path holds one scratch file at a time (#178, and the frame is deleted
+        // before the snapshot loop). The reserve is that one file's worth, not a second copy, so
+        // releasing the frame must not hand the reserved bytes to a batch backlog waiting in the
+        // gap — the table snapshot is next and it ends the build too if it has nowhere to go.
+        ParquetScratchBudget budget = budget(8 * MIB, 3 * MIB);
+
+        ScratchLease batch = budget.open("batch_artifact");
+        batch.charge(5 * MIB);
+        try (ScratchLease frame = budget.open("checkpoint_frame")) {
+            frame.charge(3 * MIB);
+        }
+        try (ScratchLease stillBatch = budget.open("batch_artifact")) {
+            assertThrows(ScratchBudgetExceededException.class, () -> stillBatch.charge(1),
+                    "releasing the frame must not let a backlog steal the reserved share");
+        }
+        try (ScratchLease table = budget.open("checkpoint_table")) {
+            table.charge(3 * MIB);
+        }
+        batch.close();
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
+    void aCheckpointHoldingTheReserveDoesNotShrinkTheBatchShare() {
+        // The reserve is a cap on what batch may hold, not on total live. A frame in flight
+        // already occupies its share; subtracting it from the batch ceiling a second time would
+        // refuse a legitimate completed-batch build for the length of the 02:00 sweep — the
+        // opposite of a reserved share.
+        ParquetScratchBudget budget = budget(8 * MIB, 3 * MIB);
+
+        ScratchLease frame = budget.open("checkpoint_frame");
+        frame.charge(3 * MIB);
+        ScratchLease batch = budget.open("batch_artifact");
+        batch.charge(5 * MIB);
+        try (ScratchLease stillBatch = budget.open("batch_artifact")) {
+            assertThrows(ScratchBudgetExceededException.class, () -> stillBatch.charge(1),
+                    "batch at its cap must stay at its cap while a frame occupies the reserve");
+        }
+        batch.close();
+        frame.close();
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
+    void aCheckpointWriterIsNotCappedAtTheBatchShare() {
+        // The reserve is a floor for checkpoint, not a ceiling. An idle directory must still let
+        // a frame use the whole budget — the per-file ceiling is what bounds that file.
+        ParquetScratchBudget budget = budget(8 * MIB, 3 * MIB);
+
+        try (ScratchLease frame = budget.open("checkpoint_frame")) {
+            frame.charge(8 * MIB);
+        }
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
+    void anUnboundedDirectoryIgnoresTheCheckpointReserve() {
+        // Unbounded is the shipped default: there is no budget to reserve a share of, and a
+        // leftover frame-ceiling value must not start refusing batch writers on an upgrade that
+        // has not turned the directory key on.
+        ParquetScratchBudget budget = budget(0L, 64 * MIB);
+
+        try (ScratchLease batch = budget.open("batch_artifact")) {
+            batch.charge(64 * MIB);
+        }
+        assertEquals(0.0, liveBytes());
+        assertEquals(0.0, refusals("batch_artifact"));
+    }
+
+    @Test
+    void aReserveLargerThanTheBudgetLeavesNoneOfItForBatchWriters() {
+        ParquetScratchBudget budget = budget(4 * MIB, 8 * MIB);
+
+        try (ScratchLease batch = budget.open("batch_artifact")) {
+            assertThrows(ScratchBudgetExceededException.class, () -> batch.charge(1));
+        }
+        try (ScratchLease frame = budget.open("checkpoint_frame")) {
+            frame.charge(4 * MIB);
+        }
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
+    void aNegativeReserveIsReadAsNone() {
+        ParquetScratchBudget budget = budget(8 * MIB, -1L);
+
+        try (ScratchLease batch = budget.open("batch_artifact")) {
+            batch.charge(8 * MIB);
+        }
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
+    void namesTheReservedShareInABatchRefusal() {
+        ParquetScratchBudget budget = budget(8 * MIB, 3 * MIB);
+
+        try (ScratchLease batch = budget.open("batch_artifact")) {
+            batch.charge(5 * MIB);
+            ScratchBudgetExceededException refused = assertThrows(
+                    ScratchBudgetExceededException.class, () -> batch.charge(1));
+            assertNotNull(refused.getMessage());
+            assertTrue(refused.getMessage().contains("delta.checkpoint.max-frame-temp-bytes"),
+                    "the key that sized the reserve must be named: " + refused.getMessage());
+            assertTrue(refused.getMessage().contains(String.valueOf(3 * MIB)),
+                    "the reserved bytes must be in the message: " + refused.getMessage());
+            assertTrue(refused.getMessage().contains("only 0 of"),
+                    "a batch writer at its cap must not read as a free directory: "
+                            + refused.getMessage());
         }
     }
 

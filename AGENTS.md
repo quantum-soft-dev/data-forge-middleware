@@ -269,6 +269,14 @@ pages/{feature}/            # Route pages
   Generated". Pairing invariant pinned: every STARTED exit writes a terminal, documented
   exceptions write neither. `SQL_REGENERATION_*` stay (#190). No REST/gRPC/proto/metric-name
   change. See `docs/020-sql-generation-optimization.md`.
+- checkpoint-scratch-reserve: A completed-batch backlog can no longer fill the Parquet scratch
+  directory for the length of the 02:00 sweep and abort every site's nightly checkpoint (issue
+  #193). Batch writers may use at most `delta.parquet.max-scratch-bytes` minus
+  `delta.checkpoint.max-frame-temp-bytes` — the declared size of the largest scratch file the
+  checkpoint path holds, and it holds only one at a time (#178). Checkpoint writers still see
+  the whole budget; unbounded ignores the reserve. Existing failure modes unchanged; still off
+  `delta.checkpoint.builds.aborted`. No new key, no migration (**V57 stays free**). See
+  `docs/delta-client-v2-guide.md`.
 - nonfinite-decimal-storage: A non-finite / unparseable decimal stays NULL for every destination,
   Parquet and SQL agreeing; destination-aware storage (keeping NaN on bare `numeric` /
   `double precision`) is not re-introduced (issue #240, the fork PR #232 reverted). SQL data

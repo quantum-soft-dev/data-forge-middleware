@@ -1070,6 +1070,15 @@ pod-private volume until the next sweep tick (#141) and its owner is gone, so no
 it; and kubelet acts on usage *exceeding* the limit rather than reaching it — solving to exact
 equality would make the budget itself an eviction.
 
+**A reserved share for the nightly checkpoint (issue #193).** That volume-residue gigabyte is not
+this. Batch writers may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` (1.5 GiB on this deployment, leaving 3.5 GiB for
+completed-batch artifacts). The checkpoint path holds one scratch file at a time (#178), so the
+reserve is one file's worth — the declared size of the largest one. Checkpoint writers still see
+the whole directory budget when it is idle. Unbounded (the shipped default) ignores the reserve.
+A refusal is still a transient `delta.parquet.scratch.refused`, never a tag on
+`delta.checkpoint.builds.aborted`.
+
 It is **charged as bytes are written**, by the same two counting streams that already enforce the
 per-file ceilings, and released when the file is deleted. It is not reserved at the ceiling up
 front: the ceilings are 1 GiB against artifacts in the low hundreds of MiB, so a three-table batch
@@ -1104,13 +1113,15 @@ volume was busy, so:
   both end the build. Since #153 the frame is written first and is the largest file a build
   produces, and `CheckpointScheduler` walks sites serially — so a directory held full for the length
   of the 02:00 sweep aborts *every* site's build at its first write, and retention is frozen
-  fleet-wide for that night. Nothing reserves a share for the checkpoint path, so until #193 the
-  mitigation is entirely "size the key with room to spare" — read
-  `max_over_time(delta_parquet_scratch_bytes[7d])` before lowering it. The batch side degrades one artifact at a time;
-  this side degrades by whole sites. Nothing is lost (the next night repeats the fold), the pre-#150
-  behaviour on this deployment was a kubelet eviction of the pod, which is worse — but the asymmetry
-  is real, `delta.parquet.scratch.refused{writer=checkpoint_frame}` is the series to alert on, and
-  giving the checkpoint path a reserved share is **#193**;
+  fleet-wide for that night. Since #193 a completed-batch backlog cannot do that: batch writers
+  may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`
+  (the declared size of the largest scratch file the checkpoint path holds, and it holds only
+  one at a time), so the nightly frame always has somewhere to land. Checkpoint writers still
+  see the whole budget when the directory is idle. Unbounded (the shipped default) ignores the
+  reserve — there is nothing to reserve a share of. A refusal here is still absent from
+  `delta.checkpoint.builds.aborted`. `delta.parquet.scratch.refused{writer=checkpoint_frame}`
+  remains the series for a checkpoint writer that did hit a full directory (a reserve of zero,
+  or a misconfiguration where the frame ceiling exceeds the directory);
 - a **completed-batch artifact** takes the ordinary backoff instead of the first-attempt
   `ABANDONED` its own ceiling earns it, so the download answers `409` rather than a permanent `404`
   — **while attempts remain**. The type distinction buys back the first attempt, not the cap: a

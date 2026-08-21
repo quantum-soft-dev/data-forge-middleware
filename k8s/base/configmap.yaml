@@ -85,6 +85,9 @@ data:
   # above says the directory belongs to this pod; on a shared volume it would be a per-replica
   # share. ParquetScratchCeilingBudgetTest recomputes it from these manifests, so raising it or
   # shrinking sizeLimit on its own fails the build.
+  # The last DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES of this budget cannot be taken by batch
+  # writers (issue #193): that is the reserved share for the nightly checkpoint frame, which
+  # holds one scratch file at a time. 5Gi - 1.5Gi leaves 3.5Gi for completed-batch artifacts.
   DELTA_PARQUET_MAX_SCRATCH_BYTES: "5368709120"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"
