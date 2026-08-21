@@ -584,6 +584,45 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- error-toast-401: The global error toast handler no longer speaks out of turn on
+  every 401 path (issue #239, the four routes #225 documented rather than closed).
+  None of them is about interceptor registration count. **The decision the ticket
+  asked for:** a failed refresh rejects the original Axios 401, not the Auth0
+  error, so `.response` and `.config` survive (`suppressErrorToast`,
+  `getServerErrorStatus`); the Auth0 error is the recovery attempt and travels as
+  `error.cause`. Rejecting the Auth0 error looked cheaper and would have closed
+  routes 2–3 together, but it changes what every downstream caller receives from a
+  failed refresh into something that is neither a 401 nor their request.
+  **What a failed refresh says, and who says it.** Refresh succeeds and the retry
+  succeeds → no toast (already pinned by #225). Refresh succeeds and the retry
+  fails → one toast from the inner pass; the outer chain (re-entered by
+  `apiClient.request`) sees that mark and stays quiet. Refresh fails
+  for a named reason → that reason's toast alone (network during refresh, Auth0
+  unavailable, or "Failed to refresh session"), owned by `interceptors.ts`, which
+  now honours `suppressErrorToast` on its own toasts. Refresh fails on the
+  expired-refresh-token branch → silence, so the logout redirect stays quiet, and
+  the mark stops this handler filling that silence with the leftover-401 session
+  toast.
+  Refresh not initialized / already retried → one leftover-401 toast, chosen
+  deliberately: "Your session is no longer valid. Please sign in again." A 401 is
+  never a network error and never the generic unexpected-error default. Tests
+  first over all four routes; `error-handler.test.ts` already wired
+  `setupResponseInterceptor` beside the handler. No `App.tsx` change (registration
+  order was already correct). Frontend only: no backend, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or route change. The "exactly one
+  toast" claim in `docs/delta-client-v2-guide.md` is about download pills whose
+  presign requests suppress the global toast, so it was true throughout and stays
+  true — and `suppressErrorToast` now actually holds on the 401 path those
+  callers can also hit.
+  **Review round 1** trimmed the production comments that had pasted this
+  write-up, corrected the over-claim that both interceptors mark on a failed
+  retry (only the inner handler does; `AGENTS.md` already said so), pinned
+  `suppressErrorToast` on Auth0-unavailable and the handler's Auth0 leak
+  guard, and noted that `return apiClient.request` is deliberately not
+  awaited so a rejected retry cannot enter the refresh-failure catch.
+  **Review round 2** corrected the expired-token comment (and this entry) that
+  still named a network toast: after rejecting the original 401, an unmarked
+  pass would hit leftover `case 401`, not the no-response branch.
 - failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
   payload as one that is not due yet (issue #224, the bound #213 left open). Since #213 a site with
   `last_checkpoint_seq = 0` and records applied reads as a neutral **"No checkpoint yet"** — right
@@ -1138,6 +1177,7 @@ pages/{feature}/            # Route pages
   no REST, gRPC, proto, DTO, metric, S3-key, configuration-key-**name** or frontend change; key
   names and defaults are untouched — only an out-of-range value's fate changes.
   See `docs/020-sql-generation-optimization.md`.
+
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three

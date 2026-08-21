@@ -3,7 +3,7 @@ import type { AxiosError, InternalAxiosRequestConfig } from 'axios'
 import { toast } from 'sonner'
 import { logger } from '../lib/logger'
 import { refreshTokenWithLock, isTokenRefreshInitialized } from './token-refresh'
-import { isAuth0Error, isTokenExpiredError } from './types'
+import { isAuth0Error, isTokenExpiredError, markErrorToastHandled } from './types'
 import type { RetryableAxiosConfig } from './types'
 
 /**
@@ -74,7 +74,14 @@ export function setupInterceptors(tokenGetter: () => string | undefined | Promis
  * Flow:
  * 1. 401 received → attempt token refresh
  * 2. Refresh succeeds → retry original request with new token
- * 3. Refresh fails → logout user (handled by token-refresh.ts)
+ * 3. Refresh fails → reject the original 401 (not the Auth0 error) so
+ *    `.response` and `.config` survive; toast a named reason, or stay
+ *    silent on the expired-refresh-token branch so the logout redirect
+ *    is quiet. The Auth0 error travels as `error.cause`.
+ *
+ * This interceptor owns the refresh-attempt taxonomy. Leftover 401s
+ * (refresh not initialized, or already retried) are left unmarked for
+ * the global handler's session toast. See issue #239.
  */
 export function setupResponseInterceptor(): void {
   // Clear previous interceptor if exists
@@ -122,32 +129,46 @@ export function setupResponseInterceptor(): void {
 
         logger.info('[Interceptor]', '✅ Token refreshed, retrying request:', config?.url)
 
-        // Retry the original request
+        // Not awaited: a rejected retry must not enter this catch (refresh
+        // failures only). Axios receives the retry promise as the interceptor result.
         return apiClient.request(config!)
       } catch (refreshError) {
         logger.error('[Interceptor]', '❌ Token refresh failed:', refreshError)
 
+        // Reject the original 401 so `.response` / `.config` survive; recovery is error.cause.
+        if (error instanceof Error && refreshError instanceof Error) {
+          error.cause = refreshError
+        }
+
+        const suppress = Boolean(config?.suppressErrorToast)
+        const finish = (message: string | null): Promise<never> => {
+          if (message !== null && !suppress) {
+            toast.error(message)
+          }
+          markErrorToastHandled(error)
+          return Promise.reject(error)
+        }
+
         // T042: Handle network error during refresh
         if (isNetworkError(refreshError)) {
-          toast.error('Network error. Please check your connection.')
-          return Promise.reject(refreshError)
+          return finish('Network error. Please check your connection.')
         }
 
         // T043: Handle Auth0 service unavailable
         if (isAuth0ServiceUnavailable(refreshError)) {
-          toast.error('Authentication service unavailable. Please try again later.')
-          return Promise.reject(refreshError)
+          return finish('Authentication service unavailable. Please try again later.')
         }
 
-        // For token expiry errors, logout is handled by refreshTokenWithLock
-        // No toast needed as user will be redirected to login
+        // For token expiry errors, logout is handled by refreshTokenWithLock.
+        // Stay silent so the redirect is the only signal — and mark handled
+        // so the global handler does not fill that silence with a leftover-401
+        // session toast.
         if (isAuth0Error(refreshError) && isTokenExpiredError(refreshError.error)) {
-          return Promise.reject(refreshError)
+          return finish(null)
         }
 
         // For other unexpected errors, show a generic toast
-        toast.error('Failed to refresh session. Please try again.')
-        return Promise.reject(refreshError)
+        return finish('Failed to refresh session. Please try again.')
       }
     }
   )
