@@ -144,6 +144,22 @@ class SeededSiteTeardownTest extends BaseIntegrationTest {
         assertThat(named.getCause()).isSameAs(thrown);
     }
 
+    @Test
+    @DisplayName("an exhausted cleanSite retry throws the named failure, not a raw DIV")
+    void exhaustedCleanSiteRetryThrowsNamedFailure() {
+        seedAccountSiteBatch();
+
+        IllegalStateException named = assertThrows(IllegalStateException.class, () ->
+                SeededSiteTeardown.cleanSite(jdbc, site, this::insertMarkedSegment, this::insertMarkedSegment));
+
+        assertThat(named.getMessage())
+                .as("the production throw site, not the formatter in isolation")
+                .contains("cleanSite(")
+                .contains("SQLSTATE=23503")
+                .contains("constraint=changelog_segments_batch_id_fkey");
+        assertThat(named.getCause()).isInstanceOf(DataIntegrityViolationException.class);
+    }
+
     private DataIntegrityViolationException catchBatchDelete() {
         return assertThrows(DataIntegrityViolationException.class,
                 () -> jdbc.update("DELETE FROM batches WHERE site_id = ?", site));

@@ -49,13 +49,22 @@ public final class SeededSiteTeardown {
      * passes a no-op; the retry still re-sweeps, so a row that lands in that window is cleared.
      */
     static void cleanSite(JdbcTemplate jdbc, UUID siteId, Runnable betweenSweepAndBatchDelete) {
+        cleanSite(jdbc, siteId, betweenSweepAndBatchDelete, () -> {
+        });
+    }
+
+    /**
+     * {@code retryWindow} is the same injector on the second pass. Production and the happy-path
+     * race tests pass a no-op; the exhaustion test re-plants the row after the re-sweep so the
+     * named failure is the one {@code cleanSite} actually throws.
+     */
+    static void cleanSite(JdbcTemplate jdbc, UUID siteId, Runnable firstWindow, Runnable retryWindow) {
         try {
-            deleteSiteRows(jdbc, siteId, betweenSweepAndBatchDelete);
+            deleteSiteRows(jdbc, siteId, firstWindow);
         } catch (DataIntegrityViolationException first) {
             log.warn("retrying site teardown for {} after {}", siteId, describeFkFailure(first));
             try {
-                deleteSiteRows(jdbc, siteId, () -> {
-                });
+                deleteSiteRows(jdbc, siteId, retryWindow);
             } catch (DataIntegrityViolationException second) {
                 throw namedFailure("cleanSite(" + siteId + ")", second);
             }

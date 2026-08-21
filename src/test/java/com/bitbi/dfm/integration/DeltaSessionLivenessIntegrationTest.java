@@ -389,16 +389,26 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         } finally {
             channel.shutdownNow();
             server.shutdownNow();
-            boolean channelDown = channel.awaitTermination(5, TimeUnit.SECONDS);
-            boolean serverDown = server.awaitTermination(5, TimeUnit.SECONDS);
-            if (!channelDown || !serverDown) {
-                IllegalStateException quiesce = new IllegalStateException(
-                        "ingestion gRPC did not quiesce before teardown: channelTerminated="
-                                + channel.isTerminated() + " serverTerminated=" + server.isTerminated());
+            try {
+                boolean channelDown = channel.awaitTermination(15, TimeUnit.SECONDS);
+                boolean serverDown = server.awaitTermination(15, TimeUnit.SECONDS);
+                if (!channelDown || !serverDown) {
+                    IllegalStateException quiesce = new IllegalStateException(
+                            "ingestion gRPC did not quiesce before teardown: channelTerminated="
+                                    + channel.isTerminated() + " serverTerminated="
+                                    + server.isTerminated());
+                    if (thrown != null) {
+                        thrown.addSuppressed(quiesce);
+                    } else {
+                        thrown = quiesce;
+                    }
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
                 if (thrown != null) {
-                    thrown.addSuppressed(quiesce);
+                    thrown.addSuppressed(interrupted);
                 } else {
-                    thrown = quiesce;
+                    thrown = interrupted;
                 }
             }
         }
