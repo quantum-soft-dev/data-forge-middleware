@@ -205,6 +205,28 @@ public interface ChangelogSegmentRepository {
     int deferEgress(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
 
     /**
+     * Stamp {@code plugin_sql_at} and no other column (issue #245).
+     *
+     * <p>The claim lock is released before the work (#164), so a whole-entity save of the snapshot
+     * captured at claim would merge {@code egress_at} back to the value held then — un-marking
+     * work the egress worker had already finished. This statement is the success twin of
+     * {@link #deferPluginSql(UUID, LocalDateTime, int)}.</p>
+     *
+     * @param id segment identifier
+     * @return 1 if a row was updated, 0 if it is gone
+     */
+    int markPluginSqlProcessed(UUID id);
+
+    /**
+     * Stamp {@code egress_at} and no other column (issue #245). The egress twin of
+     * {@link #markPluginSqlProcessed(UUID)}.
+     *
+     * @param id segment identifier
+     * @return 1 if a row was updated, 0 if it is gone
+     */
+    int markEgressed(UUID id);
+
+    /**
      * Every S3 object of a site's changelog, published and provisional alike — the collection step
      * of a history wipe (issue #89), which unlike a re-baseline must leave nothing behind.
      *

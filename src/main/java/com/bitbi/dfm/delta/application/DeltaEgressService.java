@@ -33,10 +33,13 @@ import java.util.Map;
  *
  * <p>This class opens <em>no</em> transaction of its own (issue #164). The pending-row claim
  * and the {@code egress_at} write are the repository's short transactions; the S3 download,
- * Parquet render and per-table uploads run with nothing open. A crash after a successful
- * upload leaves the segment pending and the sweep retries — the same keys are overwritten.
- * Calling {@link #egressSegment} with a transaction already open is refused rather than
- * silently pinning that connection across the network round trip.</p>
+ * Parquet render and per-table uploads run with nothing open. The mark is a targeted
+ * {@code UPDATE ... SET egress_at} of that column only (issue #245), not a save of the entity
+ * captured at claim — a merge would un-stamp {@code plugin_sql_at} if the SQL worker had
+ * finished in between. A crash after a successful upload leaves the segment pending and the
+ * sweep retries — the same keys are overwritten. Calling {@link #egressSegment} with a
+ * transaction already open is refused rather than silently pinning that connection across
+ * the network round trip.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -255,8 +258,9 @@ public class DeltaEgressService {
             metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
         });
 
-        segment.markEgressed();
-        segmentRepository.save(segment);
+        // Targeted UPDATE of this marker only (issue #245): a save of the claim-time snapshot
+        // would merge plugin_sql_at back to NULL after the SQL worker had already stamped it.
+        segmentRepository.markEgressed(segment.getId());
         metrics.segmentEgressed();
 
         log.info("Delta egress done: siteId={}, seq={}..{}, tables={}",

@@ -260,6 +260,12 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245). Both workers
+  saved the whole entity captured at claim, no `@Version`; since #164 the claim lock is
+  released before S3, so one queue's save could NULL the other's marker. After #212 that
+  held the segment back from pruning. Targeted `UPDATE ... SET plugin_sql_at` /
+  `egress_at WHERE id = ?` — no migration, V57 stays free. A mark of A also leaves B's
+  retry columns intact. See `docs/delta-client-v2-guide.md`.
 - dbf-column-types: DBF SQL generation receives column types from the site's `TableSchema`
   (`DbfColumnType.fromSqlType`) instead of `Map.of()`, so empty `I`/`Y` become `0` and a
   non-numeric cell in a numeric column is quoted rather than emitted raw (issue #263).

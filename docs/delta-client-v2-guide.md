@@ -2110,6 +2110,25 @@ proxy boundary (they were `protected` self-invocations). `ParquetExportFileServi
 queries the catalog through `ParquetExportCatalogQuery` and only then probes S3; a row is still
 dropped only on a known absence (issue **#157**) and dropped candidates still advance the cursor.
 
+### A queue's mark cannot un-mark the other (issue #245)
+
+The two queue markers used to be stamped by saving the **whole entity captured at claim**.
+`ChangelogSegment` has no `@Version`, so a merge writes every updatable field. Since #164 the
+claim lock is released before the work, the window is minutes wide: the SQL worker claims
+(`egress_at = NULL`), the egress worker claims the same row, stamps `egress_at`, commits; the
+SQL worker then saved its snapshot — writing `plugin_sql_at` **and `egress_at = NULL`**,
+re-pending work that had already run. The other direction is the same. Before #212 that
+self-healed (the re-pended worker re-ran, same keys overwritten); after #212 the columns are
+also **retention's predicate**, so a clobbered marker held the segment back from pruning
+until the re-run stamped it again, and `delta.retention.segments.held-back` counted phantom
+stalls in the window.
+
+Each success path is now a targeted `UPDATE ... SET plugin_sql_at` / `egress_at WHERE id = ?`,
+the same shape `deferPluginSql` / `deferEgress` already used for a failed attempt. A queue's
+mark cannot un-mark the other, and it cannot reset the other queue's retry columns either
+(`plugin_sql_attempts` / `_retry_at`, `egress_attempts` / `_retry_at`). No `@Version` column
+and no migration — V57 stays free.
+
 ### No S3 inside the ingestion commit (issue #147)
 
 The commit of a session — the tail segment's row, the watermark advance, the batch completion, and

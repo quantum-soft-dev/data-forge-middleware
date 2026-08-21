@@ -82,14 +82,12 @@ public class ChangelogSegment {
      * {@code UPDATE ... SET egress_attempts = egress_attempts + 1}, not by saving this entity, so
      * two replicas attempting the same segment both count.</p>
      *
-     * <p>All four retry columns are {@code updatable = false}, and that is load-bearing rather than
-     * decorative (review round 2). Both queues finish with {@code markX(); save(segment)} on the
-     * snapshot taken at claim time, and a merge writes every updatable field — so the SQL queue's
-     * success, minutes after its own claim, would otherwise write the egress columns back as they
-     * were then, <em>erasing</em> a deferral the egress worker recorded in between and restarting
-     * its escalation from zero. That is issue #245's marker clobber reaching the one bound this
-     * queue has. Hibernate applies {@code updatable} to the entity's own UPDATE only, so the bulk
-     * JPQL statements still write these columns; nothing else ever should.</p>
+     * <p>All four retry columns are {@code updatable = false}, and that is belt-and-braces for any
+     * leftover whole-entity save of a claimed snapshot (review round 2, issue #245). The success
+     * path itself is a targeted {@code UPDATE ... SET plugin_sql_at}/{@code egress_at WHERE id = ?}
+     * and never merges the claim-time entity — a merge would write the other queue's marker back
+     * to {@code NULL}. Hibernate applies {@code updatable} to the entity's own UPDATE only, so the
+     * bulk JPQL statements still write these columns; nothing else ever should.</p>
      */
     @Column(name = "egress_attempts", nullable = false, updatable = false)
     private int egressAttempts;
@@ -193,6 +191,10 @@ public class ChangelogSegment {
 
     /**
      * Mark the segment's delta Parquet egress as done (removes it from the pending queue).
+     *
+     * <p>In-memory / fixture only. Production stamps the column with
+     * {@link ChangelogSegmentRepository#markEgressed(java.util.UUID)} so a concurrent SQL-queue
+     * mark cannot be undone (issue #245).</p>
      */
     public void markEgressed() {
         this.egressAt = LocalDateTime.now(ZoneOffset.UTC);
@@ -201,6 +203,10 @@ public class ChangelogSegment {
     /**
      * Mark the segment's plugin SQL generation as done or deliberately skipped (removes it from
      * the pending delta-SQL queue).
+     *
+     * <p>In-memory / fixture only. Production stamps the column with
+     * {@link ChangelogSegmentRepository#markPluginSqlProcessed(java.util.UUID)} so a concurrent
+     * egress mark cannot be undone (issue #245).</p>
      */
     public void markPluginSqlProcessed() {
         this.pluginSqlAt = LocalDateTime.now(ZoneOffset.UTC);

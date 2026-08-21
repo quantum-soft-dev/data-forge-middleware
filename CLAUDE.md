@@ -584,6 +584,20 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245, found reviewing
+  #212). Both workers stamped their marker by saving the whole entity captured at claim, and
+  `ChangelogSegment` has no `@Version`. Since #164 the claim lock is released before S3, so the
+  SQL worker could save a snapshot whose `egress_at` was still `NULL` after the egress worker
+  had already stamped it — and the other way round. Self-healing until #212 made those columns
+  retention's predicate; a clobbered marker then held the segment back from pruning and
+  `delta.retention.segments.held-back` counted phantom stalls. **Targeted `UPDATE ... SET
+  plugin_sql_at` / `egress_at WHERE id = ?`**, the same shape `deferPluginSql`/`deferEgress`
+  already used; `@Version` would have taken V57 (#260's). A mark of A also leaves B's retry
+  columns (`x_attempts` / `x_retry_at`) intact. Tests first: the services never `save` the
+  claim-time snapshot, and an interleaving test (mark A after B, both directions, plus the
+  retry columns, plus two threads) requires both markers set. No REST, gRPC, proto, DTO,
+  migration (V56 current, V57 free), configuration-key, metric-name, S3-key or frontend
+  change. See `docs/delta-client-v2-guide.md` ("A queue's mark cannot un-mark the other").
 - dbf-column-types: DBF SQL generation receives its column types from the site's `TableSchema`,
   so the documented empty-cell contract is the one in force and a non-numeric cell in a numeric
   column can no longer become raw SQL (issue #263, filed reviewing #233). The only production

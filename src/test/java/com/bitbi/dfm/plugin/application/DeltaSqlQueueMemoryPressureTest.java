@@ -153,6 +153,7 @@ class DeltaSqlQueueMemoryPressureTest {
         // once the pod's heap recovers. This is the whole of #181 at this level.
         assertThat(segment.getPluginSqlAt()).isNull();
         verify(segmentRepository, never()).save(any());
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
         // and it spends no attempt: the refusal belongs to the pod, not to this segment, so it must
         // never walk a segment towards the poisoned report (#243, the #150/#162/#178 rule that a
         // transient overload does not become a permanent verdict)
@@ -204,8 +205,8 @@ class DeltaSqlQueueMemoryPressureTest {
 
         // Then
         assertThat(processed).isTrue();
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
         assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count()).isEqualTo(0.0);
     }
 }

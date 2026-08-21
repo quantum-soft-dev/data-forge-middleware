@@ -522,7 +522,9 @@ generation, and one increment of the new counter
 wording, which called a steady rate alert-worthy). A non-zero value is the ordinary state of a busy
 fleet: since #164 `DeltaSqlQueueService.processNextPending` opens no transaction of its own, so the
 `FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock as soon as that
-query's own short transaction commits, and `plugin_sql_at` is set only *after* the render. Two
+query's own short transaction commits, and `plugin_sql_at` is set only *after* the render —
+a targeted `UPDATE` of that column only (issue #245), so a concurrent egress mark cannot be
+merged back to `NULL`. Two
 overlapping drains — `plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
 replica has its own pool — therefore pick the same global head segment deterministically, and one
 of them always loses the unique. An alert on "any steady rate" would fire continuously in healthy
