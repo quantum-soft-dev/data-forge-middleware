@@ -7,6 +7,7 @@
 | `ci-cd.yml` | Tests + code quality. No deploys (AWS deploy + ghcr docker builds are dormant, kept for rollback). |
 | `app-deploy.yml` | Builds images in GCP Artifact Registry and deploys to GKE (dev / stage / prod). |
 | `infra-deploy.yml` | Infrastructure (Terraform) pipeline. |
+| `strip-closed-status-labels.yml` | On `issues: closed` (and a weekly/`workflow_dispatch` sweep), removes every `status:*` label from a closed issue. Closed tickets keep no live status label (issue #257). |
 
 ## CI (`ci-cd.yml`)
 
