@@ -29,8 +29,8 @@ import java.util.regex.Pattern;
  * parsing without naming the key. #185 closed that class for
  * {@code plugin.sql-generation.delta-sweep-ms} with a constructor {@code @Value} copy; every
  * other interval key was bound only at the annotation and had no such check. This validator
- * walks the same {@code @Scheduled} sites {@link com.bitbi.dfm.config} already inventories, so
- * a newly added interval key is validated without a per-bean copy.</p>
+ * walks the same {@code @Scheduled} sites {@code ScheduledTaskInventoryTest} already inventories,
+ * so a newly added interval key is validated without a per-bean copy.</p>
  *
  * <p>Only {@code fixedDelayString} and {@code fixedRateString} are intervals.
  * {@code initialDelayString} of {@code 0} means fire immediately, which several ticks use
