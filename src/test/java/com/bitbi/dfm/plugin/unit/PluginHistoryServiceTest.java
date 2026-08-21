@@ -417,7 +417,7 @@ class PluginHistoryServiceTest {
     class Reinit {
 
         @Test
-        @DisplayName("T017: Should reinit successfully - delete history and trigger async SQL generation")
+        @DisplayName("T017: Should reinit successfully - delete history and set the new baseline batch")
         void shouldReinitSuccessfully() {
             // Given
             when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))

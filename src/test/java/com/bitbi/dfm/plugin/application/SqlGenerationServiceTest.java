@@ -18,6 +18,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -31,8 +34,12 @@ import java.io.ByteArrayInputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -112,23 +119,34 @@ class SqlGenerationServiceTest {
         dbfStrategy = new DbfSqlGenerationStrategy(
                 csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
 
-        service = new SqlGenerationService(
+        service = newService(meterRegistry, dbfStrategy, 2, 120, 80);
+        service.init();
+    }
+
+    /**
+     * The one construction of {@link SqlGenerationService} in this file. The dependencies that
+     * vary between tests (the registry, because {@code Timer.start(mockRegistry)} NPEs and some
+     * tests need a real {@link SimpleMeterRegistry}; the DBF strategy) are parameters; everything
+     * else is the class's shared mocks.
+     */
+    private SqlGenerationService newService(MeterRegistry registry, DbfSqlGenerationStrategy dbf,
+                                            int maxConcurrent, int semaphoreTimeoutSeconds,
+                                            int heapThresholdPercent) {
+        return new SqlGenerationService(
                 accountPluginRepository,
                 new SqlGenerationPersistence(batchRepository, siteRepository,
                         sqlGenerationRepository, changelogSegmentRepository),
                 s3SqlFileStorageService,
-                meterRegistry,
+                registry,
                 pluginAuditService,
-                dbfStrategy,
+                dbf,
                 cdcStrategy,
                 siteSchemaService,
                 deltaStrategy,
                 pluginDeltaBaselineRepository,
-                2,
-                120,
-                80
-        );
-        service.init();
+                maxConcurrent,
+                semaphoreTimeoutSeconds,
+                heapThresholdPercent);
     }
 
     @Nested
@@ -240,20 +258,8 @@ class SqlGenerationServiceTest {
             SimpleMeterRegistry realRegistry = new SimpleMeterRegistry();
             DbfSqlGenerationStrategy realDbfStrategy = new DbfSqlGenerationStrategy(
                     csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, realRegistry);
-            SqlGenerationService serviceWithRealMetrics = new SqlGenerationService(
-                    accountPluginRepository,
-                    new SqlGenerationPersistence(batchRepository, siteRepository,
-                            sqlGenerationRepository, changelogSegmentRepository),
-                    s3SqlFileStorageService,
-                    realRegistry,
-                    pluginAuditService,
-                    realDbfStrategy,
-                    cdcStrategy,
-                    siteSchemaService,
-                    deltaStrategy,
-                    pluginDeltaBaselineRepository,
-                    2,
-                    120,
+            SqlGenerationService serviceWithRealMetrics = newService(realRegistry, realDbfStrategy,
+                    2, 120,
                     100  // disables the memory-pressure abort: it needs heap usage strictly
                          // above the threshold, and 100% is unreachable (#174)
             );
@@ -355,6 +361,8 @@ class SqlGenerationServiceTest {
         private final Long accountPluginId = 7L;
 
         private SqlGenerationService deltaService;
+        /** The registry {@link #deltaService} was built on, so the counters can be read back. */
+        private SimpleMeterRegistry deltaRegistry;
         private Batch batch;
         private Site site;
         private AccountPlugin accountPlugin;
@@ -362,22 +370,8 @@ class SqlGenerationServiceTest {
 
         @BeforeEach
         void setUpDelta() {
-            deltaService = new SqlGenerationService(
-                    accountPluginRepository,
-                    new SqlGenerationPersistence(batchRepository, siteRepository,
-                            sqlGenerationRepository, changelogSegmentRepository),
-                    s3SqlFileStorageService,
-                    new SimpleMeterRegistry(),
-                    pluginAuditService,
-                    dbfStrategy,
-                    cdcStrategy,
-                    siteSchemaService,
-                    deltaStrategy,
-                    pluginDeltaBaselineRepository,
-                    2,
-                    120,
-                    100
-            );
+            deltaRegistry = new SimpleMeterRegistry();
+            deltaService = newService(deltaRegistry, dbfStrategy, 2, 120, 100);
             deltaService.init();
 
             batch = mock(Batch.class);
@@ -452,6 +446,53 @@ class SqlGenerationServiceTest {
         }
 
         @Test
+        @DisplayName("should not audit or count the generation it only adopted (#246)")
+        void shouldNotAuditOrCountTheAdoptedGeneration() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+            PluginSqlGeneration existing = PluginSqlGeneration.create(
+                    accountPluginId, siteId, batchId, null, "plugins/bit-bi/winner.sql", 10L,
+                    new SqlGenerationStats(1, 0, 0, 1), 1L);
+            when(sqlGenerationRepository.save(any())).thenThrow(
+                    new org.springframework.dao.DataIntegrityViolationException("uk_sql_gen_source_batch"));
+            when(sqlGenerationRepository.findBySourceBatchId(batchId)).thenReturn(Optional.of(existing));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).contains(existing);
+            // The winner already wrote the completion entry, and this caller's own key was just
+            // deleted — a second entry would name a dead object on the account's plugin log.
+            verify(pluginAuditService, never()).logSqlGenerationCompleted(
+                    anyString(), any(), any(), any(), any(), anyString(), anyLong());
+            // Statement counters describe the batch, not the attempt: the winner counted them.
+            assertThat(deltaRegistry.counter("sql.generation.statements.inserts").count()).isZero();
+            assertThat(deltaRegistry.counter("sql.generation.statements.updates").count()).isZero();
+            assertThat(deltaRegistry.counter("sql.generation.statements.deletes").count()).isZero();
+            // The lost race is reported as itself rather than as a second success.
+            assertThat(deltaRegistry.counter("sql.generation.claims.lost").count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("should audit and count the winner of the unique claim exactly once (#246)")
+        void shouldAuditAndCountTheWinnerOfTheUniqueClaim() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(3, 2, 1, 1)));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isPresent();
+            verify(pluginAuditService).logSqlGenerationCompleted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId), any(),
+                    eq("plugins/bit-bi/x.sql"), anyLong());
+            assertThat(deltaRegistry.counter("sql.generation.statements.inserts").count()).isEqualTo(3.0);
+            assertThat(deltaRegistry.counter("sql.generation.statements.updates").count()).isEqualTo(2.0);
+            assertThat(deltaRegistry.counter("sql.generation.statements.deletes").count()).isEqualTo(1.0);
+            assertThat(deltaRegistry.counter("sql.generation.claims.lost").count()).isZero();
+        }
+
+        @Test
         @DisplayName("should keep the idempotency guard for V2 batches")
         void shouldKeepIdempotencyGuard() throws Exception {
             when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(true);
@@ -471,6 +512,77 @@ class SqlGenerationServiceTest {
 
             assertThat(result).isEmpty();
             verify(deltaStrategy, never()).generate(any(), any(), any(), any(), any());
+        }
+    }
+
+    /**
+     * The three keys this service consumes fail fast (issue #185): an out-of-range value refuses
+     * to construct the service, which fails the Spring context at startup. Both ways of getting a
+     * key wrong used to fail silently — {@code heap-threshold-percent: 800} disabled the heap
+     * guard, a non-positive value refused every generation for ever (an unbounded queue stall
+     * since #181, silent data loss once retention passes over the pending segments, #212).
+     *
+     * <p>The cases pin both boundaries of each agreed range: {@code heap-threshold-percent}
+     * ∈ [1..100] — 0 is refused because the ceiling-rounded reading of a live JVM is never 0, so
+     * a strict {@code > 0} refuses every generation exactly like the negative it neighbours,
+     * while 100 stays the documented off-switch of #174 (pinned by
+     * {@code SqlGenerationStreamingTest}, "should not abort at a threshold of 100 even when the
+     * heap reports full") — {@code max-concurrent} >= 1, {@code semaphore-timeout-seconds} >= 1.
+     * The refusal must name the key <em>and the value</em> ("but was N"): the crash-loop log line
+     * is the whole of what an operator gets to diagnose a failed rollout with, and asserting the
+     * value through the shared "but was" prefix keeps the assertion from being satisfied by a
+     * digit in the static text. The key strings are deliberately literals rather than the
+     * {@code *_KEY} constants: the key name is a published contract, and a test that read it
+     * through the constant would certify whatever the constant drifted to. The limits of the
+     * named-key promise live in {@code docs/020-sql-generation-optimization.md}.</p>
+     *
+     * <p>The sibling keys {@code delta-max-concurrent} / {@code delta-sweep-ms} are validated the
+     * same way by their own consumer — see {@code DeltaSqlSweepWorkerTest}.</p>
+     */
+    @Nested
+    @DisplayName("Configuration validation (issue #185)")
+    class ConfigurationValidation {
+
+        static Stream<Arguments> outOfRangeConfigurations() {
+            return Stream.of(
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, -1, -1),
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, 0, 0),
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, 101, 101),
+                    arguments("plugin.sql-generation.heap-threshold-percent", 2, 120, 800, 800),
+                    arguments("plugin.sql-generation.max-concurrent", 0, 120, 80, 0),
+                    arguments("plugin.sql-generation.max-concurrent", -1, 120, 80, -1),
+                    arguments("plugin.sql-generation.semaphore-timeout-seconds", 2, 0, 80, 0),
+                    arguments("plugin.sql-generation.semaphore-timeout-seconds", 2, -5, 80, -5));
+        }
+
+        @ParameterizedTest(name = "should refuse {0} = {4} at startup, naming the key and the value")
+        @MethodSource("outOfRangeConfigurations")
+        void shouldRefuseOutOfRangeValue(String key, int maxConcurrent, int semaphoreTimeoutSeconds,
+                                         int heapThresholdPercent, int offendingValue) {
+            assertThatThrownBy(() ->
+                    newService(meterRegistry, dbfStrategy,
+                            maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(key)
+                    .hasMessageContaining("but was " + offendingValue);
+        }
+
+        static Stream<Arguments> acceptedBoundaries() {
+            return Stream.of(
+                    arguments("heap-threshold-percent floor", 2, 120, 1),
+                    arguments("heap-threshold-percent off-switch (#174)", 2, 120, 100),
+                    arguments("max-concurrent floor", 1, 120, 80),
+                    arguments("semaphore-timeout-seconds floor", 2, 1, 80));
+        }
+
+        @ParameterizedTest(name = "should accept the {0}")
+        @MethodSource("acceptedBoundaries")
+        void shouldAcceptBoundary(String boundary, int maxConcurrent, int semaphoreTimeoutSeconds,
+                                  int heapThresholdPercent) {
+            assertThatCode(() ->
+                    newService(meterRegistry, dbfStrategy,
+                            maxConcurrent, semaphoreTimeoutSeconds, heapThresholdPercent))
+                    .doesNotThrowAnyException();
         }
     }
 }

@@ -343,7 +343,10 @@ It now throws `SqlGenerationService.MemoryPressureAbortedException`, a subclass 
 original superseded. #190 then retired the whole regeneration path, so that consumer no longer
 exists; the history stays in the bullet list above.)
 
-(`generateSqlForBatchAsync` is not in the table: it has no callers — see #210.)
+(`generateSqlForBatchAsync` — feature 015's async reinit generator, an `@Async("pluginExecutor")`
+method whose Javadoc described a reinit flow that had been removed — never appears in the table:
+it had no callers, and #185 (folding #210) deleted it. `PluginHistoryService`'s "SQL generation no
+longer triggered for reinit" comment is the remaining record of that flow.)
 
 The regeneration hazard was closed for good by #190 itself: rather than moving the generation out
 of the caller's transaction, #190 retired the regeneration path entirely (it could not serve any
@@ -376,27 +379,90 @@ on a later attempt; nothing about it is deterministically too large. The determi
 size ceilings are the opposite case — they repeat identically for ever — and are bounded by
 attempt counters (#149) or settled as `ABANDONED` (036) instead.
 
-**What sets the retry rate is the wake, not the sweep.** A throw ends the whole
-`DeltaSqlSweepWorker` drain, so there is exactly one refused attempt per wake — but the pool is
+**What sets the retry rate is the wake, not the sweep.** The memory-pressure refusal ends the
+whole `DeltaSqlSweepWorker` drain, so there is exactly one refused attempt per wake — but the pool is
 woken by `BitBiPlugin.execute` on **every** `BATCH_COMPLETED` and by a plugin reinit, not only by
 the `plugin.sql-generation.delta-sweep-ms` tick (60 s). On a busy fleet a pressure episode
 therefore produces one refused attempt, one WARN line and one audit row per completed batch,
 which is the intended visibility but is repetitive; the floor is the sweep tick, not the ceiling.
 
 **One caveat on "unbounded retry is safe": it assumes the threshold is configured sanely.**
-`plugin.sql-generation.heap-threshold-percent` is still accepted unvalidated (**#185**), so a
-mistyped `8` makes the check true for every generation for ever. Before this change that
-misconfiguration silently dropped every batch's SQL; now it stalls the delta-SQL queue instead —
-segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet — which is louder and
-leaves the work recoverable, but it is a stall with no bound of its own. Validating the key is
-#185's job.
+Since **#185** the whole `plugin.sql-generation.*` block is validated — each key in its consuming
+bean's constructor — and an out-of-range value **fails the application context at startup**:
 
-**And "recoverable" has a horizon**: `ChangelogRetentionService.prune` deletes below-checkpoint
-segments past `delta.retention.audit-window-segments` (20) without regard for `plugin_sql_at IS
-NULL`, so a segment left pending long enough is eventually deleted with its S3 object and the
-batch's SQL is lost after all — silently, and without the audit row that marks a refusal. That is
-not introduced here (it applies to any generation that keeps failing, which is what "stays pending
-for the sweep" has always meant) but it bounds the retry window, and it is **#212**.
+| Key | Range | Validated in |
+|---|---|---|
+| `heap-threshold-percent` | `1..100` | `SqlGenerationService` |
+| `max-concurrent` | `>= 1` | `SqlGenerationService` |
+| `semaphore-timeout-seconds` | `>= 1` | `SqlGenerationService` |
+| `delta-max-concurrent` | `>= 1` | `DeltaSqlSweepWorker` |
+| `delta-sweep-ms` | `>= 1` | `DeltaSqlSweepWorker` |
+| `delta-retry-delay-seconds` | `>= 1` | `DeltaSqlQueueService` (#243) |
+| `delta-poison-after-attempts` | `>= 1` | `DeltaSqlQueueService` (#243) |
+
+None of the five #185 covered was scoped out, and the two keys #243 added carry the same rule. 100 stays the documented off-switch of #174 (the strict
+comparison and the clamp are untouched), and the heap floor is **1, not 0**: the ceiling-rounded
+reading of a live JVM is never 0, so a threshold of 0 refuses every generation exactly like a
+negative value — and this deployment's "0 disables" convention elsewhere
+(`delta.parquet.max-scratch-bytes`, `delta.checkpoint.max-fold-bytes`) would have made 0 read as a
+second off-switch. **Fail fast rather than a startup WARN is an owner decision recorded on the
+ticket**, for three reasons: the deployment is a GKE rolling update, so a pod that refuses to
+start does not take the service down — old replicas keep serving and the rollout goes red
+immediately, which is exactly the visibility a config typo needs; a WARN is the channel already
+proven unread — the "memory-pressure abort disabled" startup line exists since #174 and would
+have stopped nobody; and the failure costs are asymmetric — `800` silently disables the heap
+guard, a negative value turns the whole deployment into an endless retry loop that per #212 ends
+in silent data loss once retention passes over the pending segments, `delta-max-concurrent: 0`
+used to crash-loop through `ArrayBlockingQueue`'s message-less `IllegalArgumentException` (naming
+neither key nor value), and `delta-sweep-ms: 0` was accepted by Spring and busy-looped the
+fallback sweep on a green rollout. A failed rollout that names the key is strictly cheaper than
+any of them. **Two limits of the promise are stated rather than implied.** The refusal names the
+key and the value for a *well-formed integer* out of range; a value Spring cannot convert at all
+(an env var present but empty — `${VAR:80}` does not default for `""` — or `"80%"`) fails
+earlier, during `@Value` conversion, with a message naming the constructor parameter rather than
+the key. And validation does not bound a value that is in range and still wrong for the pod — a
+threshold of `8` is legal and makes the check true for nearly every generation, stalling the
+delta-SQL queue (segments accumulate with `plugin_sql_at` unset and `/sql-changes` goes quiet) —
+so the paragraph below about the retry horizon still applies to any persistently refusing
+configuration. One grammar narrowing is deliberate: reading `delta-sweep-ms` into a `long` for
+validation rejects the duration-string form (`PT5M`) that a bare `fixedDelayString` used to
+accept — such a value now dies in `@Value` conversion at startup (no deployment, profile or test
+ever used one). The Boot-native alternative was weighed and not taken:
+`@ConfigurationProperties` + `@Validated` with jakarta constraints (the `ParquetExportProperties`
+shape) would name key, value *and* property origin, and would catch malformed values too — the
+per-consumer-constructor check is the recorded owner decision for this block, five keys across
+two beans did not justify a properties class per consumer, and the two limits above are the
+accepted cost.
+
+**And "recoverable" no longer has a silent horizon (#212)**: `ChangelogRetentionService.prune`
+used to delete below-checkpoint segments past `delta.retention.audit-window-segments` (20) without
+regard for `plugin_sql_at IS NULL`, so a segment left pending long enough was deleted with its S3
+object and the batch's SQL was lost after all — silently, and without the audit row that marks a
+refusal. Changelog retention now **holds a pending segment back** (pending egress alike), counts it
+on `delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}` and WARNs once
+per site per pass. The horizon that remains is deliberate and loud: the retry ends when the segment
+is processed, when an operator deletes it or its batch, when a re-baseline or wipe replaces the
+site's history — or at **batch retention** (per-site `retentionDays`, default 45 days), which
+deletes a retired batch's segments regardless of markers and counts what it destroys on
+`delta.retention.segments.deleted-pending`. See `docs/delta-client-v2-guide.md` ("Retention does
+not delete unprocessed work").
+
+**A per-segment failure no longer ends the drain at all (#243).** Everything above describes the
+memory-pressure refusal, which is systemic and deliberately keeps that behaviour. Any *other*
+failure of a claimed segment — an unreadable object, data the declared schema cannot render — is
+now recorded as a durable deferral (`changelog_segments.plugin_sql_attempts` /
+`plugin_sql_retry_at`, V55) and the drain ends, so the **next** wake — every `BATCH_COMPLETED`, a
+reinit, or the 60 s sweep — claims a different site's head and drains it to the end. Before that, since the claim is the globally oldest per-site head with `LIMIT 1`,
+one poison batch meant no site anywhere had SQL generated. The cooldown starts at
+`plugin.sql-generation.delta-retry-delay-seconds` and doubles per attempt to 64x; past
+`plugin.sql-generation.delta-poison-after-attempts` the WARN becomes an ERROR naming the segment
+and `sql.generation.delta.segments.poisoned` moves. A drain stops after **one** deferral, so a
+systemic failure cannot walk the whole backlog in a single wake, and a failure while the pod is
+shutting down spends no attempt at all (#162). **No attempt ceiling discards the work** — a
+skip would lose that batch's SQL permanently, with no route to re-drive it, which is what #212
+had just stopped — so the horizon stays the one described above. A plugin reinit clears the retry
+state with the marker. See `docs/delta-client-v2-guide.md` ("One failing segment does not stall
+the other sites").
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
@@ -404,6 +470,76 @@ for the sweep" has always meant) but it bounds the retry window, and it is **#21
 - `DeltaSqlQueueMemoryPressureTest` — the real service behind the delta-SQL queue: a refused
   attempt leaves the segment pending, names the batch in the audit log, and does not move
   `sql.generation.errors`; the same wiring below the threshold consumes the segment as usual
+
+---
+
+### Losing the unique claim is not a second success (#246)
+
+Two workers can race `generateSqlForBatch` for one batch since #164 dropped the transaction that
+used to serialize them: the idempotency guard (`existsBySourceBatchId`) runs before the S3 write
+and the INSERT after it, so both can pass the guard and only the V11 unique
+`uk_sql_gen_source_batch` decides the race. The loser catches the
+`DataIntegrityViolationException`, deletes the object **it** uploaded, and adopts the winner's row
+— so both callers return the same generation, which is correct and unchanged.
+
+What was wrong is what the loser did **afterwards**. It carried on down the success path and:
+
+- wrote a second `SQL_GENERATION_COMPLETED` audit entry whose `s3Key` was the key it had just
+  deleted, so the account saw two completed generations for one batch on
+  `GET /api/v1/account/plugins/{pluginId}/logs`, one of them pointing at a dead object;
+- incremented `sql.generation.statements.{inserts,updates,deletes}` a second time for the same
+  batch — those series describe the batch, so a raced batch was double-counted on every dashboard
+  reading them.
+
+`persistOrAdoptExisting` now returns *how* the caller came by the generation, and an adopted one
+returns early: no completion audit entry, no statement counters, one INFO line naming the adopted
+generation, and one increment of the new counter
+
+- **`sql.generation.claims.lost`** — registered at zero, so an alert can predate the first
+  occurrence. It counts *attempts that rendered and uploaded SQL for a batch another worker had
+  already claimed*: wasted work, not a failure — the batch has its SQL either way.
+
+**Read that counter as a waste rate, not as a defect count** (review round 2 corrected the first
+wording, which called a steady rate alert-worthy). A non-zero value is the ordinary state of a busy
+fleet: since #164 `DeltaSqlQueueService.processNextPending` opens no transaction of its own, so the
+`FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock as soon as that
+query's own short transaction commits, and `plugin_sql_at` is set only *after* the render. Two
+overlapping drains — `plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
+replica has its own pool — therefore pick the same global head segment deterministically, and one
+of them always loses the unique. An alert on "any steady rate" would fire continuously in healthy
+operation.
+
+What is worth watching is this series **against the rate of completed generations**: a large share
+means the fleet is repeatedly rendering, uploading and discarding the same batch, and the only lever
+short of a durable claim is that key. Making the claim durable so the second worker never renders at
+all belongs to the queue rather than here — recorded on **#243**, which owns that claim query.
+
+Two neighbouring series still move for both callers, deliberately: `sql.generation.duration` takes
+a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both
+permits.
+
+**The loser's `SQL_GENERATION_STARTED` entry stands, and what that looks like is worth stating**
+(raised in review): it did start, so the entry is true — but the adopt path is now the **only** exit
+of `generateSqlForBatch` that leaves a started entry with no terminal companion. Every other one
+pairs it: a failure writes `SQL_GENERATION_FAILED`, an empty diff writes
+`logSqlGenerationCompletedNoChanges`, and #181 deliberately moved `refuseUnderMemoryPressure`
+*above* the started entry precisely so a refusal costs no unterminated row. So a raced batch reads,
+on `GET /api/v1/account/plugins/{pluginId}/logs` and in the Logs tab of My Plugins, as **two
+"Generating SQL..." lines and one "SQL Generated"** — a reader pairing lines by eye sees one
+generation that never finished. That is a flat event log rather than a live status, so nothing
+spins; but it is a shape the log did not contain before, and it is the counter
+`sql.generation.claims.lost` that says the unmatched line was a lost race rather than a crash.
+
+Giving the loser a terminal entry of its own is the right end state and is **deliberately not done
+here**: it needs a new `PluginActionType` value, which is stored data plus a widening of
+`chk_plugin_audit_logs_action_type` — a Flyway migration, for a cosmetic asymmetry on a path that
+only fires when two workers genuinely collide. Reusing an existing value would be worse than the
+gap: `SQL_GENERATION_COMPLETED` is the duplicate this section removes, and
+`SQL_GENERATION_FAILED` is a `success = false` row claiming an error that did not happen.
+
+Pinned by `SqlGenerationConcurrentClaimIntegrationTest` (the real constraint, the race made
+deterministic by a barrier at `storeSqlFile`) and by the mock twin in `SqlGenerationServiceTest`;
+both go red when the adopted branch is removed.
 
 ---
 
@@ -539,11 +675,16 @@ JDK_JAVA_OPTIONS=-Xmx2560m -Xms512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200
 # application.yml (or application-prod.yml)
 plugin:
   sql-generation:
-    max-concurrent: 2           # Max concurrent SQL generations (semaphore permits)
-    semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out
+    max-concurrent: 2           # Max concurrent SQL generations (semaphore permits); >= 1
+    semaphore-timeout-seconds: 120  # Wait up to 2 min before timing out; >= 1
     heap-threshold-percent: 80  # Abort generation when heap usage is strictly above this %;
-                                # 100 disables the check (usage can never exceed 100%)
+                                # 1..100, and 100 disables the check (usage can never exceed 100%)
 ```
+
+An out-of-range value in any `plugin.sql-generation.*` key **fails startup** (issue #185): the
+three above are validated in the `SqlGenerationService` constructor, and the block's other two —
+`delta-max-concurrent` and `delta-sweep-ms` (026) — in `DeltaSqlSweepWorker`. See "One caveat on
+'unbounded retry is safe'" above for the ranges and the fail-fast reasoning.
 
 ---
 

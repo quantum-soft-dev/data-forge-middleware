@@ -6,6 +6,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
@@ -54,7 +55,8 @@ class DeltaEgressOutsideTransactionTest {
     void setUp() {
         service = new DeltaEgressService(segmentRepository, changelogSegmentService,
                 siteSchemaService, storage, new DeltaMetrics(new SimpleMeterRegistry()),
-                new DeltaParquetProperties(8L * 1024 * 1024));
+                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7,
+                new ApplicationShutdownSignal());
         segment = ChangelogSegment.create(SITE, UUID.randomUUID(), 1L, 1L, 1L,
                 "hash", "changelog/key", "DELTA", null);
     }
@@ -89,7 +91,7 @@ class DeltaEgressOutsideTransactionTest {
 
     @Test
     void egressNextPendingDownloadsAndUploadsBeforeMarkingTheRow() {
-        when(segmentRepository.findNextPendingEgress(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
         when(changelogSegmentService.readRecords("changelog/key")).thenReturn(List.of(
                 ChangeRecord.newBuilder().setTable("orders").setOp(Op.INSERT).setSeq(1L)
                         .putAllKey(Map.of("id", Value.newBuilder().setIntValue(1).build()))
@@ -102,7 +104,7 @@ class DeltaEgressOutsideTransactionTest {
         assertTrue(service.egressNextPending());
 
         var order = inOrder(changelogSegmentService, storage, segmentRepository);
-        order.verify(segmentRepository).findNextPendingEgress(1);
+        order.verify(segmentRepository).findNextPendingEgress(eq(1), any());
         order.verify(changelogSegmentService).readRecords("changelog/key");
         order.verify(storage).uploadDelta(eq(SITE), eq("orders"), eq(1L), eq(1L), any(byte[].class));
         order.verify(segmentRepository).save(segment);
@@ -111,7 +113,7 @@ class DeltaEgressOutsideTransactionTest {
 
     @Test
     void emptyQueueTouchesNoStorage() {
-        when(segmentRepository.findNextPendingEgress(1)).thenReturn(List.of());
+        when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of());
 
         assertFalse(service.egressNextPending());
         verifyNoInteractions(changelogSegmentService);

@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.delta.application.ValueMapper;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
 import com.bitbi.dfm.plugin.domain.JsonlChangeRecord;
@@ -165,6 +166,26 @@ public class SqlStatementGenerator {
     /**
      * Formats a value for SQL based on its DBF type.
      * Handles NULL for empty values, quoting for strings, no quotes for numbers.
+     *
+     * <p>A non-finite token in a numeric column is quoted, for the reason
+     * {@link #formatJsonValue(Object)} explains: unquoted, {@code NaN} is an identifier to
+     * PostgreSQL, not a literal. Quoting makes the statement <em>valid</em> only where the target
+     * type accepts a non-finite value — {@code numeric}, {@code real} and {@code double precision}
+     * do, an integral one does not, and there the statement fails either way
+     * ({@code invalid input syntax for type integer} in place of {@code column "nan" does not
+     * exist}); {@link DbfColumnType#INTEGER} and {@link DbfColumnType#CURRENCY} are quoted with the
+     * rest because a uniform rule is never worse than the bare token, not because it rescues them.</p>
+     *
+     * <p><strong>This numeric branch is unreachable through the only production caller</strong>, and
+     * that is worth knowing rather than assuming the guard is load-bearing:
+     * {@code DbfSqlGenerationStrategy} passes an <em>empty</em> {@code columnTypes} map, so every
+     * column falls back to {@link DbfColumnType#CHARACTER} and every CSV cell is already quoted and
+     * escaped — a token like {@code NaN} included. The guard belongs to this method's own contract
+     * (the parameter exists, and the branch goes live the moment a caller supplies a real map)
+     * rather than to an observed defect. Two consequences of that empty map are <em>not</em> this
+     * method's to settle and are filed as issue #263: the per-type NULL/{@code 0} handling above is
+     * dead for the same reason, and a non-numeric token reaching a numeric column is returned raw —
+     * unquoted and unescaped — which is latent only because nothing supplies the map.</p>
      */
     private String formatValue(String value, DbfColumnType type) {
         // Handle empty values
@@ -176,9 +197,10 @@ public class SqlStatementGenerator {
             }
         }
 
-        // Numeric types - no quotes
+        // Numeric types - no quotes, unless the token is one PostgreSQL only accepts quoted
         if (isNumericType(type)) {
-            return value;
+            String nonFinite = ValueMapper.canonicalNonFinite(value);
+            return nonFinite != null ? "'" + nonFinite + "'" : value;
         }
 
         // String types - escape and quote
@@ -314,6 +336,32 @@ public class SqlStatementGenerator {
     /**
      * Formats a typed value for use in a SQL statement.
      * Handles null, numbers (BigDecimal without scientific notation), booleans, bytea and strings.
+     *
+     * <p>A non-finite {@code double} is the one number that must be <em>quoted</em>: PostgreSQL
+     * {@code real} / {@code double precision} hold {@code NaN} and {@code +/-Infinity}, but only as
+     * a string literal it coerces to the column type — bare, {@code NaN} parses as a column name
+     * ({@code ERROR: column "nan" does not exist}), so the statement was written and uploaded
+     * successfully and failed only when Bit BI applied the file, taking the rest of the file with it
+     * if it applies one transactionally (issue #233).</p>
+     *
+     * <p>Quoted rather than degraded to NULL, which is what the {@code numeric} path does for the
+     * same three values (#215). The trade-off runs the other way here: Parquet DECIMAL cannot hold
+     * a non-finite value, so NULL keeps the Parquet artifacts and the SQL stream agreeing about that
+     * cell, whereas Parquet DOUBLE holds it natively — nulling it in SQL alone would be the
+     * disagreement #215 avoided, and this pipeline would be dropping a value both of its consumers
+     * can carry. The same property makes such a value usable as a key: PostgreSQL compares
+     * {@code NaN} equal to itself, so {@code col = 'NaN'} addresses the row, which is why
+     * {@code DeltaSqlGenerationStrategy} skips a record only for an unrepresentable
+     * <em>decimal</em> key.</p>
+     *
+     * <p>The rule keys on the <em>wire</em> type while the Parquet writers key on the
+     * <em>declared</em> one, so one combination still disagrees: a column declared
+     * {@code numeric}/{@code decimal} whose value nevertheless arrives as {@code double_value} —
+     * which the wire contract forbids — is NULL in every Parquet artifact
+     * ({@code ParquetCheckpointWriter.toBigDecimal} cannot render a non-finite into a DECIMAL
+     * whatever Java type it arrived as) and {@code 'NaN'} here. That was equally true before
+     * issue #233, when the SQL was merely invalid as well; teaching this path the destination type
+     * is issue #240, which owns the question for both sides.</p>
      */
     private String formatJsonValue(Object value) {
         if (value == null) {
@@ -321,6 +369,15 @@ public class SqlStatementGenerator {
         }
         if (value instanceof java.math.BigDecimal decimal) {
             return decimal.toPlainString();
+        }
+        if (value instanceof Double || value instanceof Float) {
+            // One vocabulary for the three spellings, shared with the DBF branch and with
+            // ChangelogFold rather than restated here -- a second copy of it is what issue #238 was.
+            // Java prints exactly PostgreSQL's own spellings, so the round trip through the token is
+            // free: the same string is returned unquoted when the value is finite.
+            String text = value.toString();
+            String nonFinite = ValueMapper.canonicalNonFinite(text);
+            return nonFinite != null ? "'" + nonFinite + "'" : text;
         }
         if (value instanceof Number) {
             return value.toString();

@@ -55,8 +55,21 @@ import java.util.function.Supplier;
  *       deleted or could not delete, tagged {@code prefix=segments|checkpoints} (issue #158).
  *       Alert on {@code candidates}: it is the only one of the three that moves while
  *       {@code delta.s3-orphan.dry-run} is on, which is the shipped default</li>
+ *   <li>{@code delta.retention.segments.held-back} — below-checkpoint segments retention would
+ *       have pruned but held back because their queue work is still pending, tagged
+ *       {@code reason=pending_plugin_sql|pending_egress} (issue #212). Registered at zero so an
+ *       alert can predate the first occurrence. A census, not an arrival rate: the same held-back
+ *       segment is counted again on every pass until one of its endings takes it</li>
+ *   <li>{@code delta.retention.segments.deleted-pending} — segments batch retention (the
+ *       deliberate outer horizon, per-site {@code retentionDays}) deleted while their queue work
+ *       was still pending, same {@code reason} tag, registered at zero (issue #212)</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
+ *   <li>{@code delta.egress.errors} — segment egress attempts that failed and were deferred with a
+ *       backoff, the {@code sql.generation.errors} twin (issue #243), registered at zero</li>
+ *   <li>{@code delta.egress.segments.poisoned} — the subset of those failures on a segment that has
+ *       failed at least {@code delta.egress.poison-after-attempts} times: the standing signal that
+ *       one segment needs an operator, since nothing discards it (issue #243)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
  *       {@code download|write|upload}</li>
  *   <li>{@code delta.batch-parquet.artifacts} — completed-batch artifacts settled, tagged
@@ -83,6 +96,10 @@ public class DeltaMetrics {
     public static final String ORPHAN_PREFIX_SEGMENTS = "segments";
     /** Tag value for {@code checkpoints/{siteId}/}. */
     public static final String ORPHAN_PREFIX_CHECKPOINTS = "checkpoints";
+    /** Held back because {@code plugin_sql_at IS NULL} — the delta-SQL queue still owes the segment. */
+    public static final String RETENTION_PENDING_PLUGIN_SQL = "pending_plugin_sql";
+    /** Held back because {@code egress_at IS NULL} — the delta-Parquet egress queue still owes it. */
+    public static final String RETENTION_PENDING_EGRESS = "pending_egress";
     static final String PHASE_TOTAL = "total";
     static final Set<String> BATCH_PARQUET_PHASES =
             Set.of("download", "decode", "decimal_scan", "write", "upload", PHASE_TOTAL);
@@ -97,6 +114,8 @@ public class DeltaMetrics {
     private final Counter sessionOverflowsBytes;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
+    private final Counter egressErrors;
+    private final Counter egressPoisoned;
     private final Counter nonFiniteDecimals;
     private final Counter malformedDecimals;
     private final Counter checkpointNoSchema;
@@ -118,6 +137,10 @@ public class DeltaMetrics {
     private final Counter checkpointOrphansReclaimed;
     private final Counter segmentOrphanDeletesFailed;
     private final Counter checkpointOrphanDeletesFailed;
+    private final Counter retentionHeldBackPluginSql;
+    private final Counter retentionHeldBackEgress;
+    private final Counter retentionDeletedPendingPluginSql;
+    private final Counter retentionDeletedPendingEgress;
     private final Map<String, Timer> batchParquetPhases;
     private final Map<String, Timer> egressPhases;
     private final Map<String, Timer> checkpointPhases;
@@ -143,6 +166,14 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressErrors = Counter.builder("delta.egress.errors")
+                .description("Segment egress attempts that failed — the twin of "
+                        + "sql.generation.errors, one count per deferred attempt")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressPoisoned = Counter.builder("delta.egress.segments.poisoned")
+                .description("Failed egress attempts on a segment that has now failed at least "
+                        + "delta.egress.poison-after-attempts times")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.nonFiniteDecimals = unrepresentableDecimals(registry, "non_finite");
         this.malformedDecimals = unrepresentableDecimals(registry, "malformed");
@@ -175,6 +206,10 @@ public class DeltaMetrics {
         this.checkpointOrphansReclaimed = orphansReclaimed(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.segmentOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_SEGMENTS);
         this.checkpointOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_CHECKPOINTS);
+        this.retentionHeldBackPluginSql = retentionHeldBack(registry, RETENTION_PENDING_PLUGIN_SQL);
+        this.retentionHeldBackEgress = retentionHeldBack(registry, RETENTION_PENDING_EGRESS);
+        this.retentionDeletedPendingPluginSql = retentionDeletedPending(registry, RETENTION_PENDING_PLUGIN_SQL);
+        this.retentionDeletedPendingEgress = retentionDeletedPending(registry, RETENTION_PENDING_EGRESS);
         this.batchParquetPhases = phaseTimers(registry, "delta.batch-parquet.duration",
                 "Time spent in one completed-batch Parquet phase", BATCH_PARQUET_PHASES);
         this.egressPhases = phaseTimers(registry, "delta.egress.duration",
@@ -225,6 +260,20 @@ public class DeltaMetrics {
         return Counter.builder("delta.s3-orphan.delete-failed")
                 .description("Unreferenced S3 objects the bucket would not delete, by prefix")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag(ORPHAN_PREFIX_TAG, prefix).register(registry);
+    }
+
+    private static Counter retentionHeldBack(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.retention.segments.held-back")
+                .description("Below-checkpoint segments retention would have pruned but held back "
+                        + "because their queue work is still pending, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
+    private static Counter retentionDeletedPending(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.retention.segments.deleted-pending")
+                .description("Segments batch retention deleted while their queue work was still "
+                        + "pending — the deliberate outer horizon of the queues' retry, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
     }
 
     private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
@@ -295,6 +344,17 @@ public class DeltaMetrics {
      * unmaterialized rows, so unlike the other two this abort does stop by itself, once those rows
      * have spent {@code delta.checkpoint.max-materialize-attempts} —
      * {@code delta.checkpoint.tables.given-up} is where it is visible afterwards.</p>
+     *
+     * <p>{@code lossy_refold} has one bounded sub-case since issue #212, scoped exactly to the
+     * state #212 created: a frame-gone site whose remaining segments all sit <b>at or below</b>
+     * the pointer <b>and at least one of them is held back pending queue work</b> — the row
+     * retention can never remove, so the state can stay open for ever. It drains exactly as
+     * {@code history_gone} does: one increment per night while the retryable rows last, then
+     * quiet, with the given-up gauge as the standing signal. Everything else keeps the original
+     * never-quiets contract — segments above the pointer (live data), and a below-pointer set
+     * that is all <em>processed</em>: that is the ordinary audit window of a quiet site, which
+     * retention never emptied even before #212, and its alarm is a real, rebuild-recoverable
+     * data-loss condition that must not self-silence (review round 2 of #212's PR).</p>
      *
      * <p>{@code fold_too_large} is the fourth, and it is about heap rather than disk or S3 (issue
      * #152): the site's folded state grew past {@code delta.checkpoint.max-fold-bytes}, the ceiling
@@ -447,6 +507,73 @@ public class DeltaMetrics {
             case ORPHAN_PREFIX_SEGMENTS -> segments;
             case ORPHAN_PREFIX_CHECKPOINTS -> checkpoints;
             default -> throw new IllegalArgumentException("Unknown prefix: " + prefix);
+        };
+    }
+
+    /**
+     * Below-checkpoint segments the retention pass would have pruned but held back because their
+     * queue work is still pending (issue #212).
+     *
+     * <p>A segment whose {@code plugin_sql_at} or {@code egress_at} is {@code NULL} is the durable
+     * entry of a work queue, so deleting it loses that batch's SQL or delta Parquet permanently —
+     * retention skips it and this series is how the resulting backlog is seen before it is large.
+     * Only segments the audit window would actually have pruned are counted: a pending segment
+     * still inside the window is retained by the window, not by the predicate.</p>
+     *
+     * <p>Read each {@code reason} series independently — "is this queue stalling retention": a
+     * segment owing <em>both</em> counts on both, so the sum over reasons can exceed the number of
+     * held-back segments (the per-consumer honesty of
+     * {@code delta.parquet.unrepresentable-decimals}). And read it as a <b>census, not an arrival
+     * rate</b>: the same held-back segment is counted again on every pass until one of its endings
+     * takes it — its queue draining it, an operator deleting the segment or its batch, a
+     * re-baseline or wipe replacing the site's history, or the batch-retention horizon
+     * ({@link #retentionPendingSegmentsDeleted}) — so a rate alert would read a static backlog as
+     * that many new stalls a day (the {@code delta.s3-orphan.candidates} caveat). Both series are
+     * registered at zero, so an alert can predate the first occurrence.</p>
+     *
+     * <p><b>One blind spot</b>: retention runs only after a <em>successful</em> checkpoint build
+     * ({@code CheckpointScheduler}), so a site whose build aborts nightly shows zero here while its
+     * backlog accumulates — {@code delta.checkpoint.builds.aborted} covers that state. And a plugin
+     * reinit re-pends a site's audit window by design ({@code clearPluginSqlBySiteId}), so a
+     * one-pass spike after a reinit is benign.</p>
+     *
+     * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
+     * @param count  how many segments were held back for that reason
+     */
+    public void retentionSegmentsHeldBack(String reason, long count) {
+        retentionReasonCounter(reason, retentionHeldBackPluginSql, retentionHeldBackEgress)
+                .increment(count);
+    }
+
+    /**
+     * Pending queue work destroyed by batch retention — the deliberate outer horizon of the
+     * queues' retry (issue #212, owner decision).
+     *
+     * <p>{@code BatchRetentionService} deletes a retired batch's segments (rows and objects) after
+     * the site's {@code retentionDays} (default 45) with no marker check — that is the one
+     * scheduled deleter allowed to take pending work, and this series is what keeps it from being
+     * silent: each count here is a segment whose SQL or delta Parquet is now permanently
+     * unproducible. Registered at zero; a non-zero rate means work sat in a queue for the whole
+     * retention window, which is an incident to explain, not routine. The explicit admin batch
+     * delete is deliberately <b>not</b> counted here — it is an operator action, and
+     * {@code BatchDeletionService} WARNs with the pending count instead. That "informed override"
+     * is informed only as far as the server log today: the delete's HTTP response carries no
+     * pending count, because a REST-contract change was deliberately avoided in #212 — a UI
+     * confirmation surface is its own decision if ever wanted.</p>
+     *
+     * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
+     * @param count  how many pending segments the batch deletion destroyed for that reason
+     */
+    public void retentionPendingSegmentsDeleted(String reason, long count) {
+        retentionReasonCounter(reason, retentionDeletedPendingPluginSql, retentionDeletedPendingEgress)
+                .increment(count);
+    }
+
+    private static Counter retentionReasonCounter(String reason, Counter pluginSql, Counter egress) {
+        return switch (reason) {
+            case RETENTION_PENDING_PLUGIN_SQL -> pluginSql;
+            case RETENTION_PENDING_EGRESS -> egress;
+            default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         };
     }
 
@@ -604,11 +731,44 @@ public class DeltaMetrics {
         egressSegments.increment();
     }
 
+    /**
+     * One segment's egress attempt failed and the segment was deferred (issue #243).
+     *
+     * <p>The {@code sql.generation.errors} twin the delta-SQL queue has had since 026, and the
+     * queue-level series the egress side had none of: a failure here leaves the segment as the
+     * durable queue entry, so the work is not lost — but nothing said it had happened. Every
+     * failure is one count, so this is an arrival rate; a segment failing for ever contributes one
+     * count per cooldown, which past the doubling cap is one an hour.</p>
+     *
+     * <p>Registered at zero, so an alert can predate the first failure.</p>
+     */
+    public void egressFailed() {
+        egressErrors.increment();
+    }
+
+    /**
+     * A failed egress attempt on a segment that has now failed at least
+     * {@code delta.egress.poison-after-attempts} times (issue #243).
+     *
+     * <p>The standing "an operator has to act" signal, and deliberately a <b>subset</b> of
+     * {@link #egressFailed()} rather than a tag value on it: a passing S3 outage moves the errors
+     * series and clears, while a segment reaching the threshold is a declared schema that does not
+     * fit its data, an unreadable object or a ceiling set too low — and it is <em>not</em>
+     * discarded, so nothing else will ever raise its hand. Read it as a census rather than an
+     * arrival rate: the same segment counts again on each retry until the cause is fixed, the
+     * batch is deleted, or batch retention takes it ({@link #retentionPendingSegmentsDeleted}).</p>
+     */
+    public void egressSegmentPoisoned() {
+        egressPoisoned.increment();
+    }
+
     private static Counter unrepresentableDecimals(MeterRegistry registry, String reason) {
         Counter counter = Counter.builder("delta.parquet.unrepresentable-decimals")
                 .description("Decimal cells written as NULL because the value has no Parquet DECIMAL "
-                        + "representation: non_finite = NaN or +/-Infinity (legal in PostgreSQL), "
-                        + "malformed = a token BigDecimal cannot parse (issue #215)")
+                        + "representation: non_finite = NaN or +/-Infinity, legal in PostgreSQL and "
+                        + "nothing to repair here; the signed NaN spelling PostgreSQL rejects also "
+                        + "lands here and is deliberately not separated (issue #238); malformed = a "
+                        + "token BigDecimal cannot parse at all, a client defect (issue #215)")
                 .tag("reason", reason)
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         counter.increment(0.0);
@@ -624,6 +784,14 @@ public class DeltaMetrics {
      * PostgreSQL {@code numeric} holding {@code NaN} or {@code +/-Infinity}, which is legal at the
      * source and simply has no DECIMAL encoding — nothing to repair here — while {@code malformed}
      * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix.</p>
+     *
+     * <p>One spelling is on this series without being separable on it, deliberately: PostgreSQL
+     * rejects {@code '-NaN'::numeric}, so a signed NaN can only come from a client that formats
+     * non-faithfully — but the loss it causes is the ordinary one, a cell this pipeline cannot
+     * store, so it is counted as {@code non_finite} and nothing distinguishes it (issue #238).
+     * Neither series moves differently for it and no log line prints the token: a signal of its own
+     * would page an operator about a formatting quirk that costs nothing beyond the degradation
+     * already reported here.</p>
      *
      * <p>Read it as <b>cells</b>, not rows or files: one row with two such columns counts twice,
      * and the same source cell is counted again by each <em>Parquet</em> consumer that renders it

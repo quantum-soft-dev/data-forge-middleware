@@ -95,6 +95,26 @@ public class SiteSyncState {
     private String lastRebuildMessage;
 
     /**
+     * How the most recent scheduled checkpoint build aborted before writing anything (issue #224).
+     * Null until a nightly visit of a site that still has no checkpoint throws. A healthy build
+     * does not touch this — it advances {@link #lastCheckpointSeq} instead.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "last_checkpoint_build_abort", length = 32)
+    private CheckpointBuildAbort lastCheckpointBuildAbort;
+
+    /** When {@link #lastCheckpointBuildAbort} was recorded. */
+    @Column(name = "last_checkpoint_build_abort_at")
+    private LocalDateTime lastCheckpointBuildAbortAt;
+
+    /**
+     * Operator-facing explanation of {@link #lastCheckpointBuildAbort} — the failure's own text,
+     * bounded by {@link #MAX_REBUILD_MESSAGE_LENGTH}.
+     */
+    @Column(name = "last_checkpoint_build_message", length = MAX_REBUILD_MESSAGE_LENGTH)
+    private String lastCheckpointBuildMessage;
+
+    /**
      * When {@code GetSyncState} first answered NEED_REBASELINE for the pending request (issue #84).
      * Null while the client has not been told yet — a cancellation up to that point provably
      * reaches it; afterwards the client may already be preparing its snapshot.
@@ -193,6 +213,10 @@ public class SiteSyncState {
         // It is deliberately *not* tied to rebuildRequested, which this reset leaves alone: the
         // flag says "a rebuild is owed", the verdict says "this is what the last one did".
         clearRebuildOutcome();
+        // Same for a scheduled-build abort (#224): the pointer is going back to zero, so an abort
+        // recorded against the discarded baseline would read as "the first build of the new one
+        // already failed" before anything has been attempted.
+        clearCheckpointBuildAbort();
         this.baselineEpoch++;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
@@ -224,6 +248,7 @@ public class SiteSyncState {
         this.rebaselineNotifiedAt = null;
         this.rebuildRequested = false;
         clearRebuildOutcome();
+        clearCheckpointBuildAbort();
         this.generation++;
         this.baselineEpoch++;
         this.wipePending = true;
@@ -329,6 +354,36 @@ public class SiteSyncState {
         this.lastRebuildOutcome = null;
         this.lastRebuildOutcomeAt = null;
         this.lastRebuildMessage = null;
+    }
+
+    /**
+     * Record that a scheduled checkpoint build aborted before writing anything (issue #224). Does
+     * not move {@link #updatedAt}: stalled is a statement about the client, and this write is the
+     * nightly tick's.
+     *
+     * <p>Callers that have already observed {@link #lastCheckpointSeq}{@code > 0} must not call
+     * this — a site that has a checkpoint is already distinguishable by the pointer, and the
+     * abort columns exist to separate "not due yet" from "already tried and failed".</p>
+     *
+     * @param abort   why the visit produced nothing
+     * @param message operator-facing explanation, truncated to {@link #MAX_REBUILD_MESSAGE_LENGTH};
+     *                null when the outcome needs none
+     */
+    public void recordCheckpointBuildAbort(CheckpointBuildAbort abort, String message) {
+        this.lastCheckpointBuildAbort = abort;
+        this.lastCheckpointBuildAbortAt = LocalDateTime.now(ZoneOffset.UTC);
+        this.lastCheckpointBuildMessage = truncateRebuildMessage(message);
+    }
+
+    /**
+     * Forget how the last scheduled build aborted (issue #224). Called with
+     * {@link #clearRebuildOutcome()} by everything that zeroes {@link #lastCheckpointSeq}, because
+     * an abort about a discarded baseline would otherwise make the new one read as already-failed.
+     */
+    private void clearCheckpointBuildAbort() {
+        this.lastCheckpointBuildAbort = null;
+        this.lastCheckpointBuildAbortAt = null;
+        this.lastCheckpointBuildMessage = null;
     }
 
     /**

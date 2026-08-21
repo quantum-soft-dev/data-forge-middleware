@@ -116,6 +116,37 @@ describe('getSyncStatus (issue #213)', () => {
     expect(getSyncSeverity(1_155, fresh, NOW)).toBe('elevated');
   });
 
+  it('reads a site whose first scheduled build already aborted as failed, not as waiting (#224)', () => {
+    // The state #213 introduced cannot age itself out: thirty failed nights carried the same
+    // payload as a site ingested this afternoon. The abort is the persisted fact that a
+    // scheduled visit already passed this site by.
+    expect(
+      getSyncStatus(
+        {
+          lastAppliedSeq: 1_155,
+          lastCheckpointSeq: 0,
+          updatedAt: fresh,
+          lastCheckpointBuildAbort: 'FOLD_TOO_LARGE',
+        },
+        NOW,
+      ),
+    ).toBe('first-checkpoint-failed');
+  });
+
+  it('still says stalled when the client itself has gone quiet, even with an abort on record', () => {
+    expect(
+      getSyncStatus(
+        {
+          lastAppliedSeq: 1_155,
+          lastCheckpointSeq: 0,
+          updatedAt: stale,
+          lastCheckpointBuildAbort: 'FAILED',
+        },
+        NOW,
+      ),
+    ).toBe('stalled');
+  });
+
   it('reads a null checkpoint pointer (bulk health) the same way', () => {
     expect(
       getSyncStatus({ lastAppliedSeq: 40, lastCheckpointSeq: null, updatedAt: fresh }, NOW),
@@ -164,6 +195,23 @@ describe('syncStatusTone', () => {
     expect(tone.label).toBe('No checkpoint yet');
     expect(tone).not.toEqual(syncStatusTone('elevated'));
     expect(tone).not.toEqual(syncStatusTone('critical'));
+  });
+
+  it('paints a failed first build as an alarm, not as a wait (#224)', () => {
+    const tone = syncStatusTone('first-checkpoint-failed', 'FOLD_TOO_LARGE');
+    expect(tone.label).toBe('Checkpoint failed');
+    expect(tone).not.toEqual(syncStatusTone('awaiting-first-checkpoint'));
+    expect(tone.dot).toBe(syncStatusTone('critical').dot);
+  });
+
+  it('paints a spent deferral as elevated, not as a permanent failure (#224 r1)', () => {
+    // #213 refused to call a fold-budget miss "the build is failing": it repairs next tick.
+    const tone = syncStatusTone('first-checkpoint-failed', 'DEFERRED');
+    expect(tone.label).toBe('Build deferred');
+    expect(tone.dot).toBe(syncStatusTone('elevated').dot);
+    expect(syncStatusTone('first-checkpoint-failed', 'SCRATCH_FULL').dot).toBe(
+      syncStatusTone('elevated').dot,
+    );
   });
 
   it('keeps the severity palette for every real verdict', () => {

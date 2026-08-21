@@ -22,14 +22,16 @@ interface ActivityCardProps {
   lagSamples: number[];
   /** The site's current sync verdict — colors the lag line (a pending first checkpoint is grey). */
   status: SyncStatus;
+  /** `lastCheckpointBuildAbort` when {@code status} is `first-checkpoint-failed` (#224). */
+  abort?: string | null;
   /** Recent segments, newest first (admin data). */
   segments?: DeltaSegment[];
   /** False while P2 is unresolved for owners — hides the throughput panel. */
   showThroughput: boolean;
 }
 
-export function ActivityCard({ lagSamples, status, segments, showThroughput }: ActivityCardProps) {
-  const sev = syncStatusTone(status);
+export function ActivityCard({ lagSamples, status, abort, segments, showThroughput }: ActivityCardProps) {
+  const sev = syncStatusTone(status, abort);
   const points = sparklinePoints(lagSamples, SPARK_WIDTH, SPARK_HEIGHT);
 
   // Oldest → newest, left to right, capped at the last 16 segments.

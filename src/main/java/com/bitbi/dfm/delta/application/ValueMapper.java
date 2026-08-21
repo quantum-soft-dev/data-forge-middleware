@@ -64,8 +64,13 @@ public final class ValueMapper {
      * responses from an operator — nothing to do, nothing to do, and a client sending nonsense —
      * so a counter keyed on this must not conflate them.</p>
      *
+     * <p>The three <em>values</em> are matched through more spellings than PostgreSQL itself emits,
+     * because the token is whatever the client chose to format: any casing, {@code inf} as well as
+     * {@code infinity}, and an optional sign on both — see {@link #isNonFiniteToken(String)}.</p>
+     *
      * @param value the wire value
-     * @return {@code true} for {@code NaN}, {@code Infinity} or {@code -Infinity} in any casing
+     * @return {@code true} for {@code NaN}, {@code Infinity} or {@code -Infinity} in any spelling
+     *         this pipeline recognises, the signed {@code NaN} included (issue #238)
      */
     public static boolean isNonFiniteDecimal(Value value) {
         return value.getVCase() == Value.VCase.DECIMAL_VALUE
@@ -73,18 +78,83 @@ public final class ValueMapper {
     }
 
     /**
-     * PostgreSQL accepts these case-insensitively and with an optional sign on infinity, and emits
-     * them as {@code NaN} / {@code Infinity} / {@code -Infinity}. Both spellings are matched, since
-     * the token reaching us is whatever the client chose to send.
+     * PostgreSQL emits these as {@code NaN} / {@code Infinity} / {@code -Infinity} and accepts them
+     * case-insensitively, with an optional sign on the infinities only — {@code '-NaN'::numeric} is
+     * a syntax error, so a signed NaN never comes from a faithful {@code numeric} round trip.
+     * It is matched anyway, because the token reaching us is whatever the client chose to format,
+     * which is the same premise that makes the sign stripped for infinity. The sign is therefore
+     * stripped before the NaN test too: {@code -NaN} used to fall through to
+     * {@link #isMalformedDecimal(Value)} and be counted as a client defect that does not exist
+     * (issue #238).
      */
     private static boolean isNonFiniteToken(String token) {
+        return canonicalNonFinite(token) != null;
+    }
+
+    /**
+     * The canonical spelling of a non-finite token, or {@code null} when the token is not one.
+     *
+     * <p>Shared rather than copied, because a second copy of it is what issue #238 was: the
+     * identical sign-handling slip existed in both this class and {@link ChangelogFold}, and nothing
+     * made them agree. A future spelling added here — or a change to the trim or sign rule — would
+     * otherwise leave the fold returning the raw token as identity for a value this class calls
+     * non-finite, folding one source row into two. {@link ChangelogFold} canonicalises a decimal
+     * key's fold identity with it; {@code SqlStatementGenerator} decides with it whether a DBF
+     * numeric token has to be quoted to be a PostgreSQL literal at all (issue #233), which is what
+     * widened it from package-private.</p>
+     *
+     * <p>PostgreSQL has a single NaN and rejects the signed input, so the sign is dropped rather
+     * than preserved; for the infinities it decides the answer.</p>
+     *
+     * @param token the wire token
+     * @return {@code "NaN"}, {@code "Infinity"} or {@code "-Infinity"}, or {@code null}
+     */
+    public static String canonicalNonFinite(String token) {
         String trimmed = token.trim();
-        if (trimmed.equalsIgnoreCase("nan")) {
-            return true;
+        boolean negative = trimmed.startsWith("-");
+        String unsigned = negative || trimmed.startsWith("+") ? trimmed.substring(1) : trimmed;
+        if (unsigned.equalsIgnoreCase("nan")) {
+            return "NaN";
         }
-        String unsigned = trimmed.startsWith("+") || trimmed.startsWith("-")
-                ? trimmed.substring(1) : trimmed;
-        return unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf");
+        if (unsigned.equalsIgnoreCase("infinity") || unsigned.equalsIgnoreCase("inf")) {
+            return negative ? "-Infinity" : "Infinity";
+        }
+        return null;
+    }
+
+    /**
+     * Whether this value is a floating point number the wire carried as {@code double_value} and
+     * IEEE calls non-finite — {@code NaN} or {@code ±Infinity}.
+     *
+     * <p>Unlike the decimal predicates above this is <em>not</em> a loss: {@link #toJava(Value)}
+     * returns the value, protobuf {@code double} carries it, and a column declared {@code real} or
+     * {@code double precision} materialises as Avro FLOAT/DOUBLE, which hold it natively. It is
+     * asked by a caller that must know whether the <em>declared</em> destination can hold it after
+     * all — a column declared {@code numeric(p,s)} whose value nevertheless arrives on this wire
+     * case, which the schema contract forbids and nothing rejects at ingest (issue #233).</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a {@code double_value} of {@code NaN} or {@code ±Infinity}
+     */
+    public static boolean isNonFiniteDouble(Value value) {
+        return value.getVCase() == Value.VCase.DOUBLE_VALUE
+                && !Double.isFinite(value.getDoubleValue());
+    }
+
+    /**
+     * Whether this value is a {@code string_value} spelling one of the three non-finite numbers.
+     *
+     * <p>Like {@link #isNonFiniteDouble(Value)} and unlike the decimal predicates, this is no loss
+     * here: the string is carried as it arrived. It matters only to a caller comparing the value
+     * against the column's <em>declared</em> type, where a {@code numeric(p,s)} destination cannot
+     * store it although this wire case can (issue #233, review round 4).</p>
+     *
+     * @param value the wire value
+     * @return {@code true} for a string spelling {@code NaN} or {@code ±Infinity}
+     */
+    public static boolean isNonFiniteString(Value value) {
+        return value.getVCase() == Value.VCase.STRING_VALUE
+                && canonicalNonFinite(value.getStringValue()) != null;
     }
 
     /**

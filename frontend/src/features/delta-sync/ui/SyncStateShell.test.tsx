@@ -259,5 +259,30 @@ describe('SyncStateShell (F5)', () => {
 
       expect(screen.getByTestId('severity-chip')).toHaveTextContent('Stalled')
     })
+
+    it('stops painting a wait once the scheduled build has already aborted (#224)', () => {
+      render(
+        <SyncStateShell
+          state={{
+            ...freshSite,
+            lastCheckpointBuildAbort: 'FOLD_TOO_LARGE',
+            lastCheckpointBuildAbortAt: '2026-07-05T02:00:00Z',
+            lastCheckpointBuildMessage: 'the fold outgrew the budget',
+          }}
+          now={NOW}
+        />,
+      )
+
+      expect(screen.getByTestId('severity-chip')).toHaveTextContent('Checkpoint failed')
+      expect(screen.getByTestId('severity-chip')).not.toHaveTextContent('No checkpoint yet')
+      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(
+        /already run for this site and did not produce a checkpoint/i,
+      )
+      expect(screen.getByTestId('first-checkpoint-note')).toHaveTextContent(/fold too large/i)
+      expect(screen.getByTestId('checkpoint-build-abort-message')).toHaveTextContent(
+        'the fold outgrew the budget',
+      )
+      expect(screen.getByTestId('lag-headline')).toHaveTextContent('1,155')
+    })
   })
 })

@@ -89,6 +89,23 @@ describe('SyncHealthPill (F11)', () => {
     expect(screen.getByTestId('sync-health-pill')).toHaveTextContent('No checkpoint · 1.2k')
   })
 
+  it('renders a failed first build in the alarm colour, not the wait (#224)', () => {
+    render(
+      <SyncHealthPill
+        health={health({
+          lastAppliedSeq: 1_155,
+          lastCheckpointSeq: 0,
+          lastCheckpointBuildAbort: 'FOLD_TOO_LARGE',
+        })}
+        isLoading={false}
+        now={NOW}
+      />,
+    )
+    const pill = screen.getByTestId('sync-health-pill')
+    expect(pill).toHaveTextContent('Checkpoint failed · 1.2k')
+    expect(pill).not.toHaveTextContent('No checkpoint ·')
+  })
+
   it('still reports a stalled client on a site with no checkpoint', () => {
     render(
       <SyncHealthPill

@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.CheckpointBuildAbort;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import org.mockito.InOrder;
 import java.util.List;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -27,6 +29,7 @@ class CheckpointSchedulerTest {
     private final ChangelogRetentionService retentionService = mock(ChangelogRetentionService.class);
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final CheckpointRepository checkpointRepository = mock(CheckpointRepository.class);
+    private final DeltaSyncStateService syncStateService = mock(DeltaSyncStateService.class);
     private volatile boolean shuttingDown;
     private final ApplicationShutdownSignal shutdownSignal = new ApplicationShutdownSignal() {
         @Override
@@ -37,7 +40,7 @@ class CheckpointSchedulerTest {
     private static final int MAX_MATERIALIZE_ATTEMPTS = 3;
     private final CheckpointScheduler scheduler = new CheckpointScheduler(
             checkpointService, retentionService, segmentRepository, checkpointRepository,
-            new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal);
+            new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, syncStateService);
 
     @Test
     void buildsAndPrunesEachSite() {
@@ -324,5 +327,163 @@ class CheckpointSchedulerTest {
 
         verifyNoInteractions(checkpointService);
         verifyNoInteractions(retentionService);
+    }
+
+    @Test
+    void recordsANamedAbortWhenTheScheduledBuildThrows() {
+        // Issue #224: the catch is the only place a scheduled visit is known to have produced
+        // nothing, and it is the abort path — a healthy build never reaches it.
+        UUID failing = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(failing));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(failing), anyBoolean()))
+                .thenThrow(new CheckpointService.FoldTooLargeException(failing, 9_000_000L, 4_000_000L));
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService).recordCheckpointBuildAbort(
+                eq(failing), eq(CheckpointBuildAbort.FOLD_TOO_LARGE), any());
+        verify(retentionService, never()).prune(failing);
+    }
+
+    @Test
+    void recordsFrameTooLargeAndScratchFullAndAGenericFailure() {
+        UUID frame = UUID.randomUUID();
+        UUID scratch = UUID.randomUUID();
+        UUID boom = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(frame, scratch, boom));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(frame), anyBoolean()))
+                .thenThrow(new ArtifactSizeLimitExceededException(1_500_000_000L));
+        when(checkpointService.buildCheckpoint(eq(scratch), anyBoolean()))
+                .thenThrow(new ScratchBudgetExceededException("checkpoint_frame", 1024L, 5L, 5L));
+        when(checkpointService.buildCheckpoint(eq(boom), anyBoolean()))
+                .thenThrow(new RuntimeException("boom"));
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService).recordCheckpointBuildAbort(
+                eq(frame), eq(CheckpointBuildAbort.FRAME_TOO_LARGE), any());
+        verify(syncStateService).recordCheckpointBuildAbort(
+                eq(scratch), eq(CheckpointBuildAbort.SCRATCH_FULL), any());
+        verify(syncStateService).recordCheckpointBuildAbort(
+                eq(boom), eq(CheckpointBuildAbort.FAILED), eq("boom"));
+    }
+
+    @Test
+    void recordsAReadDenialAndADeferralAsAborts() {
+        UUID denied = UUID.randomUUID();
+        UUID deferred = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(denied, deferred));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(denied), anyBoolean()))
+                .thenThrow(new CheckpointService.FramePresenceUnknownException(denied, 9L));
+        when(checkpointService.buildCheckpoint(eq(deferred), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(deferred, 600_000L, false, true));
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService).recordCheckpointBuildAbort(
+                eq(denied), eq(CheckpointBuildAbort.FRAME_UNAVAILABLE), any());
+        verify(syncStateService, atLeastOnce()).recordCheckpointBuildAbort(
+                eq(deferred), eq(CheckpointBuildAbort.DEFERRED), any());
+    }
+
+    @Test
+    void doesNotRecordADeferralProbeAsAnAbort() {
+        // Issue #224 / #178: after one spent wait the rest of the pass probes without waiting.
+        // Those probes are not "a deferral past fold-wait-seconds", and the retry pass still
+        // owes the site a real wait. Recording DEFERRED on them paints a designed miss as
+        // "the first build already failed".
+        UUID probe = UUID.randomUUID();
+        UUID spent = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(spent, probe));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(spent), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(spent, 600_000L, false, true));
+        when(checkpointService.buildCheckpoint(eq(probe), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(probe, 600_000L, false, false));
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService, atLeastOnce()).recordCheckpointBuildAbort(
+                eq(spent), eq(CheckpointBuildAbort.DEFERRED), any());
+        verify(syncStateService, never()).recordCheckpointBuildAbort(
+                eq(probe), any(), any());
+    }
+
+    @Test
+    void aThrowingAbortWriteDoesNotStopTheSweep() {
+        // The per-site catch exists so one failure does not end the tick. The new persist is a
+        // @Transactional write inside that catch: if it throws, the rest of the night is skipped.
+        UUID failing = UUID.randomUUID();
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(failing, ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(failing), anyBoolean()))
+                .thenThrow(new RuntimeException("boom"));
+        doThrow(new RuntimeException("flush failed"))
+                .when(syncStateService).recordCheckpointBuildAbort(eq(failing), any(), any());
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(eq(ok), anyBoolean());
+        verify(retentionService).prune(ok);
+    }
+
+    @Test
+    void aPruneFailureIsNotAFirstCheckpointAbort() {
+        // buildCheckpoint returned normally (a shutdown-ended build returns an empty fold and
+        // does not throw, #162). prune throwing used to share the RuntimeException catch; with
+        // the abort persist in that catch it would stamp FAILED on a site whose build did not fail.
+        UUID site = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(site));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        doThrow(new RuntimeException("prune failed")).when(retentionService).prune(site);
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService, never()).recordCheckpointBuildAbort(any(), any(), any());
+        verify(checkpointService).buildCheckpoint(eq(site), anyBoolean());
+    }
+
+    @Test
+    void doesNotRecordADiscardOrAShutdownDeferral() {
+        // A wipe or re-baseline under the build zeroes the pointer itself; recording DISCARDED
+        // would then make the new baseline read as already-failed. A deferral cut short by
+        // shutdown has not finished (#162) — the next process retries it.
+        UUID discarded = UUID.randomUUID();
+        UUID shutdown = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(discarded, shutdown));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(eq(discarded), anyBoolean()))
+                .thenThrow(new CheckpointService.BuildDiscardedException(discarded, "history replaced"));
+        when(checkpointService.buildCheckpoint(eq(shutdown), anyBoolean()))
+                .thenThrow(new CheckpointFoldBudget.BuildDeferredException(shutdown, 600_000L, true, true));
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService, never()).recordCheckpointBuildAbort(eq(discarded), any(), any());
+        verify(syncStateService, never()).recordCheckpointBuildAbort(eq(shutdown), any(), any());
+    }
+
+    @Test
+    void doesNotRecordAnAbortOnAHealthyBuild() {
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+
+        scheduler.buildCheckpoints();
+
+        verify(syncStateService, never()).recordCheckpointBuildAbort(any(), any(), any());
+        verify(retentionService).prune(ok);
     }
 }

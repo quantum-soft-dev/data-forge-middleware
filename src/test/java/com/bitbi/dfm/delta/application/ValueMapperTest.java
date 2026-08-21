@@ -49,7 +49,8 @@ class ValueMapperTest {
      */
     @Test
     void nonFiniteDecimalDegradesToNullInsteadOfThrowing() {
-        for (String token : new String[]{"Infinity", "-Infinity", "NaN", "+Infinity", "infinity", "nan"}) {
+        for (String token : new String[]{"Infinity", "-Infinity", "NaN", "+Infinity", "infinity", "nan",
+                "+NaN", "-NaN"}) {
             Value value = Value.newBuilder().setDecimalValue(token).build();
             assertNull(ValueMapper.toJava(value), token + " must map to null, not throw");
             assertTrue(ValueMapper.isNonFiniteDecimal(value), token + " must be reported as non-finite");
@@ -66,6 +67,23 @@ class ValueMapperTest {
         assertFalse(ValueMapper.isNonFiniteDecimal(Value.getDefaultInstance()));
         assertFalse(ValueMapper.isNonFiniteDecimal(Value.newBuilder().setDecimalValue("1.5").build()));
         assertFalse(ValueMapper.isNonFiniteDecimal(Value.newBuilder().setStringValue("NaN").build()));
+    }
+
+    /**
+     * A signed NaN is a legal source value this pipeline cannot store, not a client defect. The two
+     * counters are read for opposite reasons — {@code non_finite} says the pipeline lost a value it
+     * cannot hold, {@code malformed} is defined as "a client defect somebody has to fix" — so
+     * classifying {@code -NaN} as malformed pages someone to chase a bug that does not exist, which
+     * is the outcome the split was added to prevent (issue #238).
+     */
+    @Test
+    void aSignedNanIsNonFiniteRatherThanMalformed() {
+        for (String token : new String[]{"+NaN", "-NaN", "+nan", "-NAN", " -NaN "}) {
+            Value value = Value.newBuilder().setDecimalValue(token).build();
+            assertTrue(ValueMapper.isNonFiniteDecimal(value), token + " must be reported as non-finite");
+            assertFalse(ValueMapper.isMalformedDecimal(value), token + " is not a client defect");
+            assertTrue(ValueMapper.isUnrepresentable(value), token + " is still unrepresentable");
+        }
     }
 
     /**
