@@ -260,6 +260,13 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
+  negative value no longer fails Spring's parser without naming the key (issue #251).
+  `ScheduledIntervalValidator` walks every interval placeholder at startup and refuses `< 1`
+  naming the key and the value, so a newly added key cannot ship unvalidated;
+  `ScheduledTaskInventoryTest` keeps the two scans in agreement. `initialDelayString` of `0`
+  stays fire-immediately. `AccountProperties` now quotes `account.max-concurrent-batches`.
+  No migration (**V57 stays free**). See `docs/delta-client-v2-guide.md`.
 - queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245). Both workers
   saved the whole entity captured at claim, no `@Version`; since #164 the claim lock is
   released before S3, so one queue's save could NULL the other's marker. After #212 that
