@@ -8,6 +8,7 @@ import org.springframework.context.annotation.ClassPathScanningCandidateComponen
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.type.filter.AssignableTypeFilter;
+import org.springframework.core.annotation.MergedAnnotations;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -20,6 +21,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -141,6 +144,30 @@ class ScheduledTaskInventoryTest {
                         + "re-do the audit in this class for the newcomer — can it run beside the others, "
                         + "and does it hold its thread? — then update this inventory and, if it blocks, "
                         + "the pool size in application.yml");
+    }
+
+    /**
+     * Issue #251 — a {@code fixedDelayString} / {@code fixedRateString} placeholder of {@code 0}
+     * busy-loops, and a negative value fails Spring's parser without naming the key. The startup
+     * validator walks the same {@code @Scheduled} methods this inventory already enumerates, so a
+     * newly added interval key is validated without a per-bean check. This equality is what keeps
+     * that walk from going blind: a key only this scan sees is unvalidated, a key only the
+     * validator sees means this inventory's placeholder matcher has missed a site.
+     */
+    @Test
+    @DisplayName("every @Scheduled interval placeholder is one the startup validator will refuse at 0 (#251)")
+    void shouldValidateEveryScheduledIntervalPlaceholderAtStartup() {
+        Set<String> inventory = scanScheduledIntervalKeys();
+        Set<String> validator = new TreeSet<>(ScheduledIntervalValidator.discoverIntervalPlaceholders().keySet());
+
+        assertFalse(inventory.isEmpty(),
+                "no @Scheduled interval placeholder was found — the matcher is broken, not the application");
+        assertEquals(inventory, validator,
+                "the startup validator and this inventory disagree on @Scheduled interval keys. "
+                        + "A key only this scan sees is unvalidated (0 busy-loops); a key only the "
+                        + "validator sees is a scan that has gone blind here. Interval attributes "
+                        + "are fixedDelayString and fixedRateString — initialDelayString of 0 is "
+                        + "fire-immediately and must not be treated as an interval");
     }
 
     @Test
@@ -299,6 +326,54 @@ class ScheduledTaskInventoryTest {
      *
      * @return fully qualified {@code class#method} names, sorted
      */
+    /**
+     * Placeholder keys on {@code fixedDelayString} / {@code fixedRateString} of the methods
+     * {@link #scanScheduledMethods()} already enumerated.
+     *
+     * <p>Independent of {@link ScheduledIntervalValidator#discoverIntervalPlaceholders()}: that
+     * walk is a classpath scan of its own, and the equality in
+     * {@link #shouldValidateEveryScheduledIntervalPlaceholderAtStartup()} is what keeps either
+     * from going blind. {@code initialDelayString} is deliberately omitted — 0 there means fire
+     * immediately, which is a valid value several ticks already use.</p>
+     */
+    static Set<String> scanScheduledIntervalKeys() {
+        Pattern placeholder = Pattern.compile("^\\$\\{([^:}]+)(?::(.*))?}$");
+        Set<String> keys = new TreeSet<>();
+        for (String name : scanScheduledMethods()) {
+            int hash = name.indexOf('#');
+            String className = name.substring(0, hash);
+            String methodName = name.substring(hash + 1);
+            Class<?> type;
+            try {
+                type = Class.forName(className, false, ScheduledTaskInventoryTest.class.getClassLoader());
+            } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                continue;
+            }
+            for (Method method : org.springframework.util.ReflectionUtils.getAllDeclaredMethods(type)) {
+                if (!method.getName().equals(methodName)) {
+                    continue;
+                }
+                MergedAnnotations.from(method, MergedAnnotations.SearchStrategy.TYPE_HIERARCHY)
+                        .stream(Scheduled.class)
+                        .forEach(scheduled -> {
+                            collectIntervalKey(keys, placeholder, scheduled.getString("fixedDelayString"));
+                            collectIntervalKey(keys, placeholder, scheduled.getString("fixedRateString"));
+                        });
+            }
+        }
+        return keys;
+    }
+
+    private static void collectIntervalKey(Set<String> keys, Pattern placeholder, String expression) {
+        if (expression == null || expression.isBlank()) {
+            return;
+        }
+        Matcher matcher = placeholder.matcher(expression.trim());
+        if (matcher.matches()) {
+            keys.add(matcher.group(1));
+        }
+    }
+
     static Set<String> scanScheduledMethods() {
         ClassPathScanningCandidateComponentProvider scanner =
                 new ClassPathScanningCandidateComponentProvider(false);
