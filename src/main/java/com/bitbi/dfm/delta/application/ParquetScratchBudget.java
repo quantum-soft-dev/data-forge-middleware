@@ -54,13 +54,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * follows the writers whether or not a budget is set, which is the only way an operator can size the
  * key before turning it on.</p>
  *
- * <p><b>A reserved share for the checkpoint path</b> (issue #193). Batch writers may use at most
- * {@code max-scratch-bytes} minus {@code delta.checkpoint.max-frame-temp-bytes} — the declared size
- * of the largest scratch file the checkpoint path holds, and it holds only one at a time (#178).
- * That is a floor for the nightly sweep, not a ceiling: a checkpoint writer can still use the whole
- * budget when the directory is idle. Batch cannot consume into the reserved bytes even after the
- * frame is deleted, which is the gap before the table snapshot opens. Unbounded (the shipped
- * default) has nothing to reserve a share of, so a leftover frame-ceiling value is ignored.</p>
+ * <p><b>A reserved share for the checkpoint path</b> (issue #193). Batch writers' own holdings may
+ * use at most {@code max-scratch-bytes} minus {@code delta.checkpoint.max-frame-temp-bytes} — the
+ * declared size of the largest scratch file the checkpoint path holds, and it holds only one at a
+ * time (#178). Compared against batch live bytes, not the directory total: a frame in flight already
+ * occupies the reserve and must not shrink the batch share a second time. That is a floor for the
+ * nightly sweep, not a ceiling: a checkpoint writer can still use the whole budget when the
+ * directory is idle. Batch cannot consume into the reserved bytes even after the frame is deleted,
+ * which is the gap before the table snapshot opens. Unbounded (the shipped default) has nothing to
+ * reserve a share of, so a leftover frame-ceiling value is ignored.</p>
  *
  * <p><b>Per JVM</b>, so it is a true bound only where the directory is pod-private
  * ({@code delta.parquet.scratch-private-to-pod}, #141); on a shared volume it is a per-replica
@@ -96,6 +98,8 @@ public class ParquetScratchBudget {
     static final String BATCH_ARTIFACT = "batch_artifact";
 
     private final AtomicLong liveBytes = new AtomicLong();
+    private final AtomicLong batchLiveBytes = new AtomicLong();
+    private final Object accounting = new Object();
     private final Map<String, Counter> refusals = new LinkedHashMap<>();
     private final long budgetBytes;
     private final long checkpointReserveBytes;
@@ -214,21 +218,33 @@ public class ParquetScratchBudget {
 
         @Override
         public void close() {
-            closed = true;
-            if (granted > 0) {
-                liveBytes.addAndGet(-granted);
-                granted = 0;
+            synchronized (accounting) {
+                closed = true;
+                if (granted > 0) {
+                    liveBytes.addAndGet(-granted);
+                    if (BATCH_ARTIFACT.equals(writer)) {
+                        batchLiveBytes.addAndGet(-granted);
+                    }
+                    granted = 0;
+                }
             }
         }
 
         private void reserve(long need) {
             long want = Math.max(need, CHUNK_BYTES);
             long ceiling = writerCeiling();
-            while (true) {
+            synchronized (accounting) {
                 long current = liveBytes.get();
-                long take = budgetBytes == 0L
-                        ? want
-                        : Math.min(want, Math.max(0L, ceiling - current));
+                long batchCurrent = batchLiveBytes.get();
+                long writerLive = BATCH_ARTIFACT.equals(writer) ? batchCurrent : current;
+                long take;
+                if (budgetBytes == 0L) {
+                    take = want;
+                } else {
+                    long directoryRoom = Math.max(0L, budgetBytes - current);
+                    long writerRoom = Math.max(0L, ceiling - writerLive);
+                    take = Math.min(want, Math.min(directoryRoom, writerRoom));
+                }
                 if (take < need) {
                     // Once per lease, not once per refused write. FileOutputFile does not latch
                     // the way CappedOutputStream does — Parquet unwinds a write failure through a
@@ -243,18 +259,22 @@ public class ParquetScratchBudget {
                     // deleted, so holding the bytes it did not get would shrink the directory for
                     // every other writer until the pod restarts.
                     throw new ScratchBudgetExceededException(
-                            writer, need, ceiling, budgetBytes, checkpointReserveBytes, current);
+                            writer, need, ceiling, budgetBytes, checkpointReserveBytes,
+                            current, writerLive);
                 }
-                if (liveBytes.compareAndSet(current, current + take)) {
-                    granted += take;
-                    return;
+                liveBytes.addAndGet(take);
+                if (BATCH_ARTIFACT.equals(writer)) {
+                    batchLiveBytes.addAndGet(take);
                 }
+                granted += take;
             }
         }
 
         /**
-         * Batch writers stop at {@code budget - checkpoint reserve} so the nightly frame always
-         * has somewhere to land (issue #193). Checkpoint writers still see the whole budget.
+         * Batch writers' own holdings stop at {@code budget - checkpoint reserve} so the nightly
+         * frame always has somewhere to land (issue #193). Checkpoint writers still see the whole
+         * budget. Compared against this writer's live bytes, not the directory total — a frame in
+         * flight already occupies the reserve and must not shrink the batch share a second time.
          */
         private long writerCeiling() {
             if (budgetBytes == 0L) {

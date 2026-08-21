@@ -278,6 +278,27 @@ class ParquetScratchBudgetTest {
     }
 
     @Test
+    void aCheckpointHoldingTheReserveDoesNotShrinkTheBatchShare() {
+        // The reserve is a cap on what batch may hold, not on total live. A frame in flight
+        // already occupies its share; subtracting it from the batch ceiling a second time would
+        // refuse a legitimate completed-batch build for the length of the 02:00 sweep — the
+        // opposite of a reserved share.
+        ParquetScratchBudget budget = budget(8 * MIB, 3 * MIB);
+
+        ScratchLease frame = budget.open("checkpoint_frame");
+        frame.charge(3 * MIB);
+        ScratchLease batch = budget.open("batch_artifact");
+        batch.charge(5 * MIB);
+        try (ScratchLease stillBatch = budget.open("batch_artifact")) {
+            assertThrows(ScratchBudgetExceededException.class, () -> stillBatch.charge(1),
+                    "batch at its cap must stay at its cap while a frame occupies the reserve");
+        }
+        batch.close();
+        frame.close();
+        assertEquals(0.0, liveBytes());
+    }
+
+    @Test
     void aCheckpointWriterIsNotCappedAtTheBatchShare() {
         // The reserve is a floor for checkpoint, not a ceiling. An idle directory must still let
         // a frame use the whole budget — the per-file ceiling is what bounds that file.

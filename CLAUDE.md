@@ -622,9 +622,10 @@ pages/{feature}/            # Route pages
   batch writers may use at most the directory budget minus `delta.checkpoint.max-frame-temp-bytes`,
   already the declared size of the largest scratch file the checkpoint path holds, and it holds
   only one at a time (#178). That is a floor for the nightly sweep, not a ceiling — a checkpoint
-  writer still sees the whole budget when the directory is idle — and batch cannot consume into
-  the reserved bytes even after the frame is deleted, which is the gap before the table snapshot
-  opens. Unbounded (the shipped default) ignores the reserve; a negative reserve is none; a
+  writer still sees the whole budget when the directory is idle — compared against batch live
+  bytes, not the directory total, so a frame in flight does not shrink the batch share a second
+  time — and batch cannot consume into the reserved bytes even after the frame is deleted, which
+  is the gap before the table snapshot opens. Unbounded (the shipped default) ignores the reserve; a negative reserve is none; a
   reserve larger than the budget leaves batch with zero. A refused reservation keeps existing
   failure modes (`FAILED` + backoff for batch; the build ends for checkpoint) and is still off
   `delta.checkpoint.builds.aborted`, whose values are permanent by contract (#153) —

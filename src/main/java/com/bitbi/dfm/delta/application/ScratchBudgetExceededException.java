@@ -22,17 +22,22 @@ package com.bitbi.dfm.delta.application;
 public final class ScratchBudgetExceededException extends RuntimeException {
 
     ScratchBudgetExceededException(String writer, long neededBytes, long budgetBytes, long liveBytes) {
-        this(writer, neededBytes, budgetBytes, budgetBytes, 0L, liveBytes);
+        this(writer, neededBytes, budgetBytes, budgetBytes, 0L, liveBytes, liveBytes);
     }
 
     ScratchBudgetExceededException(String writer, long neededBytes, long writerCeiling,
-                                   long budgetBytes, long reservedBytes, long liveBytes) {
-        super(message(writer, neededBytes, writerCeiling, budgetBytes, reservedBytes, liveBytes));
+                                   long budgetBytes, long reservedBytes, long liveBytes,
+                                   long writerLiveBytes) {
+        super(message(writer, neededBytes, writerCeiling, budgetBytes, reservedBytes, liveBytes,
+                writerLiveBytes));
     }
 
     private static String message(String writer, long neededBytes, long writerCeiling,
-                                  long budgetBytes, long reservedBytes, long liveBytes) {
-        long free = Math.max(0L, writerCeiling - liveBytes);
+                                  long budgetBytes, long reservedBytes, long liveBytes,
+                                  long writerLiveBytes) {
+        long writerRoom = Math.max(0L, writerCeiling - writerLiveBytes);
+        long directoryRoom = Math.max(0L, budgetBytes - liveBytes);
+        long free = Math.min(writerRoom, directoryRoom);
         StringBuilder text = new StringBuilder();
         text.append("The Parquet scratch directory is full: writer ").append(writer)
                 .append(" needed ").append(neededBytes)
