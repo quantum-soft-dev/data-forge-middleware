@@ -30,6 +30,14 @@ public class SqlStatementGenerator {
     private static final Pattern VALID_IDENTIFIER = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
 
     /**
+     * A decimal / scientific token that is safe to emit unquoted as a PostgreSQL numeric
+     * literal. Anything else on the numeric branch is quoted and escaped — a cell such as
+     * {@code 0); DROP TABLE customers; --} must never go into SQL raw (issue #263).
+     */
+    private static final Pattern NUMERIC_LITERAL =
+            Pattern.compile("^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$");
+
+    /**
      * Generates a SQL statement from a row diff.
      *
      * @param diff The row difference (ADDED, MODIFIED, DELETED)
@@ -176,16 +184,10 @@ public class SqlStatementGenerator {
      * exist}); {@link DbfColumnType#INTEGER} and {@link DbfColumnType#CURRENCY} are quoted with the
      * rest because a uniform rule is never worse than the bare token, not because it rescues them.</p>
      *
-     * <p><strong>This numeric branch is unreachable through the only production caller</strong>, and
-     * that is worth knowing rather than assuming the guard is load-bearing:
-     * {@code DbfSqlGenerationStrategy} passes an <em>empty</em> {@code columnTypes} map, so every
-     * column falls back to {@link DbfColumnType#CHARACTER} and every CSV cell is already quoted and
-     * escaped — a token like {@code NaN} included. The guard belongs to this method's own contract
-     * (the parameter exists, and the branch goes live the moment a caller supplies a real map)
-     * rather than to an observed defect. Two consequences of that empty map are <em>not</em> this
-     * method's to settle and are filed as issue #263: the per-type NULL/{@code 0} handling above is
-     * dead for the same reason, and a non-numeric token reaching a numeric column is returned raw —
-     * unquoted and unescaped — which is latent only because nothing supplies the map.</p>
+     * <p>{@link DbfSqlGenerationStrategy} supplies types from the site's {@code TableSchema}.
+     * A numeric cell is emitted unquoted only when it is numeric-shaped (or a quoted non-finite
+     * spelling). Any other token is quoted and escaped, so a CSV cell such as
+     * {@code 0); DROP TABLE customers; --} cannot become raw SQL (issue #263).</p>
      */
     private String formatValue(String value, DbfColumnType type) {
         // Handle empty values
@@ -197,14 +199,25 @@ public class SqlStatementGenerator {
             }
         }
 
-        // Numeric types - no quotes, unless the token is one PostgreSQL only accepts quoted
+        // Numeric types - unquoted only when the cell is a number (or a quoted non-finite)
         if (isNumericType(type)) {
             String nonFinite = ValueMapper.canonicalNonFinite(value);
-            return nonFinite != null ? "'" + nonFinite + "'" : value;
+            if (nonFinite != null) {
+                return "'" + nonFinite + "'";
+            }
+            String trimmed = value.trim();
+            if (isNumericLiteral(trimmed)) {
+                return trimmed;
+            }
+            return "'" + escapeString(value) + "'";
         }
 
         // String types - escape and quote
         return "'" + escapeString(value) + "'";
+    }
+
+    private boolean isNumericLiteral(String value) {
+        return NUMERIC_LITERAL.matcher(value).matches();
     }
 
     /**

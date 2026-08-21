@@ -457,9 +457,9 @@ public class SqlGenerationService {
             );
         }
 
-        Map<String, TableSchema> tableSchemas = Map.of();
-        if (data.site().getSiteType() == SiteType.POSTGRES_CDC) {
-            tableSchemas = siteSchemaService.getTableSchemas(data.site().getId());
+        Map<String, TableSchema> tableSchemas = siteSchemaService.getTableSchemas(data.site().getId());
+        if (tableSchemas == null) {
+            tableSchemas = Map.of();
         }
 
         SqlGenerationContext context = new SqlGenerationContext(

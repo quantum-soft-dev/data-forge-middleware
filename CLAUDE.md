@@ -584,6 +584,23 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- dbf-column-types: DBF SQL generation receives its column types from the site's `TableSchema`,
+  so the documented empty-cell contract is the one in force and a non-numeric cell in a numeric
+  column can no longer become raw SQL (issue #263, filed reviewing #233). The only production
+  caller — `DbfSqlGenerationStrategy` — passed `Map.of()`, so `formatValue` always fell back to
+  `CHARACTER`: empty `I`/`Y` cells became `NULL` rather than `0`, numerics were quoted, and the
+  unquoted numeric branch was a latent injection the day a caller supplied real types
+  (`0); DROP TABLE customers; --` emitted verbatim). **Wiring, not deletion**: types come from
+  `SqlGenerationContext.tableSchemas` (now loaded for DBF as well as CDC), mapped by new
+  `DbfColumnType.fromSqlType` (`integer`/`serial`/`bigint` → INTEGER empty→`0`, `money` →
+  CURRENCY empty→`0`, `numeric`/`decimal` → NUMERIC, `real`/`double precision` → FLOAT, a
+  one-letter DBF code still works). No schema for the table keeps the previous CHARACTER
+  fallback. A numeric cell is unquoted only when it is numeric-shaped; anything else is quoted
+  and escaped — the injection stays closed even with types live. Tests cover rendering
+  **through** `DbfSqlGenerationStrategy` (the empty map is what let the divergence live in
+  generator-only tests) plus the mapping and the injection cases on the generator. Guide
+  `docs/bitbi-integration.md` describes the rendering actually in force. No REST, gRPC, proto,
+  DTO, migration (V56 current, V57 free), configuration-key, metric, S3-key or frontend change.
 - sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
   failure (issue #261, the limit #243 named rather than closed). `processNextPending` exempted
   only `MemoryPressureAbortedException` from spending an attempt, so a semaphore timeout

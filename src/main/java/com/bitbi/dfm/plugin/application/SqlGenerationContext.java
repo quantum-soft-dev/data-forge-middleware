@@ -17,7 +17,8 @@ import java.util.UUID;
  * @param siteId           the owning site
  * @param relevantFiles    files to process — CSV/CSV.GZ for DBF, JSONL/JSONL.GZ for CDC
  * @param previousFilesMap previous-batch files keyed by normalised name (DBF only; empty for CDC)
- * @param tableSchemas     parsed table schemas keyed by table name (CDC only; empty for DBF)
+ * @param tableSchemas     parsed table schemas keyed by table name (CDC filters columns
+ *                         against it; DBF maps PostgreSQL types onto {@code DbfColumnType})
  */
 record SqlGenerationContext(
         UUID batchId,

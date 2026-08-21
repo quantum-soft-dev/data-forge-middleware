@@ -477,6 +477,12 @@ WHERE col1 = 'val1' AND col2 = 'val2' AND col3 = 'val3';
 
 ### NULL Handling by Column Type
 
+This table is in force when the site has a `TableSchema` for the CSV's table (issue #263).
+PostgreSQL types on that schema are mapped onto the DBF types below. Without a schema for the
+table, every column is **Character** — empty cells become `NULL` and every populated cell is a
+quoted, escaped string, which is what the generator did for every column before the types were
+wired through.
+
 | DBF Type | Code | Empty String Becomes |
 |----------|------|---------------------|
 | Character | C | NULL |
@@ -487,6 +493,24 @@ WHERE col1 = 'val1' AND col2 = 'val2' AND col3 = 'val3';
 | DateTime | T | NULL |
 | **Integer** | I | **0** |
 | **Currency** | Y | **0** |
+
+PostgreSQL → DBF mapping used on this path:
+
+| PostgreSQL type | DBF type |
+|-----------------|----------|
+| `integer` / `int` / `bigint` / `smallint` / `serial` / `bigserial` | Integer |
+| `money` | Currency |
+| `numeric` / `decimal` | Numeric |
+| `real` / `float` / `double precision` | Float |
+| `boolean` | Logical |
+| `date` | Date |
+| `timestamp` / `timestamptz` | DateTime |
+| anything else (`varchar`, `text`, …) | Character |
+
+A numeric cell is emitted **unquoted** only when it is numeric-shaped (`12.50`, `-3`, `+1.2e-3`).
+Anything else in a numeric column — including a SQL fragment such as
+`0); DROP TABLE customers; --` — is quoted and escaped, the same as a Character cell. A non-finite
+token (`NaN`, `Infinity`) is quoted as described below rather than emitted raw.
 
 ### Non-finite Numbers in Generated SQL
 
@@ -500,11 +524,8 @@ every such statement fail before issue #233. The value is carried end to end for
 store it at all and writes NULL (issue #215), described in
 [the Delta client guide](delta-client-v2-guide.md#a-value-the-column-type-cannot-hold).
 
-On the DBF/CSV path the question does not arise today: `DbfSqlGenerationStrategy` calls the generator
-with an **empty** column-type map, so every cell is treated as `Character` and is quoted and escaped
-whatever it contains. That also means the per-type table above describes a mapping nothing currently
-supplies — see issue #263. The quoting rule is on the generator's contract for the day a caller
-passes real types, not a fix for an observed case.
+On the DBF/CSV path the same quoting rule applies once the site schema has mapped a column to a
+numeric DBF type. Without a schema the column is Character and the token is quoted anyway.
 
 ### Table Name Derivation
 

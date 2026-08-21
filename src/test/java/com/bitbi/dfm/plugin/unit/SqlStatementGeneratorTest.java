@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -788,6 +789,63 @@ class SqlStatementGeneratorTest {
                     "total", DbfColumnType.NUMERIC));
 
             assertThat(sql).contains("VALUES (1, 'NaN', '-Infinity', 12.50)");
+        }
+    }
+
+    /**
+     * The numeric branch used to return a cell raw — unquoted, unvalidated, unescaped.
+     * That is latent SQL injection the moment a caller supplies real column types
+     * (issue #263). Anything that is not numeric-shaped is quoted and escaped; a
+     * well-formed number stays unquoted.
+     */
+    @Nested
+    @DisplayName("Numeric cell validation (issue #263)")
+    class NumericCellValidation {
+
+        private String insertSql(String amount, DbfColumnType amountType) {
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            values.put("amount", amount);
+            return generator.generate(CsvRowDiff.added(1, values), "payments", Map.of(
+                    "id", DbfColumnType.INTEGER,
+                    "amount", amountType));
+        }
+
+        @Test
+        @DisplayName("should quote and escape a SQL fragment in a NUMERIC column")
+        void shouldQuoteSqlFragmentInNumericColumn() {
+            String sql = insertSql("0); DROP TABLE customers; --", DbfColumnType.NUMERIC);
+
+            assertThat(sql).contains("VALUES (1, '0); DROP TABLE customers; --')");
+            assertThat(sql).doesNotContain("VALUES (1, 0); DROP");
+        }
+
+        @Test
+        @DisplayName("should quote a SQL fragment in INTEGER, CURRENCY and FLOAT too")
+        void shouldQuoteSqlFragmentForEveryNumericType() {
+            for (DbfColumnType type : List.of(
+                    DbfColumnType.INTEGER, DbfColumnType.CURRENCY, DbfColumnType.FLOAT)) {
+                String sql = insertSql("1 OR 1=1", type);
+                assertThat(sql).as("%s must not emit a bare token", type)
+                        .contains("'1 OR 1=1'")
+                        .doesNotContain("VALUES (1, 1 OR 1=1)");
+            }
+        }
+
+        @Test
+        @DisplayName("should still emit a well-formed number unquoted")
+        void shouldLeaveNumericShapedUnquoted() {
+            assertThat(insertSql("12.50", DbfColumnType.NUMERIC)).contains("VALUES (1, 12.50)");
+            assertThat(insertSql("-3", DbfColumnType.INTEGER)).contains("VALUES (1, -3)");
+            assertThat(insertSql("+1.2e-3", DbfColumnType.FLOAT)).contains("VALUES (1, +1.2e-3)");
+            assertThat(insertSql(".5", DbfColumnType.NUMERIC)).contains("VALUES (1, .5)");
+        }
+
+        @Test
+        @DisplayName("should quote a hex or identifier token in a numeric column")
+        void shouldQuoteNonDecimalTokens() {
+            assertThat(insertSql("0x10", DbfColumnType.INTEGER)).contains("'0x10'");
+            assertThat(insertSql("NaNish", DbfColumnType.FLOAT)).contains("'NaNish'");
         }
     }
 }
