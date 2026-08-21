@@ -27,7 +27,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -94,8 +93,8 @@ class DeltaEgressServiceTest {
 
         verify(storage).uploadDelta(eq(SITE_ID), eq("good"), eq(1L), eq(2L), any(byte[].class));
         verify(storage, never()).uploadDelta(eq(SITE_ID), eq("bad"), anyLong(), anyLong(), any(byte[].class));
-        assertNotNull(segment.getEgressAt(), "segment leaves the pending queue despite the poison table");
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markEgressed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
         assertEquals(1.0, registry.get("delta.egress.segments").counter().count());
         assertEquals(1L, phaseCount("download"));
         assertEquals(2L, phaseCount("write"), "poison render and the surviving table are each a write");
@@ -155,6 +154,7 @@ class DeltaEgressServiceTest {
                 "the first failure waits the base delay: " + retryAt.getValue());
         assertNull(segment.getEgressAt(), "the segment stays the durable queue entry");
         verify(segmentRepository, never()).save(any());
+        verify(segmentRepository, never()).markEgressed(any());
         assertEquals(1.0, registry.get("delta.egress.errors").counter().count());
         assertEquals(0.0, registry.get("delta.egress.segments.poisoned").counter().count());
     }

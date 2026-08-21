@@ -122,12 +122,13 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Issue #243, review round 2: the two queues finish with {@code markX(); save(segment)} on the
-     * snapshot taken at claim time, so without {@code updatable = false} on the retry columns the
-     * delta-SQL queue's success — minutes after its own claim — would write the egress columns back
+     * Issue #243, review round 2 / issue #245: the success path is a targeted
+     * {@code UPDATE ... SET plugin_sql_at}/{@code egress_at}, so it cannot touch the retry columns.
+     * This test pins the leftover hazard — a whole-entity save of the claim-time snapshot — which
+     * without {@code updatable = false} on the retry columns would write the egress columns back
      * as they were then, erasing a deferral recorded in between and restarting its escalation from
-     * zero. That is #245's marker clobber reaching the one bound this queue has, so the retry state
-     * is deliberately outside the entity's own UPDATE while the bulk statements still write it.
+     * zero. The retry state is deliberately outside the entity's own UPDATE while the bulk
+     * statements still write it.
      */
     @Test
     void staleWholeEntitySaveDoesNotEraseTheOtherQueuesDeferral() {

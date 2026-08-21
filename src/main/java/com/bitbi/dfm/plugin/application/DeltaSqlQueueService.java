@@ -34,7 +34,10 @@ import java.util.Set;
  * reused), and marks it processed. This class opens <em>no</em> transaction of its own
  * (issue #164): the claim query, the skip/snapshot path and the {@code plugin_sql_at} write
  * are short repository transactions, and generation — which first waits on the SQL semaphore
- * and then talks to S3 — runs with nothing open. A failure before the mark leaves the
+ * and then talks to S3 — runs with nothing open. The mark is a targeted
+ * {@code UPDATE ... SET plugin_sql_at} of that column only (issue #245), not a save of the
+ * entity captured at claim — a merge would un-stamp {@code egress_at} if the egress worker
+ * had finished in between. A failure before the mark leaves the
  * segment pending and the sweep retries. <b>That retry's horizon (issue #212):</b>
  * {@code ChangelogRetentionService} holds a pending segment back from pruning, so the retry is no
  * longer silently bounded by changelog retention. What ends it is the segment being processed, an
@@ -157,8 +160,9 @@ public class DeltaSqlQueueService {
                 // next sweep generates normally once the condition clears.
                 sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
             }
-            segment.markPluginSqlProcessed();
-            segmentRepository.save(segment);
+            // Targeted UPDATE of this marker only (issue #245): a save of the claim-time snapshot
+            // would merge egress_at back to NULL after the egress worker had already stamped it.
+            segmentRepository.markPluginSqlProcessed(segment.getId());
             return true;
         } catch (SqlGenerationService.PodLevelAbortedException e) {
             // Deliberately not deferred and not counted as this segment's attempt (issue #261,

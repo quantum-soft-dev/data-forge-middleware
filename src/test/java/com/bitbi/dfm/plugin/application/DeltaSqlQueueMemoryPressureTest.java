@@ -204,8 +204,8 @@ class DeltaSqlQueueMemoryPressureTest {
 
         // Then
         assertThat(processed).isTrue();
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
         assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count()).isEqualTo(0.0);
     }
 }

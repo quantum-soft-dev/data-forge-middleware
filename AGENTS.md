@@ -260,6 +260,12 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245). Both workers
+  saved the whole entity captured at claim, no `@Version`; since #164 the claim lock is
+  released before S3, so one queue's save could NULL the other's marker. After #212 that
+  held the segment back from pruning. Targeted `UPDATE ... SET plugin_sql_at` /
+  `egress_at WHERE id = ?` — no migration, V57 stays free. A mark of A also leaves B's
+  retry columns intact. See `docs/delta-client-v2-guide.md`.
 - sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
   failure (issue #261). Shared parent `PodLevelAbortedException`: the queue rethrows every
   subclass, spends no attempt, moves neither `deferred` nor `poisoned`. Semaphore timeout is

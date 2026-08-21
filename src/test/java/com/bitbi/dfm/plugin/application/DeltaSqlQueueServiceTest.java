@@ -110,8 +110,8 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(processed).isTrue();
         verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACTIVATION_ID);
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 
     @Test
@@ -135,8 +135,8 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(processed).isTrue();
         verifyNoInteractions(sqlGenerationService);
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 
     @Test
@@ -164,7 +164,8 @@ class DeltaSqlQueueServiceTest {
         // audit warning signals reinit required
         verify(pluginAuditService).logSqlGenerationFailed(
                 eq("bit-bi"), eq(ACCOUNT_ID), eq(BATCH_ID), eq(SITE_ID), anyString(), anyLong());
-        assertThat(segment.getPluginSqlAt()).isNotNull();
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 
     @Test
@@ -190,7 +191,9 @@ class DeltaSqlQueueServiceTest {
                 eq("bit-bi"), eq(ACCOUNT_ID), any(), eq(SITE_ID), anyString(), anyLong());
         assertThat(meterRegistry.counter("sql.generation.delta.rebaseline.detected").count()).isEqualTo(1.0);
         // Both segments are still consumed — the queue must not stall on the quiet one.
-        assertThat(second.getPluginSqlAt()).isNotNull();
+        verify(segmentRepository).markPluginSqlProcessed(first.getId());
+        verify(segmentRepository).markPluginSqlProcessed(second.getId());
+        verify(segmentRepository, never()).save(any());
         verifyNoInteractions(sqlGenerationService);
     }
 
@@ -239,6 +242,7 @@ class DeltaSqlQueueServiceTest {
         assertThat(retryAt.getValue()).isAfter(before.plusSeconds(59));
         assertThat(segment.getPluginSqlAt()).as("still the durable queue entry").isNull();
         verify(segmentRepository, never()).save(segment);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
     }
@@ -338,6 +342,7 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(segment.getPluginSqlAt()).isNull();
         verify(segmentRepository, never()).save(segment);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
         verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
