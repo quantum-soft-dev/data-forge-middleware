@@ -1371,6 +1371,18 @@ build's files are exactly as old as the build, so a lower age deletes live work.
 
 **"One sweep interval" means the tick runs when it is due.** That is a statement about the
 scheduler, so the scheduler is pinned rather than inherited (issue **#146**).
+
+**A sweep interval of `0` is refused at startup**, naming the key and the value (issue **#251**).
+`@Scheduled(fixedDelayString)` accepts `0` and runs the tick back-to-back for ever — a busy-loop
+on a green rollout — and a negative value fails inside Spring's parser without naming the key.
+`ScheduledIntervalValidator` walks every `fixedDelayString` / `fixedRateString` placeholder
+(`delta.egress.sweep-ms`, `delta.batch-parquet.sweep-ms`, `delta.s3-orphan.sweep-ms`,
+`delta.parquet.scratch-orphan-sweep-ms`, `delta.ingestion.staged-sweep-millis`,
+`delta.ingestion.provisional-sweep-millis`, `plugin.parquet-export.purge-interval-ms`, and
+`plugin.sql-generation.delta-sweep-ms` which #185 already closed per-bean) and refuses `< 1`.
+A newly added interval key is validated without a constructor copy.
+`initialDelayString` of `0` is fire-immediately and is not an interval — the crash-recovery
+pass and the scratch sweep keep that. ISO-8601 `PT0S` is the same busy-loop as `0`.
 `SchedulingConfiguration` declares the application's `TaskScheduler` — a `ThreadPoolTaskScheduler`
 of `spring.task.scheduling.pool.size` (**7**, overridable with `SPRING_TASK_SCHEDULING_POOL_SIZE`)
 — so the nightly checkpoint build, which can hold its thread for hours, leaves threads for the

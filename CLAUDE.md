@@ -635,6 +635,23 @@ pages/{feature}/            # Route pages
   proto, DTO, **no migration (V57 stays free)**, no `specs/NNN-*`, configuration-key, metric-name,
   S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
   hold", "A non-finite `double` is kept, and quoted").
+- scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
+  negative value no longer fails Spring's parser without naming the key (issue #251, the class of
+  misconfiguration #185 closed for `plugin.sql-generation.delta-sweep-ms` and review of PR #247
+  named at every other interval site). **Mechanism-level, not per-bean**:
+  `ScheduledIntervalValidator` walks every `fixedDelayString` / `fixedRateString` placeholder
+  during singleton construction — before `ScheduledAnnotationBeanPostProcessor` starts the ticks
+  — and refuses `< 1` with a message naming the key and the value. A newly added interval key is
+  validated without a constructor `@Value` copy; `ScheduledTaskInventoryTest` keeps the walk
+  honest by requiring it to agree with an independent inventory scan (a scan gone blind is
+  otherwise an empty, green validator). `initialDelayString` of `0` stays fire-immediately (the
+  crash-recovery pass, the scratch sweep); ISO-8601 `PT0S` is the same busy-loop as `0` and is
+  refused as `0`. **Same anonymous-refusal class**: `AccountProperties` now quotes
+  `account.max-concurrent-batches` and the offending value. Test-profile overrides stay well
+  above the floor. Tests first; mutation by restoring a `0` on any discovered key. No REST, gRPC,
+  proto, DTO, migration (**V57 stays free**), configuration-key *name*, metric, S3-key or
+  frontend change. See `docs/delta-client-v2-guide.md` ("One sweep interval"),
+  `docs/020-sql-generation-optimization.md`.
 - closed-status-labels: A closed ticket keeps no live `status: *` label (issue #257, found
   working #230). Status lives in two places — the Kanban column and the repo label — and this
   file already said a close ends with "статусные метки сняты". The label half was not actually
