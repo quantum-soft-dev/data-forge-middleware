@@ -2278,13 +2278,14 @@ repairable stall into permanent, unrecoverable loss of that batch's SQL, which i
 #212 had just stopped. The attempt count therefore escalates **reporting** instead of taking a
 verdict, and the one bounded ending stays batch retention (`delta.retention.segments.deleted-pending`).
 
-**Three failures are exempt and still end the drain rather than being deferred.** A
-pod-level refusal (`PodLevelAbortedException` — below), and a failure while the pod is shutting
-down — the S3 client or the data source may already be closed, so that is the process ending
-rather than the segment failing, and #162's rule is that such an ending records no verdict. The
-#164 "no transaction across S3" guard is checked *before* the queue claims anything, for the
-same reason: swallowed into a deferral, a caller that wrapped the drain in a transaction would
-read as "every segment in the queue is poison data" instead of as the wiring mistake it is.
+**Pod-level refusals and shutdown still end the drain rather than being deferred.** Memory
+pressure and a semaphore timeout share `PodLevelAbortedException` (below). A failure while the
+pod is shutting down — the S3 client or the data source may already be closed — is the process
+ending rather than the segment failing, and #162's rule is that such an ending records no
+verdict. The #164 "no transaction across S3" guard is checked *before* the queue claims
+anything, for the same reason: swallowed into a deferral, a caller that wrapped the drain in a
+transaction would read as "every segment in the queue is poison data" instead of as the wiring
+mistake it is.
 
 **What the escalation looks like.** Every failed attempt increments
 `sql.generation.delta.segments.deferred` (SQL) or `delta.egress.errors` (egress — the
