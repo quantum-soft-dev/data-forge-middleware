@@ -584,6 +584,31 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- liveness-teardown-fk: `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` no longer loses a
+  race against its own ingestion (issue #265, seen once on CI at
+  `DELETE FROM batches WHERE site_id = ?` as a `DataIntegrityViolationException` of the class's
+  own `@AfterEach`, not an assertion; green on re-run of sha `ea6f9e34`). #226/#228 already
+  swept the two non-cascade FKs onto `batches` by the relationship each constraint uses;
+  what the teardown lacked was a guarantee that **nothing writes a new referencing row between
+  those statements**. The CI log named only the exception type. **The constraint is
+  `changelog_segments_batch_id_fkey` (V30, no `ON DELETE` action)** — a session commit landing
+  after the segment sweep and before the batch delete blocks it exactly this way — and the
+  twin is `fk_account_plugins_baseline_batch` (V25, `ON DELETE RESTRICT`).
+  **`error_logs.batch_id` is not a blocker**: V5 had no cascade, V22 added
+  `ON DELETE CASCADE`, and a planted error log now goes with the batch. **Shape:**
+  quiesce the in-process gRPC server/channel (`awaitTermination`, so a still-running
+  `SessionEnd` cannot outlive the test) **and** retry the teardown once after re-sweeping
+  those two relationships; a remaining failure is an `IllegalStateException` quoting
+  `SQLSTATE=` and `constraint=`, so the next occurrence is itself (the #226/#207
+  complaint). Extracted as `SeededSiteTeardown` (site and account arms), tests first
+  outside `**/integration/**` so the fast gate runs them: two leftover-then-clear
+  methods construct the window, one per constraint, and require the retry to remove
+  the row rather than merely survive; a third plants an `error_log` and requires the
+  unfixed `DELETE FROM batches` to succeed; a fourth requires the named-failure
+  wrapper to carry the structured prefix (mutation: dropping `SQLSTATE=` from the
+  formatter fails it even though the PG message already contains the constraint
+  name). Test-only — no production code, REST, gRPC, proto, DTO, migration
+  (**V57 stays free**), configuration-key, metric, S3-key or frontend change.
 - sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
   failure (issue #261, the limit #243 named rather than closed). `processNextPending` exempted
   only `MemoryPressureAbortedException` from spending an attempt, so a semaphore timeout
@@ -603,6 +628,7 @@ pages/{feature}/            # Route pages
   raise site). No REST, gRPC, proto, DTO, migration (V56 current, V57 free), configuration-key,
   metric-name, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("How to read
   them"), `docs/020-sql-generation-optimization.md`.
+
 - error-toast-401: The global error toast handler no longer speaks out of turn on
   every 401 path (issue #239, the four routes #225 documented rather than closed).
   None of them is about interceptor registration count. **The decision the ticket
