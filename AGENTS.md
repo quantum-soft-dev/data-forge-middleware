@@ -260,6 +260,12 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
+  failure (issue #261). Shared parent `PodLevelAbortedException`: the queue rethrows every
+  subclass, spends no attempt, moves neither `deferred` nor `poisoned`. Semaphore timeout is
+  `SemaphoreTimeoutAbortedException` (before any per-segment work). Wrapped S3 stays
+  per-segment — a missing object should poison; an outage that outlasts the doubling window is
+  an incident either way. No migration (V57 free). See `docs/delta-client-v2-guide.md`.
 - error-toast-401: The global error toast handler no longer speaks out of turn on
   every 401 path (issue #239, the four routes #225 documented rather than closed).
   A failed refresh rejects the original Axios 401, not the Auth0 error

@@ -28,8 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * cooldown the <em>next</em> wake claims a different site's head and drains it to the end. The
  * drain stops rather than continuing so that a systemic failure cannot spend an attempt on every
  * pending segment of every site in one pass. What also ends a drain, without recording anything,
- * is a condition that would meet the next claim too — the memory-pressure refusal of #181 and the
- * pod shutting down.</p>
+ * is a condition that would meet the next claim too — a {@code PodLevelAbortedException}
+ * (memory-pressure of #181, semaphore timeout of #261) and the pod shutting down.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -110,7 +110,8 @@ public class DeltaSqlSweepWorker {
             }
         } catch (RuntimeException e) {
             // What reaches here is systemic rather than one segment's own failure (issue #243) —
-            // today the #181 memory-pressure refusal, which the next claim would meet as well.
+            // a PodLevelAbortedException (memory pressure, semaphore timeout), which the next
+            // claim would meet as well.
             log.warn("Delta SQL drain ended early; the segment stays pending for the sweep: {}",
                     e.getMessage());
         }

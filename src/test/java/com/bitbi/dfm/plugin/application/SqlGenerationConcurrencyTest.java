@@ -2,7 +2,7 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.plugin.application.SqlGenerationService.SqlGenerationException;
+import com.bitbi.dfm.plugin.application.SqlGenerationService.SemaphoreTimeoutAbortedException;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
@@ -373,8 +373,8 @@ class SqlGenerationConcurrencyTest {
 
                 // Then - second task should timeout waiting for semaphore
                 assertThatThrownBy(() -> service.generateSqlForBatch(batchId2, pluginId2))
-                        .isInstanceOf(SqlGenerationException.class)
-                        .hasMessageContaining("timed out");
+                        .isInstanceOf(SemaphoreTimeoutAbortedException.class)
+                        .isInstanceOf(SqlGenerationService.PodLevelAbortedException.class);
 
                 // Release the blocked first task
                 blockLatch.countDown();
@@ -409,7 +409,7 @@ class SqlGenerationConcurrencyTest {
             // Then - second call should also succeed (semaphore was released)
             service.generateSqlForBatch(batchId2, pluginId);
 
-            // Both should have completed without SqlGenerationException timeout
+            // Both should have completed without a semaphore-timeout refusal
             verify(accountPluginRepository, times(2)).findById(pluginId);
         }
 
@@ -518,7 +518,7 @@ class SqlGenerationConcurrencyTest {
                 // Second task times out
                 try {
                     service.generateSqlForBatch(batchId2, pluginId2);
-                } catch (SqlGenerationException e) {
+                } catch (SemaphoreTimeoutAbortedException e) {
                     // Expected
                 }
 
