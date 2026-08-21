@@ -374,13 +374,12 @@ public class SqlGenerationService {
 
             throw new SqlGenerationException("Failed to read files for SQL generation", e);
         } catch (RuntimeException e) {
-            if (!(e instanceof MemoryPressureAbortedException)) {
-                // A refusal is already logged with its reading at the raise site and counted on
-                // sql.generation.aborted.memory_pressure. It is deliberately kept off
-                // sql.generation.errors, which is for generations that are broken: this one
-                // repairs itself when the heap does, and an alert on that series must not be
-                // spent on a condition that clears (the rule #162 applied to
-                // delta.checkpoint.builds.aborted). It still audits, below.
+            if (!(e instanceof PodLevelAbortedException)) {
+                // A pod-level refusal is already logged at the raise site and counted on its
+                // own series. It is deliberately kept off sql.generation.errors, which is for
+                // generations that are broken: this one repairs itself when the pod does, and
+                // an alert on that series must not be spent on a condition that clears (the
+                // rule #162 applied to delta.checkpoint.builds.aborted). It still audits, below.
                 log.error("SQL generation failed for batch: batchId={}", batchId, e);
                 meterRegistry.counter("sql.generation.errors").increment();
             }
@@ -599,7 +598,7 @@ public class SqlGenerationService {
 
     /**
      * Acquires the SQL generation semaphore with the configured timeout.
-     * Throws SqlGenerationException if the semaphore cannot be acquired in time.
+     * Throws {@link SemaphoreTimeoutAbortedException} if the semaphore cannot be acquired in time.
      *
      * @param batchId The batch ID (for logging context)
      */
@@ -613,9 +612,7 @@ public class SqlGenerationService {
                 log.warn("SQL generation semaphore acquisition timed out after {}s: batchId={}, queueLength={}",
                         semaphoreTimeoutSeconds, batchId, sqlGenerationSemaphore.getQueueLength());
                 meterRegistry.counter("sql.generation.semaphore.timeouts").increment();
-                throw new SqlGenerationException(
-                        "SQL generation timed out waiting for available slot after " + semaphoreTimeoutSeconds +
-                        "s. Current queue length: " + sqlGenerationSemaphore.getQueueLength());
+                throw new SemaphoreTimeoutAbortedException(batchId);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -637,27 +634,37 @@ public class SqlGenerationService {
     }
 
     /**
+     * A refusal that belongs to the <em>pod at this instant</em>, not to the batch being generated
+     * (issue #261). The delta-SQL queue treats every subclass the same way: rethrow, spend no
+     * per-segment attempt, move neither {@code sql.generation.delta.segments.deferred} nor
+     * {@code .poisoned}. Retrying is not a spin — the same batch generates normally once the
+     * condition (heap, contention) clears, unlike a deterministic data or object failure.
+     *
+     * <p>A subclass of {@link SqlGenerationException} so it still lands on the failure paths that
+     * already exist: a {@code SQL_GENERATION_FAILED} audit entry naming the batch, and a 500 from
+     * the two manual generation endpoints. Subclasses are kept off {@code sql.generation.errors}
+     * — each has a counter of its own and each repairs itself.</p>
+     */
+    public abstract static class PodLevelAbortedException extends SqlGenerationException {
+        protected PodLevelAbortedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Thrown when a generation is refused because the pod's heap is above
      * {@code plugin.sql-generation.heap-threshold-percent} (issue #181).
      *
      * <p>It is a failure and not an outcome: the batch's records are untouched and the same batch
      * will generate normally once the heap recovers, which is why the delta-SQL queue is expected
-     * to leave the segment pending and offer it again on the next sweep. The condition is a
-     * property of the <em>pod at that instant</em>, not of the batch, so retrying is not a spin —
-     * unlike the deterministic Parquet size ceilings, whose refusal repeats for ever.</p>
-     *
-     * <p>A subclass of {@link SqlGenerationException} so it lands on the failure paths that
-     * already exist: a {@code SQL_GENERATION_FAILED} audit entry naming the batch, and a 500 from
-     * the two manual generation endpoints rather than a 200 reporting "no changes detected". It is
-     * kept off {@code sql.generation.errors} — it has a counter of its own and it repairs
-     * itself.</p>
+     * to leave the segment pending and offer it again on the next sweep.</p>
      *
      * <p>The message is written for the reader it reaches: the owner endpoint copies it into a 500
      * body and the audit entry into an account-visible {@code errorMessage}, so it names neither
-     * the pod's heap usage nor the configuration key. Both are in the ERROR logged where the
+     * the pod's heap usage nor the configuration key. Both are in the WARN logged where the
      * refusal is raised.</p>
      */
-    public static class MemoryPressureAbortedException extends SqlGenerationException {
+    public static class MemoryPressureAbortedException extends PodLevelAbortedException {
 
         /**
          * @param batchId the batch that was refused; it is the only detail the message carries,
@@ -668,6 +675,33 @@ public class SqlGenerationService {
             // false for a manual generation, and this type cannot tell which caller raised it.
             super("Generating SQL for batch " + batchId + " was refused because the server is under "
                     + "memory pressure. No SQL was produced for this batch and its records are intact.");
+        }
+    }
+
+    /**
+     * Thrown when a generation cannot start because no semaphore permit arrived within
+     * {@code plugin.sql-generation.semaphore-timeout-seconds} (issue #261).
+     *
+     * <p>Raised <em>before</em> any per-segment work and before the memory-pressure check, so
+     * every claimed head meets it for as long as both {@code max-concurrent} permits stay busy.
+     * Walking those heads towards {@code sql.generation.delta.segments.poisoned} would turn
+     * contention into a verdict on the data — the same rule {@link MemoryPressureAbortedException}
+     * already holds.</p>
+     *
+     * <p>The message names neither the timeout nor the queue length: both stay in the WARN at the
+     * raise site, because this text reaches the owner endpoint's 500 body and the account-visible
+     * audit entry, where a tenant can act on neither.</p>
+     */
+    public static class SemaphoreTimeoutAbortedException extends PodLevelAbortedException {
+
+        /**
+         * @param batchId the batch that was refused; it is the only detail the message carries,
+         *                since the message reaches a tenant on two surfaces
+         */
+        public SemaphoreTimeoutAbortedException(UUID batchId) {
+            super("Generating SQL for batch " + batchId + " was refused because the server is busy "
+                    + "generating SQL for other batches. No SQL was produced for this batch and its "
+                    + "records are intact.");
         }
     }
 }

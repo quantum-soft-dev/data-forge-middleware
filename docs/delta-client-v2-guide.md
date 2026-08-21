@@ -2278,13 +2278,13 @@ repairable stall into permanent, unrecoverable loss of that batch's SQL, which i
 #212 had just stopped. The attempt count therefore escalates **reporting** instead of taking a
 verdict, and the one bounded ending stays batch retention (`delta.retention.segments.deleted-pending`).
 
-**Two failures are exempt and still end the drain rather than being deferred.** The
-memory-pressure refusal (below), and a failure while the pod is shutting down — the S3 client or
-the data source may already be closed, so that is the process ending rather than the segment
-failing, and #162's rule is that such an ending records no verdict. The #164 "no transaction across
-S3" guard is checked *before* the queue claims anything, for the same reason: swallowed into a
-deferral, a caller that wrapped the drain in a transaction would read as "every segment in the
-queue is poison data" instead of as the wiring mistake it is.
+**Three failures are exempt and still end the drain rather than being deferred.** A
+pod-level refusal (`PodLevelAbortedException` — below), and a failure while the pod is shutting
+down — the S3 client or the data source may already be closed, so that is the process ending
+rather than the segment failing, and #162's rule is that such an ending records no verdict. The
+#164 "no transaction across S3" guard is checked *before* the queue claims anything, for the
+same reason: swallowed into a deferral, a caller that wrapped the drain in a transaction would
+read as "every segment in the queue is poison data" instead of as the wiring mistake it is.
 
 **What the escalation looks like.** Every failed attempt increments
 `sql.generation.delta.segments.deferred` (SQL) or `delta.egress.errors` (egress — the
@@ -2306,27 +2306,29 @@ retries once its cooldown ends. A deferral whose UPDATE matches no row — the w
 replica while this attempt was failing, or the row is gone — is not reported at all, so the
 counters never send an operator after a segment that is already done.
 
-**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
-claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
-own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
-any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
-failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
-prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
-"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+**Pod-level refusals on the SQL side are exempt** (issue #261) and still end the drain.
+`PodLevelAbortedException` is the type the queue can tell from a segment's own failure; both
+subclasses spend no attempt, move neither `sql.generation.delta.segments.deferred` nor
+`.poisoned`, and the next wake starts over. Deferring either would walk healthy segments towards
+the poisoned report and let a transient overload become a verdict on the data — the rule #150,
+#162 and #178 already hold elsewhere.
 
-**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
-claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
-own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
-any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
-failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
-prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
-"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+- **Memory pressure** (`MemoryPressureAbortedException`, #181) — a reading of the *pod's* heap
+  taken before any work, so every segment claimed while it lasts would meet it.
+- **Semaphore timeout** (`SemaphoreTimeoutAbortedException`) —
+  `plugin.sql-generation.semaphore-timeout-seconds`, thrown before any per-segment work and before
+  the memory-pressure check. Sustained contention (both `max-concurrent` permits busy) times out
+  every claimed head; walking those towards the poisoned ERROR would prescribe "fix the data" for
+  a busy pod. The timeout seconds and the wait-queue length stay in the WARN at the raise site,
+  not in the exception message (that text reaches the owner's 500 body).
 
-**The memory-pressure refusal is exempt** and still ends the drain. `MemoryPressureAbortedException`
-(#181) is a reading of the *pod's* heap taken before any work, so every segment claimed while it
-lasts would meet it: it spends no attempt, moves neither counter, and the next wake starts over.
-Deferring it would walk healthy segments towards the poisoned report and let a transient overload
-become a verdict on the data — the rule #150, #162 and #178 already hold elsewhere.
+**A wrapped S3 failure is this segment's own**, decided rather than inherited. A bucket outage
+and a missing object for this batch arrive as the same wrap (`SqlGenerationException` with an
+`IOException` cause, or a `SqlFileStorageException` from the PUT), and a missing object should
+poison. An outage that outlasts the doubling window is an incident either way; the per-wake bound
+plus "many at once means systemic" is how to read that population. The poisoned ERROR's "fix the
+cause, reinit the plugin, or delete the batch" is then the right instruction for an object that
+is gone, and the right instruction for an outage that has lasted an hour.
 
 **What one poison costs the rest of the fleet, stated in numbers** (review round 3): a drain that
 meets a poisoned head spends that wake on it and stops, and at the doubling cap each such head is
