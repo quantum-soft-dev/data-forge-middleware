@@ -400,7 +400,13 @@ bean's constructor — and an out-of-range value **fails the application context
 | `delta-retry-delay-seconds` | `>= 1` | `DeltaSqlQueueService` (#243) |
 | `delta-poison-after-attempts` | `>= 1` | `DeltaSqlQueueService` (#243) |
 
-None of the five #185 covered was scoped out, and the two keys #243 added carry the same rule. 100 stays the documented off-switch of #174 (the strict
+None of the five #185 covered was scoped out, and the two keys #243 added carry the same rule.
+The rest of the application's `@Scheduled(fixedDelayString)` interval keys — every sweep that
+was bound only at the annotation — are the same floor, mechanism-level rather than per-bean
+(issue **#251**): `ScheduledIntervalValidator` walks the placeholders at startup and refuses
+`< 1` naming the key, so a newly added interval cannot ship as a busy-loop. `delta-sweep-ms`
+is therefore validated twice, which is cheap, and the constructor copy stays so this block's
+own message still names the consequence that is unique to the SQL queue. 100 stays the documented off-switch of #174 (the strict
 comparison and the clamp are untouched), and the heap floor is **1, not 0**: the ceiling-rounded
 reading of a live JVM is never 0, so a threshold of 0 refuses every generation exactly like a
 negative value — and this deployment's "0 disables" convention elsewhere

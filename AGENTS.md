@@ -261,6 +261,13 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
+  negative value no longer fails Spring's parser without naming the key (issue #251).
+  `ScheduledIntervalValidator` walks every interval placeholder at startup and refuses `< 1`
+  naming the key and the value, so a newly added key cannot ship unvalidated;
+  `ScheduledTaskInventoryTest` keeps the two scans in agreement. `initialDelayString` of `0`
+  stays fire-immediately. `AccountProperties` now quotes `account.max-concurrent-batches`.
+  No migration (**V57 stays free**). See `docs/delta-client-v2-guide.md`.
 - closed-status-labels: A closed ticket keeps no live `status: *` label (issue #257). `/merge` removed only `ready to merge` + `in review` from the `Closes #<n>` issue, so a ticket closed any other way kept whatever it had (#89 still read in progress a month after it shipped). Commands query-then-remove every `status:*` actually present (`gh issue edit --remove-label` 404s on a missing name — a fixed list *is* the defect); `.github/workflows/strip-closed-status-labels.yml` is the backstop on every close plus a weekly sweep. A scheduled auto-strip is worth having here (mechanical, no false positive) and was declined as a journal guard on #205. Docs, commands and one workflow — no production code, no migration (V57 free).
 - queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245). Both workers
   saved the whole entity captured at claim, no `@Version`; since #164 the claim lock is
