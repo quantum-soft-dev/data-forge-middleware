@@ -63,7 +63,7 @@ $ARGUMENTS
   можно не проверять.
 - **Merge строго по одному и последовательно.** После каждого merge все остальные PR прогона
   гарантированно стали `BEHIND`, а часть — `DIRTY`. Второй merge начинается только после того,
-  как первый закрыт до конца (issue закрыт, карточка в `Done`).
+  как первый закрыт до конца (issue закрыт, карточка в `Done`, `status: *` сняты).
 - **Один рабочий каталог — один исполнитель.** Ни двух агентов в одном worktree, ни субагента в
   workspace'е, где сидит человек: они затирают друг другу файлы и коммитят чужие изменения.
 - **Диспетчер сам не пишет код.** Его инструменты — `gh`, `git` на чтение, `Agent` (в режиме B),
@@ -393,8 +393,9 @@ review `PENDING`, он вызывает `submitPullRequestReview` **до** resol
 диспетчера — то есть ни во что.
 
 **Merge-замок.** Пока `/merge` не закончил (PR смержен squash-коммитом, issue закрыт, карточка
-в `Done`, метки сняты) — второй merge не начинается, даже если второй PR готов. Готовые PR ждут
-в очереди.
+в `Done`, все `status: *` сняты) — второй merge не начинается, даже если второй PR готов.
+Готовые PR ждут в очереди. Перечитай метки закрытого issue, а не только state: закрытый тикет
+с живым `status: ready to merge` — это #257, и он врёт следующему `gh issue list`.
 
 **После каждого merge:**
 
@@ -494,8 +495,16 @@ review `PENDING`, он вызывает `submitPullRequestReview` **до** resol
 
    ```bash
    gh issue edit  <дубль> --add-label duplicate
+   while IFS= read -r label; do
+     gh issue edit <дубль> --remove-label "$label"
+   done < <(gh issue view <дубль> --json labels --jq '.labels[].name | select(startswith("status:"))')
    gh issue close <дубль> --comment "Дубль #<первый>, заведён в том же прогоне."
    ```
+
+   Статусные метки снимаются **все, что реально висят**, тем же циклом, что в `/merge` и
+   `/github-issue` (`CLAUDE.md` → «Status lives in two places»). Фиксированный список 404-ит
+   `gh issue edit --remove-label`, если названной метки нет, и оставляет живой статус на
+   закрытом тикете — это #257.
 
    **Метка `duplicate` обязательна на каждом закрытом как поглощённый** (`CLAUDE.md` → «A ticket
    closed as absorbed carries `duplicate`»): закрытие само переносит карточку в `Done`, и без метки
