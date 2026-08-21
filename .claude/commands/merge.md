@@ -231,13 +231,23 @@ gh pr merge <pr> --squash --delete-branch
        --field-id <status-field-id> --single-select-option-id <option-id колонки Done>
    ```
 
-3. **Снять статусные метки.** Закрытый тикет не должен висеть с `status: ready to merge`:
+3. **Снять статусные метки.** Закрытый тикет не носит ни одной `status: *` — не только
+   `ready to merge`. Снимай **все, что реально висит**, а не фиксированный список из двух
+   имён: `gh issue edit --remove-label` отвечает 404, если названной метки на тикете нет, и
+   именно короткий список оставлял `status: ready` / `in progress` / `blocked` на закрытых
+   (это и был #257). Цикл тот же, что в `CLAUDE.md` → «Status lives in two places»:
 
    ```bash
-   gh issue edit <n> --remove-label "status: ready to merge" --remove-label "status: in review"
+   while IFS= read -r label; do
+     gh issue edit <n> --remove-label "$label"
+   done < <(gh issue view <n> --json labels --jq '.labels[].name | select(startswith("status:"))')
    ```
 
    Метки `bug`/`enhancement` и `priority: *` не трогаем — это классификация, а не статус.
+   Экшен `.github/workflows/strip-closed-status-labels.yml` — подстраховка на закрытиях,
+   которые эта команда не видит (`Closes #<n>` срабатывает в шаге 4, кнопка в UI); не
+   повод пропускать этот шаг: только что закрытый тикет с живой меткой отравляет следующий
+   `gh issue list --label "status: …"` в этой же сессии.
 
 4. **Если PR поглотил ещё один тикет**, закрой и его — с меткой `duplicate`. Единой формулировки
    в этом репозитории нет, и по одной строке `folds #NNN` такую связь не найти: в ходу
@@ -247,14 +257,18 @@ gh pr merge <pr> --squash --delete-branch
    ничего):
 
    ```bash
-   gh issue edit  <NNN> --add-label duplicate \
-       --remove-label "status: in progress" --remove-label "status: blocked" \
-       --remove-label "status: ready"        # снимаются те, что реально висят
+   gh issue edit <NNN> --add-label duplicate
+   while IFS= read -r label; do
+     gh issue edit <NNN> --remove-label "$label"
+   done < <(gh issue view <NNN> --json labels --jq '.labels[].name | select(startswith("status:"))')
    gh issue close <NNN> --comment "Поглощён #<основной>, смержено в develop: PR #<pr>."
    ```
 
-   Статусные метки снимаются по тому же правилу, что и у основного тикета в пункте 3: закрытый
-   тикет с `status: blocked` — ровно тот случай, когда доска и метки расходятся (это и был #200).
+   Статусные метки снимаются **тем же циклом, что и у основного тикета в пункте 3**, а не
+   фиксированным списком из трёх имён: `gh issue edit --remove-label` 404-ит, если названной
+   метки нет, и тогда не встанет даже `duplicate`. Закрытый тикет с `status: blocked` — ровно
+   тот случай, когда доска и метки расходятся (это и был #200); с `status: ready to merge` —
+   тот же случай с другого конца (#228).
 
    Метка обязательна и здесь тоже (`CLAUDE.md` → «A ticket closed as absorbed carries
    `duplicate`»), хотя работа как раз **уехала** в `develop` вместе с поглотителем: `duplicate`
@@ -321,5 +335,7 @@ Merge в `develop` **ничего не деплоит**. Dev (GKE) выкаты�
 
 - Merge прошёл, а issue не закрылся и карточка не переехала — доведи вручную и скажи об этом.
   Наполовину закрытый тикет хуже незакрытого: он выглядит сделанным, а доска врёт.
+- Merge прошёл, issue закрылся, но на нём осталась `status: *` — сними циклом из шага 5.3 и
+  скажи об этом. Закрытый тикет с живой статусной меткой — вторая половина той же лжи (#257).
 - `gh pr merge` отказал из-за защиты ветки — не обходи. Покажи текст отказа.
 - После merge упал CI на `develop` — сразу скажи, не откладывая до конца отчёта.

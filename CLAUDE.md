@@ -450,6 +450,32 @@ columns in order — jumping is not allowed:
 there, shipped or absorbed alike. The `duplicate` label is what separates the two — see "A ticket
 closed as absorbed carries `duplicate`" above.
 
+A closed ticket has **no** `status: *` label. The column is `Done`; the live labels (`ready`,
+`in progress`, `in review`, `ready to merge`, `blocked`) are a state machine for open work, and
+a closed ticket wearing one is a wrong answer to `gh issue list --label "status: in progress"`
+and to `/merge`'s ambiguous-target lookup (`--label "status: ready to merge"`). `/merge` used
+to remove only the two names a squash-merge is expected to carry, and only from the `Closes #<n>`
+issue — so a ticket closed from `ready` / `in progress` / `blocked`, an absorbed close, a runner
+duplicate close, a GitHub-UI close, or the auto-close `Closes` fires at squash time, kept
+whatever it had (#89 still read in progress a month after it shipped). **Every close route
+strips every `status:*` actually present.** Query then remove, because `gh issue edit
+--remove-label` 404s if the named label is not on the issue, which is why a fixed two-name list
+*was* the defect:
+
+```bash
+while IFS= read -r label; do
+  gh issue edit <n> --remove-label "$label"
+done < <(gh issue view <n> --json labels --jq '.labels[].name | select(startswith("status:"))')
+```
+
+The load-bearing backstop is `.github/workflows/strip-closed-status-labels.yml`: it fires on
+`issues: closed` (covers the routes the commands never see) and weekly / `workflow_dispatch`
+(covers a label added after close, or an Action that failed). A scheduled auto-strip is worth
+having here — closed + `status:*` is always wrong, no false positive — and was declined as a
+journal guard on #205, where a missing `AGENTS.md` entry needs a judgement. The Action is not a
+reason for a command to skip the loop: a just-closed ticket still wearing a live label poisons
+the next `gh issue list` in that same session.
+
 Moving the board needs the `project` token scope — if `gh project` fails with
 `INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
 only the label. Always re-read the board after a transition: a command that exited 0 is not proof
@@ -584,6 +610,32 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- closed-status-labels: A closed ticket keeps no live `status: *` label (issue #257, found
+  working #230). Status lives in two places — the Kanban column and the repo label — and this
+  file already said a close ends with "статусные метки сняты". The label half was not actually
+  cleaned: `/merge` step 5.3 removed exactly two names (`ready to merge`, `in review`) and only
+  from the `Closes #<n>` issue, so a ticket closed from `ready` / `in progress` / `blocked`, an
+  absorbed close, a runner duplicate close, a GitHub-UI close, or `Closes` auto-close before
+  that step, kept whatever it had. Five closed issues wore a live status on 2026-08-20
+  (#228/#226/#215 `ready to merge`, #93 `ready`, #89 `in progress` a month after it shipped);
+  a day of runner merges added six more. `gh issue list --label "status: in progress"` and
+  `/merge`'s ambiguous-target lookup are both read across states often enough that a closed
+  ticket wearing one is a wrong answer waiting to happen. **Both a rule in the commands and
+  repo automation, not a choice of one.** Commands cannot see a UI close or the auto-close
+  `Closes` fires at squash time, before step 5.3. Automation cannot unstick the next `gh issue
+  list` in the same session if the agent skips the strip. The command-side shape is **query
+  then remove** — `gh issue edit --remove-label` 404s if the named label is not on the issue,
+  which is why a fixed two-name list was the defect, and why #230's absorbed path naming three
+  other labels would have failed the `duplicate` add on a ticket that was not in those three
+  states. The load-bearing backstop is `.github/workflows/strip-closed-status-labels.yml` on
+  `issues: closed` (prefix `status:`, issues not PRs) plus a weekly/`workflow_dispatch` sweep
+  that lists repo labels with that prefix and strips them from closed issues. **A scheduled
+  guard is worth having here and was declined as a journal guard on #205**: closed +
+  `status:*` is always wrong and auto-strip has no false positive, whereas a missing
+  `AGENTS.md` entry needs a judgement. Backfill is a census, not the issue's own five: the
+  five plus the six that accumulated before this landed (eleven closed issues). No production code, REST, gRPC,
+  proto, DTO, migration (**V57 stays free**), configuration-key, metric, S3-key or frontend
+  change.
 - queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245, found reviewing
   #212). Both workers stamped their marker by saving the whole entity captured at claim, and
   `ChangelogSegment` has no `@Version`. Since #164 the claim lock is released before S3, so the

@@ -57,6 +57,22 @@ GitHub issue». Здесь детализируется механика ком�
 Отдельной колонки под «ready to merge» на доске нет — карточка остаётся в `In Review`, а
 готовность к merge показывает метка.
 
+Закрытый тикет **не носит** `status: *`. Это не «снимет `/merge`, если вспомнит»: любой путь
+закрытия — squash с `Closes #<n>`, поглощение, дубль диспетчера, кнопка в UI, `gh issue close` —
+снимает **все** живые статусные метки, которые реально висят. Фиксированный список из двух имён
+(`ready to merge` + `in review`) как раз и оставлял `ready` / `in progress` / `blocked` на
+закрытых — это #257. Цикл (тот же, что в `CLAUDE.md` → «Status lives in two places»):
+
+```bash
+while IFS= read -r label; do
+  gh issue edit <n> --remove-label "$label"
+done < <(gh issue view <n> --json labels --jq '.labels[].name | select(startswith("status:"))')
+```
+
+`gh issue edit --remove-label` отвечает 404, если названной метки на тикете нет, поэтому список
+не хардкодят. Подстраховка на закрытиях вне команд — `.github/workflows/strip-closed-status-labels.yml`
+(`issues: closed` + еженедельный sweep); не повод пропускать цикл в самой команде.
+
 ### Как двигать карточку
 
 Идентификаторы доски — проект, поле `Status`, option-id всех колонок и готовые команды —
@@ -657,6 +673,9 @@ close»). Просто скажи, что workspace можно архивиро�
 
    ```bash
    gh issue edit <поглощённый> --add-label duplicate
+   while IFS= read -r label; do
+     gh issue edit <поглощённый> --remove-label "$label"
+   done < <(gh issue view <поглощённый> --json labels --jq '.labels[].name | select(startswith("status:"))')
    gh issue close <поглощённый> --comment "Поглощён #<выживший> (открыт / смержен в develop <sha>)."
    ```
 
@@ -670,7 +689,8 @@ close»). Просто скажи, что workspace можно архивиро�
    перезаписал бы тот же workflow. Но проверь, что она действительно уехала в `Done`, — как и
    везде на доске, отработавшая команда не доказательство результата: если workflow не сработал,
    подвинь её в `Done` руками (идентификаторы — `CLAUDE.md` → «Board identifiers»). И сними
-   статусные метки: закрытый тикет не должен висеть с `status: blocked` или `status: ready`.
+   **все** статусные метки циклом выше: закрытый тикет не должен висеть ни с `status: blocked`,
+   ни с `status: ready`, ни с любой другой `status: *` (#257).
 
    **Тикет, который кто-то уже ведёт, ты не закрываешь.** Сначала проверь — метка
    `status: in progress`, assignee, открытый PR:

@@ -1,0 +1,103 @@
+# Closed tickets keep no live status:* label (issue #257).
+#
+# The commands strip on every close they own, but they cannot see a GitHub-UI
+# close, a runner duplicate close they did not write, or the auto-close Closes #<n>
+# fires at squash time — before /merge step 5.3. This workflow is the backstop:
+# issues:closed covers every route, and the weekly sweep covers a label added
+# after close or an Action that failed.
+#
+# A scheduled auto-strip is worth having here (closed + status:* is always wrong,
+# no false positive) and was declined as a journal guard on #205, where a missing
+# AGENTS.md entry needs a judgement.
+name: Strip closed status labels
+
+on:
+  issues:
+    types: [closed]
+  schedule:
+    # Monday 06:00 UTC — residual census, not crash recovery.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  strip:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Remove status:* from the closed issue, or sweep leftovers
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const PREFIX = 'status:';
+
+            function isIssue(issue) {
+              return issue && !issue.pull_request;
+            }
+
+            function statusNames(issue) {
+              return (issue.labels || [])
+                .map((label) => (typeof label === 'string' ? label : label.name))
+                .filter((name) => name.startsWith(PREFIX));
+            }
+
+            async function strip(issue) {
+              if (!isIssue(issue)) {
+                return 0;
+              }
+              const names = statusNames(issue);
+              for (const name of names) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name,
+                  });
+                } catch (err) {
+                  // 404: already gone (command raced us, or a second event).
+                  if (err.status !== 404) {
+                    throw err;
+                  }
+                }
+              }
+              if (names.length > 0) {
+                core.info('#' + issue.number + ': removed ' + names.join(', '));
+              }
+              return names.length;
+            }
+
+            if (context.eventName === 'issues') {
+              await strip(context.payload.issue);
+              return;
+            }
+
+            const repoLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const statusLabels = repoLabels
+              .map((label) => label.name)
+              .filter((name) => name.startsWith(PREFIX));
+            const seen = new Set();
+            let stripped = 0;
+            for (const label of statusLabels) {
+              const issues = await github.paginate(github.rest.issues.listForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed',
+                labels: label,
+                per_page: 100,
+              });
+              for (const issue of issues) {
+                if (seen.has(issue.number)) {
+                  continue;
+                }
+                seen.add(issue.number);
+                stripped += await strip(issue);
+              }
+            }
+            core.info(
+              'sweep: examined ' + seen.size + ' closed issues, stripped ' + stripped + ' labels'
+            );
