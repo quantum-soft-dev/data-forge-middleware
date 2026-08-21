@@ -1,11 +1,16 @@
 package com.bitbi.dfm.plugin.domain;
 
+import java.util.Locale;
+
 /**
  * DBF (dBASE) column types for determining NULL handling in SQL generation.
  * <p>
  * Per specification:
  * - Character, Numeric, Logical, Date, Float, DateTime: empty string = NULL
  * - Integer, Currency: empty string = 0
+ * </p>
+ * A site's {@code TableSchema} declares PostgreSQL types; {@link #fromSqlType(String)}
+ * maps those onto this enum so DBF SQL generation can apply the table above.
  */
 public enum DbfColumnType {
     /** Character field - empty = NULL */
@@ -65,6 +70,44 @@ public enum DbfColumnType {
             }
         }
         return CHARACTER;  // Default to CHARACTER (empty = NULL)
+    }
+
+    /**
+     * Maps a PostgreSQL column type (as stored on {@code TableSchema}) onto a DBF type.
+     *
+     * <p>Modifiers in parentheses are ignored ({@code numeric(12,2)} is {@link #NUMERIC}).
+     * A single-letter DBF code is accepted as well, so a schema that stored the original
+     * header encoding still resolves. Anything unrecognised becomes {@link #CHARACTER}.</p>
+     *
+     * @param sqlType PostgreSQL type string (e.g. {@code integer}, {@code varchar(255)})
+     *                or a one-letter DBF code
+     * @return the corresponding DBF type
+     */
+    public static DbfColumnType fromSqlType(String sqlType) {
+        if (sqlType == null || sqlType.isBlank()) {
+            return CHARACTER;
+        }
+        String trimmed = sqlType.trim();
+        String base = trimmed.toLowerCase(Locale.ROOT);
+        int paren = base.indexOf('(');
+        if (paren >= 0) {
+            base = base.substring(0, paren);
+        }
+        base = base.replaceAll("\\s+", " ").trim();
+        return switch (base) {
+            case "integer", "int", "int4", "serial",
+                 "smallint", "int2", "smallserial",
+                 "bigint", "int8", "bigserial" -> INTEGER;
+            case "money" -> CURRENCY;
+            case "numeric", "decimal" -> NUMERIC;
+            case "real", "float4", "float",
+                 "double precision", "float8", "double" -> FLOAT;
+            case "boolean", "bool" -> LOGICAL;
+            case "date" -> DATE;
+            case "timestamp", "timestamptz", "datetime",
+                 "timestamp without time zone", "timestamp with time zone" -> DATETIME;
+            default -> fromCode(trimmed);
+        };
     }
 
     /**

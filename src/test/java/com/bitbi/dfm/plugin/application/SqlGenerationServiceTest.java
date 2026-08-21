@@ -8,6 +8,7 @@ import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.site.domain.SiteType;
+import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -43,6 +44,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -348,6 +350,89 @@ class SqlGenerationServiceTest {
             verify(s3SqlFileStorageService).storeSqlFile(any(), any(), anyString());
             // Verify the skipped file metric was incremented
             assertThat(realRegistry.counter("sql.generation.files.skipped.invalid_headers").count()).isEqualTo(1.0);
+        }
+    }
+
+    @Nested
+    @DisplayName("DBF column types from TableSchema (issue #263)")
+    class DbfColumnTypesFromTableSchema {
+
+        @Test
+        @DisplayName("should load the site schema for a DBF site and pass mapped types to the generator")
+        void shouldPassMappedTypesForDbfSite() throws Exception {
+            SimpleMeterRegistry realRegistry = new SimpleMeterRegistry();
+            DbfSqlGenerationStrategy realDbfStrategy = new DbfSqlGenerationStrategy(
+                    csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, realRegistry);
+            SqlGenerationService serviceWithRealMetrics = newService(realRegistry, realDbfStrategy,
+                    2, 120, 100);
+            serviceWithRealMetrics.init();
+
+            UUID batchId = UUID.randomUUID();
+            UUID siteId = UUID.randomUUID();
+            UUID accountId = UUID.randomUUID();
+            Long accountPluginId = 1L;
+
+            AccountPlugin accountPlugin = mock(AccountPlugin.class);
+            when(accountPlugin.isBaselineBatch(batchId)).thenReturn(false);
+            when(accountPlugin.hasBaselineBatch()).thenReturn(true);
+            when(accountPluginRepository.findById(accountPluginId)).thenReturn(Optional.of(accountPlugin));
+
+            Batch batch = mock(Batch.class);
+            when(batch.getId()).thenReturn(batchId);
+            when(batch.getSiteId()).thenReturn(siteId);
+            when(batch.getAccountId()).thenReturn(accountId);
+
+            UploadedFile file = mock(UploadedFile.class);
+            when(file.getOriginalFileName()).thenReturn("orders.csv");
+            when(file.getS3Key()).thenReturn("account/site/orders.csv");
+            when(batch.getUploadedFiles()).thenReturn(List.of(file));
+            when(batchRepository.findByIdWithFiles(batchId)).thenReturn(Optional.of(batch));
+            when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(false);
+
+            Site site = mock(Site.class);
+            when(site.getId()).thenReturn(siteId);
+            when(site.getDomain()).thenReturn("test-site.com");
+            when(site.getSiteType()).thenReturn(SiteType.DBF);
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+            when(batchRepository.findPreviousBatchForSiteWithFiles(siteId, batchId))
+                    .thenReturn(Optional.empty());
+
+            when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(
+                    new ResponseInputStream<>(
+                            GetObjectResponse.builder().build(),
+                            new ByteArrayInputStream("id,quantity\n1,\n".getBytes(StandardCharsets.UTF_8))));
+
+            when(csvDiffService.compare(anyString(), anyString(), anyList()))
+                    .thenReturn(List.of(CsvRowDiff.added(1, new LinkedHashMap<>(Map.of("id", "1", "quantity", "")))));
+
+            TableSchema orders = new TableSchema(
+                    List.of(
+                            new TableSchema.ColumnDefinition("id", "integer", false),
+                            new TableSchema.ColumnDefinition("quantity", "integer", true)),
+                    List.of(),
+                    List.of());
+            when(siteSchemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", orders));
+
+            when(sqlStatementGenerator.generate(any(), anyString(), any()))
+                    .thenReturn("INSERT INTO orders (id, quantity) VALUES (1, 0);\n");
+            when(s3SqlFileStorageService.storeSqlFile(any(), any(), anyString()))
+                    .thenReturn("plugins/bit-bi/test.sql");
+            when(s3SqlFileStorageService.getFileSize(anyString())).thenReturn(100L);
+            PluginSqlGeneration generation = mock(PluginSqlGeneration.class);
+            when(generation.getId()).thenReturn(UUID.randomUUID());
+            when(sqlGenerationRepository.save(any())).thenReturn(generation);
+
+            Optional<PluginSqlGeneration> result =
+                    serviceWithRealMetrics.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isPresent();
+            @SuppressWarnings("unchecked")
+            org.mockito.ArgumentCaptor<Map<String, DbfColumnType>> types =
+                    org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(sqlStatementGenerator).generate(any(), eq("orders"), types.capture());
+            assertThat(types.getValue())
+                    .containsEntry("id", DbfColumnType.INTEGER)
+                    .containsEntry("quantity", DbfColumnType.INTEGER);
         }
     }
 

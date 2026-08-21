@@ -266,6 +266,11 @@ pages/{feature}/            # Route pages
   held the segment back from pruning. Targeted `UPDATE ... SET plugin_sql_at` /
   `egress_at WHERE id = ?` — no migration, V57 stays free. A mark of A also leaves B's
   retry columns intact. See `docs/delta-client-v2-guide.md`.
+- dbf-column-types: DBF SQL generation receives column types from the site's `TableSchema`
+  (`DbfColumnType.fromSqlType`) instead of `Map.of()`, so empty `I`/`Y` become `0` and a
+  non-numeric cell in a numeric column is quoted rather than emitted raw (issue #263).
+  Without a schema the column stays Character. No migration (V57 free). See
+  `docs/bitbi-integration.md`.
 - liveness-teardown-fk: `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` no longer loses a
   race against its own ingestion (issue #265). #226/#228 already swept the two non-cascade FKs
   onto `batches` by the relationship each uses; a session commit landing between those
