@@ -612,6 +612,28 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-scratch-reserve: A completed-batch backlog can no longer fill the Parquet scratch
+  directory for the length of the 02:00 sweep and abort every site's nightly checkpoint (issue
+  **#193**, the asymmetry #150 named and left open). `delta.parquet.max-scratch-bytes` is one pool
+  shared by three writers; the batch side degrades one artifact at a time, while a refused
+  checkpoint frame (or, since #150 r2, a refused table snapshot) ends the build, and
+  `CheckpointScheduler` walks sites serially — so a directory held full overnight froze
+  `last_checkpoint_seq` and retention fleet-wide. **Reserved share**, the ticket's first option:
+  batch writers may use at most the directory budget minus `delta.checkpoint.max-frame-temp-bytes`,
+  already the declared size of the largest scratch file the checkpoint path holds, and it holds
+  only one at a time (#178). That is a floor for the nightly sweep, not a ceiling — a checkpoint
+  writer still sees the whole budget when the directory is idle — and batch cannot consume into
+  the reserved bytes even after the frame is deleted, which is the gap before the table snapshot
+  opens. Unbounded (the shipped default) ignores the reserve; a negative reserve is none; a
+  reserve larger than the budget leaves batch with zero. A refused reservation keeps existing
+  failure modes (`FAILED` + backoff for batch; the build ends for checkpoint) and is still off
+  `delta.checkpoint.builds.aborted`, whose values are permanent by contract (#153) —
+  `delta.parquet.scratch.refused` is the series. No new configuration key. Deployed arithmetic
+  is unchanged (5 GiB directory, 1.5 GiB frame, 3.5 GiB batch share); the ceiling-budget guard
+  now requires that share to fit at least one completed-batch artifact. Tests first, mutation
+  by dropping the batch cap. No REST, gRPC, proto, DTO, migration (**V57 stays free**),
+  configuration-key, metric-name, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("A reserved share for the nightly checkpoint").
 - scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
   negative value no longer fails Spring's parser without naming the key (issue #251, the class of
   misconfiguration #185 closed for `plugin.sql-generation.delta-sweep-ms` and review of PR #247

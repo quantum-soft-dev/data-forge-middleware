@@ -507,6 +507,10 @@ delta:
     # k8s/base/configmap.yaml. Unbounded still MEASURES: delta.parquet.scratch.bytes follows the
     # writers either way, and max(that gauge) is how this key is sized before it is turned on.
     # Per JVM, so it is a real bound only where scratch-private-to-pod above holds.
+    # Since issue #193, batch writers may use at most this minus
+    # delta.checkpoint.max-frame-temp-bytes, so a completed-batch backlog cannot fill the
+    # directory for the length of the 02:00 sweep. Checkpoint writers still see the whole
+    # budget. Unbounded ignores the reserve — there is nothing to reserve a share of.
     max-scratch-bytes: ${DELTA_PARQUET_MAX_SCRATCH_BYTES:0}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)

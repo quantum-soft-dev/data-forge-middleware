@@ -261,6 +261,14 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-scratch-reserve: A completed-batch backlog can no longer fill the Parquet scratch
+  directory for the length of the 02:00 sweep and abort every site's nightly checkpoint (issue
+  #193). Batch writers may use at most `delta.parquet.max-scratch-bytes` minus
+  `delta.checkpoint.max-frame-temp-bytes` — the declared size of the largest scratch file the
+  checkpoint path holds, and it holds only one at a time (#178). Checkpoint writers still see
+  the whole budget; unbounded ignores the reserve. Existing failure modes unchanged; still off
+  `delta.checkpoint.builds.aborted`. No new key, no migration (**V57 stays free**). See
+  `docs/delta-client-v2-guide.md`.
 - scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
   negative value no longer fails Spring's parser without naming the key (issue #251).
   `ScheduledIntervalValidator` walks every interval placeholder at startup and refuses `< 1`

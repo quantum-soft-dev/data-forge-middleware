@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -53,6 +54,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * follows the writers whether or not a budget is set, which is the only way an operator can size the
  * key before turning it on.</p>
  *
+ * <p><b>A reserved share for the checkpoint path</b> (issue #193). Batch writers may use at most
+ * {@code max-scratch-bytes} minus {@code delta.checkpoint.max-frame-temp-bytes} — the declared size
+ * of the largest scratch file the checkpoint path holds, and it holds only one at a time (#178).
+ * That is a floor for the nightly sweep, not a ceiling: a checkpoint writer can still use the whole
+ * budget when the directory is idle. Batch cannot consume into the reserved bytes even after the
+ * frame is deleted, which is the gap before the table snapshot opens. Unbounded (the shipped
+ * default) has nothing to reserve a share of, so a leftover frame-ceiling value is ignored.</p>
+ *
  * <p><b>Per JVM</b>, so it is a true bound only where the directory is pod-private
  * ({@code delta.parquet.scratch-private-to-pod}, #141); on a shared volume it is a per-replica
  * share. Scratch left behind by a dead process (#127, #141) sits outside every lease, since its
@@ -89,13 +98,29 @@ public class ParquetScratchBudget {
     private final AtomicLong liveBytes = new AtomicLong();
     private final Map<String, Counter> refusals = new LinkedHashMap<>();
     private final long budgetBytes;
+    private final long checkpointReserveBytes;
 
+    /**
+     * Tests that do not exercise the checkpoint reserved share (issue #193).
+     */
+    public ParquetScratchBudget(MeterRegistry registry, long budgetBytes) {
+        this(registry, budgetBytes, 0L);
+    }
+
+    @Autowired
     public ParquetScratchBudget(MeterRegistry registry,
-                                @Value("${delta.parquet.max-scratch-bytes:0}") long budgetBytes) {
+                                @Value("${delta.parquet.max-scratch-bytes:0}") long budgetBytes,
+                                @Value("${delta.checkpoint.max-frame-temp-bytes:0}") long checkpointReserveBytes) {
         // A negative value is read as unbounded rather than as "refuse everything": an operator who
         // typed one meant to relax the guard, and the failure mode of the other reading is every
         // checkpoint table skipped and every batch artifact retried to abandonment.
         this.budgetBytes = Math.max(0L, budgetBytes);
+        // Unbounded has nothing to reserve a share of. A negative reserve is none. A reserve larger
+        // than the budget leaves batch writers with zero — the nightly frame still gets the whole
+        // directory, which is the point of the share.
+        this.checkpointReserveBytes = this.budgetBytes == 0L
+                ? 0L
+                : Math.min(this.budgetBytes, Math.max(0L, checkpointReserveBytes));
         Gauge.builder("delta.parquet.scratch.bytes", liveBytes, AtomicLong::doubleValue)
                 .description("Bytes of file-backed Parquet scratch reserved by live writers")
                 .tag("application", "data-forge-middleware")
@@ -110,9 +135,14 @@ public class ParquetScratchBudget {
         if (this.budgetBytes == 0L) {
             log.info("The Parquet scratch directory is unbounded (delta.parquet.max-scratch-bytes "
                     + "is unset); delta.parquet.scratch.bytes measures it so the key can be sized");
-        } else {
+        } else if (this.checkpointReserveBytes == 0L) {
             log.info("The Parquet scratch directory is bounded at {} bytes "
                     + "(delta.parquet.max-scratch-bytes)", this.budgetBytes);
+        } else {
+            log.info("The Parquet scratch directory is bounded at {} bytes "
+                    + "(delta.parquet.max-scratch-bytes), of which {} bytes are reserved for a "
+                    + "checkpoint frame (delta.checkpoint.max-frame-temp-bytes)",
+                    this.budgetBytes, this.checkpointReserveBytes);
         }
     }
 
@@ -193,9 +223,12 @@ public class ParquetScratchBudget {
 
         private void reserve(long need) {
             long want = Math.max(need, CHUNK_BYTES);
+            long ceiling = writerCeiling();
             while (true) {
                 long current = liveBytes.get();
-                long take = budgetBytes == 0L ? want : Math.min(want, budgetBytes - current);
+                long take = budgetBytes == 0L
+                        ? want
+                        : Math.min(want, Math.max(0L, ceiling - current));
                 if (take < need) {
                     // Once per lease, not once per refused write. FileOutputFile does not latch
                     // the way CappedOutputStream does — Parquet unwinds a write failure through a
@@ -209,13 +242,28 @@ public class ParquetScratchBudget {
                     // Reserve nothing on a refusal. The writer is about to be unwound and its file
                     // deleted, so holding the bytes it did not get would shrink the directory for
                     // every other writer until the pod restarts.
-                    throw new ScratchBudgetExceededException(writer, need, budgetBytes, current);
+                    throw new ScratchBudgetExceededException(
+                            writer, need, ceiling, budgetBytes, checkpointReserveBytes, current);
                 }
                 if (liveBytes.compareAndSet(current, current + take)) {
                     granted += take;
                     return;
                 }
             }
+        }
+
+        /**
+         * Batch writers stop at {@code budget - checkpoint reserve} so the nightly frame always
+         * has somewhere to land (issue #193). Checkpoint writers still see the whole budget.
+         */
+        private long writerCeiling() {
+            if (budgetBytes == 0L) {
+                return 0L;
+            }
+            if (BATCH_ARTIFACT.equals(writer)) {
+                return budgetBytes - checkpointReserveBytes;
+            }
+            return budgetBytes;
         }
     }
 }
