@@ -545,28 +545,30 @@ Two neighbouring series still move for both callers, deliberately: `sql.generati
 a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both
 permits.
 
-**The loser's `SQL_GENERATION_STARTED` entry stands, and what that looks like is worth stating**
-(raised in review): it did start, so the entry is true — but the adopt path is now the **only** exit
-of `generateSqlForBatch` that leaves a started entry with no terminal companion. Every other one
-pairs it: a failure writes `SQL_GENERATION_FAILED`, an empty diff writes
-`logSqlGenerationCompletedNoChanges`, and #181 deliberately moved `refuseUnderMemoryPressure`
-*above* the started entry precisely so a refusal costs no unterminated row. So a raced batch reads,
+**The loser's `SQL_GENERATION_STARTED` entry stands, and it is now paired** (issue #260). It did
+start, so the entry is true; the terminal is a new action type **`SQL_GENERATION_ADOPTED`**
+(V57 widens `chk_plugin_audit_logs_action_type`) whose metadata names the adopted generation and
+the winner's key. Reusing `SQL_GENERATION_COMPLETED` would have been the duplicate #246 removed
+(a second entry naming the object this attempt just deleted); `SQL_GENERATION_FAILED` would have
+been a `success = false` row claiming an error that did not happen. A raced batch therefore reads,
 on `GET /api/v1/account/plugins/{pluginId}/logs` and in the Logs tab of My Plugins, as **two
-"Generating SQL..." lines and one "SQL Generated"** — a reader pairing lines by eye sees one
-generation that never finished. That is a flat event log rather than a live status, so nothing
-spins; but it is a shape the log did not contain before, and it is the counter
-`sql.generation.claims.lost` that says the unmatched line was a lost race rather than a crash.
+"Generating SQL..." lines, one "SQL Generated" and one "SQL Already Generated"** — a reader pairing
+lines by eye sees both attempts finish. `sql.generation.claims.lost` remains the operator series
+that the unmatched line used to be the only account-visible signal for.
 
-Giving the loser a terminal entry of its own is the right end state and is **deliberately not done
-here**: it needs a new `PluginActionType` value, which is stored data plus a widening of
-`chk_plugin_audit_logs_action_type` — a Flyway migration, for a cosmetic asymmetry on a path that
-only fires when two workers genuinely collide. Reusing an existing value would be worse than the
-gap: `SQL_GENERATION_COMPLETED` is the duplicate this section removes, and
-`SQL_GENERATION_FAILED` is a `success = false` row claiming an error that did not happen.
+The pairing invariant of `generateSqlForBatch` is: every exit that writes
+`SQL_GENERATION_STARTED` writes a terminal (`COMPLETED`, `COMPLETED` with no changes, `FAILED`, or
+`ADOPTED`). Documented exceptions write neither STARTED nor a terminal for that attempt: a
+baseline / missing-batch-data skip, `#181`'s memory-pressure refusal (above STARTED), and `#261`'s
+semaphore timeout (before `doGenerateSqlForBatch`). There is no documented exception that writes
+STARTED and then returns without a terminal. Pinned by `SqlGenerationStartedPairingTest` (the
+inventory, including that the adopt early-return writes ADOPTED before it returns) and by the
+behavioral exits in `SqlGenerationServiceTest.DeltaV2Routing`.
 
-Pinned by `SqlGenerationConcurrentClaimIntegrationTest` (the real constraint, the race made
-deterministic by a barrier at `storeSqlFile`) and by the mock twin in `SqlGenerationServiceTest`;
-both go red when the adopted branch is removed.
+The unique claim itself is still pinned by `SqlGenerationConcurrentClaimIntegrationTest` (the real
+constraint, the race made deterministic by a barrier at `storeSqlFile`) and by the mock twin in
+`SqlGenerationServiceTest`; both go red when the adopted branch is removed. That integration test
+now also awaits exactly one `SQL_GENERATION_ADOPTED` row naming the surviving generation and key.
 
 ---
 

@@ -37,6 +37,13 @@ class PluginActionTypeTest {
             PluginActionType type = PluginActionType.SQL_GENERATION_FAILED;
             assertThat(type.name()).isEqualTo("SQL_GENERATION_FAILED");
         }
+
+        @Test
+        @DisplayName("Should have SQL_GENERATION_ADOPTED as the terminal for a lost unique claim (#260)")
+        void shouldHaveSqlGenerationAdoptedType() {
+            PluginActionType type = PluginActionType.SQL_GENERATION_ADOPTED;
+            assertThat(type.name()).isEqualTo("SQL_GENERATION_ADOPTED");
+        }
     }
 
     @Nested
@@ -120,9 +127,10 @@ class PluginActionTypeTest {
     }
 
     @Test
-    @DisplayName("Should have exactly 21 action types")
-    void shouldHaveTwentyOneActionTypes() {
-        // 6 existing + 3 SQL generation types + 4 history management types + 1 reinit type (Feature 015)
+    @DisplayName("Should have exactly 22 action types")
+    void shouldHaveTwentyTwoActionTypes() {
+        // 6 existing + 4 SQL generation types (STARTED/COMPLETED/FAILED + ADOPTED, issue #260)
+        // + 4 history management types + 1 reinit type (Feature 015)
         // + 1 SQL_GENERATION_DELETED (manual admin tools)
         // + 4 Parquet Export types (Feature 028: FILES_LISTED, LINK_CONSUMED, LINK_REJECTED, PASSWORD_ROTATED)
         // + 1 API_KEY_ROTATED (#66)
@@ -130,6 +138,7 @@ class PluginActionTypeTest {
         //
         // Changing this count means adding an enum value, which also needs a migration extending
         // chk_plugin_audit_logs_action_type — PluginAuditLogActionTypeIntegrationTest enforces that.
-        assertThat(PluginActionType.values()).hasSize(21);
+        // SQL_REGENERATION_* stay: they are stored-data values a historical row may carry (#190).
+        assertThat(PluginActionType.values()).hasSize(22);
     }
 }
