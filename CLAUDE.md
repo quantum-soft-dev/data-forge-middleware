@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V55**, next is **V56**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V56**, next is **V57**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -581,9 +581,39 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
+- Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
+  payload as one that is not due yet (issue #224, the bound #213 left open). Since #213 a site with
+  `last_checkpoint_seq = 0` and records applied reads as a neutral **"No checkpoint yet"** — right
+  for an afternoon ingest waiting on `delta.checkpoint.cron`. Every whole-site abort
+  (`frame_too_large`, a fold over `max-fold-bytes`, a deferral, an S3 read denial) writes no
+  `checkpoints` row and leaves the pointer at zero, so thirty failed nights carried byte-for-byte
+  that payload; `nextCheckpointBuildAt` cannot separate them either, being the next cron occurrence
+  recomputed per request. Bounding it by lag magnitude was the obvious answer and is still the wrong
+  one — a first `FULL_SNAPSHOT` is unbounded, so that bound would report the largest sites as
+  critical on day one, which is the defect #213 removed. **Shape 2 of the ticket**, not 1: a
+  persisted abort of the scheduled visit (the forced rebuild already has `lastRebuildOutcome` —
+  #186), not a `created_at` from which "the last scheduled occurrence has passed" would be inferred.
+  V56 adds nullable `site_sync_state.last_checkpoint_build_abort` / `_abort_at` / `_message`.
+  `CheckpointScheduler` writes them from its catch, and `DeltaSyncStateService.recordCheckpointBuildAbort`
+  no-ops once `lastCheckpointSeq` is past zero, so a healthy build still writes nothing and a later
+  abort of an already-checkpointed site does not take a column. Values: `FAILED`, `FOLD_TOO_LARGE`,
+  `FRAME_TOO_LARGE`, `SCRATCH_FULL`, `FRAME_UNAVAILABLE`, `DEFERRED`. A discard under the build and a
+  deferral cut short by shutdown are not recorded (#162). A wipe and a re-baseline drop the abort,
+  because both zero the pointer and an abort about the discarded baseline would then read as "the
+  first build of the new one already failed". Additive DTO: reason and time on both sync-state
+  projections and on bulk health; `lastCheckpointBuildMessage` on the **admin** projection only, the
+  same split as `lastRebuildMessage`. On the frontend the field is `z.string()`, not `z.enum`, and
+  `getSyncStatus` reads it as `first-checkpoint-failed`: the chip says **Checkpoint failed**, the
+  pill **Checkpoint failed · 1.2k**, the card names the abort. Stalled still wins.
+  **Review round 1** wrapped the persist so a flush error cannot escape the per-site catch and
+  end the tick, split prune out of that catch (a retention failure is not a first-checkpoint
+  abort; a shutdown-ended build returns an empty fold and does not throw), recorded `DEFERRED`
+  only on a spent wait (a probe is not an attempt), and painted contention aborts elevated
+  rather than critical. No gRPC, proto, configuration-key, metric-name, S3-key or route change.
+  See `docs/delta-client-v2-guide.md` ("A first checkpoint build that keeps failing").
 - double-nan-sql-literal: A non-finite `double` reaches Bit BI as a quoted literal, so the SQL it is
   handed is valid PostgreSQL (issue #233). `SqlStatementGenerator.formatJsonValue` rendered every
   `Number` through `toString()`, and PostgreSQL `real`/`double precision` legitimately hold `NaN` and
@@ -760,6 +790,7 @@ pages/{feature}/            # Route pages
   deferral is precisely the round-1 defect, one systemic outage walking the whole backlog in a
   chain, so the trade is documented in the guide instead. The semaphore-timeout exemption was raised
   again and stays #261 for the same reason as in round 2.
+
 - adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the
   winner's success as its own (issue #246, a pre-existing defect promoted out of the withdrawn
   findings inbox #242 after #190/PR #236 made the race deterministic in a test). Since #164 two

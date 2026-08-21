@@ -105,7 +105,9 @@ public class DeltaSyncUserController {
                     + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading "
                     + "and lastRebuildOutcome/At describing how the most recent finished forced rebuild ended "
                     + "(lastRebuildMessage carries the diagnosis on the admin projection only), plus "
-                    + "nextCheckpointBuildAt naming when the scheduled checkpoint build next runs — "
+                    + "nextCheckpointBuildAt naming when the scheduled checkpoint build next runs and "
+                    + "lastCheckpointBuildAbort/At naming why a scheduled visit of a site that still has no "
+                    + "checkpoint produced nothing (issue #224; lastCheckpointBuildMessage is admin-only) — "
                     + "lastCheckpointSeq 0 means no checkpoint has been built yet rather than a backlog. "
                     + "404 when the Delta client has never connected (no sync state row)."
     )
