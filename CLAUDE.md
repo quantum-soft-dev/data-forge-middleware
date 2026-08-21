@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V56**, next is **V57**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V57**, next is **V58**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -530,6 +530,7 @@ frontend gate.
 | `SQL_GENERATION_STARTED` | SQL generation began for batch |
 | `SQL_GENERATION_COMPLETED` | SQL generation finished (includes stats: insertCount, updateCount, deleteCount) |
 | `SQL_GENERATION_FAILED` | SQL generation error (includes errorMessage) |
+| `SQL_GENERATION_ADOPTED` | This attempt lost the unique claim and adopted the winner's generation (issue #260; metadata: generationId, s3Key) |
 
 #### User-Facing Plugin Logs
 - **Endpoint**: `GET /api/v1/account/plugins/{pluginId}/logs`
@@ -609,9 +610,33 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
+- Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- unpaired-sql-started: A lost SQL-generation unique claim now writes a terminal
+  `SQL_GENERATION_ADOPTED` instead of leaving the account's plugin log with an unpaired
+  `SQL_GENERATION_STARTED` (issue #260, the gap #246 named and left open). Since #246 the loser of
+  `uk_sql_gen_source_batch` adopts the winner's generation and writes no second
+  `SQL_GENERATION_COMPLETED` — that entry named the S3 object the adopt path had just deleted —
+  so a raced batch read as two "Generating SQL..." lines and one "SQL Generated". The vocabulary
+  had no value for that outcome: reusing `COMPLETED` is the duplicate #246 removed, and `FAILED`
+  is a `success = false` row claiming an error that did not happen. **New action type**, not
+  retiring the pairing: `PluginActionType.SQL_GENERATION_ADOPTED`, V57 widens
+  `chk_plugin_audit_logs_action_type` (NOT VALID + VALIDATE, the V44/V48 split), metadata names
+  the adopted `generationId` and the winner's `s3Key`, and the Logs tab labels it **SQL Already
+  Generated**. Written immediately (`@Async("pluginExecutor")` + save), like STARTED, because the
+  attempt happened regardless of any surrounding transaction and the winner already owns the row.
+  `SQL_REGENERATION_*` stay as read-only history (#190). The pairing invariant of
+  `generateSqlForBatch` is stated and pinned: every exit that writes STARTED writes a terminal
+  (`COMPLETED`, no-changes COMPLETED, `FAILED`, or `ADOPTED`); documented exceptions (baseline /
+  missing batch data, #181 memory-pressure above STARTED, #261 semaphore timeout before
+  `doGenerateSqlForBatch`) write neither. `SqlGenerationStartedPairingTest` holds the inventory
+  (the adopt early-return writes ADOPTED before it returns); the behavioral exits live in
+  `SqlGenerationServiceTest.DeltaV2Routing`; the real-constraint twin
+  `SqlGenerationConcurrentClaimIntegrationTest` awaits exactly one ADOPTED row naming the
+  surviving generation and key, still exactly one COMPLETED carrying the surviving key, still one
+  `claims.lost`. No REST, gRPC, proto, DTO shape, configuration-key, metric-name, S3-key or
+  TanStack-Query-key change; no `specs/NNN-*`. See `docs/020-sql-generation-optimization.md`.
 - nonfinite-decimal-storage: A non-finite / unparseable decimal stays NULL for every destination,
   Parquet and SQL agreeing, and a padded finite token is kept (issue #240, the destination-aware
   fork deferred from #215 / PR #232). **The first fork is not taken.** Keeping `NaN` on a bare

@@ -559,6 +559,82 @@ class SqlGenerationServiceTest {
         }
 
         @Test
+        @DisplayName("should pair STARTED with ADOPTED when this caller loses the unique claim (#260)")
+        void shouldPairStartedWithAdoptedWhenLosingTheUniqueClaim() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+            PluginSqlGeneration existing = PluginSqlGeneration.create(
+                    accountPluginId, siteId, batchId, null, "plugins/bit-bi/winner.sql", 10L,
+                    new SqlGenerationStats(1, 0, 0, 1), 1L);
+            when(sqlGenerationRepository.save(any())).thenThrow(
+                    new org.springframework.dao.DataIntegrityViolationException("uk_sql_gen_source_batch"));
+            when(sqlGenerationRepository.findBySourceBatchId(batchId)).thenReturn(Optional.of(existing));
+
+            deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            verify(pluginAuditService).logSqlGenerationStarted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId));
+            verify(pluginAuditService).logSqlGenerationAdopted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId),
+                    eq(existing.getId()), eq("plugins/bit-bi/winner.sql"), anyLong());
+            verify(pluginAuditService, never()).logSqlGenerationCompleted(
+                    anyString(), any(), any(), any(), any(), anyString(), anyLong());
+            verify(pluginAuditService, never()).logSqlGenerationCompletedNoChanges(
+                    anyString(), any(), any(), any(), anyLong());
+            verify(pluginAuditService, never()).logSqlGenerationFailed(
+                    anyString(), any(), any(), any(), anyString(), anyLong());
+        }
+
+        @Test
+        @DisplayName("should pair STARTED with COMPLETED (no changes) when the diff is empty (#260)")
+        void shouldPairStartedWithCompletedNoChangesWhenDiffIsEmpty() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(null);
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isEmpty();
+            verify(pluginAuditService).logSqlGenerationStarted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId));
+            verify(pluginAuditService).logSqlGenerationCompletedNoChanges(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId), anyLong());
+        }
+
+        @Test
+        @DisplayName("should pair STARTED with FAILED when generation throws after the attempt was announced (#260)")
+        void shouldPairStartedWithFailedWhenGenerationThrows() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenThrow(new IllegalStateException("render exploded"));
+
+            assertThatThrownBy(() -> deltaService.generateSqlForBatch(batchId, accountPluginId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("render exploded");
+
+            verify(pluginAuditService).logSqlGenerationStarted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId));
+            verify(pluginAuditService).logSqlGenerationFailed(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId),
+                    eq("render exploded"), anyLong());
+        }
+
+        @Test
+        @DisplayName("should pair STARTED with COMPLETED on the winning claim (#260)")
+        void shouldPairStartedWithCompletedOnTheWinningClaim() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+
+            deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            verify(pluginAuditService).logSqlGenerationStarted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId));
+            verify(pluginAuditService).logSqlGenerationCompleted(
+                    eq("bit-bi"), eq(accountId), eq(batchId), eq(siteId), any(),
+                    eq("plugins/bit-bi/x.sql"), anyLong());
+        }
+
+        @Test
         @DisplayName("should audit and count the winner of the unique claim exactly once (#246)")
         void shouldAuditAndCountTheWinnerOfTheUniqueClaim() throws Exception {
             when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))

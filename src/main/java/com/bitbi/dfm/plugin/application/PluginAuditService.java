@@ -460,6 +460,54 @@ public class PluginAuditService {
         }
     }
 
+    /**
+     * Logs that this attempt lost the unique claim and adopted the winner's generation.
+     *
+     * <p>Written immediately, like {@link #logSqlGenerationStarted}: the attempt happened
+     * regardless of any surrounding transaction, and the winner already owns the row. Deferring
+     * it to AFTER_COMMIT would drop the terminal companion of STARTED if the caller rolled back
+     * after adopting — the unpaired line this method exists to close (issue #260).</p>
+     *
+     * @param pluginId      the plugin identifier
+     * @param accountId     the account that owns the batch
+     * @param batchId       the batch both workers generated for
+     * @param siteId        the site the batch belongs to
+     * @param generationId  the adopted generation (the winner's row)
+     * @param winnerS3Key   the surviving SQL object; this attempt's own key was deleted
+     * @param durationMs    time this attempt spent rendering before it lost the claim
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlGenerationAdopted(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID siteId,
+            UUID generationId,
+            String winnerS3Key,
+            long durationMs) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            metadata.put("siteId", siteId.toString());
+            metadata.put("generationId", generationId.toString());
+            metadata.put("s3Key", winnerS3Key);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_GENERATION_ADOPTED)
+                    .withMetadata(metadata)
+                    .withDuration(durationMs);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_GENERATION_ADOPTED plugin={} account={} batch={} "
+                            + "generation={} s3Key={} duration={}ms",
+                    pluginId, accountId, batchId, generationId, winnerS3Key, durationMs);
+        } catch (Exception e) {
+            log.error("Failed to log SQL generation adopted audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
+
     // ==================== Plugin History Audit Methods (Feature 014) ====================
 
     /**

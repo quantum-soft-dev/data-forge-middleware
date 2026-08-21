@@ -324,10 +324,22 @@ public class SqlGenerationService {
                 // the winner and must not be repeated (issue #246) — a second
                 // SQL_GENERATION_COMPLETED entry would name a dead S3 key on the account's plugin
                 // log, and the statement counters describe the batch rather than the attempt.
+                // STARTED already landed (the attempt did start); pair it with ADOPTED naming
+                // the surviving generation and key so the account's log is not left with an
+                // unterminated "Generating SQL..." line (issue #260).
                 log.info("Lost the unique claim for batch {}: adopting generation {} written by "
                                 + "the winning worker. Its completion audit entry and statement "
-                                + "counters stand for this batch; this attempt records neither.",
+                                + "counters stand for this batch; this attempt records ADOPTED.",
                         batchId, claim.generation().getId());
+                pluginAuditService.logSqlGenerationAdopted(
+                        PLUGIN_ID,
+                        batchData.batch().getAccountId(),
+                        batchId,
+                        batchData.batch().getSiteId(),
+                        claim.generation().getId(),
+                        claim.generation().getS3Key(),
+                        durationMs / 1_000_000
+                );
                 meterRegistry.counter("sql.generation.claims.lost").increment();
                 return Optional.of(claim.generation());
             }
@@ -555,7 +567,8 @@ public class SqlGenerationService {
      * <p>The distinction is what keeps the success-path side effects single (issue #246). Both
      * callers legitimately return the same generation, but only one of them produced it, so only
      * one may write the {@code SQL_GENERATION_COMPLETED} audit entry and move
-     * {@code sql.generation.statements.*}.</p>
+     * {@code sql.generation.statements.*}. The loser still writes {@code SQL_GENERATION_ADOPTED}
+     * so its {@code SQL_GENERATION_STARTED} is paired (issue #260).</p>
      *
      * @param generation the surviving generation for the batch — the winner's on either branch
      * @param adopted    {@code true} when this caller lost the claim and adopted the winner's row

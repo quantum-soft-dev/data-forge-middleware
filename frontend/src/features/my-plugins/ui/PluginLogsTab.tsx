@@ -33,6 +33,7 @@ const USER_VISIBLE_ACTIONS: PluginActionType[] = [
   'SQL_GENERATION_STARTED',
   'SQL_GENERATION_COMPLETED',
   'SQL_GENERATION_FAILED',
+  'SQL_GENERATION_ADOPTED',
   'SQL_REGENERATION_STARTED',
   'SQL_REGENERATION_COMPLETED',
   'SQL_REGENERATION_FAILED',
@@ -64,6 +65,7 @@ const ACTION_TYPE_LABELS: Record<PluginActionType, string> = {
   SQL_GENERATION_STARTED: 'Generating SQL...',
   SQL_GENERATION_COMPLETED: 'SQL Generated',
   SQL_GENERATION_FAILED: 'SQL Generation Failed',
+  SQL_GENERATION_ADOPTED: 'SQL Already Generated',
   EVENT_DISPATCHED: 'Event Dispatched',
   EVENT_FAILED: 'Event Failed',
   EVENT_TIMEOUT: 'Event Timeout',
@@ -111,6 +113,7 @@ function getActionIcon(actionType: PluginActionType, success: boolean) {
 
   switch (actionType) {
     case 'SQL_GENERATION_COMPLETED':
+    case 'SQL_GENERATION_ADOPTED':
       return <CheckCircle2 className="h-4 w-4" style={{ color: severityTokens.healthy.dot }} strokeWidth={1.5} />
     case 'SQL_GENERATION_STARTED':
       return <Clock className="h-4 w-4 text-blue-500" />
