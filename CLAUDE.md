@@ -612,6 +612,29 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- nonfinite-decimal-storage: A non-finite / unparseable decimal stays NULL for every destination,
+  Parquet and SQL agreeing, and a padded finite token is kept (issue #240, the destination-aware
+  fork deferred from #215 / PR #232). **The first fork is not taken.** Keeping `NaN` on a bare
+  `numeric` (Avro STRING) or `double precision` (Avro DOUBLE) was implemented in PR #232 and
+  reverted after a non-finite narrowed into a `bigint` wrote `0` uncounted; this run keeps today's
+  rule rather than rewriting that coercion. Two gaps that rule still had are closed. **Data cells
+  of the forbidden combination.** A column declared `numeric(p,s)` whose value arrives as
+  `double_value` / a non-finite `string_value` was NULL in every Parquet artifact and `'NaN'` in
+  the SQL stream — valid PostgreSQL storing a value the baseline does not have. Keys of that
+  combination were already skipped (#233); `DeltaSqlGenerationStrategy` now degrades those *data*
+  cells to null before `SqlStatementGenerator` (which has no schema and still keys on the wire
+  type). A `double precision` or bare `numeric` destination is not a DECIMAL and is still quoted.
+  **A padded finite decimal is a value, not a defect.** `isNonFiniteToken` already trimmed;
+  `parseDecimal` was handed the token raw, so `" 1.5 "` — a legal number, and a shape
+  `ChangelogFold.normalizeDecimal` already retries trimmed — was NULL and counted
+  `reason=malformed`. `parseDecimal` trims. The guide's "A key column is the exception" paragraph
+  names the consumer (SQL; both Parquet writers write a key cell NULL like any other), and the
+  `hasUnrepresentableKey` wire-case gap is closed for keys (#233, `unaddressableKeyReason`) and
+  for data (this). Tests first, mutation-shaped: the padded mapper/writer cases fail with the
+  raw parse restored, the SQL-NULL case fails if the strategy keeps quoting. No REST, gRPC,
+  proto, DTO, **no migration (V57 stays free)**, no `specs/NNN-*`, configuration-key, metric-name,
+  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
+  hold", "A non-finite `double` is kept, and quoted").
 - scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
   negative value no longer fails Spring's parser without naming the key (issue #251, the class of
   misconfiguration #185 closed for `plugin.sql-generation.delta-sweep-ms` and review of PR #247

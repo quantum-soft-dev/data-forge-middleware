@@ -195,8 +195,12 @@ public final class ValueMapper {
     }
 
     private static BigDecimal parseDecimal(String token) {
+        // Trim before parsing: BigDecimal rejects surrounding whitespace, while isNonFiniteToken
+        // (and ChangelogFold.normalizeDecimal) already trim. A padded finite token (" 1.5 ") is a
+        // legal number this pipeline can store exactly, not a client defect, and used to land on
+        // reason=malformed (issue #240, evidence from #238).
         try {
-            return new BigDecimal(token);
+            return new BigDecimal(token.trim());
         } catch (NumberFormatException e) {
             return null;
         }
