@@ -609,6 +609,26 @@ pages/{feature}/            # Route pages
   formatter fails it even though the PG message already contains the constraint
   name). Test-only — no production code, REST, gRPC, proto, DTO, migration
   (**V57 stays free**), configuration-key, metric, S3-key or frontend change.
+- sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
+  failure (issue #261, the limit #243 named rather than closed). `processNextPending` exempted
+  only `MemoryPressureAbortedException` from spending an attempt, so a semaphore timeout
+  (`acquireSemaphore`, before any per-segment work) and a wrapped S3 `IOException` arrived as a
+  plain `SqlGenerationException` and walked healthy heads towards
+  `sql.generation.delta.segments.poisoned`. **The type is a shared parent**,
+  `PodLevelAbortedException`: the queue rethrows every subclass, spends no attempt, moves
+  neither `deferred` nor `poisoned`, and ends the drain — the next claim would meet it too.
+  Memory pressure keeps its subclass; the semaphore timeout is new
+  `SemaphoreTimeoutAbortedException`. The timeout seconds and wait-queue length stay in the WARN
+  at the raise site, not in the exception message (that text reaches the owner's 500 body).
+  **The wrapped S3 failure stays this segment's own**, decided rather than inherited: a bucket
+  outage and a missing object for this batch arrive as the same wrap, and a missing object
+  should poison. An outage that outlasts the doubling window is an incident either way; the
+  per-wake bound plus "many at once means systemic" is how to read that population. Tests first
+  (queue exemption red against the old MemoryPressure-only catch; concurrency timeout pins the
+  raise site). No REST, gRPC, proto, DTO, migration (V56 current, V57 free), configuration-key,
+  metric-name, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("How to read
+  them"), `docs/020-sql-generation-optimization.md`.
+
 - error-toast-401: The global error toast handler no longer speaks out of turn on
   every 401 path (issue #239, the four routes #225 documented rather than closed).
   None of them is about interceptor registration count. **The decision the ticket

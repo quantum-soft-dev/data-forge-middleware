@@ -152,22 +152,23 @@ public class DeltaSqlQueueService {
                 suspendBaselines(segment, site, activation.get());
             } else {
                 // throws on failure → mark is skipped → the segment stays the durable queue entry.
-                // Since #181 the memory-pressure abort is one such failure (it used to return an
-                // empty Optional, indistinguishable from "no changes", and the segment was consumed
-                // with its SQL never generated); the condition belongs to the pod rather than the
-                // batch, so the next sweep generates normally once the heap recovers.
+                // A PodLevelAbortedException (#261, memory pressure of #181 or a semaphore timeout)
+                // is rethrown rather than deferred: it belongs to the pod, not this batch, so the
+                // next sweep generates normally once the condition clears.
                 sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
             }
             segment.markPluginSqlProcessed();
             segmentRepository.save(segment);
             return true;
-        } catch (SqlGenerationService.MemoryPressureAbortedException e) {
-            // Deliberately not deferred and not counted as this segment's attempt (issue #243).
-            // The refusal is a reading of the pod's heap taken before any work, so it is systemic
-            // and self-repairing: every segment claimed while it lasts would meet it, and walking
-            // this one towards the poisoned report would turn a transient overload into a verdict
-            // on the data — the rule #150/#162/#178 already hold elsewhere. Ending the drain is
-            // also the right answer here, since the next claim would be refused too.
+        } catch (SqlGenerationService.PodLevelAbortedException e) {
+            // Deliberately not deferred and not counted as this segment's attempt (issue #261,
+            // generalising #181 / #243). Memory pressure and a semaphore timeout are both
+            // readings of the *pod* taken before any per-segment work, so every head claimed
+            // while they last would meet them. Walking this one towards the poisoned report
+            // would turn a transient overload into a verdict on the data — the rule
+            // #150/#162/#178 already hold elsewhere. Ending the drain is also the right
+            // answer, since the next claim would be refused too. A wrapped S3 failure is
+            // *not* this type: a missing object for this batch should still poison.
             throw e;
         } catch (RuntimeException e) {
             deferSegment(segment, e);

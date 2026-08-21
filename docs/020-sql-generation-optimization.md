@@ -84,7 +84,7 @@ public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long acco
         acquired = sqlGenerationSemaphore.tryAcquire(semaphoreTimeoutSeconds, TimeUnit.SECONDS);
         if (!acquired) {
             log.warn("SQL generation semaphore timeout for batch {}", batchId);
-            throw new SqlGenerationException("SQL generation queue full, try again later", null);
+            throw new SemaphoreTimeoutAbortedException(batchId);
         }
         // ... existing logic ...
     } finally {
@@ -463,6 +463,25 @@ skip would lose that batch's SQL permanently, with no route to re-drive it, whic
 had just stopped — so the horizon stays the one described above. A plugin reinit clears the retry
 state with the marker. See `docs/delta-client-v2-guide.md` ("One failing segment does not stall
 the other sites").
+
+**A pod-level refusal is distinguishable at the queue (#261).** `#181` gave memory pressure a
+type (`MemoryPressureAbortedException`) so the queue could leave the segment pending without
+consuming it. #243 then spent an attempt on every other `RuntimeException`, including two
+systemic conditions that arrived as a plain `SqlGenerationException`: the semaphore timeout
+(`acquireSemaphore`, before any per-segment work) and a wrapped S3 `IOException`. Both walked
+healthy heads towards `sql.generation.delta.segments.poisoned`.
+
+The type is now a shared parent, `PodLevelAbortedException`. The semaphore timeout is
+`SemaphoreTimeoutAbortedException` — same exemption as memory pressure: rethrow, spend no
+attempt, move neither `deferred` nor `poisoned`, end the drain. The timeout seconds and wait-queue
+length stay in the WARN at the raise site, not in the exception message (that text reaches the
+owner endpoint's 500 body).
+
+The wrapped S3 failure is **this segment's own**, decided rather than inherited. A bucket outage
+and a missing object for this batch arrive as the same wrap, and a missing object should poison.
+An outage that outlasts the doubling window is an incident either way; the per-wake bound plus
+"many at once means systemic" is how to read that population. See
+`docs/delta-client-v2-guide.md` ("How to read them").
 
 **Tests**:
 - Unit test: stub `getHeapUsagePercent()` above/at/below the threshold → verify the boundary
