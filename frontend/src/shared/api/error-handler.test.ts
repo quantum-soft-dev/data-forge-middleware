@@ -135,6 +135,23 @@ describe('setupErrorHandler', () => {
 
     expect(toast.error).not.toHaveBeenCalled();
   });
+
+  it('does not toast a leaked Auth0 error as a network failure', async () => {
+    const interceptors = (
+      apiClient.interceptors.response as unknown as {
+        handlers: Array<{ rejected?: (error: unknown) => Promise<unknown> }>
+      }
+    ).handlers;
+    const ours = interceptors[interceptors.length - 1];
+    if (!ours?.rejected) {
+      throw new Error('error handler was not registered');
+    }
+
+    await expect(ours.rejected(auth0Error('invalid_grant'))).rejects.toBeDefined();
+
+    expect(toast.error).not.toHaveBeenCalledWith(NETWORK_TOAST_HANDLER);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -329,6 +346,30 @@ describe('setupErrorHandler relative to the 401 refresh interceptor', () => {
 
   it('route 3: suppressErrorToast survives leftover 401 when refresh is not initialized', async () => {
     wireAppOrder('none');
+
+    await expect(
+      apiClient.get('/anything', { adapter: statusAdapter(401), suppressErrorToast: true }),
+    ).rejects.toMatchObject({ response: { status: 401 } });
+
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('route 3: suppressErrorToast survives Auth0 unavailable', async () => {
+    wireAppOrder(async () => {
+      throw Object.assign(new Error('temporarily unavailable'), { status: 503 });
+    });
+
+    await expect(
+      apiClient.get('/anything', { adapter: statusAdapter(401), suppressErrorToast: true }),
+    ).rejects.toMatchObject({ response: { status: 401 } });
+
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('route 3: suppressErrorToast survives a network error during refresh', async () => {
+    wireAppOrder(async () => {
+      throw new Error('Network Error');
+    });
 
     await expect(
       apiClient.get('/anything', { adapter: statusAdapter(401), suppressErrorToast: true }),

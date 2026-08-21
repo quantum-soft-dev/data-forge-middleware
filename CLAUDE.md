@@ -595,8 +595,8 @@ pages/{feature}/            # Route pages
   failed refresh into something that is neither a 401 nor their request.
   **What a failed refresh says, and who says it.** Refresh succeeds and the retry
   succeeds → no toast (already pinned by #225). Refresh succeeds and the retry
-  fails → one toast from the inner pass; both interceptors mark the rejection so
-  the outer chain (re-entered by `apiClient.request`) stays quiet. Refresh fails
+  fails → one toast from the inner pass; the outer chain (re-entered by
+  `apiClient.request`) sees that mark and stays quiet. Refresh fails
   for a named reason → that reason's toast alone (network during refresh, Auth0
   unavailable, or "Failed to refresh session"), owned by `interceptors.ts`, which
   now honours `suppressErrorToast` on its own toasts. Refresh fails on the
@@ -613,6 +613,12 @@ pages/{feature}/            # Route pages
   presign requests suppress the global toast, so it was true throughout and stays
   true — and `suppressErrorToast` now actually holds on the 401 path those
   callers can also hit.
+  **Review round 1** trimmed the production comments that had pasted this
+  write-up, corrected the over-claim that both interceptors mark on a failed
+  retry (only the inner handler does; `AGENTS.md` already said so), pinned
+  `suppressErrorToast` on Auth0-unavailable and the handler's Auth0 leak
+  guard, and noted that `return apiClient.request` is deliberately not
+  awaited so a rejected retry cannot enter the refresh-failure catch.
 - failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
   payload as one that is not due yet (issue #224, the bound #213 left open). Since #213 a site with
   `last_checkpoint_seq = 0` and records applied reads as a neutral **"No checkpoint yet"** — right

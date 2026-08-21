@@ -129,17 +129,13 @@ export function setupResponseInterceptor(): void {
 
         logger.info('[Interceptor]', '✅ Token refreshed, retrying request:', config?.url)
 
-        // Retry the original request
+        // Not awaited: a rejected retry must not enter this catch (refresh
+        // failures only). Axios receives the retry promise as the interceptor result.
         return apiClient.request(config!)
       } catch (refreshError) {
         logger.error('[Interceptor]', '❌ Token refresh failed:', refreshError)
 
-        // Reject the original 401, not the Auth0/network error. The recovery
-        // error has no `.response` and no `.config`, so the global toast
-        // handler would read it as a network failure and lose
-        // `suppressErrorToast` (issue #239 routes 2–3). Downstream callers
-        // then see the 401 the server actually returned; the recovery error
-        // is `error.cause`.
+        // Reject the original 401 so `.response` / `.config` survive; recovery is error.cause.
         if (error instanceof Error && refreshError instanceof Error) {
           error.cause = refreshError
         }

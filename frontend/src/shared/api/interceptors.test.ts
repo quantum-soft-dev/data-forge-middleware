@@ -260,6 +260,18 @@ describe('interceptors - response interceptor', () => {
 
       await expect(rejectedOf(original)).rejects.toBe(original)
       expect(toast.error).not.toHaveBeenCalled()
+      expect(isErrorToastHandled(original)).toBe(true)
+    })
+
+    it('honours suppressErrorToast on Auth0 unavailable', async () => {
+      const original = createAxiosError(401, { suppressErrorToast: true } as Partial<RetryableAxiosConfig>)
+      mockRefreshTokenWithLock.mockRejectedValueOnce(
+        Object.assign(new Error('temporarily unavailable'), { status: 503 }),
+      )
+
+      await expect(rejectedOf(original)).rejects.toBe(original)
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(isErrorToastHandled(original)).toBe(true)
     })
   })
 })

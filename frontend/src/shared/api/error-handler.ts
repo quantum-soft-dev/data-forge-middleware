@@ -17,34 +17,14 @@ declare module 'axios' {
 /**
  * Global error handler for API requests
  *
- * Handles common HTTP error responses:
- * - 401 Unauthorized: leftover 401s (refresh not initialized, or already
- *   retried) toast a session message. A refresh that was *attempted* is owned
- *   by interceptors.ts — named reason, or silence on expired-token logout.
- * - 403 Forbidden: Show permission error
- * - 404 Not Found: Show not found error
- * - 409 Conflict: Show conflict error (e.g., duplicate email)
- * - 500 Server Error: Show generic server error
- * - Network Error: Show network error
+ * - 401: leftover 401s (refresh not initialized, or already retried) toast a
+ *   session message. A refresh that was attempted is owned by interceptors.ts.
+ * - 403 / 404 / 409 / 413 / 500: status toasts; 404 and 409 quote the server.
+ * - No response: network toast, unless the error is Auth0-shaped (not a
+ *   connection failure).
  *
- * A 401 is never a network error and never the generic unexpected-error
- * default. Decision for issue #239, replacing the four routes #225 documented
- * rather than closed:
- *
- *   1. `case 401` speaks only for leftover 401s the refresh interceptor did
- *      not attempt to recover. Message: the session is no longer valid.
- *   2–3. interceptors.ts rejects the original Axios 401 on a failed refresh,
- *      not the Auth0 error, and marks it handled. That restores `.response`
- *      and `.config` (so `suppressErrorToast` survives) and stops this
- *      handler filling the expired-token silence with a lie about the
- *      network. Rejecting the Auth0 error would have been cheaper at the
- *      interceptor but changes what every downstream caller receives from a
- *      failed refresh into something that is neither a 401 nor their request
- *      — we keep the 401 the server actually returned; the Auth0 error is
- *      the recovery attempt and travels as `error.cause`.
- *   4. A successful refresh retries via `apiClient.request`, which re-enters
- *      this chain. The inner pass toasts the retry's failure; both
- *      interceptors mark the rejection, so the outer pass stays quiet.
+ * A 401 is never a network error and never the generic unexpected-error default.
+ * The handled mark stops a retried `apiClient.request` toasting twice.
  *
  * Usage: Call setupErrorHandler() in App.tsx. Calling it again replaces the
  * previous registration, so however often the caller's effect re-runs, repeated
@@ -121,10 +101,7 @@ export function setupErrorHandler() {
       }
 
       if (!error.response) {
-        // A failed refresh used to land here because it rejected the Auth0
-        // error (no `.response`). interceptors.ts now rejects the original
-        // 401, so this branch is not on that path. If an Auth0 error still
-        // leaks, it is not a network failure and we must not say so.
+        // Auth0-shaped errors have no HTTP response; they are not a dropped connection.
         if (!isAuth0Error(error)) {
           toast.error('Network error. Please check your connection and try again.')
         }
