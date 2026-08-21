@@ -124,7 +124,10 @@ deployment's is the outer one: on GKE `temp-dir` points at a `parquet-scratch` `
 `sizeLimit` sits inside the container's `ephemeral-storage` request/limit (issue #131), and crossing
 that is a kubelet eviction, not an `ABANDONED` artifact. The application's is
 `delta.parquet.max-scratch-bytes` (issue #150), charged as bytes are written by every file-backed
-writer and released when the file is deleted, so the pod refuses before the volume fills. A build
+writer and released when the file is deleted, so the pod refuses before the volume fills. Since
+issue #193 batch writers may use at most that budget minus
+`delta.checkpoint.max-frame-temp-bytes`, so a completed-batch backlog cannot fill the directory
+for the length of the nightly checkpoint sweep. A build
 stopped by *that* is retried with the ordinary backoff rather than abandoned: the artifact is
 ordinary and the directory was busy, which is the opposite of what crossing `max-temp-bytes`
 means. The distinction buys back the first attempt, not the cap — a directory held full across the
