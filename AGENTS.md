@@ -261,6 +261,14 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- nonfinite-decimal-storage: A non-finite / unparseable decimal stays NULL for every destination,
+  Parquet and SQL agreeing; destination-aware storage (keeping NaN on bare `numeric` /
+  `double precision`) is not re-introduced (issue #240, the fork PR #232 reverted). SQL data
+  cells of a Parquet-DECIMAL column that arrived as `double_value` / a non-finite
+  `string_value` are NULL like the artifacts, not `'NaN'`; keys of that combination stay
+  skipped (#233). `parseDecimal` trims, so `" 1.5 "` is stored rather than counted
+  `malformed`. The guide names the key-skip as SQL-only. No migration (V57 stays free), no
+  `specs/NNN-*`. See `docs/delta-client-v2-guide.md`.
 - closed-status-labels: A closed ticket keeps no live `status: *` label (issue #257). `/merge` removed only `ready to merge` + `in review` from the `Closes #<n>` issue, so a ticket closed any other way kept whatever it had (#89 still read in progress a month after it shipped). Commands query-then-remove every `status:*` actually present (`gh issue edit --remove-label` 404s on a missing name — a fixed list *is* the defect); `.github/workflows/strip-closed-status-labels.yml` is the backstop on every close plus a weekly sweep. A scheduled auto-strip is worth having here (mechanical, no false positive) and was declined as a journal guard on #205. Docs, commands and one workflow — no production code, no migration (V57 free).
 - queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245). Both workers
   saved the whole entity captured at claim, no `@Version`; since #164 the claim lock is
