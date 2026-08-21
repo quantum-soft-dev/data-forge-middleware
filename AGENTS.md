@@ -260,6 +260,17 @@ pages/{feature}/            # Route pages
 - Migrations current at **V56**; next migration is **V57** (do not reuse numbers)
 
 ## Recent Changes
+- liveness-teardown-fk: `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` no longer loses a
+  race against its own ingestion (issue #265). #226/#228 already swept the two non-cascade FKs
+  onto `batches` by the relationship each uses; a session commit landing between those
+  statements still blocked `DELETE FROM batches` as an opaque `DataIntegrityViolationException`
+  of the class's own `@AfterEach`. **The constraint is `changelog_segments_batch_id_fkey`**
+  (V30); the twin is `fk_account_plugins_baseline_batch` (V25 RESTRICT);
+  `error_logs.batch_id` is not a blocker (V22 CASCADE). Shape: quiesce the in-process gRPC
+  server **and** retry the teardown once after re-sweeping; a remaining failure names
+  `SQLSTATE` and the constraint. `SeededSiteTeardown`, tests first outside
+  `**/integration/**`. Test-only — no production code, REST, gRPC, proto, DTO, migration
+  (**V57 stays free**), configuration-key, metric, S3-key or frontend change.
 - error-toast-401: The global error toast handler no longer speaks out of turn on
   every 401 path (issue #239, the four routes #225 documented rather than closed).
   A failed refresh rejects the original Axios 401, not the Auth0 error
