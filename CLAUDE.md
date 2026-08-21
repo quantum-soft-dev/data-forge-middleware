@@ -470,7 +470,9 @@ done < <(gh issue view <n> --json labels --jq '.labels[].name | select(startswit
 
 The load-bearing backstop is `.github/workflows/strip-closed-status-labels.yml`: it fires on
 `issues: closed` (covers the routes the commands never see) and weekly / `workflow_dispatch`
-(covers a label added after close, or an Action that failed). A scheduled auto-strip is worth
+(covers a label added after close, an Action that failed, and a close performed with
+`GITHUB_TOKEN` — GitHub does not chain `GITHUB_TOKEN` events, so `issues: closed` would not
+fire for that one). A scheduled auto-strip is worth
 having here — closed + `status:*` is always wrong, no false positive — and was declined as a
 journal guard on #205, where a missing `AGENTS.md` entry needs a judgement. The Action is not a
 reason for a command to skip the loop: a just-closed ticket still wearing a live label poisons
@@ -629,7 +631,9 @@ pages/{feature}/            # Route pages
   other labels would have failed the `duplicate` add on a ticket that was not in those three
   states. The load-bearing backstop is `.github/workflows/strip-closed-status-labels.yml` on
   `issues: closed` (prefix `status:`, issues not PRs) plus a weekly/`workflow_dispatch` sweep
-  that lists repo labels with that prefix and strips them from closed issues. **A scheduled
+  that lists repo labels with that prefix and strips them from closed issues — the sweep also
+  covers a close performed with `GITHUB_TOKEN`, which GitHub will not chain into
+  `issues: closed`. **A scheduled
   guard is worth having here and was declined as a journal guard on #205**: closed +
   `status:*` is always wrong and auto-strip has no false positive, whereas a missing
   `AGENTS.md` entry needs a judgement. Backfill is a census, not the issue's own five: the

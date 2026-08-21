@@ -1,10 +1,12 @@
 # Closed tickets keep no live status:* label (issue #257).
 #
 # The commands strip on every close they own, but they cannot see a GitHub-UI
-# close, a runner duplicate close they did not write, or the auto-close Closes #<n>
+# close, a close whose prompt skipped the loop, or the auto-close Closes #<n>
 # fires at squash time — before /merge step 5.3. This workflow is the backstop:
-# issues:closed covers every route, and the weekly sweep covers a label added
-# after close or an Action that failed.
+# issues:closed covers every human/gh route, and the weekly sweep covers a label
+# added after close, an Action that failed, and a close performed with
+# GITHUB_TOKEN (GitHub does not chain GITHUB_TOKEN events, so issues:closed
+# would not fire for that one).
 #
 # A scheduled auto-strip is worth having here (closed + status:* is always wrong,
 # no false positive) and was declined as a journal guard on #205, where a missing
