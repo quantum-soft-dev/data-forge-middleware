@@ -367,14 +367,13 @@ public class SqlStatementGenerator {
      * {@code DeltaSqlGenerationStrategy} skips a record only for an unrepresentable
      * <em>decimal</em> key.</p>
      *
-     * <p>The rule keys on the <em>wire</em> type while the Parquet writers key on the
-     * <em>declared</em> one, so one combination still disagrees: a column declared
-     * {@code numeric}/{@code decimal} whose value nevertheless arrives as {@code double_value} —
-     * which the wire contract forbids — is NULL in every Parquet artifact
-     * ({@code ParquetCheckpointWriter.toBigDecimal} cannot render a non-finite into a DECIMAL
-     * whatever Java type it arrived as) and {@code 'NaN'} here. That was equally true before
-     * issue #233, when the SQL was merely invalid as well; teaching this path the destination type
-     * is issue #240, which owns the question for both sides.</p>
+     * <p>This method still keys on the <em>wire</em> type because it has no schema. A column
+     * declared {@code numeric(p,s)} whose value nevertheless arrives as {@code double_value} is
+     * degraded to {@code null} <em>before</em> it reaches here, by
+     * {@code DeltaSqlGenerationStrategy} (issue #240): Parquet DECIMAL cannot hold a non-finite
+     * value, so NULL is the contract both consumers keep. A {@code double precision} or bare
+     * {@code numeric} destination is not a DECIMAL and still arrives as a {@code Double}, quoted
+     * below.</p>
      */
     private String formatJsonValue(Object value) {
         if (value == null) {

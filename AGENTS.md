@@ -269,6 +269,14 @@ pages/{feature}/            # Route pages
   the whole budget; unbounded ignores the reserve. Existing failure modes unchanged; still off
   `delta.checkpoint.builds.aborted`. No new key, no migration (**V57 stays free**). See
   `docs/delta-client-v2-guide.md`.
+- nonfinite-decimal-storage: A non-finite / unparseable decimal stays NULL for every destination,
+  Parquet and SQL agreeing; destination-aware storage (keeping NaN on bare `numeric` /
+  `double precision`) is not re-introduced (issue #240, the fork PR #232 reverted). SQL data
+  cells of a Parquet-DECIMAL column that arrived as `double_value` / a non-finite
+  `string_value` are NULL like the artifacts, not `'NaN'`; keys of that combination stay
+  skipped (#233). `parseDecimal` trims, so `" 1.5 "` is stored rather than counted
+  `malformed`. The guide names the key-skip as SQL-only. No migration (V57 stays free), no
+  `specs/NNN-*`. See `docs/delta-client-v2-guide.md`.
 - scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
   negative value no longer fails Spring's parser without naming the key (issue #251).
   `ScheduledIntervalValidator` walks every interval placeholder at startup and refuses `< 1`

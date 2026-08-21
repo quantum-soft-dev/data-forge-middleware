@@ -198,6 +198,45 @@ class ParquetCheckpointWriterTest {
         }
     }
 
+    /**
+     * A padded finite token is a value, not a defect. The writers share {@link ValueMapper}, so the
+     * mapper's trim has to survive this path too: otherwise the cell is NULL in every Parquet
+     * artifact and counted {@code reason=malformed} while the fold has already treated it as the
+     * unpadded number (issue #240).
+     */
+    @Test
+    void aPaddedFiniteDecimalIsWrittenAsTheNumberNotCountedMalformed() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("price", "numeric(12,2)", true)),
+                List.of("id"), List.of());
+
+        Map<String, Value> padded = new LinkedHashMap<>();
+        padded.put("id", intVal(1));
+        padded.put("price", decVal(" 12.50 "));
+        Map<String, Value> unpadded = new LinkedHashMap<>();
+        unpadded.put("id", intVal(2));
+        unpadded.put("price", decVal("12.50"));
+
+        Path file = tempDir.resolve("padded-finite.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(padded, unpadded), Long.MAX_VALUE, ROW_GROUP_BYTES,
+                TestScratchLeases.unbounded());
+
+        assertEquals(0L, degraded.malformedCount(),
+                "whitespace around a finite decimal is not a client defect");
+        assertEquals(0L, degraded.nonFiniteCount());
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertEquals(new BigDecimal("12.50"), reader.read().get("price"),
+                    "the padded token is stored as the number, not NULL");
+            assertEquals(new BigDecimal("12.50"), reader.read().get("price"));
+        }
+    }
+
     /** Same as the non-finite case; counted apart because only this one is a client defect. */
     @Test
     void malformedDecimalInANotNullColumnStillMaterializesTheTable() throws Exception {
