@@ -1380,7 +1380,8 @@ pages/{feature}/            # Route pages
   still current, V55 free), configuration-key, S3-key or frontend change; both meter names are
   new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
   delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
-  `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
+  `docs/cr-bitbi-delta-sql.md` (the retention residual risk narrowed, not struck — listed as item
+  4 then, renumbered to 3 by #205 when the obsolete connection-hold item above it was removed).
   **Round 2 reviewed what round 1 introduced, and three of its findings cut into round 1's own
   fixes.** The A3 drain was silencing far more than its justification named: with the default
   window of 20, retention never emptied a quiet site's below-checkpoint list even before #212, so
