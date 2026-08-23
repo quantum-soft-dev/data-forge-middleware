@@ -131,6 +131,7 @@ export type PluginActionType =
   | 'SQL_GENERATION_STARTED'
   | 'SQL_GENERATION_COMPLETED'
   | 'SQL_GENERATION_FAILED'
+  | 'SQL_GENERATION_ADOPTED'
   | 'SQL_GENERATION_DELETED'
   | 'PLUGIN_HISTORY_CLEARED'
   | 'SQL_REGENERATION_STARTED'
@@ -160,6 +161,8 @@ export interface SqlGenerationMetadata {
   deleteCount?: number
   /** S3 key where SQL file was stored */
   s3Key?: string
+  /** Adopted generation id (SQL_GENERATION_ADOPTED — the winner's row) */
+  generationId?: string
   /** Duration in milliseconds */
   durationMs?: number
 }

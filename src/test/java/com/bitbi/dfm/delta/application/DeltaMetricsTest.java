@@ -201,6 +201,51 @@ class DeltaMetricsTest {
     }
 
     @Test
+    void registersRetentionSeriesAtZeroSoAnAlertCanPredateTheFirstOccurrence() {
+        // Issue #212: both hold-back reasons and both deleted-pending reasons exist from startup —
+        // the delta.checkpoint.builds.aborted treatment (#153).
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        new DeltaMetrics(registry);
+
+        for (String reason : List.of("pending_plugin_sql", "pending_egress")) {
+            assertEquals(0.0, registry.get("delta.retention.segments.held-back")
+                    .tag("reason", reason).counter().count());
+            assertEquals(0.0, registry.get("delta.retention.segments.deleted-pending")
+                    .tag("reason", reason).counter().count());
+        }
+    }
+
+    @Test
+    void countsRetentionHoldBacksAndHorizonDeletionsByReason() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, 3);
+        metrics.retentionSegmentsHeldBack(DeltaMetrics.RETENTION_PENDING_EGRESS, 0);
+        metrics.retentionPendingSegmentsDeleted(DeltaMetrics.RETENTION_PENDING_EGRESS, 2);
+
+        assertEquals(3.0, registry.get("delta.retention.segments.held-back")
+                .tag("reason", "pending_plugin_sql").counter().count());
+        assertEquals(0.0, registry.get("delta.retention.segments.held-back")
+                .tag("reason", "pending_egress").counter().count());
+        assertEquals(2.0, registry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_egress").counter().count());
+        assertEquals(0.0, registry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", "pending_plugin_sql").counter().count());
+    }
+
+    @Test
+    void rejectsAnUnknownRetentionReason() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> metrics.retentionSegmentsHeldBack("pending_sql", 1));
+        assertThrows(IllegalArgumentException.class,
+                () -> metrics.retentionPendingSegmentsDeleted("pending_sql", 1));
+    }
+
+    @Test
     void rejectsUnknownPhaseTags() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaMetrics metrics = new DeltaMetrics(registry);

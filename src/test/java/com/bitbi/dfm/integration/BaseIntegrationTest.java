@@ -70,6 +70,29 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Autowired
+    protected com.bitbi.dfm.delta.domain.ChangelogSegmentRepository changelogSegmentRepository;
+
+    /**
+     * Mark every committed segment of a site processed by both queues (issue #212).
+     *
+     * <p>The fixture path ({@code ChangelogSegmentService.persist}) leaves {@code plugin_sql_at}
+     * and {@code egress_at} {@code NULL} — pending — and since #212 retention holds a pending
+     * segment back. A test whose subject needs its fixture segments actually <em>pruned</em> calls
+     * this first; a test about the hold-back itself relies on exactly that pending default.
+     * Shared here (the {@code clearAppSettings} precedent) so each class does not grow its own
+     * copy.</p>
+     *
+     * @param siteId site whose committed segments to mark
+     */
+    protected void markSegmentsProcessed(UUID siteId) {
+        changelogSegmentRepository.findBySiteIdOrderByFirstSeq(siteId).forEach(segment -> {
+            segment.markEgressed();
+            segment.markPluginSqlProcessed();
+            changelogSegmentRepository.save(segment);
+        });
+    }
+
+    @Autowired
     private S3CheckpointStorage egressCleanupStorage;
 
     @Autowired

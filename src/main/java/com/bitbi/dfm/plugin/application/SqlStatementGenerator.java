@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.delta.application.ValueMapper;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
 import com.bitbi.dfm.plugin.domain.JsonlChangeRecord;
@@ -27,6 +28,14 @@ public class SqlStatementGenerator {
      * Max 63 characters per PostgreSQL limit.
      */
     private static final Pattern VALID_IDENTIFIER = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
+
+    /**
+     * A decimal / scientific token that is safe to emit unquoted as a PostgreSQL numeric
+     * literal. Anything else on the numeric branch is quoted and escaped — a cell such as
+     * {@code 0); DROP TABLE customers; --} must never go into SQL raw (issue #263).
+     */
+    private static final Pattern NUMERIC_LITERAL =
+            Pattern.compile("^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$");
 
     /**
      * Generates a SQL statement from a row diff.
@@ -165,6 +174,20 @@ public class SqlStatementGenerator {
     /**
      * Formats a value for SQL based on its DBF type.
      * Handles NULL for empty values, quoting for strings, no quotes for numbers.
+     *
+     * <p>A non-finite token in a numeric column is quoted, for the reason
+     * {@link #formatJsonValue(Object)} explains: unquoted, {@code NaN} is an identifier to
+     * PostgreSQL, not a literal. Quoting makes the statement <em>valid</em> only where the target
+     * type accepts a non-finite value — {@code numeric}, {@code real} and {@code double precision}
+     * do, an integral one does not, and there the statement fails either way
+     * ({@code invalid input syntax for type integer} in place of {@code column "nan" does not
+     * exist}); {@link DbfColumnType#INTEGER} and {@link DbfColumnType#CURRENCY} are quoted with the
+     * rest because a uniform rule is never worse than the bare token, not because it rescues them.</p>
+     *
+     * <p>{@link DbfSqlGenerationStrategy} supplies types from the site's {@code TableSchema}.
+     * A numeric cell is emitted unquoted only when it is numeric-shaped (or a quoted non-finite
+     * spelling). Any other token is quoted and escaped, so a CSV cell such as
+     * {@code 0); DROP TABLE customers; --} cannot become raw SQL (issue #263).</p>
      */
     private String formatValue(String value, DbfColumnType type) {
         // Handle empty values
@@ -176,13 +199,25 @@ public class SqlStatementGenerator {
             }
         }
 
-        // Numeric types - no quotes
+        // Numeric types - unquoted only when the cell is a number (or a quoted non-finite)
         if (isNumericType(type)) {
-            return value;
+            String nonFinite = ValueMapper.canonicalNonFinite(value);
+            if (nonFinite != null) {
+                return "'" + nonFinite + "'";
+            }
+            String trimmed = value.trim();
+            if (isNumericLiteral(trimmed)) {
+                return trimmed;
+            }
+            return "'" + escapeString(value) + "'";
         }
 
         // String types - escape and quote
         return "'" + escapeString(value) + "'";
+    }
+
+    private boolean isNumericLiteral(String value) {
+        return NUMERIC_LITERAL.matcher(value).matches();
     }
 
     /**
@@ -314,6 +349,31 @@ public class SqlStatementGenerator {
     /**
      * Formats a typed value for use in a SQL statement.
      * Handles null, numbers (BigDecimal without scientific notation), booleans, bytea and strings.
+     *
+     * <p>A non-finite {@code double} is the one number that must be <em>quoted</em>: PostgreSQL
+     * {@code real} / {@code double precision} hold {@code NaN} and {@code +/-Infinity}, but only as
+     * a string literal it coerces to the column type — bare, {@code NaN} parses as a column name
+     * ({@code ERROR: column "nan" does not exist}), so the statement was written and uploaded
+     * successfully and failed only when Bit BI applied the file, taking the rest of the file with it
+     * if it applies one transactionally (issue #233).</p>
+     *
+     * <p>Quoted rather than degraded to NULL, which is what the {@code numeric} path does for the
+     * same three values (#215). The trade-off runs the other way here: Parquet DECIMAL cannot hold
+     * a non-finite value, so NULL keeps the Parquet artifacts and the SQL stream agreeing about that
+     * cell, whereas Parquet DOUBLE holds it natively — nulling it in SQL alone would be the
+     * disagreement #215 avoided, and this pipeline would be dropping a value both of its consumers
+     * can carry. The same property makes such a value usable as a key: PostgreSQL compares
+     * {@code NaN} equal to itself, so {@code col = 'NaN'} addresses the row, which is why
+     * {@code DeltaSqlGenerationStrategy} skips a record only for an unrepresentable
+     * <em>decimal</em> key.</p>
+     *
+     * <p>This method still keys on the <em>wire</em> type because it has no schema. A column
+     * declared {@code numeric(p,s)} whose value nevertheless arrives as {@code double_value} is
+     * degraded to {@code null} <em>before</em> it reaches here, by
+     * {@code DeltaSqlGenerationStrategy} (issue #240): Parquet DECIMAL cannot hold a non-finite
+     * value, so NULL is the contract both consumers keep. A {@code double precision} or bare
+     * {@code numeric} destination is not a DECIMAL and still arrives as a {@code Double}, quoted
+     * below.</p>
      */
     private String formatJsonValue(Object value) {
         if (value == null) {
@@ -321,6 +381,15 @@ public class SqlStatementGenerator {
         }
         if (value instanceof java.math.BigDecimal decimal) {
             return decimal.toPlainString();
+        }
+        if (value instanceof Double || value instanceof Float) {
+            // One vocabulary for the three spellings, shared with the DBF branch and with
+            // ChangelogFold rather than restated here -- a second copy of it is what issue #238 was.
+            // Java prints exactly PostgreSQL's own spellings, so the round trip through the token is
+            // free: the same string is returned unquoted when the value is finite.
+            String text = value.toString();
+            String nonFinite = ValueMapper.canonicalNonFinite(text);
+            return nonFinite != null ? "'" + nonFinite + "'" : text;
         }
         if (value instanceof Number) {
             return value.toString();

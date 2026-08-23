@@ -40,6 +40,16 @@ export const deltaSyncStateSchema = z.object({
    * occurrence (the sweep is switched off), and optional so an older backend still parses.
    */
   nextCheckpointBuildAt: z.string().nullable().optional().default(null),
+  /**
+   * Why the last scheduled visit of a site that still has no checkpoint produced nothing (#224):
+   * FAILED, FOLD_TOO_LARGE, FRAME_TOO_LARGE, SCRATCH_FULL, FRAME_UNAVAILABLE or DEFERRED.
+   * Deliberately a plain string rather than a z.enum — a value added on the server must degrade
+   * rather than blank the Delta Sync tab. Null while no scheduled build has aborted on record.
+   */
+  lastCheckpointBuildAbort: z.string().nullable().optional().default(null),
+  lastCheckpointBuildAbortAt: z.string().nullable().optional().default(null),
+  /** Operator-facing explanation; withheld on the owner projection. */
+  lastCheckpointBuildMessage: z.string().nullable().optional().default(null),
 });
 export type DeltaSyncState = z.infer<typeof deltaSyncStateSchema>;
 
@@ -121,5 +131,11 @@ export const deltaSyncHealthSchema = z.object({
   lastAppliedSeq: z.number().nullable(),
   lastCheckpointSeq: z.number().nullable(),
   updatedAt: z.string().nullable(),
+  /**
+   * Why the last scheduled visit of a site that still has no checkpoint produced nothing (#224).
+   * Optional so an older backend still parses; the pill uses it to stop painting a failed first
+   * build as a wait.
+   */
+  lastCheckpointBuildAbort: z.string().nullable().optional().default(null),
 });
 export type DeltaSyncHealth = z.infer<typeof deltaSyncHealthSchema>;

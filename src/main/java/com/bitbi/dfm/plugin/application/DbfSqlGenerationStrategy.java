@@ -1,7 +1,9 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
+import com.bitbi.dfm.plugin.domain.DbfColumnType;
 import com.bitbi.dfm.plugin.domain.SqlGenerationStats;
+import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.commons.csv.CSVFormat;
@@ -23,6 +25,7 @@ import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
@@ -32,6 +35,10 @@ import java.util.zip.GZIPInputStream;
  *
  * <p>Compares consecutive CSV snapshots using {@link CsvDiffService} (Myers diff algorithm)
  * and generates INSERT / UPDATE / DELETE statements via {@link SqlStatementGenerator}.</p>
+ *
+ * <p>Column types come from the site's {@code TableSchema} (PostgreSQL types mapped by
+ * {@link DbfColumnType#fromSqlType(String)}). Without a schema for the table, every column
+ * falls back to {@link DbfColumnType#CHARACTER} — quoted, empty → {@code NULL}.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -89,9 +96,10 @@ public class DbfSqlGenerationStrategy implements SqlGenerationStrategy {
                 }
 
                 List<CsvRowDiff> diffs = csvDiffService.compare(previousCsvContent, currentCsvContent, headers);
+                Map<String, DbfColumnType> columnTypes = columnTypesFor(tableName, context.tableSchemas());
 
                 for (CsvRowDiff diff : diffs) {
-                    String sql = sqlStatementGenerator.generate(diff, tableName, Map.of());
+                    String sql = sqlStatementGenerator.generate(diff, tableName, columnTypes);
                     sqlContent.append(sql);
 
                     switch (diff.type()) {
@@ -178,5 +186,28 @@ public class DbfSqlGenerationStrategy implements SqlGenerationStrategy {
             name = "_" + name;
         }
         return name;
+    }
+
+    /**
+     * Resolves DBF column types for {@code tableName} from the site schema.
+     * Missing schema, missing table, or a null map all yield an empty map, which
+     * the generator treats as CHARACTER for every column.
+     */
+    private Map<String, DbfColumnType> columnTypesFor(String tableName, Map<String, TableSchema> tableSchemas) {
+        if (tableSchemas == null) {
+            return Map.of();
+        }
+        TableSchema schema = tableSchemas.get(tableName);
+        if (schema == null || schema.columns() == null || schema.columns().isEmpty()) {
+            return Map.of();
+        }
+        Map<String, DbfColumnType> types = new LinkedHashMap<>();
+        for (TableSchema.ColumnDefinition column : schema.columns()) {
+            if (column == null || column.name() == null) {
+                continue;
+            }
+            types.put(column.name(), DbfColumnType.fromSqlType(column.type()));
+        }
+        return types;
     }
 }

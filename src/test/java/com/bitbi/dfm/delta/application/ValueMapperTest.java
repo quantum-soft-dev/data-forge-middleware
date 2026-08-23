@@ -49,7 +49,8 @@ class ValueMapperTest {
      */
     @Test
     void nonFiniteDecimalDegradesToNullInsteadOfThrowing() {
-        for (String token : new String[]{"Infinity", "-Infinity", "NaN", "+Infinity", "infinity", "nan"}) {
+        for (String token : new String[]{"Infinity", "-Infinity", "NaN", "+Infinity", "infinity", "nan",
+                "+NaN", "-NaN"}) {
             Value value = Value.newBuilder().setDecimalValue(token).build();
             assertNull(ValueMapper.toJava(value), token + " must map to null, not throw");
             assertTrue(ValueMapper.isNonFiniteDecimal(value), token + " must be reported as non-finite");
@@ -69,6 +70,23 @@ class ValueMapperTest {
     }
 
     /**
+     * A signed NaN is a legal source value this pipeline cannot store, not a client defect. The two
+     * counters are read for opposite reasons — {@code non_finite} says the pipeline lost a value it
+     * cannot hold, {@code malformed} is defined as "a client defect somebody has to fix" — so
+     * classifying {@code -NaN} as malformed pages someone to chase a bug that does not exist, which
+     * is the outcome the split was added to prevent (issue #238).
+     */
+    @Test
+    void aSignedNanIsNonFiniteRatherThanMalformed() {
+        for (String token : new String[]{"+NaN", "-NaN", "+nan", "-NAN", " -NaN "}) {
+            Value value = Value.newBuilder().setDecimalValue(token).build();
+            assertTrue(ValueMapper.isNonFiniteDecimal(value), token + " must be reported as non-finite");
+            assertFalse(ValueMapper.isMalformedDecimal(value), token + " is not a client defect");
+            assertTrue(ValueMapper.isUnrepresentable(value), token + " is still unrepresentable");
+        }
+    }
+
+    /**
      * A token that is neither finite nor one of the three non-finite spellings is a malformed
      * decimal, not a representable-value problem: it still must not throw out of the mapper (that is
      * what cost the table its file), but it must not be counted as non-finite either, since the
@@ -80,6 +98,27 @@ class ValueMapperTest {
         Value value = Value.newBuilder().setDecimalValue("not-a-number").build();
         assertNull(ValueMapper.toJava(value));
         assertFalse(ValueMapper.isNonFiniteDecimal(value));
+    }
+
+    /**
+     * {@link #isNonFiniteToken} trims; {@code parseDecimal} used to be handed the token raw, and
+     * {@link BigDecimal} rejects surrounding whitespace. So {@code " 1.5 "} — a perfectly legal
+     * number, and a shape {@link ChangelogFold} already retries trimmed so it folds with {@code "1.5"}
+     * as one row — was unparseable, degraded to NULL, and counted
+     * {@code reason=malformed}: silent loss of a value this pipeline can represent exactly, in the
+     * counter defined as "a client defect somebody has to fix" (issue #240, evidence from #238).
+     */
+    @Test
+    void aPaddedFiniteDecimalIsKeptRatherThanCountedMalformed() {
+        for (String token : new String[]{" 1.5 ", "1.5 ", " 1.5", "\t12.50\n"}) {
+            Value value = Value.newBuilder().setDecimalValue(token).build();
+            assertEquals(new BigDecimal(token.trim()), ValueMapper.toJava(value),
+                    token + " is a finite number this pipeline can store");
+            assertFalse(ValueMapper.isMalformedDecimal(value),
+                    token + " is not a client defect");
+            assertFalse(ValueMapper.isNonFiniteDecimal(value));
+            assertFalse(ValueMapper.isUnrepresentable(value));
+        }
     }
 
     /**
