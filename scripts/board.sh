@@ -9,7 +9,11 @@
 # остаётся в `In Review`, а готовность показывает метка `status: ready to merge`.
 set -euo pipefail
 OWNER=quantum-soft-dev; REPO=quantum-soft-dev/data-forge-middleware; PROJECT=16
-PID=$(gh project view "$PROJECT" --owner "$OWNER" --format json --jq .id)
+
+# Резолвится лениво: `show` и `unblock` id проекта не нужен, а безусловный вызов стоил бы
+# лишнего обращения к API на каждом запуске скрипта.
+PID=""
+project_id() { [[ -n "$PID" ]] || PID=$(gh project view "$PROJECT" --owner "$OWNER" --format json --jq .id); echo "$PID"; }
 
 item_id() { gh project item-list "$PROJECT" --owner "$OWNER" --limit 500 --format json \
   --jq ".items[] | select(.content.number==$1) | .id"; }
@@ -58,7 +62,7 @@ set_status() {
   fid=$(jq -r '.fields[] | select(.name=="Status") | .id' <<<"$fields")
   oid=$(jq -r --arg s "$column" '.fields[] | select(.name=="Status") | .options[] | select(.name==$s) | .id' <<<"$fields")
   [[ -z "$oid" || "$oid" == "null" ]] && { echo "на доске нет колонки: $column" >&2; exit 1; }
-  gh project item-edit --project-id "$PID" --id "$item" --field-id "$fid" \
+  gh project item-edit --project-id "$(project_id)" --id "$item" --field-id "$fid" \
     --single-select-option-id "$oid" >/dev/null
 
   strip_status_labels "$issue" "$label"

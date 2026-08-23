@@ -230,7 +230,14 @@ alone, so their absence is not a failure. `./gradlew test -PexcludeIntegration` 
 (~30 contract tests use Testcontainers); without it the gate dies inside `Unsafe.java`. Never
 write off a red check without checking which test it is.
 
-The merge into `develop` never happens without a human go-ahead. Normally that go-ahead is per PR,
+The merge into `develop` never happens without a human go-ahead — but the go-ahead can be given by
+invoking a command as well as by answering a question, and **two** commands carry it: the
+per-run `/github-issue-runner` (below) and the per-issue **`/task <n>`**, whose step 6 merges its
+own PR because typing the command *is* the authorization for that one issue. Both still verify
+every readiness condition; the authorization removes the question, not the checks. `/github-issue`
+does **not** carry it: it stops at readiness and hands the decision over.
+
+Normally, then, the go-ahead is per PR,
 via `/merge <pr>` (invoking it is the authorization). That command re-checks readiness, merges
 with **squash** (one issue = one commit, as the whole current history), closes the issue, moves
 the card to `Done` and strips the `status: *` labels. `deleteBranchOnMerge` is off in the repo
@@ -380,7 +387,8 @@ says nothing about *which* ticket survives, which stays a judgement about where 
 
 `/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
 up to **three** issues in flight and picks up the next as a slot frees. Invoking it gives the
-merge go-ahead **for that run** — the one exception to the per-PR gate above. Nothing else
+merge go-ahead **for that run** — one of the two standing exceptions to the per-PR gate above, the
+other being `/task <n>`, which carries it for a single issue. Nothing else
 relaxes: every readiness condition and every `/merge` check is still verified, merges stay
 serialized one at a time, the dispatcher writes no code itself, and an executor's report is
 re-verified against GitHub before anything is merged.

@@ -33,10 +33,16 @@ echo "## PR, смерженные за 30 дней (по словам и пут�
 since=$(date -v-30d +%Y-%m-%d 2>/dev/null || date -d '30 days ago' +%Y-%m-%d)
 gh pr list -R "$REPO" --state merged --limit 10 --search "$kw merged:>=$since" \
   --json number,title,mergedAt --jq '.[] | "  PR #\(.number) \(.title) (\(.mergedAt[:10]))"' || true
-for p in "${paths[@]}"; do
-  gh pr list -R "$REPO" --state merged --limit 5 --search "\"$p\" merged:>=$since" \
-    --json number,title --jq ".[] | \"  PR #\(.number) \(.title)  ← $p\"" || true
-done
+# Guard обязателен: под `set -u` в bash 3.2 — а это /bin/bash на macOS, платформе этого
+# репозитория — разворачивание пустого массива "${paths[@]}" само по себе «unbound variable».
+# Вызов без путей документирован и является основным сценарием (перед взятием задачи файлы ещё
+# не известны), так что без guard'а скрипт падал ровно там, где нужен чаще всего.
+if ((${#paths[@]})); then
+  for p in "${paths[@]}"; do
+    gh pr list -R "$REPO" --state merged --limit 5 --search "\"$p\" merged:>=$since" \
+      --json number,title --jq ".[] | \"  PR #\(.number) \(.title)  ← $p\"" || true
+  done
+fi
 
 if ((${#paths[@]})); then
   echo "## Последние коммиты develop по путям"
