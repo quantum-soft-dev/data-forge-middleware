@@ -1564,7 +1564,7 @@ So, in order, to give the pool more room:
    together, which is what stops the pool quietly outgrowing the database. At the default the
    ceiling already allows up to 12.
 2. Or lower a remaining long holder — after **#164** the two queue workers are short (claim/mark
-   only; S3 and the generation semaphore run with no transaction open), so the floor is the four
+   only; S3 and the generation semaphore run with no transaction open), so the floor is the five
    long scheduled ticks plus the request reserve. Shortening or dropping a `Cost.LONG` tick is
    what moves it now.
 

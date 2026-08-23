@@ -384,8 +384,11 @@ src/main/java/com/bitbi/dfm/
 ### Run Contract Tests
 
 ```bash
-./gradlew contractTest
+./gradlew test -PexcludeIntegration
 ```
+
+This runs the unit and contract suites without the Testcontainers integration suite. To run only a
+specific contract class, use `./gradlew test --tests '*ContractTest'`.
 
 ### Code Coverage
 

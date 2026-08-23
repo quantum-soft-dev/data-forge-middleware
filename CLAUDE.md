@@ -621,6 +621,56 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- docs-recent-changes-drifts: Four accumulating documents now describe the repository they are
+  about (issue #205, folding **#218**). None is a code defect; all four are the case this file
+  already calls out — one document says one thing and another says something else about the same
+  place — and they are one branch because they share no files with each other and none with
+  product code. **The guide's connection floor said four long ticks.** #158 / PR #198 added
+  `DeltaS3OrphanSweeper` as a fifth `Cost.LONG` tick and moved the floor to
+  `5 long ticks + 2 request reserve = 7`; round 4 of that review fixed the contradiction inside
+  `application.yml`, the #158 journal entry says five, and `BackgroundConnectionDemandTest`
+  derives the term from `ScheduledTaskInventoryTest.longRunningTaskCount()` — four annotated
+  `Cost.LONG` tasks plus the programmatic `BatchRetentionScheduler` cron, so five. The guide was
+  the only surface left carrying the old number, precisely because it lives outside the file that
+  review touched. It says five. **`AGENTS.md` was missing `prefix-walk-paged`** (#199 / PR #203
+  wrote it to `CLAUDE.md` only) and carried `split-scratch-ceilings` **twice**, the two copies
+  differing in exactly the clause #153 made stale — an assertion and its superseded variant living
+  in one file, which an agent reading top to bottom resolves by accident. The entry is restored
+  between `test-profile-scratch-directory` and `s3-orphan-sweep`, its position in `CLAUDE.md`; the
+  stale duplicate is deleted and the corrected copy kept. **`README.md` documented
+  `./gradlew contractTest`** (#218), a task `build.gradle.kts` does not register — it declares
+  exactly `test` (with `-PexcludeIntegration`) and `integrationTest` — so the one command a
+  newcomer runs to check the contract suite failed with "task not found". It names the supported
+  gate, matching "Commands" in this file and the gates table, with `--tests '*ContractTest'` for a
+  single class; adding a real `contractTest` task was rejected as a new gate nobody asked for.
+  **`docs/cr-bitbi-delta-sql.md` residual risk 3** still described the delta-SQL queue as holding
+  a database connection across S3 as a live accepted trade-off, which #164 retired:
+  `processNextPending` dropped its wrapping `@Transactional`, the claim and the mark are short
+  repository transactions, and the class Javadoc, the guide ("No S3 inside a queue worker") and
+  the #164 entry all say so. Removed rather than reworded — there is no residual risk left to
+  state — and the list renumbers; the retention item keeps the narrowing #212 gave it.
+  **The DoD's third item — is a guard worth having for the missing journal entry — is answered
+  yes, and the reversal is the durable part.** #205 was written to answer *no*, on a census of
+  2026-08-19 that found a single omission and three same-day merges landing correctly in both
+  files. Finishing the ticket four days later re-ran that census and the premise was gone:
+  `AGENTS.md` is missing **three more** fresh entries, each written to `CLAUDE.md` by its own PR —
+  `adopt-path-side-effects` (#246), `double-nan-sql-literal` (#233), `signed-nan-classification`
+  (#238). One omission is a slip; four in a week is a mechanism, and the mechanism is that the
+  omission is **invisible in the diff** of a PR that touches only one of the two files, so no
+  amount of review habit catches it. The *other* half of #205's reasoning — that a guard would
+  need a hand-placed boundary, "a second convention maintained by nobody" — is half right and the
+  half that is wrong is what unblocks the guard: the two journals are genuinely unequal (81 slugs
+  to 97 today, 13 of the 16 differences being the `033`–`042` block plus
+  `tag-driven-dev-deploy`, `plugin-secret-reveal` and `agent-migration-doc-consistency`, which
+  `AGENTS.md` stopped carrying and later resumed), but entries are only ever **prepended and never
+  removed**, so the anchor at the end of that gap — `042-parquet-phase-metrics` — never moves. It
+  is one constant set once, not a convention, which is exactly the shape
+  `MigrationDocumentationConsistencyTest` (#104) already has over these same two files. Above that
+  anchor the predicate is mechanical and has no false positive, since the repository's convention
+  is that an entry rides in both. Building it needs the three missing entries backfilled first, so
+  it is **#278** rather than this branch, and this entry is what stops the answer being lost.
+  Documentation only: no product code, test, REST, gRPC, proto, DTO, migration (**V58 stays
+  free**), configuration-key, metric, S3-key or frontend change.
 - unpaired-sql-started: A lost SQL-generation unique claim now writes a terminal
   `SQL_GENERATION_ADOPTED` instead of leaving the account's plugin log with an unpaired
   `SQL_GENERATION_STARTED` (issue #260, the gap #246 named and left open). Since #246 the loser of
@@ -1330,7 +1380,8 @@ pages/{feature}/            # Route pages
   still current, V55 free), configuration-key, S3-key or frontend change; both meter names are
   new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
   delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
-  `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
+  `docs/cr-bitbi-delta-sql.md` (the retention residual risk narrowed, not struck — listed as item
+  4 then, renumbered to 3 by #205 when the obsolete connection-hold item above it was removed).
   **Round 2 reviewed what round 1 introduced, and three of its findings cut into round 1's own
   fixes.** The A3 drain was silencing far more than its justification named: with the default
   window of 20, retention never emptied a quiet site's below-checkpoint list even before #212, so
