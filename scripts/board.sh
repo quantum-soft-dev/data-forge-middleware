@@ -10,10 +10,13 @@
 set -euo pipefail
 OWNER=quantum-soft-dev; REPO=quantum-soft-dev/data-forge-middleware; PROJECT=16
 
-# Резолвится лениво: `show` и `unblock` id проекта не нужен, а безусловный вызов стоил бы
-# лишнего обращения к API на каждом запуске скрипта.
+# Резолвится лениво: `show` id проекта не нужен вовсе, а безусловный вызов стоил бы лишнего
+# обращения к API на каждом запуске скрипта. Функция вызывается ОТДЕЛЬНЫМ ОПЕРАТОРОМ, а не
+# через `$(…)`: подстановка команды исполняется в субшелле, присваивание `PID` в родителя не
+# возвращается, и «кэш» перестал бы кэшировать — в `unblock_after`, где `set_status` зовётся в
+# цикле, это был бы поход в API на каждый разблокированный тикет.
 PID=""
-project_id() { [[ -n "$PID" ]] || PID=$(gh project view "$PROJECT" --owner "$OWNER" --format json --jq .id); echo "$PID"; }
+ensure_project_id() { [[ -n "$PID" ]] || PID=$(gh project view "$PROJECT" --owner "$OWNER" --format json --jq .id); }
 
 item_id() { gh project item-list "$PROJECT" --owner "$OWNER" --limit 500 --format json \
   --jq ".items[] | select(.content.number==$1) | .id"; }
@@ -62,7 +65,8 @@ set_status() {
   fid=$(jq -r '.fields[] | select(.name=="Status") | .id' <<<"$fields")
   oid=$(jq -r --arg s "$column" '.fields[] | select(.name=="Status") | .options[] | select(.name==$s) | .id' <<<"$fields")
   [[ -z "$oid" || "$oid" == "null" ]] && { echo "на доске нет колонки: $column" >&2; exit 1; }
-  gh project item-edit --project-id "$(project_id)" --id "$item" --field-id "$fid" \
+  ensure_project_id
+  gh project item-edit --project-id "$PID" --id "$item" --field-id "$fid" \
     --single-select-option-id "$oid" >/dev/null
 
   strip_status_labels "$issue" "$label"
