@@ -621,6 +621,55 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- commit-gate-outside-ci: The per-task gate stopped lying in both directions (issue #278, folding
+  **#279** — both found finishing #205/PR #255, both about the mandatory commit gate misreporting
+  outside CI, and both claimed `build.gradle.kts`, so they could never have run in parallel).
+  **Part B — red where nothing is broken.** `ChangelogSegmentQueueMarkerClobberTest` (#245) failed
+  two methods on a branch whose diff was five markdown files and zero lines of code, deterministically,
+  for anyone outside UTC — and `CLAUDE.md` both makes the gate mandatory and forbids `--no-verify`,
+  so a docs-only commit cost a cycle chasing somebody else's test, the class of defect #207 and #226
+  were filed for. **The ticket's diagnosis was wrong and that is the part worth keeping**: it named
+  the read (`rs.getTimestamp` without a `Calendar`) and prescribed `rs.getObject(col,
+  LocalDateTime.class)`; that change is a **no-op** here, since `getTimestamp(...).toLocalDateTime()`
+  builds an instant in the JVM zone and converts it straight back, a net identity. The shift is on
+  the **write**: `hibernate.jdbc.time_zone: UTC` (`application.yml`) makes Hibernate read a bound
+  `LocalDateTime` as JVM-local wall clock and store the same instant in UTC. Production is symmetric —
+  it writes and reads through Hibernate, so the conversion cancels, and `plugin_sql_retry_at` /
+  `egress_retry_at` are compared against the database's own `CURRENT_TIMESTAMP` — while this class
+  deliberately reads the **row** through `JdbcTemplate` (#245's reason: merge copies detached values
+  onto the managed instance, so only the generated statement proves the mapping), where it does not.
+  Writing `LocalDateTime.now(ZoneOffset.UTC)` and comparing it with the raw column therefore differed
+  by the JVM's offset. Fixed by binding a JVM wall clock, as production does, and expecting the stored
+  form (`asStored`, the identity in UTC); verified green under `TZ=UTC`, `Asia/Jerusalem`,
+  `America/Los_Angeles` and `Australia/Sydney`, red outside UTC without it. Pinning the test JVM's
+  zone (the ticket's option 3) stays **not taken**: it is a new build-wide invariant that would hide
+  this class of defect rather than show it, and it was not needed. The `getTimestamp` +
+  `LocalDateTime` shape has no other occurrence in `src/test`; the three in
+  `ParquetExportCatalogDao` are production and a finding of their own (**#280**).
+  **Part A — green where something is broken.** The "Recent Changes" journal ships to `CLAUDE.md`
+  and `AGENTS.md` alike, and nothing held it: the omission is invisible in the diff of a PR that
+  writes to one file. #205 fixed a single miss and answered "no guard needed, it is a review habit";
+  four days later three more entries were missing (`double-nan-sql-literal`, `adopt-path-side-effects`,
+  `signed-nan-classification`), each written to `CLAUDE.md` by its own PR — one miss is a slip, four
+  in a week is a mechanism. #205's counter-argument was half right: the journals are genuinely unequal
+  (81 slugs to 97), but 13 of the 16 differences are the block `AGENTS.md` stopped carrying and later
+  resumed (`033`–`042`, `tag-driven-dev-deploy`, `plugin-secret-reveal`,
+  `agent-migration-doc-consistency`), and since entries are only **prepended**, the newest slug of
+  that block — `042-parquet-phase-metrics` — can never move. That is one constant set once, not a
+  boundary anybody maintains, the shape `MigrationDocumentationConsistencyTest` (#104) already has
+  over these two files. `AgentJournalConsistencyTest` asserts three things above that anchor:
+  presence, no duplicate within either file (#205 found `split-scratch-ceilings` twice, the copies
+  differing exactly in the clause #153 made stale), and — added here — that the shared entries appear
+  in the **same order** in both, since an entry backfilled into the wrong place is the same defect one
+  step quieter. That third assertion immediately found a pre-existing inversion, `split-scratch-ceilings`
+  ahead of `ingestion-commit-no-s3` in `AGENTS.md` while #147 is newer than #138: fixed by moving the
+  entries, not by weakening the check. All three mutation-proven (drop a backfilled entry, duplicate
+  one, move one) and red before the backfill on exactly the three slugs. `build.gradle.kts` already
+  declared both documents as test inputs (#104); the pre-commit hook's docs-only branch now runs
+  **`com.bitbi.dfm.documentation.*`** rather than one named class, because naming classes one by one
+  is how the next guard is added and silently never run. Test, documentation and hook only: no
+  production code, REST, gRPC, proto, DTO, migration (**V58 stays free**), configuration-key, metric,
+  S3-key or frontend change.
 - docs-recent-changes-drifts: Four accumulating documents now describe the repository they are
   about (issue #205, folding **#218**). None is a code defect; all four are the case this file
   already calls out — one document says one thing and another says something else about the same
