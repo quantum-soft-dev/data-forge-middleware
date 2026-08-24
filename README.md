@@ -386,10 +386,18 @@ clock — in an entity, after a raw-JDBC read, and in the DTOs, which serialize 
   `clock_timestamp() AT TIME ZONE 'UTC'` in the Parquet Export catalog watermark.
 
 A field held as `Instant` needs no rule: its binding stores the UTC wall clock in every zone and
-never consulted `hibernate.jdbc.time_zone` at all. `TimestampRoundTripIntegrationTest` pins both
-that and the `LocalDateTime` round trip, running each case with the JVM's default zone set to UTC,
-`Asia/Jerusalem` and `America/Los_Angeles` in turn, so the guard cannot pass merely because CI
-happens to run in UTC.
+never consulted `hibernate.jdbc.time_zone` at all.
+
+Two guards hold this, and they are not interchangeable. `TimestampProducerConventionTest` is static
+— it bans the zero-argument `now()` and asserts the setting's absence — and so gives the same answer
+in every environment; **it is what CI relies on.** `TimestampRoundTripIntegrationTest` states the
+property end to end (write through JPA, read the same column through raw JDBC, require equality, for
+a `LocalDateTime` field and an `Instant` one) but runs in whatever zone the JVM is in: on a machine
+outside UTC that makes it mutation-sensitive, while in CI, which runs in UTC, the conversion it
+guards against would be the identity and the test would stay green. It deliberately does **not**
+switch the JVM's default zone to change that — pgjdbc derives a connection's PostgreSQL session zone
+from that default, and the test suite shares one pool, so a non-UTC session could leak onto another
+test's `CURRENT_TIMESTAMP` write.
 
 `java.sql.Timestamp` is banned in `src/` in either direction (`Timestamp.valueOf`, `new Timestamp(…)`,
 `rs.getTimestamp(…)`), because it is an instant and so silently carries the JVM's default zone.
