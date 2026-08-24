@@ -53,6 +53,24 @@ class BatchParquetQueueServiceIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /**
+     * The batch's raw changelog segment — what a requeued build replays (issue #244): without one
+     * the requeue is refused, since no attempt could produce the artifact. Both queue markers are
+     * stamped so the global, site-blind queues can never claim it (#175).
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void seedBatchSegment() {
+        jdbcTemplate.update("DELETE FROM changelog_segments WHERE batch_id = ?", BATCH_ID);
+        jdbcTemplate.update("""
+                INSERT INTO changelog_segments (id, site_id, batch_id, first_seq, last_seq,
+                                                record_count, content_hash, s3_key, mode,
+                                                provisional, plugin_sql_at, egress_at)
+                VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), SITE_ID, BATCH_ID,
+                "delta/" + SITE_ID + "/segments/" + UUID.randomUUID() + ".pb.gz");
+    }
+
     @Test
     void staleWorkerCannotRenewTheClaimAfterAConcurrentOperatorRequeue() throws Exception {
         Site site = siteRepository.findById(SITE_ID).orElseThrow();
