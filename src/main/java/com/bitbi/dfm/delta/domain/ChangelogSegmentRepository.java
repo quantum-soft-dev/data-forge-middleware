@@ -151,10 +151,14 @@ public interface ChangelogSegmentRepository {
      * {@code FOR UPDATE SKIP LOCKED} so concurrent workers (or instances) never double-process.
      * Must run inside a transaction.
      *
+     * <p>A segment whose last attempt failed is held out until its {@code egress_retry_at}
+     * (issue #243) — its own site still queues behind it, every other site drains.</p>
+     *
      * @param limit maximum segments to claim
+     * @param now   the claiming instant (UTC); segments in backoff past it are not offered
      * @return per-site head pending segments, oldest first
      */
-    List<ChangelogSegment> findNextPendingEgress(int limit);
+    List<ChangelogSegment> findNextPendingEgress(int limit, LocalDateTime now);
 
     /**
      * Segments still waiting for delta-Parquet egress ({@code egress_at IS NULL}), including any
@@ -168,10 +172,59 @@ public interface ChangelogSegmentRepository {
      * created in seq order per site — locked with {@code FOR UPDATE SKIP LOCKED} so concurrent
      * workers never double-process. Must run inside a transaction.
      *
+     * <p>Backoff applies exactly as in {@link #findNextPendingEgress} (issue #243).</p>
+     *
      * @param limit maximum segments to claim
+     * @param now   the claiming instant (UTC); segments in backoff past it are not offered
      * @return per-site head pending segments, oldest first
      */
-    List<ChangelogSegment> findNextPendingPluginSql(int limit);
+    List<ChangelogSegment> findNextPendingPluginSql(int limit, LocalDateTime now);
+
+    /**
+     * Record a failed delta-SQL attempt and hold the segment out of the queue until {@code retryAt}
+     * (issue #243). Increments the attempt count in the database rather than writing the caller's
+     * snapshot, and is <b>claim-scoped</b>: it does nothing when the segment is no longer pending,
+     * or when its attempt count has moved since the claim — a peer's deferral, or a reinit's reset
+     * (review round 3).
+     *
+     * @param id              segment identifier
+     * @param retryAt         when the segment may be claimed again (UTC)
+     * @param attemptsAtClaim the attempt count this claim saw
+     * @return 1 if the segment was deferred, 0 if its work had landed or its state moved
+     */
+    int deferPluginSql(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
+
+    /**
+     * The egress twin of {@link #deferPluginSql(UUID, LocalDateTime, int)} (issue #243).
+     *
+     * @param id              segment identifier
+     * @param retryAt         when the segment may be claimed again (UTC)
+     * @param attemptsAtClaim the attempt count this claim saw
+     * @return 1 if the segment was deferred, 0 if it had been egressed or its state moved
+     */
+    int deferEgress(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
+
+    /**
+     * Stamp {@code plugin_sql_at} and no other column (issue #245).
+     *
+     * <p>The claim lock is released before the work (#164), so a whole-entity save of the snapshot
+     * captured at claim would merge {@code egress_at} back to the value held then — un-marking
+     * work the egress worker had already finished. This statement is the success twin of
+     * {@link #deferPluginSql(UUID, LocalDateTime, int)}.</p>
+     *
+     * @param id segment identifier
+     * @return 1 if a row was updated, 0 if it is gone
+     */
+    int markPluginSqlProcessed(UUID id);
+
+    /**
+     * Stamp {@code egress_at} and no other column (issue #245). The egress twin of
+     * {@link #markPluginSqlProcessed(UUID)}.
+     *
+     * @param id segment identifier
+     * @return 1 if a row was updated, 0 if it is gone
+     */
+    int markEgressed(UUID id);
 
     /**
      * Every S3 object of a site's changelog, published and provisional alike — the collection step
@@ -332,6 +385,10 @@ public interface ChangelogSegmentRepository {
     /**
      * Re-enqueue all of a site's segments for plugin SQL generation (plugin reinit: the
      * checkpoint-lag gap is regenerated under freshly captured baselines).
+     *
+     * <p>Clears the retry state too (issue #243): a reinit is the operator saying the cause is
+     * gone, so a segment that had accumulated attempts starts from a clean count and is claimable
+     * at once instead of sitting out the cooldown its old failures earned.</p>
      *
      * @param siteId site identifier
      * @return number of segments re-enqueued

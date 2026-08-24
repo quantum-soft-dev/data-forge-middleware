@@ -31,4 +31,12 @@ final class TestScratchLeases {
     static ParquetScratchBudget budgetOf(long maxBytes) {
         return new ParquetScratchBudget(new SimpleMeterRegistry(), maxBytes);
     }
+
+    /**
+     * A budget whose batch writers stop at {@code maxBytes - checkpointReserveBytes}, so a
+     * checkpoint frame always has a reserved share (issue #193).
+     */
+    static ParquetScratchBudget budgetOf(long maxBytes, long checkpointReserveBytes) {
+        return new ParquetScratchBudget(new SimpleMeterRegistry(), maxBytes, checkpointReserveBytes);
+    }
 }

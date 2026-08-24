@@ -3,6 +3,8 @@ package com.bitbi.dfm.config;
 import com.bitbi.dfm.account.application.AccountProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.env.YamlPropertySourceLoader;
@@ -17,6 +19,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -94,5 +97,45 @@ class AccountBatchLimitConfigTest {
 
         assertEquals(9, properties.getMaxConcurrentBatches(),
                 "the documented override knob must keep working — the default is a default, not a constant");
+    }
+
+    /**
+     * Issue #251 — the same "anonymous refusal" class as a {@code fixedDelayString} of 0:
+     * {@code AccountProperties} threw {@code "maxConcurrentBatches must be at least 1"}, naming
+     * neither the configuration key nor the value, so the crash-loop line did not say what to fix.
+     */
+    @ParameterizedTest(name = "should refuse account.max-concurrent-batches = {0}, naming the key and the value")
+    @ValueSource(ints = {0, -1})
+    void shouldRefuseNonPositiveLimitNamingTheKeyAndTheValue(int value) {
+        AccountProperties properties = new AccountProperties();
+
+        IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
+                () -> properties.setMaxConcurrentBatches(value));
+        assertTrue(thrown.getMessage().contains("account.max-concurrent-batches"),
+                "refusal must name the configuration key, got: " + thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("but was " + value),
+                "refusal must name the offending value, got: " + thrown.getMessage());
+    }
+
+    @Test
+    @DisplayName("binding a non-positive override fails startup naming the key")
+    void shouldRefuseNonPositiveLimitWhenBoundFromTheEnvironment() {
+        Exception thrown = assertThrows(Exception.class, () -> bind(
+                IsolatedEnvironments.loadConfig(Map.of("ACCOUNT_MAX_CONCURRENT_BATCHES", "0"))));
+
+        Throwable cursor = thrown;
+        boolean named = false;
+        while (cursor != null) {
+            String message = cursor.getMessage();
+            if (message != null && message.contains("account.max-concurrent-batches")
+                    && message.contains("but was 0")) {
+                named = true;
+                break;
+            }
+            cursor = cursor.getCause();
+        }
+        assertTrue(named,
+                "binding 0 must fail with a message naming account.max-concurrent-batches and the "
+                        + "value; the crash-loop line is the whole diagnosis. Got: " + thrown);
     }
 }

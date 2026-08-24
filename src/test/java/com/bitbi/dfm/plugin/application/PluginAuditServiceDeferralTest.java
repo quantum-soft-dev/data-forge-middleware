@@ -297,6 +297,17 @@ class PluginAuditServiceDeferralTest {
         }
 
         @Test
+        @DisplayName("SQL generation adopted — the attempt happened; the winner already owns the row")
+        void shouldWriteSqlGenerationAdoptedImmediately() {
+            service.logSqlGenerationAdopted(
+                    PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(),
+                    UUID.randomUUID(), "plugins/bit-bi/winner.sql", 5L);
+
+            verify(repository).save(any(PluginAuditLog.class));
+            verifyNoInteractions(eventPublisher);
+        }
+
+        @Test
         @DisplayName("download link rejected — nothing changed, so there is nothing to wait for")
         void shouldWriteLinkRejectionImmediately() {
             service.logLinkRejected("parquet-export", accountId, "expired");

@@ -113,6 +113,37 @@ describe('getDeltaSyncState', () => {
     expect(state?.lastRebuildOutcome).toBeNull();
     expect(state?.lastRebuildOutcomeAt).toBeNull();
     expect(state?.lastRebuildMessage).toBeNull();
+    expect(state?.lastCheckpointBuildAbort).toBeNull();
+    expect(state?.lastCheckpointBuildAbortAt).toBeNull();
+    expect(state?.lastCheckpointBuildMessage).toBeNull();
+  });
+
+  it('carries a scheduled-build abort through (#224)', async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: {
+        ...syncStatePayload,
+        lastCheckpointSeq: 0,
+        lastCheckpointBuildAbort: 'FOLD_TOO_LARGE',
+        lastCheckpointBuildAbortAt: '2026-07-05T02:00:00Z',
+        lastCheckpointBuildMessage: 'the fold outgrew the budget',
+      },
+    });
+
+    const state = await getDeltaSyncState('s1', { admin: false });
+
+    expect(state?.lastCheckpointBuildAbort).toBe('FOLD_TOO_LARGE');
+    expect(state?.lastCheckpointBuildAbortAt).toBe('2026-07-05T02:00:00Z');
+    expect(state?.lastCheckpointBuildMessage).toBe('the fold outgrew the budget');
+  });
+
+  it('keeps an abort value it does not know rather than rejecting the payload', async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: { ...syncStatePayload, lastCheckpointBuildAbort: 'SOMETHING_NEW' },
+    });
+
+    const state = await getDeltaSyncState('s1', { admin: false });
+
+    expect(state?.lastCheckpointBuildAbort).toBe('SOMETHING_NEW');
   });
 });
 

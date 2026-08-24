@@ -42,7 +42,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * ceilings were set. A count is not something a per-file ceiling can bound. The directory budget
  * bounds the sum directly, so the per-file ceilings drop out of the inequality and keep only their
  * per-artifact job; what remains outside it is scratch a dead process left behind (#127, #141),
- * which no lease covers, and that is what the reserve below is for.</p>
+ * which no lease covers, and that is what the reserve below is for. Since issue #193 the last
+ * {@code DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES} of the directory budget is reserved for the
+ * checkpoint path — a different reserve — so the remainder must still fit at least one
+ * completed-batch artifact.</p>
  */
 class ParquetScratchCeilingBudgetTest {
 
@@ -128,6 +131,15 @@ class ParquetScratchCeilingBudgetTest {
                             + directoryBudget + " B, so the directory refuses before that ceiling "
                             + "can ever speak and its documented failure mode never happens");
         }
+
+        // Issue #193: batch writers stop at directory minus the frame ceiling, so a completed-batch
+        // backlog cannot fill the bytes the nightly frame needs. That share has to fit at least one
+        // batch artifact, or the batch ceiling is dead configuration the same way.
+        long batchShare = directoryBudget - frameCeiling;
+        assertTrue(batchShare >= batchCeiling,
+                "the reserved checkpoint share leaves " + batchShare + " B for batch writers, below "
+                        + BATCH_CEILING_KEY + "=" + batchCeiling + " B, so a single completed-batch "
+                        + "artifact can never reach its own ceiling");
 
         long sizeLimit = scratchVolumeSizeLimitBytes();
         long budget = sizeLimit - RESIDUE_RESERVE_BYTES;

@@ -316,4 +316,37 @@ describe('PluginLogsTab', () => {
     // Should show "Plugin Activated" instead of just "Activate"
     expect(screen.getByText(/plugin activated/i)).toBeInTheDocument()
   })
+
+  it('should show a user-friendly label for a lost SQL-generation claim (#260)', () => {
+    const logsWithAdopted: PluginLogPageResponse = {
+      content: [
+        {
+          id: 1,
+          actionType: 'SQL_GENERATION_ADOPTED',
+          success: true,
+          metadata: {
+            batchId: '550e8400-e29b-41d4-a716-446655440000',
+            generationId: '0199baac-f852-753f-6fc3-7c994fc38654',
+            s3Key: 'plugins/bit-bi/account/site/winner.sql',
+          },
+          occurredAt: '2025-12-27T10:30:02Z',
+        },
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    }
+
+    vi.mocked(pluginLogsQueries.usePluginLogsQuery).mockReturnValue({
+      data: logsWithAdopted,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any)
+
+    renderWithProvider(<PluginLogsTab pluginId="bit-bi" />)
+
+    expect(screen.getByText(/sql already generated/i)).toBeInTheDocument()
+  })
 })

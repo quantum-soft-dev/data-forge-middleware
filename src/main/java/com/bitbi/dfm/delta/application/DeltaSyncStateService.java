@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.CheckpointBuildAbort;
 import com.bitbi.dfm.delta.domain.CheckpointRebuildOutcome;
 import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
@@ -208,6 +209,30 @@ public class DeltaSyncStateService {
     public void recordRebuildOutcome(UUID siteId, CheckpointRebuildOutcome outcome, String message) {
         repository.findBySiteId(siteId).ifPresent(state -> {
             state.recordRebuildOutcome(outcome, message);
+            repository.save(state);
+        });
+    }
+
+    /**
+     * Record that a scheduled checkpoint build aborted before writing anything (issue #224).
+     *
+     * <p>No-op when the site has no sync-state row, and no-op when {@code lastCheckpointSeq} is
+     * already past zero: the abort columns exist to tell "the first build is not due yet" from
+     * "it already ran and produced nothing", and a site that has a checkpoint is past that. A
+     * healthy build never calls this — it advances the pointer instead.</p>
+     *
+     * @param siteId  site identifier
+     * @param abort   why the visit produced nothing
+     * @param message operator-facing explanation (truncated by the entity), or null when the
+     *                outcome needs none
+     */
+    @Transactional
+    public void recordCheckpointBuildAbort(UUID siteId, CheckpointBuildAbort abort, String message) {
+        repository.findBySiteId(siteId).ifPresent(state -> {
+            if (state.getLastCheckpointSeq() != 0L) {
+                return;
+            }
+            state.recordCheckpointBuildAbort(abort, message);
             repository.save(state);
         });
     }

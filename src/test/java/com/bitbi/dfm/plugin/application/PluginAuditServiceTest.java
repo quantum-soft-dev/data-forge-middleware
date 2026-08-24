@@ -156,4 +156,35 @@ class PluginAuditServiceTest {
             assertThat(savedLog.getErrorMessage()).hasSize(500);
         }
     }
+
+    @Nested
+    @DisplayName("SQL Generation Adopted")
+    class SqlGenerationAdopted {
+
+        @Test
+        @DisplayName("Should log SQL_GENERATION_ADOPTED naming the adopted generation and the winner's key (#260)")
+        void shouldLogSqlGenerationAdoptedWithGenerationAndWinnerKey() {
+            UUID generationId = UUID.randomUUID();
+            String winnerS3Key = "plugins/bit-bi/account/site/winner.sql";
+            long durationMs = 900;
+
+            auditService.logSqlGenerationAdopted(
+                    PLUGIN_ID, ACCOUNT_ID, BATCH_ID, SITE_ID, generationId, winnerS3Key, durationMs);
+
+            verify(auditLogRepository).save(auditLogCaptor.capture());
+            PluginAuditLog savedLog = auditLogCaptor.getValue();
+
+            assertThat(savedLog.getPluginId()).isEqualTo(PLUGIN_ID);
+            assertThat(savedLog.getAccountId()).isEqualTo(ACCOUNT_ID);
+            assertThat(savedLog.getActionType()).isEqualTo(PluginActionType.SQL_GENERATION_ADOPTED);
+            assertThat(savedLog.isSuccess()).isTrue();
+            assertThat(savedLog.getDurationMs()).isEqualTo(durationMs);
+
+            Map<String, Object> metadata = savedLog.getMetadata();
+            assertThat(metadata).containsEntry("batchId", BATCH_ID.toString());
+            assertThat(metadata).containsEntry("siteId", SITE_ID.toString());
+            assertThat(metadata).containsEntry("generationId", generationId.toString());
+            assertThat(metadata).containsEntry("s3Key", winnerS3Key);
+        }
+    }
 }

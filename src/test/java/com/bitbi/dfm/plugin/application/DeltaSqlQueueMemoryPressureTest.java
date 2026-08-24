@@ -8,6 +8,7 @@ import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -28,6 +29,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.contains;
@@ -108,7 +110,7 @@ class DeltaSqlQueueMemoryPressureTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                meterRegistry);
+                meterRegistry, 60, 7, new ApplicationShutdownSignal());
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -128,7 +130,7 @@ class DeltaSqlQueueMemoryPressureTest {
         when(batch.getAccountId()).thenReturn(ACCOUNT_ID);
 
         segment = ChangelogSegment.create(SITE_ID, BATCH_ID, 1L, 9L, 9L, "hash", "delta/x", "DELTA", Map.of());
-        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(segment));
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
 
         when(persistence.existsByBatchId(BATCH_ID)).thenReturn(true);
         when(persistence.loadBatchData(eq(BATCH_ID), anyBoolean())).thenReturn(
@@ -151,6 +153,12 @@ class DeltaSqlQueueMemoryPressureTest {
         // once the pod's heap recovers. This is the whole of #181 at this level.
         assertThat(segment.getPluginSqlAt()).isNull();
         verify(segmentRepository, never()).save(any());
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
+        // and it spends no attempt: the refusal belongs to the pod, not to this segment, so it must
+        // never walk a segment towards the poisoned report (#243, the #150/#162/#178 rule that a
+        // transient overload does not become a permanent verdict)
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
         // and nothing was generated or written on the way out
         verifyNoInteractions(deltaStrategy);
         verify(s3SqlFileStorageService, never()).storeSqlFile(any(), any(), any());
@@ -197,8 +205,8 @@ class DeltaSqlQueueMemoryPressureTest {
 
         // Then
         assertThat(processed).isTrue();
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
         assertThat(meterRegistry.counter("sql.generation.aborted.memory_pressure").count()).isEqualTo(0.0);
     }
 }

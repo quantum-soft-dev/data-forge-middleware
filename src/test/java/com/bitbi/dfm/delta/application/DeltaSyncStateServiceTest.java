@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.RebaselineCancellation;
+import com.bitbi.dfm.delta.domain.CheckpointBuildAbort;
 import com.bitbi.dfm.delta.domain.CheckpointRebuildOutcome;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
@@ -257,6 +258,44 @@ class DeltaSyncStateServiceTest {
     void recordRebuildOutcomeIsNoOpWhenRowAbsent() {
         when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
         service.recordRebuildOutcome(SITE, CheckpointRebuildOutcome.COMPLETED, null);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void recordCheckpointBuildAbortStampsASiteThatStillHasNoCheckpoint() {
+        // Issue #224: the first nightly visit that produces nothing is what distinguishes
+        // "not due yet" from "already tried and failed". last_checkpoint_seq is still 0.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(1_155L);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.recordCheckpointBuildAbort(SITE, CheckpointBuildAbort.FOLD_TOO_LARGE, "fold outgrew the budget");
+
+        assertEquals(CheckpointBuildAbort.FOLD_TOO_LARGE, state.getLastCheckpointBuildAbort());
+        assertEquals("fold outgrew the budget", state.getLastCheckpointBuildMessage());
+        assertNotNull(state.getLastCheckpointBuildAbortAt());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void recordCheckpointBuildAbortDoesNotWriteOnceACheckpointExists() {
+        // DoD: no write on a healthy (or already-checkpointed) site. The lag surface already
+        // distinguishes a later abort; touching these columns would be a write the first-checkpoint
+        // UI does not read.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordCheckpoint(80L);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.recordCheckpointBuildAbort(SITE, CheckpointBuildAbort.FAILED, "boom");
+
+        assertNull(state.getLastCheckpointBuildAbort());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void recordCheckpointBuildAbortIsNoOpWhenRowAbsent() {
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
+        service.recordCheckpointBuildAbort(SITE, CheckpointBuildAbort.DEFERRED, "budget held");
         verify(repository, never()).save(any());
     }
 

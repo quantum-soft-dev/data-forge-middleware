@@ -45,7 +45,9 @@ import java.util.function.Supplier;
  *       directory was full, tagged {@code writer=checkpoint_frame|checkpoint_table|batch_artifact}.
  *       Transient by nature — it says the directory was busy, not that the artifact was too big —
  *       so it is its own counter rather than a value on any of the meters below, neither the
- *       permanent {@code builds.aborted} nor the per-table {@code tables.unmaterialized}</li>
+ *       permanent {@code builds.aborted} nor the per-table {@code tables.unmaterialized}. Since
+ *       issue #193 a {@code batch_artifact} refusal can also mean the writer hit the checkpoint
+ *       reserved share rather than the whole directory</li>
  *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
@@ -65,6 +67,11 @@ import java.util.function.Supplier;
  *       was still pending, same {@code reason} tag, registered at zero (issue #212)</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
+ *   <li>{@code delta.egress.errors} — segment egress attempts that failed and were deferred with a
+ *       backoff, the {@code sql.generation.errors} twin (issue #243), registered at zero</li>
+ *   <li>{@code delta.egress.segments.poisoned} — the subset of those failures on a segment that has
+ *       failed at least {@code delta.egress.poison-after-attempts} times: the standing signal that
+ *       one segment needs an operator, since nothing discards it (issue #243)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
  *       {@code download|write|upload}</li>
  *   <li>{@code delta.batch-parquet.artifacts} — completed-batch artifacts settled, tagged
@@ -109,6 +116,8 @@ public class DeltaMetrics {
     private final Counter sessionOverflowsBytes;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
+    private final Counter egressErrors;
+    private final Counter egressPoisoned;
     private final Counter nonFiniteDecimals;
     private final Counter malformedDecimals;
     private final Counter checkpointNoSchema;
@@ -159,6 +168,14 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressErrors = Counter.builder("delta.egress.errors")
+                .description("Segment egress attempts that failed — the twin of "
+                        + "sql.generation.errors, one count per deferred attempt")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressPoisoned = Counter.builder("delta.egress.segments.poisoned")
+                .description("Failed egress attempts on a segment that has now failed at least "
+                        + "delta.egress.poison-after-attempts times")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.nonFiniteDecimals = unrepresentableDecimals(registry, "non_finite");
         this.malformedDecimals = unrepresentableDecimals(registry, "malformed");
@@ -716,11 +733,44 @@ public class DeltaMetrics {
         egressSegments.increment();
     }
 
+    /**
+     * One segment's egress attempt failed and the segment was deferred (issue #243).
+     *
+     * <p>The {@code sql.generation.errors} twin the delta-SQL queue has had since 026, and the
+     * queue-level series the egress side had none of: a failure here leaves the segment as the
+     * durable queue entry, so the work is not lost — but nothing said it had happened. Every
+     * failure is one count, so this is an arrival rate; a segment failing for ever contributes one
+     * count per cooldown, which past the doubling cap is one an hour.</p>
+     *
+     * <p>Registered at zero, so an alert can predate the first failure.</p>
+     */
+    public void egressFailed() {
+        egressErrors.increment();
+    }
+
+    /**
+     * A failed egress attempt on a segment that has now failed at least
+     * {@code delta.egress.poison-after-attempts} times (issue #243).
+     *
+     * <p>The standing "an operator has to act" signal, and deliberately a <b>subset</b> of
+     * {@link #egressFailed()} rather than a tag value on it: a passing S3 outage moves the errors
+     * series and clears, while a segment reaching the threshold is a declared schema that does not
+     * fit its data, an unreadable object or a ceiling set too low — and it is <em>not</em>
+     * discarded, so nothing else will ever raise its hand. Read it as a census rather than an
+     * arrival rate: the same segment counts again on each retry until the cause is fixed, the
+     * batch is deleted, or batch retention takes it ({@link #retentionPendingSegmentsDeleted}).</p>
+     */
+    public void egressSegmentPoisoned() {
+        egressPoisoned.increment();
+    }
+
     private static Counter unrepresentableDecimals(MeterRegistry registry, String reason) {
         Counter counter = Counter.builder("delta.parquet.unrepresentable-decimals")
                 .description("Decimal cells written as NULL because the value has no Parquet DECIMAL "
-                        + "representation: non_finite = NaN or +/-Infinity (legal in PostgreSQL), "
-                        + "malformed = a token BigDecimal cannot parse (issue #215)")
+                        + "representation: non_finite = NaN or +/-Infinity, legal in PostgreSQL and "
+                        + "nothing to repair here; the signed NaN spelling PostgreSQL rejects also "
+                        + "lands here and is deliberately not separated (issue #238); malformed = a "
+                        + "token BigDecimal cannot parse at all, a client defect (issue #215)")
                 .tag("reason", reason)
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         counter.increment(0.0);
@@ -736,6 +786,14 @@ public class DeltaMetrics {
      * PostgreSQL {@code numeric} holding {@code NaN} or {@code +/-Infinity}, which is legal at the
      * source and simply has no DECIMAL encoding — nothing to repair here — while {@code malformed}
      * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix.</p>
+     *
+     * <p>One spelling is on this series without being separable on it, deliberately: PostgreSQL
+     * rejects {@code '-NaN'::numeric}, so a signed NaN can only come from a client that formats
+     * non-faithfully — but the loss it causes is the ordinary one, a cell this pipeline cannot
+     * store, so it is counted as {@code non_finite} and nothing distinguishes it (issue #238).
+     * Neither series moves differently for it and no log line prints the token: a signal of its own
+     * would page an operator about a formatting quirk that costs nothing beyond the degradation
+     * already reported here.</p>
      *
      * <p>Read it as <b>cells</b>, not rows or files: one row with two such columns counts twice,
      * and the same source cell is counted again by each <em>Parquet</em> consumer that renders it

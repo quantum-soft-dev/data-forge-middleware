@@ -32,6 +32,15 @@ public enum PluginActionType {
     /** SQL generation failed with error */
     SQL_GENERATION_FAILED,
 
+    /**
+     * This attempt lost the unique claim ({@code uk_sql_gen_source_batch}) and adopted the
+     * winner's generation (issue #260). Terminal companion of {@link #SQL_GENERATION_STARTED} on
+     * that path — not a second {@link #SQL_GENERATION_COMPLETED} (that would name the object this
+     * attempt just deleted, issue #246) and not {@link #SQL_GENERATION_FAILED} (nothing failed;
+     * the batch has its SQL).
+     */
+    SQL_GENERATION_ADOPTED,
+
     /** Admin cleared all plugin history for an account */
     PLUGIN_HISTORY_CLEARED,
 

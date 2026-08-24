@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.presentation.dto;
 
 import com.bitbi.dfm.delta.application.DeltaSyncHealthService.SiteHealth;
+import com.bitbi.dfm.delta.domain.CheckpointBuildAbort;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -19,13 +20,18 @@ import java.util.UUID;
  * @param lastAppliedSeq    highest durably-applied change sequence (null without sync state)
  * @param lastCheckpointSeq latest materialized checkpoint sequence (null without sync state)
  * @param updatedAt         last sync-state update (null without sync state)
+ * @param lastCheckpointBuildAbort why the last scheduled visit of a site that still has no
+ *                            checkpoint produced nothing (issue #224); null without sync state
+ *                            or when no scheduled build has aborted on record. The site-list
+ *                            pill uses this to stop painting a failed first build as a wait
  */
 public record DeltaSyncHealthResponseDto(
         UUID siteId,
         boolean hasSyncState,
         Long lastAppliedSeq,
         Long lastCheckpointSeq,
-        Instant updatedAt
+        Instant updatedAt,
+        CheckpointBuildAbort lastCheckpointBuildAbort
 ) {
 
     /**
@@ -36,14 +42,15 @@ public record DeltaSyncHealthResponseDto(
      */
     public static DeltaSyncHealthResponseDto of(SiteHealth health) {
         if (health.state() == null) {
-            return new DeltaSyncHealthResponseDto(health.siteId(), false, null, null, null);
+            return new DeltaSyncHealthResponseDto(health.siteId(), false, null, null, null, null);
         }
         return new DeltaSyncHealthResponseDto(
                 health.siteId(),
                 true,
                 health.state().getLastAppliedSeq(),
                 health.state().getLastCheckpointSeq(),
-                health.state().getUpdatedAt().toInstant(ZoneOffset.UTC)
+                health.state().getUpdatedAt().toInstant(ZoneOffset.UTC),
+                health.state().getLastCheckpointBuildAbort()
         );
     }
 }
