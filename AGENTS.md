@@ -262,6 +262,56 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- batch-parquet-retention-hold: Changelog retention consults the third durable consumer of raw
+  segments — the completed-batch Parquet build — and the two windows it cannot cover now say so
+  instead of retrying into the same ending (issue #244, filed by review round 1 of PR #235 as
+  bucket C2 of #212 and pre-existing before it). `batch_parquet_artifacts` is the durable queue of
+  the 036/038 finalization and every attempt replays the batch's **raw** segments
+  (`findByBatchIdOrderByFirstSeq`) — on the worker's backoff retries, on a 039 admin requeue, on
+  the 037 legacy backfill — while `ChangelogRetentionService.prune` consulted only #212's two queue
+  markers. A batch checkpointed and pruned while its artifact row was still `PENDING`/`FAILED`
+  therefore lost its replay input permanently.
+  **The prune predicate is extended, and the unit of the decision is the batch.** A below-checkpoint
+  segment whose batch has an artifact row in `BatchParquetArtifactStatus.UNFINISHED`
+  (`PENDING`/`BUILDING`/`FAILED`) is held back, all of that batch's segments together — a *partial*
+  prune is worse than an empty one, since `expectedRowCount` is derived from the segments actually
+  loaded, so the row-count guard agrees with the truncation and the artifact publishes `READY`
+  silently missing rows. Counted on
+  **`delta.retention.segments.held-back{reason=pending_batch_parquet}`** (a third tag value,
+  registered at zero, nothing renamed) and named in the same per-site WARN. **Unlike #212's
+  hold-back this one is bounded by construction**: a row leaves `UNFINISHED` after
+  `delta.batch-parquet.max-attempts` (~1 h) as `READY` or `ABANDONED`, so it needs no age or count
+  bound of the prune's own. The census is **one query per pass** over the candidate batch ids
+  (`findBatchIdsWithStatusIn`), never one per segment, and the predicate travels **with** the
+  conditional DELETE as a `NOT EXISTS` — the #212 rule, against the race that is real here: a lazy
+  backfill or an admin requeue committing between retention's read and its delete creates exactly
+  the work row that needs those segments. A refused delete whose markers still read processed can
+  only have been refused by that predicate, and is counted as such.
+  **The two windows the hold-back deliberately does not cover are the DoD's second half, and they
+  are made explicit rather than closed.** `READY` and `ABANDONED` are terminal and prunable, so an
+  `ABANDONED` row requeued a week later (039) and the legacy backfill of a pre-036 batch with no
+  rows at all (037) can both find the segments gone — retention had nothing to consult when it ran.
+  Before this, the replay's `IllegalStateException("Batch has no published changelog segments")`
+  went into the generic catch as a *transient* failure: ~an hour of identical retries to reach the
+  same `ABANDONED`, with the reason buried under them. New `BatchSegmentsUnavailableException` is
+  classified **permanent** (abandoned on the first attempt, message naming retention, a wipe and a
+  re-baseline as the takers), the admin requeue refuses with **409** (`ArtifactUnproducibleException`,
+  a subclass of `ArtifactNotRequeueableException` so the route's existing catch and its documented
+  409 are unchanged) instead of queueing an attempt whose only ending is that abandon, and the
+  backfill logs the unproducible batch instead of answering 0 silently before the download 404s.
+  **The residual is documented rather than implied**: a batch pruned only *in part* while all its
+  rows were terminal can still be requeued or backfilled and renders only the surviving segments.
+  In none of these cases are the records lost — they are in the site's checkpoint; the per-batch
+  artifact is.
+  Tests first and mutation-proven: with the census disabled four unit tests go red, with the
+  permanent classification reverted one, with the requeue refusal removed one; the JPQL half of the
+  DELETE predicate — SQL inside `@Query`, which neither the compiler nor CI catches — is driven
+  against the real statement by an integration test, as #212's marker half already was. The
+  admin-queue contract fixture now seeds the batch's segment (with both queue markers stamped, so
+  the global site-blind queues cannot claim it) and gained the 409 case. No REST **route**, gRPC,
+  proto, DTO, migration (**V58 stays free**), configuration-key, metric-**name**, S3-key or frontend
+  change. See `docs/delta-client-v2-guide.md` ("Retention does not delete unprocessed work"),
+  `docs/cr-unified-batch-parquet.md`.
 - commit-gate-outside-ci: The per-task gate stopped lying in both directions (issue #278, folding
   **#279**; both found finishing #205/PR #255, both claimed `build.gradle.kts`, so they could never
   have run in parallel). **Part B — red where nothing is broken**:
