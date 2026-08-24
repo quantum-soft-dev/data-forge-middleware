@@ -362,19 +362,34 @@ src/main/java/com/bitbi/dfm/
 
 ### Time zones
 
-Every zone-independent `TIMESTAMP` column in this schema holds a **UTC wall clock**, and there are
-two ways to read one. They agree only while the JVM runs in UTC, so the deployed container declares
-that zone instead of inheriting it (`ENV TZ=UTC` in the `Dockerfile`, held by
-`ContainerTimeZoneContractTest`).
+Every zone-independent `TIMESTAMP` column in this schema holds a **UTC wall clock**, and nothing on
+the way in or out converts it. A `LocalDateTime` in memory is therefore always that same UTC wall
+clock — in an entity, after a raw-JDBC read, and in the DTOs, which serialize one with
+`toInstant(ZoneOffset.UTC)`.
 
-- **Through Hibernate** — an entity's `LocalDateTime` field. `spring.jpa.properties.hibernate.jdbc.time_zone: UTC`
-  makes Hibernate read a bound `LocalDateTime` as wall clock *in the JVM's zone* and store the same
-  instant in UTC; a read converts back. Write and read therefore cancel out, so this path is
-  self-consistent in any zone — but off UTC the value it returns is the JVM zone's wall clock, not
-  the column's.
-- **Through raw JDBC** (`JdbcTemplate` / `NamedParameterJdbcTemplate`) — no conversion: bind a
-  `LocalDateTime` directly (JDBC 4.2) and read with `rs.getObject(column, LocalDateTime.class)`.
-  This is the column's own value, i.e. UTC.
+- **Producing** — pass the zone explicitly: `LocalDateTime.now(ZoneOffset.UTC)`, and
+  `LocalDate.now(ZoneOffset.UTC)` where a date picks a monthly partition of `error_logs`. The
+  zero-argument `now()` reads the JVM's default zone without saying so and is banned in `src/`
+  (`TimestampProducerConventionTest`).
+- **Through Hibernate** — an entity's `LocalDateTime` field is stored and read verbatim.
+  `spring.jpa.properties.hibernate.jdbc.time_zone` is deliberately **not** set: it would make
+  Hibernate read a bound `LocalDateTime` as wall clock *in the JVM's zone* and store a different
+  instant, so the column would stop agreeing with every other path. Its absence is asserted, not
+  merely left to habit.
+- **Through raw JDBC** (`JdbcTemplate` / `NamedParameterJdbcTemplate`) — bind a `LocalDateTime`
+  directly (JDBC 4.2) and read with `rs.getObject(column, LocalDateTime.class)`.
+- **From the database's own clock** — a JPQL `SET … = CURRENT_TIMESTAMP` is evaluated by
+  PostgreSQL in the *session's* zone, which pgjdbc sets from the JVM's. That producer is UTC
+  because the JVM is, which is one of the two reasons the container still declares its zone rather
+  than inheriting it (`ENV TZ=UTC` in the `Dockerfile`, held by `ContainerTimeZoneContractTest`);
+  the other is that logs then read in UTC. Native SQL says it outright instead —
+  `clock_timestamp() AT TIME ZONE 'UTC'` in the Parquet Export catalog watermark.
+
+A field held as `Instant` needs no rule: its binding stores the UTC wall clock in every zone and
+never consulted `hibernate.jdbc.time_zone` at all. `TimestampRoundTripIntegrationTest` pins both
+that and the `LocalDateTime` round trip, running each case with the JVM's default zone set to UTC,
+`Asia/Jerusalem` and `America/Los_Angeles` in turn, so the guard cannot pass merely because CI
+happens to run in UTC.
 
 `java.sql.Timestamp` is banned in `src/` in either direction (`Timestamp.valueOf`, `new Timestamp(…)`,
 `rs.getTimestamp(…)`), because it is an instant and so silently carries the JVM's default zone.
@@ -384,11 +399,12 @@ gap: that local time does not exist, `Calendar` resolves it forward, and the val
 shifted by the transition. `RawTimestampReadConventionTest` holds the ban and carries the one
 deliberate exemption.
 
-The producing side is **not** yet uniform — parts of the code build a `LocalDateTime` with
-`LocalDateTime.now()` (the JVM zone, which the Hibernate conversion then makes correct) and parts
-with `LocalDateTime.now(ZoneOffset.UTC)` (already UTC, which that same conversion applies a second
-time). Off UTC those two disagree; under the UTC contract above they do not. Tracked separately —
-see issue #282.
+Until #282 the producing side was not uniform — parts of the code built a `LocalDateTime` with
+`LocalDateTime.now()` (the JVM zone, which the Hibernate conversion then made correct) and parts
+with `LocalDateTime.now(ZoneOffset.UTC)` (already UTC, which that same conversion applied a second
+time). Removing the conversion is what let one producer be right on every path at once. On a UTC
+JVM that conversion was the identity, so no stored row changed meaning and no data migration was
+needed; rows written by a JVM outside UTC — local development only — shift by that JVM's offset.
 
 ### Key Business Rules
 
