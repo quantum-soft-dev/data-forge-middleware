@@ -66,7 +66,7 @@ class BatchParquetQueueServiceIntegrationTest extends BaseIntegrationTest {
                                                 record_count, content_hash, s3_key, mode,
                                                 provisional, plugin_sql_at, egress_at)
                 VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, UUID.randomUUID(), SITE_ID, BATCH_ID,
                 "delta/" + SITE_ID + "/segments/" + UUID.randomUUID() + ".pb.gz");
     }

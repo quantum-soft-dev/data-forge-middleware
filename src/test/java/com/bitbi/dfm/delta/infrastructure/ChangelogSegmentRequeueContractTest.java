@@ -47,7 +47,7 @@ class ChangelogSegmentRequeueContractTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO changelog_segments (id, site_id, batch_id, first_seq, last_seq, record_count,
                                                 content_hash, s3_key, mode, provisional, plugin_sql_at)
-                VALUES (?, ?, ?, ?, ?, 10, 'hash', ?, ?, FALSE, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, 10, 'hash', ?, ?, FALSE, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, UUID.randomUUID(), SITE, BATCH, firstSeq, lastSeq,
                 "segments/" + firstSeq + ".pb.gz", mode);
     }

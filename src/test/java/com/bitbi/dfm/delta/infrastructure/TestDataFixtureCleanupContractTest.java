@@ -263,7 +263,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active,
                                              activated_at, baseline_batch_id)
-                VALUES (?, 'bit-bi', '{}'::jsonb, true, CURRENT_TIMESTAMP, ?)
+                VALUES (?, 'bit-bi', '{}'::jsonb, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?)
                 """, foreignAccount, guardBatch);
     }
 
@@ -284,7 +284,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
                 VALUES (?, ?, ?, 'x', 'Cleanup guard 226', true,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 'V2')
                 """, foreignSite, foreignAccount, FOREIGN_DOMAIN, FOREIGN_DOMAIN);
         // Both queue stamps are set, not just plugin_sql_at: findNextPendingEgress is as global and
         // as site-predicate-free as findNextPendingPluginSql (#175), so a pending row here can be
@@ -297,7 +297,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                                                 record_count, content_hash, s3_key, mode,
                                                 provisional, plugin_sql_at, egress_at)
                 VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, strandedSegment, foreignSite, guardBatch,
                 "delta/" + foreignSite + "/segments/1.pb.gz");
     }
@@ -333,7 +333,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at)
                 VALUES (?, ?, ?, 'COMPLETED', 'cleanup-guard-226/', 0, 0, false,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, guardBatch, SEEDED_ACCOUNT, SEEDED_SITE);
     }
 
@@ -341,7 +341,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
     private void insertForeignAccount() {
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-                VALUES (?, ?, 'Cleanup guard 226', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, 'Cleanup guard 226', true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, foreignAccount, "cleanup-guard-226@" + FOREIGN_DOMAIN);
     }
 
@@ -357,7 +357,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at)
                 VALUES (?, ?, ?, 'COMPLETED', 'cleanup-guard-228-account/', 0, 0, false,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, mismatchedAccountBatch, SEEDED_ACCOUNT, foreignSite);
     }
 
@@ -387,7 +387,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
                 VALUES (?, ?, 'Cleanup guard 228 test.local', true,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, testLocalAccount, "228-" + testLocalAccount + "@test.local");
         insertSite(testLocalSite, testLocalAccount,
                 "228-" + testLocalSite + ".test.local", "Cleanup guard 228 test.local");
@@ -395,13 +395,13 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at)
                 VALUES (?, ?, ?, 'COMPLETED', 'cleanup-guard-228-test-local/', 0, 0, false,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, testLocalBatch, testLocalAccount, testLocalSite);
         insertMarkedSegment(testLocalSegment, testLocalSite, testLocalBatch);
         jdbc.update("""
                 INSERT INTO site_sync_state (site_id, last_applied_seq, last_checkpoint_seq,
                                              schema_version, updated_at)
-                VALUES (?, 1, 0, 1, CURRENT_TIMESTAMP)
+                VALUES (?, 1, 0, 1, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, testLocalSite);
     }
 
@@ -417,7 +417,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at)
                 VALUES (?, ?, ?, 'COMPLETED', 'cleanup-guard-228-underscore/', 0, 0, false,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, underscoreBatch, SEEDED_ACCOUNT, underscoreSite);
         insertMarkedSegment(underscoreSegment, underscoreSite, underscoreBatch);
         jdbc.update("""
@@ -427,12 +427,12 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 """, underscoreErrorLog, underscoreBatch, underscoreSite);
         jdbc.update("""
                 INSERT INTO checkpoints (id, site_id, table_name, seq, row_count, created_at, updated_at)
-                VALUES (?, ?, 'cleanup_228', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, 'cleanup_228', 1, 0, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, underscoreCheckpoint, underscoreSite);
         jdbc.update("""
                 INSERT INTO site_sync_state (site_id, last_applied_seq, last_checkpoint_seq,
                                              schema_version, updated_at)
-                VALUES (?, 1, 0, 1, CURRENT_TIMESTAMP)
+                VALUES (?, 1, 0, 1, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, underscoreSite);
     }
 
@@ -441,7 +441,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
                 VALUES (?, ?, ?, 'x', ?, true,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 'V2')
                 """, id, accountId, domain, displayName, domain);
     }
 
@@ -457,7 +457,7 @@ class TestDataFixtureCleanupContractTest extends BaseIntegrationTest {
                                                 record_count, content_hash, s3_key, mode,
                                                 provisional, plugin_sql_at, egress_at)
                 VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, id, siteId, batchId, "delta/" + siteId + "/segments/" + id + ".pb.gz");
     }
 

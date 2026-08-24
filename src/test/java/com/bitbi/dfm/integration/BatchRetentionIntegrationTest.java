@@ -61,7 +61,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         String secretHash = "$2a$10$7EqJtq98hPqEX7fNZaFWoOhiN4Y7sJpX6dC";
 
         jdbcTemplate.update(
-                "INSERT INTO accounts (id, email, name, is_active, created_at, updated_at) VALUES (?,?,?,?,NOW(),NOW())",
+                "INSERT INTO accounts (id, email, name, is_active, created_at, updated_at) VALUES (?,?,?,?,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC')",
                 accountId,
                 "retention-test@example.com",
                 "Retention Test",
@@ -69,7 +69,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at, site_name) VALUES (?,?,?,?,?,?,?,NOW(),NOW(),?)",
+                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at, site_name) VALUES (?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC',?)",
                 siteId,
                 accountId,
                 compositeDomain,
@@ -84,7 +84,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         LocalDateTime recentStartedAt = LocalDateTime.now(ZoneOffset.UTC).minusDays(10);
 
         jdbcTemplate.update(
-                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',0)",
                 eligibleBatchId,
                 siteId,
                 accountId,
@@ -98,7 +98,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',0)",
                 inProgressBatchId,
                 siteId,
                 accountId,
@@ -112,7 +112,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',0)",
                 recentBatchId,
                 siteId,
                 accountId,
@@ -126,7 +126,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at) VALUES (?,?,?,?,?,?,?,NOW())",
+                "INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at) VALUES (?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC')",
                 fileId,
                 eligibleBatchId,
                 "data.csv",
@@ -137,7 +137,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO error_logs (id, site_id, batch_id, type, title, message, stack_trace, client_version, metadata, occurred_at, created_at) VALUES (?,?,?,?,?,?,?,?,?::jsonb,NOW(),NOW())",
+                "INSERT INTO error_logs (id, site_id, batch_id, type, title, message, stack_trace, client_version, metadata, occurred_at, created_at) VALUES (?,?,?,?,?,?,?,?,?::jsonb,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC')",
                 errorId,
                 siteId,
                 eligibleBatchId,
@@ -160,7 +160,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                     (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
                      checksum, attempt_count, created_at, updated_at, ready_at, version)
                 VALUES (?, ?, ?, 'orders', 'READY', ?, 1, 4, 'checksum', 1,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 0)
                 """, UUID.randomUUID(), siteId, eligibleBatchId, artifactKey);
         assertThat(checkpointStorage.exists(artifactKey)).isTrue();
         assertThat(checkpointStorage.exists(orphanAttemptKey)).isTrue();
@@ -198,7 +198,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         String secretHash = "$2a$10$7EqJtq98hPqEX7fNZaFWoOhiN4Y7sJpX6dC";
 
         jdbcTemplate.update(
-                "INSERT INTO accounts (id, email, name, is_active, created_at, updated_at) VALUES (?,?,?,?,NOW(),NOW())",
+                "INSERT INTO accounts (id, email, name, is_active, created_at, updated_at) VALUES (?,?,?,?,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC')",
                 accountId,
                 "baseline-test@example.com",
                 "Baseline Test",
@@ -206,7 +206,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at, site_name) VALUES (?,?,?,?,?,?,?,NOW(),NOW(),?)",
+                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at, site_name) VALUES (?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC',?)",
                 siteId,
                 accountId,
                 compositeDomain,
@@ -221,7 +221,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
 
         // Baseline batch (old but must not be deleted)
         jdbcTemplate.update(
-                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',0)",
                 baselineBatchId,
                 siteId,
                 accountId,
@@ -236,7 +236,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
 
         // Another eligible old batch (should be deleted)
         jdbcTemplate.update(
-                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW() AT TIME ZONE 'UTC',0)",
                 eligibleBatchId,
                 siteId,
                 accountId,
@@ -251,7 +251,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
 
         // account_plugins row referencing baseline batch
         jdbcTemplate.update(
-                "INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active, activated_at, created_at, updated_at, baseline_batch_id) VALUES (?,?,?::jsonb,?,?,NOW(),NOW(),?)",
+                "INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active, activated_at, created_at, updated_at, baseline_batch_id) VALUES (?,?,?::jsonb,?,?,NOW() AT TIME ZONE 'UTC',NOW() AT TIME ZONE 'UTC',?)",
                 accountId,
                 "bit-bi",
                 "{}",

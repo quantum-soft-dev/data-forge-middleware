@@ -74,7 +74,7 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
                 INSERT INTO batch_parquet_artifacts
                     (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
                      checksum, attempt_count, created_at, updated_at, ready_at, version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 0)
                 """, UUID.randomUUID(), SITE, BATCH, tableName, artifactStatus,
                 ready ? "egress/%s/batches/%s/%s.parquet".formatted(SITE, BATCH, tableName) : null,
                 ready ? 42L : null, ready ? 1234L : null, ready ? "abc123" : null,

@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +66,71 @@ class DatabaseClockConventionTest {
     private static final int GRANDFATHERED_THROUGH_VERSION = 57;
 
     /**
+     * This class's own path. Excluded from the test-source scan wholesale, which is the one
+     * file-wide carve-out here and the only one that can be earned rather than argued: its literals
+     * are the scanner's <em>input</em>, so every shape it bans has to appear in them, and asserting
+     * a count instead would make every future case of the scanner a guard edit. The exclusion is
+     * not taken on trust — {@link #theSelfExclusionIsEarned()} requires the file to still carry
+     * those fixtures and to have no way of reaching a database at all.
+     */
+    private static final String SELF =
+            "src/test/java/com/bitbi/dfm/config/DatabaseClockConventionTest.java";
+
+    /**
+     * One earned use of a session-zone clock in a test source: which file, which shape, how many
+     * occurrences, and why.
+     *
+     * @param path        repository-relative path, forward slashes
+     * @param shape       the one shape this file may name — any other still fails
+     * @param occurrences how many times it may name it — a second one is a new decision, not a
+     *                    consequence of this exemption
+     * @param reason      why the bare form is right here, read by whoever finds the failure
+     */
+    private record Exemption(String path, String shape, int occurrences, String reason) {
+    }
+
+    /**
+     * The bare clocks the test tree has decided are right where they stand (issue #287).
+     *
+     * <p>Scoped to a shape and a count rather than to a file, the {@code
+     * RawTimestampReadConventionTest} shape (#280): the reason each entry carries is about one
+     * line, and exempting the file would let the next fixture in with the guard green. An entry
+     * whose file no longer matches it exactly — shape gone, or named more often than it was earned
+     * — is itself a failure, since a stale exemption is how a ban quietly stops being one.</p>
+     *
+     * <p>Two kinds appear here and they are not the same argument. The first is a column that is
+     * {@code TIMESTAMPTZ}: for those the bare form is <em>correct</em> — the value is an instant,
+     * not a wall clock — and wrapping it would produce a {@code timestamp} that PostgreSQL then
+     * reinterprets in the session's zone on assignment, i.e. the fix would be the defect. The
+     * second is prose: a failure message that quotes the banned shape in order to talk about it,
+     * in a class that has no database access at all.</p>
+     */
+    private static final List<Exemption> ALLOWED = List.of(
+            new Exemption("src/test/java/com/bitbi/dfm/delta/infrastructure/TestDataFixtureCleanupContractTest.java",
+                    "CURRENT_TIMESTAMP", 2,
+                    "device_authorizations.expires_at and .created_at are TIMESTAMPTZ (V21), so the "
+                            + "bare form stores the right instant and the wrapped one would be "
+                            + "reinterpreted in the session zone on assignment"),
+            new Exemption("src/test/java/com/bitbi/dfm/config/ContainerTimeZoneContractTest.java",
+                    "CURRENT_TIMESTAMP", 1,
+                    "an assertion message quoting the shape it is about; the class reads the "
+                            + "Dockerfile and never touches a database"),
+            new Exemption("src/test/java/com/bitbi/dfm/config/ScheduledTaskTestProfileCadenceTest.java",
+                    "CURRENT_TIMESTAMP", 1,
+                    "an assertion message describing what test-data.sql seeds; the class reads "
+                            + "configuration and never touches a database"),
+            new Exemption("src/test/java/com/bitbi/dfm/config/TimestampProducerConventionTest.java",
+                    "now()", 2,
+                    "its own remedy text and one synthetic Java source it feeds to itself; that "
+                            + "now() is java.time's, not the database's, and the class never "
+                            + "touches a database"),
+            new Exemption("src/test/java/com/bitbi/dfm/integration/DatabaseClockUtcIntegrationTest.java",
+                    "CURRENT_TIMESTAMP", 1,
+                    "the one read that must stay bare: it measures how far the session's own clock "
+                            + "is from UTC, which is what gives that test its teeth (#286). It "
+                            + "reads and writes nothing"));
+
+    /**
      * Clock functions that return a {@code timestamptz} and are therefore correct once they are
      * read in UTC. Each is a violation unless {@code AT TIME ZONE 'UTC'} follows it.
      */
@@ -114,6 +180,88 @@ class DatabaseClockConventionTest {
                         + String.join("\n  ", violations.stream().map(Object::toString).toList())
                         + "\nTo fix: " + REMEDY)
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("no test fixture reads the clock in the database session's zone")
+    void noTestFixtureStampsATimestampInTheSessionZone() {
+        List<Violation> violations = new ArrayList<>();
+        for (Path file : testJavaSources()) {
+            String relative = relative(file);
+            violations.addAll(unexempted(relative, scanJava(relative, read(file))));
+        }
+        for (Path file : testSqlResources()) {
+            String relative = relative(file);
+            violations.addAll(unexempted(relative, scanSql(relative, read(file))));
+        }
+        assertThat(violations)
+                .withFailMessage(() -> "These fixtures seed rows from the database session's zone, "
+                        + "which pgjdbc takes from the JVM — so off UTC they disagree with the "
+                        + "values the application writes, and a test comparing the two is red or "
+                        + "green for a reason that is not its own (#278/#279):\n  "
+                        + String.join("\n  ", violations.stream().map(Object::toString).toList())
+                        + "\nTo fix: " + REMEDY)
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("an exemption whose file no longer needs it fails")
+    void everyExemptionIsStillEarned() {
+        for (Exemption exemption : ALLOWED) {
+            Path file = RunOwnedScratch.projectRoot().resolve(exemption.path());
+            assertThat(Files.exists(file))
+                    .withFailMessage("Exempted file %s does not exist — drop the entry", exemption.path())
+                    .isTrue();
+            long found = scanJava(exemption.path(), read(file)).stream()
+                    .filter(v -> v.shape().equals(exemption.shape()))
+                    .count();
+            assertThat(found)
+                    .withFailMessage("%s names %s %d time(s); the exemption budgets %d. Fewer means "
+                                    + "the exemption is stale and must be removed; more means a new "
+                                    + "use nobody decided on. The budgeted one is there because: %s",
+                            exemption.path(), exemption.shape(), found, exemption.occurrences(),
+                            exemption.reason())
+                    .isEqualTo(exemption.occurrences());
+        }
+    }
+
+    @Test
+    @DisplayName("the scan's own file is excluded only while it earns it")
+    void theSelfExclusionIsEarned() {
+        String self = read(RunOwnedScratch.projectRoot().resolve(SELF));
+        assertThat(scanJava(SELF, self))
+                .as("this class is excluded because its literals are the scanner's own fixtures; "
+                        + "an exclusion over a file that no longer carries them is dead weight "
+                        + "hiding whatever is written there next")
+                .isNotEmpty();
+        assertThat(codeOutsideLiterals(self))
+                .as("the exclusion rests on this class being unable to reach a database, so its "
+                        + "literals cannot seed a row however they are written; the moment it "
+                        + "gains one, the exclusion has to go and the fixtures with it. Read "
+                        + "outside comments and string literals, because this very assertion — and "
+                        + "the Javadoc explaining the scan — name those types in order to talk "
+                        + "about them")
+                .doesNotContain("JdbcTemplate")
+                .doesNotContain("EntityManager")
+                .doesNotContain("DataSource")
+                .doesNotContain("@Sql");
+    }
+
+    @Test
+    @DisplayName("an exemption covers its own shape and nothing else in the same file")
+    void anExemptionIsScopedToItsShapeAndCount() {
+        // Driven by a synthetic exemption rather than by ALLOWED.get(0): what is asserted is the
+        // scoping rule, which must hold whatever the real list happens to contain today.
+        Exemption exemption = new Exemption("X.java", "CURRENT_TIMESTAMP", 1, "synthetic");
+        List<Violation> found = List.of(
+                new Violation(exemption.path(), 1, exemption.shape()),
+                new Violation(exemption.path(), 2, exemption.shape()),
+                new Violation(exemption.path(), 3, "now()"));
+        assertThat(unexempted(List.of(exemption), exemption.path(), found))
+                .as("the exemption spends its single budgeted occurrence on line 1 and covers "
+                        + "neither a second use of the same shape nor a different shape")
+                .containsExactly(new Violation(exemption.path(), 2, exemption.shape()),
+                        new Violation(exemption.path(), 3, "now()"));
     }
 
     @Test
@@ -329,6 +477,63 @@ class DatabaseClockConventionTest {
             }
         }
         return line;
+    }
+
+    /** {@code source} with its comments removed and its string literals blanked. */
+    private static String codeOutsideLiterals(String source) {
+        AsyncExecutorQualifierTest.Stripped stripped = AsyncExecutorQualifierTest.strip(source);
+        char[] code = stripped.code().toCharArray();
+        boolean[] insideLiteral = stripped.insideLiteral();
+        for (int i = 0; i < code.length; i++) {
+            if (insideLiteral[i]) {
+                code[i] = ' ';
+            }
+        }
+        return new String(code);
+    }
+
+    /** The violations of {@code path} that no entry of {@link #ALLOWED} accounts for. */
+    private static List<Violation> unexempted(String path, List<Violation> found) {
+        return unexempted(ALLOWED, path, found);
+    }
+
+    /** The violations of {@code path} that no exemption accounts for, earliest first. */
+    private static List<Violation> unexempted(List<Exemption> allowed, String path, List<Violation> found) {
+        Map<String, Integer> budget = new LinkedHashMap<>();
+        for (Exemption exemption : allowed) {
+            if (exemption.path().equals(path)) {
+                budget.merge(exemption.shape(), exemption.occurrences(), Integer::sum);
+            }
+        }
+        List<Violation> remaining = new ArrayList<>();
+        for (Violation violation : found.stream().sorted(Comparator.comparingInt(Violation::line)).toList()) {
+            Integer left = budget.get(violation.shape());
+            if (left != null && left > 0) {
+                budget.put(violation.shape(), left - 1);
+                continue;
+            }
+            remaining.add(violation);
+        }
+        return remaining;
+    }
+
+    private static List<Path> testJavaSources() {
+        List<Path> files = new ArrayList<>(walk(
+                RunOwnedScratch.projectRoot().resolve("src/test/java"), ".java"));
+        files.removeIf(file -> relative(file).equals(SELF));
+        assertThat(files)
+                .withFailMessage("No test sources found — the scan has gone blind")
+                .hasSizeGreaterThan(100);
+        return files;
+    }
+
+    private static List<Path> testSqlResources() {
+        List<Path> files = walk(RunOwnedScratch.projectRoot().resolve("src/test/resources"), ".sql");
+        assertThat(files)
+                .withFailMessage("No test SQL resources found — the scan has gone blind; "
+                        + "test-data.sql is the fixture every integration class runs")
+                .isNotEmpty();
+        return files;
     }
 
     private static List<Path> productionJavaSources() {

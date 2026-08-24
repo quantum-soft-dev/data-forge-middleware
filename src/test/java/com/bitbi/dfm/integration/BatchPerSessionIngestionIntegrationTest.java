@@ -183,7 +183,7 @@ class BatchPerSessionIngestionIntegrationTest extends BaseIntegrationTest {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, id, "029-" + tag + "-" + id + "@test.local", "029 " + tag);
         return id;
     }
@@ -193,7 +193,7 @@ class BatchPerSessionIngestionIntegrationTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
-                VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
+                VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 'V2')
                 """, id, accountId, "029-" + tag + "-" + id + ".test.local", "029 " + tag,
                 "029-" + tag + "-" + id);
         return id;

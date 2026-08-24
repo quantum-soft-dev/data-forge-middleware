@@ -65,7 +65,7 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
      */
     private void expireToken(String opaqueToken) throws Exception {
         int updated = jdbcTemplate.update(
-                "UPDATE refresh_tokens SET expires_at = now() - interval '1 day' WHERE token_hash = ?",
+                "UPDATE refresh_tokens SET expires_at = now() AT TIME ZONE 'UTC' - interval '1 day' WHERE token_hash = ?",
                 sha256Hex(opaqueToken));
         org.assertj.core.api.Assertions.assertThat(updated).isEqualTo(1);
     }
@@ -294,7 +294,7 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
         for (String legacy : java.util.List.of(legacyToken, otherLegacyToken)) {
             jdbcTemplate.update("""
                     INSERT INTO refresh_tokens (id, site_id, token_hash, expires_at, created_at, revoked_at)
-                    VALUES (gen_random_uuid(), ?, ?, now() + interval '90 days', now(), now())
+                    VALUES (gen_random_uuid(), ?, ?, now() AT TIME ZONE 'UTC' + interval '90 days', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
                     """, STORE_03_SITE_ID, sha256Hex(legacy));
         }
 

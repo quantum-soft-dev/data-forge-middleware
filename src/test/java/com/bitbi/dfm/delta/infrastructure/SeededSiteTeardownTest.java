@@ -168,19 +168,19 @@ class SeededSiteTeardownTest extends BaseIntegrationTest {
     private void seedAccountSiteBatch() {
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-                VALUES (?, ?, 'Teardown guard 265', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, 'Teardown guard 265', true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, account, "teardown-guard-265@" + FOREIGN_DOMAIN);
         jdbc.update("""
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
                 VALUES (?, ?, ?, 'x', 'Teardown guard 265', true,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 'V2')
                 """, site, account, FOREIGN_DOMAIN, FOREIGN_DOMAIN);
         jdbc.update("""
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at)
                 VALUES (?, ?, ?, 'COMPLETED', 'teardown-guard-265/', 0, 0, false,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, batch, account, site);
     }
 
@@ -194,7 +194,7 @@ class SeededSiteTeardownTest extends BaseIntegrationTest {
                                                 record_count, content_hash, s3_key, mode,
                                                 provisional, plugin_sql_at, egress_at)
                 VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, segment, site, batch, "delta/" + site + "/segments/" + segment + ".pb.gz");
     }
 
@@ -202,19 +202,19 @@ class SeededSiteTeardownTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
                 VALUES (?, ?, 'Teardown guard 265 activation', true,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, foreignActivationAccount, "teardown-guard-265-act@" + FOREIGN_DOMAIN);
         jdbc.update("""
                 INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active,
                                              activated_at, baseline_batch_id)
-                VALUES (?, 'bit-bi', '{}'::jsonb, true, CURRENT_TIMESTAMP, ?)
+                VALUES (?, 'bit-bi', '{}'::jsonb, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?)
                 """, foreignActivationAccount, batch);
     }
 
     private void insertErrorLog() {
         jdbc.update("""
                 INSERT INTO error_logs (id, batch_id, site_id, type, title, message, occurred_at)
-                VALUES (?, ?, ?, 'TeardownGuard', 'cleanup 265', 'batch_id cascade probe', now())
+                VALUES (?, ?, ?, 'TeardownGuard', 'cleanup 265', 'batch_id cascade probe', now() AT TIME ZONE 'UTC')
                 """, errorLog, batch, site);
     }
 

@@ -47,7 +47,7 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
         jdbc.update("DELETE FROM site_sync_state WHERE site_id IN (?, ?)", OWNED_SITE, FOREIGN_SITE);
         jdbc.update("""
                 INSERT INTO site_sync_state (site_id, last_applied_seq, last_checkpoint_seq, schema_version, updated_at)
-                VALUES (?, 100, 50, 1, CURRENT_TIMESTAMP)
+                VALUES (?, 100, 50, 1, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, OWNED_SITE);
     }
 
@@ -59,14 +59,14 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
 
     private void closeActiveSession() {
         jdbc.update("""
-                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
                 WHERE site_id = ? AND status = 'IN_PROGRESS'
                 """, OWNED_SITE);
     }
 
     /** Pretend GetSyncState has already handed NEED_REBASELINE to the client. */
     private void markClientNotified() {
-        jdbc.update("UPDATE site_sync_state SET rebaseline_notified_at = CURRENT_TIMESTAMP WHERE site_id = ?",
+        jdbc.update("UPDATE site_sync_state SET rebaseline_notified_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC' WHERE site_id = ?",
                 OWNED_SITE);
     }
 
@@ -184,8 +184,8 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
         setOpenSessionMode("FULL_SNAPSHOT");
         // Well beyond batch.timeout.minutes and any container/JVM timezone skew.
         jdbc.update("""
-                UPDATE batches SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 days',
-                                   last_activity_at = CURRENT_TIMESTAMP - INTERVAL '2 days'
+                UPDATE batches SET started_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - INTERVAL '2 days',
+                                   last_activity_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - INTERVAL '2 days'
                 WHERE site_id = ? AND status = 'IN_PROGRESS'
                 """, OWNED_SITE);
 
