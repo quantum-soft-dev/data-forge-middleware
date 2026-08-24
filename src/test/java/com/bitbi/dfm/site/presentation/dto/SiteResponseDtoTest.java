@@ -25,7 +25,7 @@ class SiteResponseDtoTest {
         // Given
         UUID id = UUID.randomUUID();
         UUID accountId = UUID.randomUUID();
-        LocalDateTime createdAt = LocalDateTime.now();
+        LocalDateTime createdAt = LocalDateTime.now(ZoneOffset.UTC);
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(id);
@@ -63,7 +63,7 @@ class SiteResponseDtoTest {
         when(site.getDisplayName()).thenReturn("Secure Site");
         when(site.getIsActive()).thenReturn(true);
         when(site.getRetentionDays()).thenReturn(30);
-        when(site.getCreatedAt()).thenReturn(LocalDateTime.now());
+        when(site.getCreatedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         // Note: Site entity has clientSecretHash field which should NOT be exposed
 
         // When

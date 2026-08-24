@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -148,14 +149,14 @@ class UploadedFileTest {
     @DisplayName("Should set uploadedAt to current time")
     void shouldSetUploadedAtToCurrentTime() {
         // Given
-        LocalDateTime before = LocalDateTime.now().minusSeconds(1);
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1);
 
         // When
         UploadedFile file = UploadedFile.create(testBatchId, "file.csv", "path/",
                 1024L, "text/csv", testChecksum);
 
         // Then
-        LocalDateTime after = LocalDateTime.now().plusSeconds(1);
+        LocalDateTime after = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
         assertTrue(file.getUploadedAt().isAfter(before));
         assertTrue(file.getUploadedAt().isBefore(after));
     }

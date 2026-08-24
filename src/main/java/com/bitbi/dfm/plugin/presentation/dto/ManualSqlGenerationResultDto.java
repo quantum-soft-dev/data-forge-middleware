@@ -4,6 +4,7 @@ import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -88,7 +89,7 @@ public record ManualSqlGenerationResultDto(
                 0,
                 false,
                 reason,
-                LocalDateTime.now()
+                LocalDateTime.now(ZoneOffset.UTC)
         );
     }
 }

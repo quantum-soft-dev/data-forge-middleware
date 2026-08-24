@@ -8,6 +8,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -127,7 +128,7 @@ public class ErrorLog {
         Objects.requireNonNull(message, "Message cannot be null");
 
         UUID id = UUID.randomUUID();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         // Sanitize strings to remove null bytes (0x00) which are invalid in PostgreSQL UTF-8
         String sanitizedType = sanitizeString(type);
@@ -172,8 +173,8 @@ public class ErrorLog {
 
     @PrePersist
     protected void onCreate() {
-        if (occurredAt == null) occurredAt = LocalDateTime.now();
-        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (occurredAt == null) occurredAt = LocalDateTime.now(ZoneOffset.UTC);
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @Override

@@ -3,6 +3,7 @@ package com.bitbi.dfm.config;
 import com.bitbi.dfm.testsupport.RunOwnedScratch;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import java.time.ZoneOffset;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -69,13 +70,15 @@ class RawTimestampReadConventionTest {
      * guard green. An entry whose file no longer matches it exactly — shape gone, or named more
      * often than it was earned — is itself a failure, since a stale exemption is how a ban quietly
      * stops being one.</p>
+     *
+     * <p>Empty since #282. The one entry it carried was
+     * {@code ChangelogSegmentQueueMarkerClobberTest.asStored()}, which reapplied the Hibernate
+     * binding's JVM-zone conversion so a repository write could be compared with the raw column in
+     * any zone; removing {@code hibernate.jdbc.time_zone: UTC} made that conversion the identity
+     * and the helper is gone. A future entry restores the machinery below — see this class's own
+     * history for the shape.</p>
      */
-    private static final List<Exemption> ALLOWED = List.of(new Exemption(
-            "src/test/java/com/bitbi/dfm/delta/infrastructure/ChangelogSegmentQueueMarkerClobberTest.java",
-            "Timestamp.valueOf(...)", 1,
-            "asStored() models the Hibernate binding's own JVM-zone conversion on purpose, so that "
-                    + "a row written through the repository can be compared with the raw column in "
-                    + "any zone (#278, part B)."));
+    private static final List<Exemption> ALLOWED = List.of();
 
     /** The shapes that reach the JVM default zone without saying so. */
     private static final Map<String, Pattern> BANNED = new LinkedHashMap<>(Map.of(
@@ -148,17 +151,19 @@ class RawTimestampReadConventionTest {
     @Test
     @DisplayName("an exemption covers its own shape and nothing else in the same file")
     void anExemptionDoesNotCoverTheRestOfItsFile() {
-        assertThat(ALLOWED)
-                .withFailMessage("There is no exemption left to scope, so this test asserts nothing "
-                        + "— delete it together with the last entry rather than leaving it green")
-                .isNotEmpty();
-        Exemption exemption = ALLOWED.get(0);
+        // Driven by a synthetic exemption rather than by ALLOWED.get(0). The instruction this test
+        // used to carry — "delete it together with the last entry rather than leaving it green" —
+        // was about a test that asserts nothing once the list empties, which #282 did. Scoping is
+        // what a future entry will depend on, so it is pinned on its own instead of deleted.
+        Exemption exemption = new Exemption("X.java", "Timestamp.valueOf(...)", 1, "synthetic");
         List<Violation> found = List.of(
                 new Violation(exemption.path(), 1, exemption.shape()),
                 new Violation(exemption.path(), 2, exemption.shape()),
                 new Violation(exemption.path(), 3, "rs.getTimestamp(...)"));
-        assertThat(unexempted(exemption.path(), found))
+        assertThat(unexempted(List.of(exemption), exemption.path(), found))
                 .extracting(Violation::line)
+                .as("the exemption spends its single budgeted occurrence on line 1 and covers "
+                        + "neither a second one of the same shape nor a different shape")
                 .containsExactly(2, 3);
     }
 
@@ -185,7 +190,7 @@ class RawTimestampReadConventionTest {
                 class X {
                     void bad(java.sql.ResultSet rs) throws Exception {
                         rs.getTimestamp("a").toLocalDateTime();
-                        Timestamp.valueOf(java.time.LocalDateTime.now());
+                        Timestamp.valueOf(java.time.LocalDateTime.now(ZoneOffset.UTC));
                         Object t = new java.sql.Timestamp(0L);
                     }
                 }
@@ -194,10 +199,15 @@ class RawTimestampReadConventionTest {
                 .containsExactlyInAnyOrder("rs.getTimestamp(...)", "Timestamp.valueOf(...)", "new Timestamp(...)");
     }
 
-    /** The violations of {@code path} that no exemption accounts for, earliest first. */
+    /** The violations of {@code path} that no entry of {@link #ALLOWED} accounts for. */
     private static List<Violation> unexempted(String path, List<Violation> found) {
+        return unexempted(ALLOWED, path, found);
+    }
+
+    /** The violations of {@code path} that no exemption accounts for, earliest first. */
+    private static List<Violation> unexempted(List<Exemption> allowed, String path, List<Violation> found) {
         Map<String, Integer> budget = new LinkedHashMap<>();
-        for (Exemption exemption : ALLOWED) {
+        for (Exemption exemption : allowed) {
             if (exemption.path().equals(path)) {
                 budget.merge(exemption.shape(), exemption.occurrences(), Integer::sum);
             }

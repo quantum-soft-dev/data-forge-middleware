@@ -15,6 +15,7 @@ import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -162,8 +163,8 @@ class BatchHistoryServiceTest {
         when(projection.getSiteId()).thenReturn(site.getId());
         when(projection.getStatus()).thenReturn("COMPLETED");
         when(projection.getHasErrors()).thenReturn(false);
-        when(projection.getStartedAt()).thenReturn(LocalDateTime.now());
-        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
+        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(projection.getFileCount()).thenReturn(0);
         when(projection.getTotalSize()).thenReturn(0L);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
@@ -195,8 +196,8 @@ class BatchHistoryServiceTest {
         when(projection.getSiteId()).thenReturn(site.getId());
         when(projection.getStatus()).thenReturn("COMPLETED");
         when(projection.getHasErrors()).thenReturn(false);
-        when(projection.getStartedAt()).thenReturn(LocalDateTime.now());
-        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
+        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(projection.getFileCount()).thenReturn(0);
         when(projection.getTotalSize()).thenReturn(0L);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
@@ -226,8 +227,8 @@ class BatchHistoryServiceTest {
         when(projection.getSiteId()).thenReturn(site.getId());
         when(projection.getStatus()).thenReturn("COMPLETED");
         when(projection.getHasErrors()).thenReturn(false);
-        when(projection.getStartedAt()).thenReturn(LocalDateTime.now());
-        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
+        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(projection.getFileCount()).thenReturn(2);
         when(projection.getTotalSize()).thenReturn(2048L);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));

@@ -26,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -165,7 +166,7 @@ class BatchRetentionServiceTest {
         when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(1, List.of()));
 
         BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(siteId, null, null, LocalDateTime.now().minusDays(1), 10, false)
+                new BatchRetentionService.BatchCleanupRequest(siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false)
         );
 
         assertThat(summary.deletedBatches()).isEqualTo(1);
@@ -207,7 +208,7 @@ class BatchRetentionServiceTest {
 
         BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
                 new BatchRetentionService.BatchCleanupRequest(
-                        siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+                        siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
 
         assertThat(summary.deletedBatches()).isEqualTo(1);
         assertThat(summary.errors()).anyMatch(error -> error.contains("list denied"));
@@ -240,7 +241,7 @@ class BatchRetentionServiceTest {
 
         BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
                 new BatchRetentionService.BatchCleanupRequest(
-                        siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+                        siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
 
         assertThat(summary.deletedBatches()).isEqualTo(1);
         verify(s3FileStorageService).deleteObjects(List.of(legacyKey));
@@ -304,7 +305,7 @@ class BatchRetentionServiceTest {
 
         try (LogCapture capture = LogCapture.attachTo(BatchRetentionService.class)) {
             service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
-                    siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+                    siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
 
             assertThat(capture.messagesAt(Level.WARN))
                     .anyMatch(message -> message.contains("pending queue work")
@@ -334,7 +335,7 @@ class BatchRetentionServiceTest {
         when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
 
         service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
-                siteId, null, null, LocalDateTime.now().minusDays(1), 10, true));
+                siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, true));
 
         verify(segmentRepository, never()).countPendingQueueWorkByBatchId(any());
         assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
@@ -367,7 +368,7 @@ class BatchRetentionServiceTest {
 
         BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
                 new BatchRetentionService.BatchCleanupRequest(
-                        siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+                        siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
 
         assertThat(summary.errors()).isNotEmpty();
         assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")

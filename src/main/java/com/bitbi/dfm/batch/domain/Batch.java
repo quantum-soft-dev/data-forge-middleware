@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -126,7 +127,7 @@ public class Batch {
         Objects.requireNonNull(accountId, "AccountId cannot be null");
 
         UUID id = UUID.randomUUID();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         String s3Path = generateS3Path(accountId, siteId, now);
 
         Batch batch = new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
@@ -146,32 +147,32 @@ public class Batch {
     public void complete() {
         status.validateTransition(BatchStatus.COMPLETED);
         this.status = BatchStatus.COMPLETED;
-        this.completedAt = LocalDateTime.now();
+        this.completedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void completeWithWarnings() {
         status.validateTransition(BatchStatus.COMPLETED_WITH_WARNINGS);
         this.status = BatchStatus.COMPLETED_WITH_WARNINGS;
-        this.completedAt = LocalDateTime.now();
+        this.completedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void fail() {
         status.validateTransition(BatchStatus.FAILED);
         this.status = BatchStatus.FAILED;
         this.hasErrors = true;
-        this.completedAt = LocalDateTime.now();
+        this.completedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void cancel() {
         status.validateTransition(BatchStatus.CANCELLED);
         this.status = BatchStatus.CANCELLED;
-        this.completedAt = LocalDateTime.now();
+        this.completedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void markAsNotCompleted() {
         status.validateTransition(BatchStatus.NOT_COMPLETED);
         this.status = BatchStatus.NOT_COMPLETED;
-        this.completedAt = LocalDateTime.now();
+        this.completedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void incrementFileCount(long fileSize) {
@@ -192,7 +193,7 @@ public class Batch {
      * sweeper can distinguish a long-lived live session from a silently abandoned one.
      */
     public void touchActivity() {
-        this.lastActivityAt = LocalDateTime.now();
+        this.lastActivityAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public boolean isExpired(int timeoutMinutes) {
@@ -203,12 +204,12 @@ public class Batch {
         // session survives while a silent one still expires. v1 batches never touch activity, so
         // they keep the started_at-based timeout.
         LocalDateTime baseline = lastActivityAt != null ? lastActivityAt : startedAt;
-        return LocalDateTime.now().isAfter(baseline.plusMinutes(timeoutMinutes));
+        return LocalDateTime.now(ZoneOffset.UTC).isAfter(baseline.plusMinutes(timeoutMinutes));
     }
 
     @PrePersist
     protected void onCreate() {
-        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @Override

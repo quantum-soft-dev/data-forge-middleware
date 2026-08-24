@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -141,7 +142,7 @@ class PartitionManagerTest {
 
         // Then
         assertNotNull(nextPartitionDate);
-        LocalDate expectedDate = LocalDate.now().plusMonths(1);
+        LocalDate expectedDate = LocalDate.now(ZoneOffset.UTC).plusMonths(1);
         assertEquals(expectedDate.getYear(), nextPartitionDate.getYear());
         assertEquals(expectedDate.getMonth(), nextPartitionDate.getMonth());
     }
@@ -164,7 +165,7 @@ class PartitionManagerTest {
     void shouldCalculateRetentionCutoffDateCorrectly() {
         // Given
         int retentionMonths = 6;
-        LocalDate expectedCutoff = LocalDate.now().minusMonths(6);
+        LocalDate expectedCutoff = LocalDate.now(ZoneOffset.UTC).minusMonths(6);
 
         // When
         LocalDate cutoffDate = partitionManager.calculateRetentionCutoffDate(retentionMonths);
@@ -180,7 +181,7 @@ class PartitionManagerTest {
     void shouldCalculateRetentionCutoffFor12Months() {
         // Given
         int retentionMonths = 12;
-        LocalDate expectedCutoff = LocalDate.now().minusMonths(12);
+        LocalDate expectedCutoff = LocalDate.now(ZoneOffset.UTC).minusMonths(12);
 
         // When
         LocalDate cutoffDate = partitionManager.calculateRetentionCutoffDate(retentionMonths);

@@ -24,7 +24,7 @@ class FileUploadResponseDtoTest {
         // Given
         UUID id = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
-        LocalDateTime uploadedAt = LocalDateTime.now();
+        LocalDateTime uploadedAt = LocalDateTime.now(ZoneOffset.UTC);
 
         UploadedFile uploadedFile = mock(UploadedFile.class);
         when(uploadedFile.getId()).thenReturn(id);

@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -82,7 +83,7 @@ public class BatchRetentionService {
             int retentionDays = request.retentionDays() != null ? request.retentionDays() : site.getRetentionDays();
             LocalDateTime cutoff = request.olderThan() != null
                     ? request.olderThan()
-                    : LocalDateTime.now().minusDays(retentionDays);
+                    : LocalDateTime.now(ZoneOffset.UTC).minusDays(retentionDays);
 
             BatchCleanupSummary siteSummary = cleanupSite(site.getId(), cutoff, remaining, dryRun);
             summary.merge(siteSummary);

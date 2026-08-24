@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.domain.events;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -19,7 +20,7 @@ public record AccountDeactivatedEvent(
 ) implements DomainEvent {
 
     public AccountDeactivatedEvent(UUID accountId) {
-        this(UUID.randomUUID(), LocalDateTime.now(), accountId);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), accountId);
     }
 
     @Override

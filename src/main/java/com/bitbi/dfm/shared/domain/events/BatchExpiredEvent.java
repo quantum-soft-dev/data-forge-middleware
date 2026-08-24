@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.domain.events;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -23,7 +24,7 @@ public record BatchExpiredEvent(
      * @param accountId the account identifier (required for plugin event dispatch)
      */
     public BatchExpiredEvent(UUID batchId, UUID accountId) {
-        this(UUID.randomUUID(), LocalDateTime.now(), batchId, accountId);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), batchId, accountId);
     }
 
     /**
@@ -34,7 +35,7 @@ public record BatchExpiredEvent(
      */
     @Deprecated
     public BatchExpiredEvent(UUID batchId) {
-        this(UUID.randomUUID(), LocalDateTime.now(), batchId, null);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), batchId, null);
     }
 
     @Override

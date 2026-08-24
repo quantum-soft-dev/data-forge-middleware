@@ -234,7 +234,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
      */
     private boolean reclaimAbandonedBatch(UUID siteId) {
         try {
-            java.time.LocalDateTime cutoff = java.time.LocalDateTime.now()
+            java.time.LocalDateTime cutoff = java.time.LocalDateTime.now(ZoneOffset.UTC)
                     .minus(java.time.Duration.ofMillis(stagedTtlMillis));
             boolean reclaimed = batchLifecycleService.reclaimAbandonedBatch(siteId, cutoff);
             if (reclaimed) {

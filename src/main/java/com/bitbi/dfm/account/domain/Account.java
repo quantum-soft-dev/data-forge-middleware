@@ -7,6 +7,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -103,7 +104,7 @@ public class Account {
         validateName(name);
 
         UUID id = UUID.randomUUID();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         // Value Objects handle validation internally
         Phone phoneVO = Phone.of(phone);
@@ -144,7 +145,7 @@ public class Account {
         validateName(name);
 
         UUID id = UUID.randomUUID();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         // Value Objects handle validation internally
         Phone phoneVO = Phone.of(phone);
@@ -164,7 +165,7 @@ public class Account {
         Objects.requireNonNull(newName, "Name cannot be null");
         validateName(newName);
         this.name = newName.trim();
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -175,7 +176,7 @@ public class Account {
      */
     public void updatePhone(String newPhone) {
         this.phone = Phone.of(newPhone);
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -186,7 +187,7 @@ public class Account {
      */
     public void updateCompany(String newCompany) {
         this.company = Company.of(newCompany);
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -198,7 +199,7 @@ public class Account {
             throw new IllegalStateException("Account is already deactivated");
         }
         this.isActive = false;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         // Domain event: AccountDeactivatedEvent should be published
     }
 
@@ -210,7 +211,7 @@ public class Account {
             throw new IllegalStateException("Account is already active");
         }
         this.isActive = true;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -236,7 +237,7 @@ public class Account {
         }
 
         this.identityProviderUserId = identityProviderUserId;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -296,16 +297,16 @@ public class Account {
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) {
-            createdAt = LocalDateTime.now();
+            createdAt = LocalDateTime.now(ZoneOffset.UTC);
         }
         if (updatedAt == null) {
-            updatedAt = LocalDateTime.now();
+            updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         }
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @Override

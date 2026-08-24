@@ -134,7 +134,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         // rollback sufficient. (Asserting delivery directly would need an extra bean and therefore an
         // extra Spring context, which exhausts the shared Postgres connection limit in a full run.)
         UUID batchId = expiredBatch("events");
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
 
         assertThrows(OptimisticLockingFailureException.class, () ->
                 txTemplate.executeWithoutResult(tx -> {
@@ -153,7 +153,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         // 030/T06 regression sentinel — the version bump must not resurrect the original bug where
         // the sweeper reaps a batch a live session is still touching.
         UUID batchId = expiredBatch("live");
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
 
         batchLifecycleService.touchActivity(batchId); // the session speaks up first
 
@@ -167,7 +167,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         UUID batchId = expiredBatch("silent");
 
         assertTrue(batchLifecycleService.markBatchNotCompletedIfStillExpired(
-                        batchId, LocalDateTime.now().minusMinutes(60)),
+                        batchId, LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60)),
                 "a genuinely silent batch is still reclaimed");
         assertEquals(BatchStatus.NOT_COMPLETED, reload(batchId).getStatus());
     }
@@ -210,7 +210,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
 
     private void assertStaleTerminalWriteIsRejected(Consumer<Batch> transition, String tag) {
         UUID batchId = expiredBatch(tag);
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
 
         assertThrows(OptimisticLockingFailureException.class, () ->
                         txTemplate.executeWithoutResult(tx -> {

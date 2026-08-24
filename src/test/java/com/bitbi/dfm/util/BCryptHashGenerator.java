@@ -2,6 +2,7 @@ package com.bitbi.dfm.util;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import java.time.ZoneOffset;
 
 /**
  * Utility to generate BCrypt hashes for test data.
@@ -24,7 +25,7 @@ public class BCryptHashGenerator {
         };
 
         System.out.println("\n-- BCrypt hashes for test secrets:");
-        System.out.println("-- Generated on: " + java.time.LocalDateTime.now());
+        System.out.println("-- Generated on: " + java.time.LocalDateTime.now(ZoneOffset.UTC));
         System.out.println("-- Copy these hashes to test-data.sql\n");
 
         for (String secret : secrets) {

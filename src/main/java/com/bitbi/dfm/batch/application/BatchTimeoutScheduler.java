@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -56,7 +57,7 @@ public class BatchTimeoutScheduler {
     public void checkExpiredBatches() {
         logger.debug("Running batch timeout check (timeout: {} minutes)", timeoutMinutes);
 
-        LocalDateTime cutoffTime = LocalDateTime.now().minusMinutes(timeoutMinutes);
+        LocalDateTime cutoffTime = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(timeoutMinutes);
         List<Batch> expiredBatches = batchRepository.findExpiredBatches(cutoffTime);
 
         if (expiredBatches.isEmpty()) {

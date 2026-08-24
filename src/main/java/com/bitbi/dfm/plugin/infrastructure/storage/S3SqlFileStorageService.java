@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -230,7 +231,7 @@ public class S3SqlFileStorageService {
      * (026); without it the later file silently overwrites the earlier one.</p>
      */
     private String generateS3Key(UUID accountId, UUID siteId) {
-        String datetime = LocalDateTime.now().format(PATH_DATETIME_FORMATTER);
+        String datetime = LocalDateTime.now(ZoneOffset.UTC).format(PATH_DATETIME_FORMATTER);
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         return String.format("plugins/bit-bi/%s/%s/%s_%s.sql",
                 accountId, siteId, datetime, suffix);

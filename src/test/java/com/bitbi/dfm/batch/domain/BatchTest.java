@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,14 +30,14 @@ class BatchTest {
     @DisplayName("Should set lastActivityAt to now on touchActivity")
     void shouldTouchActivityUpdateLastActivityAt() {
         Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
-        LocalDateTime before = LocalDateTime.now().minusSeconds(1);
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1);
 
         batch.touchActivity();
 
         assertThat(batch.getLastActivityAt())
                 .isNotNull()
                 .isAfter(before)
-                .isBeforeOrEqualTo(LocalDateTime.now().plusSeconds(1));
+                .isBeforeOrEqualTo(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1));
     }
 
     @Test
@@ -71,7 +72,7 @@ class BatchTest {
 
     /** Old-started IN_PROGRESS batch via the protected all-args constructor (same package). */
     private static Batch startedMinutesAgo(int minutes) {
-        LocalDateTime startedAt = LocalDateTime.now().minusMinutes(minutes);
+        LocalDateTime startedAt = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(minutes);
         return new Batch(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                 BatchStatus.IN_PROGRESS, "path/", 0, 0L, false, startedAt, null, startedAt);
     }

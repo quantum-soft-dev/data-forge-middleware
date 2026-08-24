@@ -23,6 +23,7 @@ import org.springframework.test.context.event.RecordApplicationEvents;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -150,9 +151,9 @@ class BatchPerSessionIngestionIntegrationTest extends BaseIntegrationTest {
     @Test
     void expiredBatchQueryUsesLastActivityWithStartedAtFallback() {
         // One site per batch — "one active batch per site" is enforced by a partial unique index.
-        // Raw-JDBC seeding must use UTC wall-clocks: hibernate.jdbc.time_zone=UTC shifts every
-        // JPA-bound timestamp (including the query's cutoff parameter), while JdbcTemplate writes
-        // wall-clocks verbatim.
+        // The UTC wall clock is what every write path stores since #282 — this raw-JDBC seed, the
+        // JPA-bound cutoff below, and the production stamps alike — so seeding and querying agree
+        // in any JVM zone rather than only in UTC.
         UUID accountId = freshAccount("sweeper");
         LocalDateTime dbNow = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
@@ -165,7 +166,7 @@ class BatchPerSessionIngestionIntegrationTest extends BaseIntegrationTest {
         UUID legacyFresh = insertInProgressBatch(accountId, freshV2Site(accountId, "sw-d"),
                 dbNow.minusMinutes(30), null);
 
-        List<UUID> expired = batchRepository.findExpiredBatches(LocalDateTime.now().minusMinutes(60)).stream()
+        List<UUID> expired = batchRepository.findExpiredBatches(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60)).stream()
                 .map(Batch::getId)
                 .filter(id -> List.of(liveOld, silent, legacySilent, legacyFresh).contains(id))
                 .toList();

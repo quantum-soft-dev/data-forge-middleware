@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.domain.events;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -18,7 +19,7 @@ public record BatchStartedEvent(
 ) implements DomainEvent {
 
     public BatchStartedEvent(UUID batchId, UUID siteId, UUID accountId) {
-        this(UUID.randomUUID(), LocalDateTime.now(), batchId, siteId, accountId);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), batchId, siteId, accountId);
     }
 
     @Override

@@ -27,7 +27,7 @@ class ErrorLogResponseDtoTest {
         UUID id = UUID.randomUUID();
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
-        LocalDateTime occurredAt = LocalDateTime.now();
+        LocalDateTime occurredAt = LocalDateTime.now(ZoneOffset.UTC);
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("key1", "value1");
 
@@ -75,7 +75,7 @@ class ErrorLogResponseDtoTest {
         when(errorLog.getStackTrace()).thenReturn(null);
         when(errorLog.getClientVersion()).thenReturn(null);
         when(errorLog.getMetadata()).thenReturn(null);
-        when(errorLog.getOccurredAt()).thenReturn(LocalDateTime.now());
+        when(errorLog.getOccurredAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
 
         // When
         ErrorLogResponseDto dto = ErrorLogResponseDto.fromEntity(errorLog);
@@ -105,7 +105,7 @@ class ErrorLogResponseDtoTest {
         when(errorLog.getStackTrace()).thenReturn("java.lang.NullPointerException at line 42");
         when(errorLog.getClientVersion()).thenReturn("2.0.0");
         when(errorLog.getMetadata()).thenReturn(metadata);
-        when(errorLog.getOccurredAt()).thenReturn(LocalDateTime.now());
+        when(errorLog.getOccurredAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
 
         // When
         ErrorLogResponseDto dto = ErrorLogResponseDto.fromEntity(errorLog);
