@@ -156,17 +156,22 @@ public class BatchParquetFinalizationService {
             return 0;
         }
         List<ChangelogSegment> segments = segmentRepository.findByBatchIdOrderByFirstSeq(batchId);
-        if (segments.isEmpty()) {
-            // Said out loud rather than answered with a silent 0 (issue #244): this is the legacy
-            // backfill's own version of "segments pruned, artifact unproducible", and the download
-            // that triggered it is about to answer 404 for a batch that looks perfectly complete.
-            log.warn("No completed-batch Parquet can be built for batch {}: its changelog segments "
-                            + "are gone (retention, a history wipe or a re-baseline) — the records "
-                            + "remain available through the site's checkpoint (issue #244)",
-                    batchId);
+        if (!segments.isEmpty() && !segments.get(0).getSiteId().equals(siteId)) {
             return 0;
         }
-        if (!segments.get(0).getSiteId().equals(siteId)) {
+        if (segments.isEmpty()) {
+            // Said out loud rather than answered with a silent 0 (issue #244): the download that
+            // triggered this is about to answer 404 for a batch that looks complete. The cause is
+            // deliberately left open — a session that sealed nothing has no segments either and
+            // never had any, so naming retention here would send an operator after data loss that
+            // did not happen (review round 1). The ownership check runs first for the same reason:
+            // a foreign batch id must not produce a line about this site.
+            log.warn("No completed-batch Parquet can be built for batch {}: it has no published "
+                            + "changelog segments — either the session sealed none, or retention, "
+                            + "a history wipe or a re-baseline has since taken them, in which case "
+                            + "the records remain available through the site's checkpoint "
+                            + "(issue #244)",
+                    batchId);
             return 0;
         }
         return enqueue(batchId, siteId, segments);

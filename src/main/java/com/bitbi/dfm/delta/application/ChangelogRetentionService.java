@@ -110,6 +110,13 @@ public class ChangelogRetentionService {
      * strand) being unaffected.</p>
      */
     private static final int OBJECT_DELETE_CHUNK = 1000;
+    /**
+     * How many batch ids one census query may carry (issue #244, review round 1). The
+     * below-checkpoint set is unbounded since #212, so a single {@code IN} list over every
+     * candidate batch can exceed PostgreSQL's 32767 bind parameters — which would fail the whole
+     * pass for exactly the backlog it exists to clear.
+     */
+    private static final int CENSUS_CHUNK = 1000;
 
     private final ChangelogSegmentRepository segmentRepository;
     private final BatchParquetArtifactRepository artifactRepository;
@@ -408,8 +415,17 @@ public class ChangelogRetentionService {
         if (candidates.isEmpty()) {
             return Set.of();
         }
-        return artifactRepository.findBatchIdsWithStatusIn(
-                candidates, BatchParquetArtifactStatus.UNFINISHED);
+        // Chunked, because the candidate set is unbounded: one IN list over every batch of a
+        // months-old backlog would exceed the driver's parameter limit and throw before a single
+        // row was pruned.
+        List<UUID> ordered = List.copyOf(candidates);
+        Set<UUID> owed = new LinkedHashSet<>();
+        for (int from = 0; from < ordered.size(); from += CENSUS_CHUNK) {
+            owed.addAll(artifactRepository.findBatchIdsWithStatusIn(
+                    ordered.subList(from, Math.min(from + CENSUS_CHUNK, ordered.size())),
+                    BatchParquetArtifactStatus.UNFINISHED));
+        }
+        return owed;
     }
 
     /** The hold-back census of one pass — the same counting for the view and the re-read (R2-9). */

@@ -360,8 +360,12 @@ class ChangelogRetentionServiceTest {
 
         service(1).prune(SITE);
 
-        verify(artifactRepository).findBatchIdsWithStatusIn(
-                Set.of(BATCH, otherBatch.batchId()), BatchParquetArtifactStatus.UNFINISHED);
+        org.mockito.ArgumentCaptor<java.util.Collection<UUID>> asked =
+                org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(artifactRepository).findBatchIdsWithStatusIn(asked.capture(),
+                eq(BatchParquetArtifactStatus.UNFINISHED));
+        assertEquals(Set.of(BATCH, otherBatch.batchId()), Set.copyOf(asked.getValue()),
+                "the distinct candidate batches, and not the one inside the audit window");
     }
 
     @Test
@@ -398,4 +402,30 @@ class ChangelogRetentionServiceTest {
         assertEquals(0, pruned);
         verify(segmentRepository, never()).findBelowCheckpointBySiteId(any(), org.mockito.ArgumentMatchers.anyLong());
     }
+    @Test
+    void chunksTheArtifactCensusSoAHugeBacklogCannotOverflowTheParameterLimit() {
+        // Review round 1: the below-checkpoint set is unbounded since #212, so one IN list over
+        // every candidate batch can exceed PostgreSQL's 32767 bind parameters — failing the whole
+        // pass for exactly the backlog it exists to clear.
+        checkpointAt(10_000L);
+        View[] views = new View[1001];
+        for (int i = 0; i < views.length; i++) {
+            views[i] = new View(UUID.randomUUID(), "delta/s/" + i + ".pb.gz", UUID.randomUUID(),
+                    DONE, DONE);
+        }
+        belowCheckpoint(10_000L, views);
+        deleteSucceeds();
+        List<Integer> chunkSizes = new java.util.ArrayList<>();
+        when(artifactRepository.findBatchIdsWithStatusIn(anyCollection(), anyCollection()))
+                .thenAnswer(invocation -> {
+                    chunkSizes.add(((java.util.Collection<?>) invocation.getArgument(0)).size());
+                    return Set.of();
+                });
+
+        assertEquals(1001, service(0).prune(SITE));
+
+        assertEquals(List.of(1000, 1), chunkSizes,
+                "the census is issued in bounded chunks, not one statement per pass");
+    }
+
 }

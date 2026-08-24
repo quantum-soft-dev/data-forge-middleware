@@ -2310,7 +2310,9 @@ markers and named in the same per-site WARN. Three things about it are worth kno
   the artifact is `ABANDONED` on its first attempt instead of after an hour of identical retries;
   the admin requeue answers **409** with the same reason rather than queueing an attempt that
   cannot succeed; and the backfill logs the unproducible batch instead of returning zero rows
-  silently, after which the download answers 404. **The residual, stated rather than implied**: a
+  silently, after which the download answers 404 — that line deliberately does **not** name
+  retention as the cause, because a session that sealed nothing has no segments either and never
+  had any. **The residual, stated rather than implied**: a
   batch *partly* pruned while all its artifact rows were terminal can still be requeued or
   backfilled, and the artifact it produces then covers only the surviving segments. The records
   themselves are not lost in any of these cases — they are in the site's checkpoint; the per-batch
