@@ -42,11 +42,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * withdrawn: pgjdbc takes a connection's PostgreSQL session zone from the JVM's default <em>at
  * connect time</em>, and this suite shares one database and one pool across cached contexts with
  * {@code minimum-idle: 0} and a ten-second idle timeout, so a connection opened during such a
- * window would carry a non-UTC session zone back into the pool. A later JPQL
- * {@code SET … = CURRENT_TIMESTAMP} from an unrelated test — six of those exist — would then write
- * a local wall clock into a column everything else fills with UTC: a silent, order-dependent
- * failure in a shared database, which is the #226/#245 class of defect and far worse than the
- * blind spot it was buying.</p>
+ * window would carry a non-UTC session zone back into the pool. An unrelated test's fixture — some
+ * forty of which still seed rows with a bare {@code CURRENT_TIMESTAMP} — would then write a local
+ * wall clock into a column everything else fills with UTC: a silent, order-dependent failure in a
+ * shared database, which is the #226/#245 class of defect and far worse than the blind spot it was
+ * buying. #286 took the six production statements that used to be in that population out of it, so
+ * the hazard is now the fixtures alone; the safe way to move the zone is
+ * {@code DatabaseClockUtcIntegrationTest}'s, a {@code SET LOCAL} the transaction undoes.</p>
  */
 @DisplayName("A TIMESTAMP column round-trips as UTC")
 class TimestampRoundTripIntegrationTest extends BaseIntegrationTest {

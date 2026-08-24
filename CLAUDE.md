@@ -621,6 +621,53 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- db-clock-utc: The database clock — the third producer of a zone-independent `TIMESTAMP` column —
+  says UTC itself instead of inheriting it from the session zone (issue #286, found working #282 and
+  filed rather than folded in). #282 brought every **Java** producer to one convention and removed
+  `hibernate.jdbc.time_zone`; six statements let **PostgreSQL** stamp the value, and PostgreSQL
+  resolves `CURRENT_TIMESTAMP` in the session's zone, which pgjdbc sets from the JVM's default at
+  connect time — measured on #282, where `SHOW TimeZone` reported the JVM's zone. Off UTC those six
+  wrote local wall clock into columns every other path fills with UTC, and two of them
+  (`refresh_tokens.revoked_at`, `account_plugins.last_used_at`/`updated_at`) sit on `Instant` fields
+  whose entity writer always binds UTC — so one column received two different clocks.
+  **Option 1 of the ticket, and the DB stays the time source.** `CAST(current_timestamp AT TIME ZONE
+  'UTC' AS timestamp)`, the expression `JpaBatchParquetArtifactRepository.nextCatalogWatermark`
+  already carried. Option 2 (bind `:now`) was rejected for the reason the ticket gave: it moves the
+  clock into the application, and one clock across pods that disagree about the time is what #245
+  chose deliberately for the queue markers. JPQL has no `AT TIME ZONE`, so the six become
+  `nativeQuery = true` — SQL inside `@Query`, a contract neither the compiler nor CI checks, which
+  is why the wired half is driven by the real statements rather than asserted from the source.
+  **Two guards, because neither can do the other's job.** `DatabaseClockConventionTest` is static
+  and scans string literals of `src/main/java` — SQL reaches PostgreSQL from here as a string, so
+  this is the *opposite* use of `AsyncExecutorQualifierTest.strip`'s literal mask from #282's and
+  #280's guards, which is why all three share one stripper. `CURRENT_TIMESTAMP`, `now()`,
+  `clock_timestamp()`, `statement_timestamp()` and `transaction_timestamp()` fail unless
+  `AT TIME ZONE 'UTC'` follows; `LOCALTIMESTAMP` and `CURRENT_DATE` fail outright, since they have
+  already resolved the session zone and returned a value with none left in it, so wrapping would
+  reinterpret rather than convert. `DatabaseClockUtcIntegrationTest` is the wired half and has
+  teeth **in CI**, which the #282 round trip deliberately does not: it moves the session zone to
+  `America/Los_Angeles` with `SET LOCAL` — undone by the transaction it runs in, where a plain
+  `SET` would ride the pooled connection into another cached context and make this file the
+  #226/#245 contamination it is protecting against — asserts the offset is really there before
+  asserting anything about a column, then drives each of the six statements and reads the raw
+  column back. Mutation-proven: restoring one bare `CURRENT_TIMESTAMP` reddens the scan and exactly
+  one wired case.
+  **Two populations are named as out of scope rather than left implied.** Eleven **applied**
+  migrations declare columns `DEFAULT CURRENT_TIMESTAMP`; an applied migration is never edited, and
+  those defaults cannot fire in production anyway — every INSERT on those tables goes through JPA
+  with the column mapped, and the one native INSERT (`insertPendingIfAbsent`) binds its own `:now`.
+  New migrations are held to the convention above an anchor of **V57**, a constant set once, the
+  shape `MigrationDocumentationConsistencyTest` already has over these files. And ~40 test fixtures
+  seed rows with the bare form: wrong in the same way, red only outside UTC, and a sweep of its own
+  rather than a consequence of this one (**#287**).
+  **Already-written rows**: on a UTC deployment the wrapped expression is byte-for-byte the old one,
+  so no row changes meaning and there is no data migration; rows written by a non-UTC session —
+  local development — shift by that session's offset. `ENV TZ=UTC` and `ContainerTimeZoneContractTest`
+  (#280) stay, their role for the session zone dropping from load-bearing to belt-and-braces while
+  they keep earning their place on logs. No REST, gRPC, proto, DTO, **migration (V58 stays free)**,
+  `specs/NNN-*`, configuration-key, metric, S3-key or frontend change; the three repository methods
+  keep their names, signatures and semantics — only the statement behind them says which zone it
+  meant. See `README.md` ("Time zones").
 - utc-write-convention: A zone-independent `TIMESTAMP` column has one producer, and the conversion
   that made two of them necessary is gone (issue #282, the write side #280 deferred). `src/main`
   held 65 `LocalDateTime.now()` calls in the legacy aggregates and 44

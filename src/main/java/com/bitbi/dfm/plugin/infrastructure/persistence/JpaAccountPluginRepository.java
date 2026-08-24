@@ -82,10 +82,18 @@ public interface JpaAccountPluginRepository extends JpaRepository<AccountPlugin,
     /**
      * Updates only the last_used_at and updated_at timestamps for an account-plugin.
      * Uses atomic UPDATE to avoid overwriting concurrent changes to other fields.
+     *
+     * <p>Native, and only because JPQL has no {@code AT TIME ZONE} (issue #286): both columns are
+     * zone-independent {@code TIMESTAMP}s holding a UTC wall clock, and both are also written by
+     * the entity as {@code Instant}, which is always UTC. A bare {@code CURRENT_TIMESTAMP} is
+     * resolved in the database session's zone — which pgjdbc takes from the JVM's default — so off
+     * UTC one column received two different clocks. The database stays the time source (#245).</p>
      */
     @Override
     @Modifying
-    @Query("UPDATE AccountPlugin ap SET ap.lastUsedAt = CURRENT_TIMESTAMP, ap.updatedAt = CURRENT_TIMESTAMP WHERE ap.id = :id")
+    @Query(value = "UPDATE account_plugins SET last_used_at = CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp), "
+            + "updated_at = CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp) WHERE id = :id",
+            nativeQuery = true)
     void updateLastUsedAtById(@Param("id") Long id);
 
     /**
