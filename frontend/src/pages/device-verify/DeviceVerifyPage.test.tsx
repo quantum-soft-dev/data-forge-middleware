@@ -215,6 +215,24 @@ describe('DeviceVerifyPage', () => {
     );
   });
 
+  // The code can expire while the confirm card sits open — the page does not
+  // poll — so approving is the second, and likelier, way into the expired
+  // state (#219 review). "Please try again" would ask for a retry that can
+  // never succeed.
+  it('shows the expired-code recovery card when approving an expired code (HTTP 410)', async () => {
+    search.code = 'ABCD-1234';
+    vi.mocked(deviceAuthApi.approveAuthorization).mockRejectedValue(httpError(410));
+
+    renderPage();
+    await screen.findByText('Authorize Device');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Approve & Create Site' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Code Expired', level: 2 })
+    ).toBeInTheDocument();
+  });
+
   it('denies the authorization', async () => {
     search.code = 'ABCD-1234';
 

@@ -1933,8 +1933,20 @@ pages/{feature}/            # Route pages
   instruction to start a new request on the device becomes reachable while 404 and all operational
   failures retain the existing error card. Tests pin both the controller status and the rendered
   recovery action. The uncalled `denyAuthorizationDelete` export is deleted rather than creating a
-  second denial path alongside the used POST action. No migration, gRPC, proto, DTO,
-  configuration-key, metric, S3-key, route-path or TanStack Query key change. See
+  second denial path alongside the used POST action.
+  **Review then found the card still unreachable by the likelier route**: the approve action kept
+  mapping the same exception to 404, and the confirm card does not poll (`useVerifyInfo` has
+  `retry: false`, `staleTime` 30 s and no `refetchInterval`), so a code that was valid on load and
+  expired while the card sat open produced "Failed to authorize device. Please try again." — a retry
+  that can never succeed — instead of the recovery card. `POST /api/v1/device/verify` answers 410
+  too, and both action handlers route it to the same state through one `isExpiredResponse` predicate
+  shared with the lookup. The `DELETE` denial is deliberately untouched: `deny` does not test expiry,
+  so it cannot raise the condition, and its OpenAPI text stopped claiming otherwise. Two smaller
+  ones: the 404 message dropped "or expired" — with expiry at 410 a 404 really is an unknown code,
+  and since #211 that string is the *only* report, so it was sending operators to restart an
+  authorization instead of re-reading the code — and the new `410` annotations no longer declare an
+  `ErrorResponseDto` body that the bodyless `.build()` responses never send. No migration, gRPC,
+  proto, DTO, configuration-key, metric, S3-key, route-path or TanStack Query key change. See
   `docs/cr-device-verify-expired-card.md` and `docs/device-flow-client-guide.md`.
 - device-verify-false-toast: The one error signal on the device authorization path stopped being
   wrong, and the direct URL the client prints works again (issue #211, two defects in one flow, both

@@ -25,4 +25,20 @@ class DeviceAuthorizationControllerTest {
 
         assertEquals(HttpStatus.GONE, response.getStatusCode());
     }
+
+    @Test
+    void shouldReturnGoneWhenApprovedAuthorizationHasExpired() {
+        DeviceAuthorizationService service = mock(DeviceAuthorizationService.class);
+        AuthorizationHelper authorizationHelper = mock(AuthorizationHelper.class);
+        DeviceAuthorizationController controller = new DeviceAuthorizationController(service, authorizationHelper);
+        java.util.UUID accountId = java.util.UUID.randomUUID();
+        when(authorizationHelper.getAuthenticatedAccountId()).thenReturn(accountId);
+        when(service.verify("ABCD-1234", accountId))
+                .thenThrow(new DeviceAuthorizationService.AuthorizationExpiredException("Authorization has expired"));
+
+        ResponseEntity<?> response = controller.verify(
+                new com.bitbi.dfm.deviceauth.presentation.dto.DeviceVerifyRequestDto("ABCD-1234", "approve"));
+
+        assertEquals(HttpStatus.GONE, response.getStatusCode());
+    }
 }
