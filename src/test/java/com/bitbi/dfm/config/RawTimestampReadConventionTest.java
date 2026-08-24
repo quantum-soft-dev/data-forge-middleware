@@ -148,6 +148,10 @@ class RawTimestampReadConventionTest {
     @Test
     @DisplayName("an exemption covers its own shape and nothing else in the same file")
     void anExemptionDoesNotCoverTheRestOfItsFile() {
+        assertThat(ALLOWED)
+                .withFailMessage("There is no exemption left to scope, so this test asserts nothing "
+                        + "— delete it together with the last entry rather than leaving it green")
+                .isNotEmpty();
         Exemption exemption = ALLOWED.get(0);
         List<Violation> found = List.of(
                 new Violation(exemption.path(), 1, exemption.shape()),
