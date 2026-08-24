@@ -37,6 +37,13 @@ RUN ls -lh build/libs/
 # glibc-based image required: snappy-java native lib (Parquet egress compression) does not load on musl (Alpine)
 FROM eclipse-temurin:25-jre AS production
 
+# The JVM's zone is part of the storage contract, not a property of the base image: every
+# zone-independent TIMESTAMP column holds a UTC wall clock, and the Hibernate path
+# (hibernate.jdbc.time_zone: UTC) agrees with a raw JDBC read of the same column only in UTC.
+# Set through TZ rather than -Duser.timezone in JAVA_OPTS, which callers replace wholesale
+# (docker-compose.prod.yml). See README.md "Time zones"; held by ContainerTimeZoneContractTest.
+ENV TZ=UTC
+
 # Install curl for health checks
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
@@ -80,6 +87,9 @@ ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
 # Stage 3: Development Stage (Optional)
 # ============================================
 FROM eclipse-temurin:25-jdk AS development
+
+# Same storage contract as the production stage above.
+ENV TZ=UTC
 
 # Install curl for debugging (bash ships with the base image)
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
