@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -135,14 +136,14 @@ class ErrorLogTest {
     @DisplayName("Should set occurredAt and createdAt to current time")
     void shouldSetTimestampsToCurrentTime() {
         // Given
-        LocalDateTime before = LocalDateTime.now().minusSeconds(1);
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1);
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
                 null, null, null);
 
         // Then
-        LocalDateTime after = LocalDateTime.now().plusSeconds(1);
+        LocalDateTime after = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
         assertTrue(errorLog.getOccurredAt().isAfter(before));
         assertTrue(errorLog.getOccurredAt().isBefore(after));
         assertTrue(errorLog.getCreatedAt().isAfter(before));

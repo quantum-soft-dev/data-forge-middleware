@@ -3,6 +3,7 @@ package com.bitbi.dfm.batch.domain;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Objects;
 
 /**
@@ -63,7 +64,7 @@ public class BatchTimeoutPolicy {
         }
 
         LocalDateTime expirationTime = batch.getStartedAt().plusMinutes(timeoutMinutes);
-        return LocalDateTime.now().isAfter(expirationTime);
+        return LocalDateTime.now(ZoneOffset.UTC).isAfter(expirationTime);
     }
 
     /**
@@ -80,7 +81,7 @@ public class BatchTimeoutPolicy {
         }
 
         LocalDateTime expirationTime = batch.getStartedAt().plusMinutes(timeoutMinutes);
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         if (now.isAfter(expirationTime)) {
             return 0;
@@ -98,7 +99,7 @@ public class BatchTimeoutPolicy {
      * @return cutoff timestamp for finding expired batches
      */
     public LocalDateTime calculateCutoffTime() {
-        return LocalDateTime.now().minusMinutes(timeoutMinutes);
+        return LocalDateTime.now(ZoneOffset.UTC).minusMinutes(timeoutMinutes);
     }
 
     /**

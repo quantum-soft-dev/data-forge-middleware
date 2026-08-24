@@ -146,8 +146,12 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: false
         show_sql: false
-        jdbc:
-          time_zone: UTC
+        # No hibernate.jdbc.time_zone here, deliberately (#282). It would make Hibernate read a
+        # bound LocalDateTime as wall clock in the JVM's zone and store a different instant, so the
+        # column would stop agreeing with every raw-JDBC read (#280), with the native
+        # clock_timestamp() AT TIME ZONE 'UTC' catalog watermark, and with the DTOs that serialize a
+        # LocalDateTime as toInstant(ZoneOffset.UTC). Producers yield UTC directly instead — see
+        # README.md "Time zones", held by TimestampProducerConventionTest.
     open-in-view: false
 
   flyway:

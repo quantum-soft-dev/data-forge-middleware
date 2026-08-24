@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -171,7 +172,7 @@ public class BatchLifecycleService {
     @Transactional(propagation = Propagation.SUPPORTS)
     public void touchActivity(UUID batchId) {
         try {
-            if (batchRepository.touchActivity(batchId, LocalDateTime.now()) == 0) {
+            if (batchRepository.touchActivity(batchId, LocalDateTime.now(ZoneOffset.UTC)) == 0) {
                 // 031/T10: also the normal outcome for a frame that arrives after the batch ended —
                 // debug, not warn, since a late heartbeat on a finished session is expected noise.
                 logger.debug("touchActivity: batch missing or no longer IN_PROGRESS, skipping: batchId={}",
@@ -376,7 +377,7 @@ public class BatchLifecycleService {
         }
         UUID accountId = existing.get().getAccountId();
 
-        if (batchRepository.markNotCompletedIfStillExpired(batchId, cutoffTime, LocalDateTime.now()) == 0) {
+        if (batchRepository.markNotCompletedIfStillExpired(batchId, cutoffTime, LocalDateTime.now(ZoneOffset.UTC)) == 0) {
             logger.debug("Timeout sweep: batch revived or already terminal, skipping: batchId={}", batchId);
             return false;
         }

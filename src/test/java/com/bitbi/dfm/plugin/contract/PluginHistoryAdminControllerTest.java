@@ -15,6 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -81,7 +82,7 @@ class PluginHistoryAdminControllerTest extends BaseIntegrationTest {
                     null, // first batch
                     TEST_SITE_ID,
                     "test-site.example.com",
-                    LocalDateTime.now(),
+                    LocalDateTime.now(ZoneOffset.UTC),
                     150,
                     100,
                     30,

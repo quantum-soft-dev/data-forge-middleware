@@ -21,12 +21,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The deployed JVM runs in UTC by declaration, not by accident (issue #280).
  *
- * <p>Every zone-independent {@code TIMESTAMP} column in this schema holds a UTC wall clock, and the
- * two ways of reading one — raw JDBC, which takes the column as it is, and Hibernate, which
- * converts through the JVM's zone because of {@code hibernate.jdbc.time_zone: UTC} — give the same
- * answer on one condition: that zone is UTC. Until this guard the condition held because the base
- * image happens to default to UTC, which is a property of a third party's image and of nothing this
- * repository says.</p>
+ * <p>Every zone-independent {@code TIMESTAMP} column in this schema holds a UTC wall clock. Until
+ * this guard the deployed JVM ran in UTC because the base image happens to default to it, which is
+ * a property of a third party's image and of nothing this repository says.</p>
+ *
+ * <p><strong>What still depends on the zone, and what no longer does.</strong> #280 declared it
+ * because the Hibernate and raw-JDBC reads of such a column agreed only in UTC —
+ * {@code hibernate.jdbc.time_zone: UTC} made the Hibernate path convert through the JVM's zone.
+ * #282 removed that setting, so those two paths now agree in <em>any</em> zone and that reason is
+ * gone. Two remain, and they are why this guard stays. The database's own clock is a producer for
+ * these columns — a JPQL {@code SET … = CURRENT_TIMESTAMP} is evaluated by PostgreSQL in the
+ * session's zone, which pgjdbc takes from the JVM's — so off UTC those statements would write a
+ * local wall clock into a column everything else fills with UTC. And logs, timestamps in support
+ * requests and anything else read by a human come out in the zone the container declares.</p>
  *
  * <p><strong>{@code ENV TZ}, not {@code -Duser.timezone} in {@code JAVA_OPTS}.</strong> That
  * variable is set wholesale by callers — {@code docker-compose.prod.yml} replaces it — so a flag
@@ -73,8 +80,10 @@ class ContainerTimeZoneContractTest {
         Map<String, String> declared = timeZonePerStage(read(RunOwnedScratch.projectRoot().resolve("Dockerfile")));
         for (String stage : RUNTIME_STAGES) {
             assertThat(declared)
-                    .withFailMessage("Dockerfile stage '%s' must declare ENV TZ=UTC: the Hibernate and raw-JDBC "
-                            + "reads of a TIMESTAMP column agree only in UTC (#280, see README.md \"Time zones\"). "
+                    .withFailMessage("Dockerfile stage '%s' must declare ENV TZ=UTC: pgjdbc takes the database "
+                            + "session's zone from the JVM's, so a JPQL 'SET ... = CURRENT_TIMESTAMP' would write "
+                            + "a local wall clock into a column everything else fills with UTC — and logs would "
+                            + "print in that zone too (#280, #282, see README.md \"Time zones\"). "
                             + "Declared zones per stage: %s", stage, declared)
                     .containsEntry(stage, "UTC");
         }

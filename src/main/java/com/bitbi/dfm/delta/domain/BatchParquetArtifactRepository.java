@@ -71,8 +71,7 @@ public interface BatchParquetArtifactRepository {
     /**
      * Next catalog-visible timestamp: {@code max(previous + 1µs, clock_timestamp())}. Must run
      * in the same transaction as {@link #lockCatalogPublish()} so two publishers cannot observe
-     * the same watermark. Survives pod clock skew that a plain {@code LocalDateTime.now()} would
-     * not.
+     * the same watermark. Survives pod clock skew that a timestamp taken in the JVM would not.
      */
     LocalDateTime nextCatalogWatermark();
 

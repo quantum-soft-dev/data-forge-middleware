@@ -621,6 +621,79 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- utc-write-convention: A zone-independent `TIMESTAMP` column has one producer, and the conversion
+  that made two of them necessary is gone (issue #282, the write side #280 deferred). `src/main`
+  held 65 `LocalDateTime.now()` calls in the legacy aggregates and 44
+  `LocalDateTime.now(ZoneOffset.UTC)` calls in delta, and
+  `spring.jpa.properties.hibernate.jdbc.time_zone: UTC` made **exactly the first set correct**,
+  shifting the second by the JVM's offset — invisible on a UTC JVM, the #279/#280 blind spot again.
+  **Outcome 2 of the ticket: the setting is removed and every producer yields UTC directly.**
+  #280 had rejected that option because it "repairs 44 places and breaks 65"; normalising the
+  producers is what this ticket is, so the option became available — and two facts, both established
+  here rather than assumed, made it the right one. **The measurement that unblocked it**: on a JVM in
+  `Asia/Jerusalem` with the setting pinned to a *third* zone (`America/New_York`), an `Instant` field
+  on a `TIMESTAMP` column stored the UTC wall clock **unchanged**, while a `LocalDateTime` moved. So
+  `Instant` binding never consulted the setting at all, and the ~15 `TIMESTAMP` columns held as
+  `Instant` (`refresh_tokens`, `account_plugins`, `plugin_configs`, `admin_action_logs`,
+  `comparison_results`, `file_comparisons`) — whose producers have no zone knob at the call site and
+  so could not have been repaired by any convention — were never at risk. That was the one thing
+  capable of making outcome 2 a much larger ticket, and it is now pinned by a test rather than left
+  as a measurement in a comment. **The fact that decided against outcome 1**: `toInstant(ZoneOffset.UTC)`
+  appears in **22 DTO files** across `batch/`, `site/`, `error/`, `upload/` and `delta/`, so the whole
+  presentation layer already reads an in-memory `LocalDateTime` as a UTC wall clock — a convention
+  `DeltaTimestampsTest` has asserted since 023 r3. Keeping the setting and standardising on
+  `LocalDateTime.now()` (the 65-call majority, and the cheaper diff) would have made every
+  Hibernate **read** return JVM-local wall clock and all 22 files emit the wrong instant off UTC.
+  Outcome 1 was not the conservative choice; it was the one that contradicted the layer that already
+  had a convention. What ships instead: `LocalDateTime` in memory equals the column equals UTC, on
+  every path at once — JPA, raw JDBC (#280), the native `clock_timestamp() AT TIME ZONE 'UTC'`
+  catalog watermark, and the DTOs — with no conversion anywhere.
+  **Already-written data (the ticket's fourth criterion, answered rather than waved at)**: on a UTC
+  JVM the removed conversion is the identity, so no stored row changes meaning and there is no data
+  migration; the deployed container has declared `TZ=UTC` since #280. Rows written by a JVM outside
+  UTC — local development only — shift by that JVM's offset.
+  **The guards are two, because neither can do the other's job.** `TimestampProducerConventionTest`
+  is static and bans the zero-argument `now()` in `src/` — `LocalDate` included, since that date
+  picks which monthly partition of `error_logs` a UTC `occurred_at` lands in — and asserts in the
+  same class that `hibernate.jdbc.time_zone` is **absent**, because with the setting back the ban
+  would enforce the wrong producer. It reuses `AsyncExecutorQualifierTest.strip` (literal mask
+  included) and reads configuration with whole-line comments blanked, after the first draft failed
+  on the very comment recording why the setting is gone — a hazard its own test now pins.
+  `TimestampRoundTripIntegrationTest` is the end-to-end statement #280 wanted and refused: write
+  through JPA, read the same column through `JdbcTemplate`, require equality. With the conversion in
+  place that test is red on every non-UTC JVM — #279 recreated by its own guard — and removing the
+  conversion is what makes it true. **Where the teeth are is stated rather than assumed**: it runs in
+  the ambient zone, so on a developer's machine outside UTC it is mutation-sensitive, while in CI —
+  which runs in UTC, where the removed conversion is the identity — it would stay green, so what
+  stops the setting coming back there is the static guard, which asserts its absence directly in
+  every environment. **A cut that switched the JVM default zone (UTC, `Asia/Jerusalem`,
+  `America/Los_Angeles`) to buy teeth in CI was written and withdrawn in review**, and the reason is
+  worth keeping: pgjdbc takes a connection's PostgreSQL session zone from the JVM default *at connect
+  time*, and this suite shares one database and one pool across cached contexts with
+  `minimum-idle: 0` and a ten-second idle timeout — so a connection opened inside such a window
+  carries a non-UTC session zone back into the pool, and a later JPQL `SET … = CURRENT_TIMESTAMP`
+  from an unrelated test writes a local wall clock into a column everything else fills with UTC. That
+  is the #226/#245 class of silent, order-dependent contamination, and much worse than the blind spot
+  it was buying — the hazard is created by the very pgjdbc behaviour this entry documents two
+  paragraphs down. Mutation-proven where each guard can be: restore the setting and the static guard
+  goes red anywhere (and the round trip goes red off UTC); restore one bare `now()` and the scan goes
+  red.
+  **Two simplifications are consequences, not tidying**: `ChangelogSegmentQueueMarkerClobberTest.asStored()`
+  (#278, part B) existed only to reapply the binding's conversion so a repository write could be
+  compared with the raw column in any zone — it is the identity now and is gone, and with it the only
+  entry of `RawTimestampReadConventionTest`'s allowlist. That test's scoping case was rewritten to
+  drive a synthetic exemption rather than deleted as its own instruction proposed, since scoping is
+  what the next entry will depend on and a test asserting nothing was the thing that instruction
+  objected to.
+  **Deliberately out of scope, and named rather than implied**: the 6 JPQL `SET … = CURRENT_TIMESTAMP`
+  writes are a *third* producer, the database clock. Measured here: `SHOW TimeZone` reports the JVM's
+  zone, because pgjdbc sets the session zone from it — so off UTC those statements write local wall
+  clock into the same columns. Rewriting them as bound parameters moves the time source out of the
+  database, which #245 chose deliberately for the queue markers, so it is its own decision and is
+  filed rather than taken (**#286**). `ENV TZ=UTC` and `ContainerTimeZoneContractTest` (#280) stay: their role
+  changes from load-bearing to belt-and-braces plus that session zone. No REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key *name*, metric, S3-key or frontend
+  change. See `README.md` ("Time zones").
 - batch-parquet-retention-hold: Changelog retention consults the third durable consumer of raw
   segments — the completed-batch Parquet build — and the two windows it cannot cover now say so
   instead of retrying into the same ending (issue #244, filed by review round 1 of PR #235 as
@@ -788,7 +861,6 @@ pages/{feature}/            # Route pages
   is how the next guard is added and silently never run. Test, documentation and hook only: no
   production code, REST, gRPC, proto, DTO, migration (**V58 stays free**), configuration-key, metric,
   S3-key or frontend change.
-||||||| b07022c0
 - retention-no-s3-in-transaction: The changelog retention pass no longer holds a HikariCP
   connection across its object deletes (issue #234). `ChangelogRetentionService.prune` was
   `@Transactional` around everything, so the batched `DeleteObjects` round trip ran with the pass's

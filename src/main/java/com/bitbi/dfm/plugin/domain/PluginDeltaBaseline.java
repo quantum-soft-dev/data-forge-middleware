@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -54,8 +55,8 @@ public class PluginDeltaBaseline {
         baseline.siteId = siteId;
         baseline.tableName = tableName;
         baseline.baselineSeq = baselineSeq;
-        baseline.createdAt = LocalDateTime.now();
-        baseline.updatedAt = LocalDateTime.now();
+        baseline.createdAt = LocalDateTime.now(ZoneOffset.UTC);
+        baseline.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         return baseline;
     }
 
@@ -64,18 +65,18 @@ public class PluginDeltaBaseline {
      */
     public void suspend() {
         this.baselineSeq = Long.MAX_VALUE;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PrePersist
     protected void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (createdAt == null) createdAt = now;
         if (updatedAt == null) updatedAt = now;
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 }

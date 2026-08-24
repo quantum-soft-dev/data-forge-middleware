@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.containsString;
@@ -77,7 +78,7 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
                 """, UUID.randomUUID(), SITE, BATCH, tableName, artifactStatus,
                 ready ? "egress/%s/batches/%s/%s.parquet".formatted(SITE, BATCH, tableName) : null,
                 ready ? 42L : null, ready ? 1234L : null, ready ? "abc123" : null,
-                ready ? LocalDateTime.now() : null);
+                ready ? LocalDateTime.now(ZoneOffset.UTC) : null);
     }
 
     @Test

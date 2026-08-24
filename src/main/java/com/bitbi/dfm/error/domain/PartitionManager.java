@@ -3,6 +3,7 @@ package com.bitbi.dfm.error.domain;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
 
@@ -72,7 +73,7 @@ public class PartitionManager {
      * @return date for next partition to create
      */
     public LocalDate getNextPartitionDate() {
-        return LocalDate.now().plusMonths(1);
+        return LocalDate.now(ZoneOffset.UTC).plusMonths(1);
     }
 
     /**
@@ -100,6 +101,6 @@ public class PartitionManager {
         if (retentionMonths <= 0) {
             throw new IllegalArgumentException("Retention months must be positive");
         }
-        return LocalDate.now().minusMonths(retentionMonths);
+        return LocalDate.now(ZoneOffset.UTC).minusMonths(retentionMonths);
     }
 }

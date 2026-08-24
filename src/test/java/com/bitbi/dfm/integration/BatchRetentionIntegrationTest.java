@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -79,8 +80,8 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                 "example.com"
         );
 
-        LocalDateTime oldStartedAt = LocalDateTime.now().minusDays(60);
-        LocalDateTime recentStartedAt = LocalDateTime.now().minusDays(10);
+        LocalDateTime oldStartedAt = LocalDateTime.now(ZoneOffset.UTC).minusDays(60);
+        LocalDateTime recentStartedAt = LocalDateTime.now(ZoneOffset.UTC).minusDays(10);
 
         jdbcTemplate.update(
                 "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
@@ -216,7 +217,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                 "baseline.example.com"
         );
 
-        LocalDateTime oldStartedAt = LocalDateTime.now().minusDays(60);
+        LocalDateTime oldStartedAt = LocalDateTime.now(ZoneOffset.UTC).minusDays(60);
 
         // Baseline batch (old but must not be deleted)
         jdbcTemplate.update(
@@ -255,7 +256,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                 "bit-bi",
                 "{}",
                 true,
-                LocalDateTime.now(),
+                LocalDateTime.now(ZoneOffset.UTC),
                 baselineBatchId
         );
 

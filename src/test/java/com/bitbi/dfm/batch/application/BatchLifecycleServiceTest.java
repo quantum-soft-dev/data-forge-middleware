@@ -22,6 +22,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -372,7 +373,7 @@ class BatchLifecycleServiceTest {
     @DisplayName("markBatchNotCompletedIfStillExpired()")
     class MarkBatchNotCompletedIfStillExpired {
 
-        private final LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        private final LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
 
         @Test
         @DisplayName("should reap a still-expired batch and publish the expiry event")
@@ -426,9 +427,9 @@ class BatchLifecycleServiceTest {
         void shouldTouchActivityWithTargetedUpdate() {
             when(batchRepository.touchActivity(eq(batchId), any(LocalDateTime.class))).thenReturn(1);
 
-            LocalDateTime before = LocalDateTime.now();
+            LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
             service.touchActivity(batchId);
-            LocalDateTime after = LocalDateTime.now();
+            LocalDateTime after = LocalDateTime.now(ZoneOffset.UTC);
 
             ArgumentCaptor<LocalDateTime> stamp = ArgumentCaptor.forClass(LocalDateTime.class);
             verify(batchRepository).touchActivity(eq(batchId), stamp.capture());

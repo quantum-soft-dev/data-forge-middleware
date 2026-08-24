@@ -3,6 +3,7 @@ package com.bitbi.dfm.shared.exception;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Standardized error response DTO.
@@ -22,6 +23,6 @@ public record ErrorResponse(
         String path
 ) {
     public static ErrorResponse of(int status, String error, String message, String path) {
-        return new ErrorResponse(LocalDateTime.now(), status, error, message, path);
+        return new ErrorResponse(LocalDateTime.now(ZoneOffset.UTC), status, error, message, path);
     }
 }

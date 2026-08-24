@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -122,7 +123,7 @@ public class PluginSqlGeneration {
         entity.deleteCount = stats.deletes();
         entity.filesProcessed = stats.filesProcessed();
         entity.generationDurationMs = durationMs;
-        entity.createdAt = LocalDateTime.now();
+        entity.createdAt = LocalDateTime.now(ZoneOffset.UTC);
         entity.superseded = false;
         entity.supersededBy = null;
         return entity;

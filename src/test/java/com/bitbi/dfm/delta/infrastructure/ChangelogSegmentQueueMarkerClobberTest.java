@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -36,6 +35,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the real statements against PostgreSQL — a mock cannot prove two column writes compose.
  * It lives outside {@code integration/} so the per-task gate runs it (the
  * {@link ChangelogSegmentRequeueContractTest} precedent).</p>
+ *
+ * <p><strong>The retry columns are compared against the bound value directly.</strong> They used
+ * to go through an {@code asStored()} helper that reapplied the binding's own JVM-zone conversion,
+ * because {@code hibernate.jdbc.time_zone: UTC} made a value written through the repository and
+ * read back through {@link JdbcTemplate} differ by the JVM's offset — green in CI and
+ * deterministically red anywhere else (#278, part B). #282 removed that setting, so the write and
+ * this raw read are the same wall clock in every zone and the helper was the identity; these two
+ * assertions are now also the narrowest end-to-end statement of that convention.</p>
  */
 @DisplayName("Queue marker writes (issue #245)")
 class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
@@ -86,7 +93,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
     @DisplayName("a plugin-SQL mark leaves the egress retry columns intact")
     void sqlMarkLeavesEgressRetryStateIntact() {
         UUID id = seedPending().getId();
-        LocalDateTime retryAt = LocalDateTime.now().plusMinutes(5);
+        LocalDateTime retryAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
         assertThat(segmentRepository.deferEgress(id, retryAt, 0)).isEqualTo(1);
 
         assertThat(segmentRepository.markPluginSqlProcessed(id)).isEqualTo(1);
@@ -95,7 +102,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
         assertThat(row.pluginSqlAt()).isNotNull();
         assertThat(row.egressAt()).as("egress is still owed").isNull();
         assertThat(row.egressAttempts()).isEqualTo(1);
-        assertThat(row.egressRetryAt()).isEqualToIgnoringNanos(asStored(retryAt));
+        assertThat(row.egressRetryAt()).isEqualToIgnoringNanos(retryAt);
         assertThat(row.pluginSqlAttempts()).isZero();
         assertThat(row.pluginSqlRetryAt()).isNull();
     }
@@ -104,7 +111,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
     @DisplayName("an egress mark leaves the plugin-SQL retry columns intact")
     void egressMarkLeavesSqlRetryStateIntact() {
         UUID id = seedPending().getId();
-        LocalDateTime retryAt = LocalDateTime.now().plusMinutes(5);
+        LocalDateTime retryAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
         assertThat(segmentRepository.deferPluginSql(id, retryAt, 0)).isEqualTo(1);
 
         assertThat(segmentRepository.markEgressed(id)).isEqualTo(1);
@@ -113,7 +120,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
         assertThat(row.egressAt()).isNotNull();
         assertThat(row.pluginSqlAt()).as("plugin SQL is still owed").isNull();
         assertThat(row.pluginSqlAttempts()).isEqualTo(1);
-        assertThat(row.pluginSqlRetryAt()).isEqualToIgnoringNanos(asStored(retryAt));
+        assertThat(row.pluginSqlRetryAt()).isEqualToIgnoringNanos(retryAt);
         assertThat(row.egressAttempts()).isZero();
         assertThat(row.egressRetryAt()).isNull();
     }
@@ -150,28 +157,6 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
                 SITE, BATCH, 1L, 5L, 5L, "hash-245",
                 "delta/" + SITE + "/segments/245.pb.gz", "DELTA", Map.of());
         return segmentRepository.save(segment);
-    }
-
-    /**
-     * The wall clock a {@link LocalDateTime} parameter actually lands as in the row.
-     *
-     * <p>These columns are {@code TIMESTAMP} without a zone (V55) and the entity holds them as
-     * {@link LocalDateTime}, but {@code hibernate.jdbc.time_zone: UTC} (application.yml) makes
-     * Hibernate read a bound {@code LocalDateTime} as JVM-local wall clock and store the same
-     * instant in UTC. Production is symmetric — it writes and reads through Hibernate, so the
-     * conversion cancels — while this class deliberately reads the <em>row</em> through
-     * {@link JdbcTemplate}, where it does not. Writing a UTC wall clock and comparing it with the
-     * raw column therefore differed by the JVM's offset: green in CI (UTC) and deterministically
-     * red anywhere else, failing the mandatory per-task gate on commits that touch nothing
-     * (issue #278, part B; the offset is zero in UTC, so this conversion is the identity there
-     * and the assertion holds in every zone).</p>
-     */
-    private static LocalDateTime asStored(LocalDateTime bound) {
-        // Timestamp.valueOf, not atZone: this is the conversion the binding itself performs, and
-        // the two disagree on an ambiguous local time — the repeated hour after a DST fall-back,
-        // where Calendar resolution takes the standard offset and ZonedDateTime the daylight one.
-        // An hour's divergence once a year, in exactly the zones this fix exists for.
-        return Timestamp.valueOf(bound).toInstant().atZone(ZoneOffset.UTC).toLocalDateTime();
     }
 
     private Row load(UUID id) {

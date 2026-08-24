@@ -28,10 +28,11 @@ import java.util.UUID;
  * {@code rs.getTimestamp}: both carry the JVM's default zone, and although a read followed by
  * {@code toLocalDateTime()} cancels that conversion for almost every value, it does not for one
  * that falls in the JVM zone's DST gap — such a wall clock does not exist locally and comes back
- * shifted by the transition. The Hibernate path over these same columns converts
- * ({@code hibernate.jdbc.time_zone: UTC}) and therefore agrees with this one only while the JVM
- * runs in UTC, which the deployed container declares. Held by
- * {@code RawTimestampReadConventionTest} (#280); see {@code README.md}, "Time zones".</p>
+ * shifted by the transition. The Hibernate path over these same columns used to convert
+ * ({@code hibernate.jdbc.time_zone: UTC}) and so agreed with this one only while the JVM ran in
+ * UTC; #282 removed that setting, so both paths now read the column's own value in any zone. Held
+ * by {@code RawTimestampReadConventionTest} (#280) and {@code TimestampProducerConventionTest}
+ * (#282); see {@code README.md}, "Time zones".</p>
  */
 @Repository
 public class ParquetExportCatalogDao {

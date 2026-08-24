@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 
@@ -60,7 +61,7 @@ public class SiteSchema {
         schema.siteId = siteId;
         schema.schemaData = schemaData;
         schema.schemaVersion = 1;
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         schema.createdAt = now;
         schema.updatedAt = now;
         return schema;
@@ -74,18 +75,18 @@ public class SiteSchema {
     public void update(Map<String, Object> newSchemaData) {
         this.schemaData = newSchemaData;
         this.schemaVersion = this.schemaVersion + 1;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PrePersist
     protected void onCreate() {
-        if (createdAt == null) createdAt = LocalDateTime.now();
-        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
+        if (updatedAt == null) updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         if (schemaVersion == null) schemaVersion = 1;
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 }

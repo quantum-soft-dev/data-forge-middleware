@@ -25,7 +25,7 @@ class BatchResponseDtoTest {
         // Given
         UUID id = UUID.randomUUID();
         UUID siteId = UUID.randomUUID();
-        LocalDateTime startedAt = LocalDateTime.now();
+        LocalDateTime startedAt = LocalDateTime.now(ZoneOffset.UTC);
 
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(id);
@@ -61,8 +61,8 @@ class BatchResponseDtoTest {
         // Given
         UUID id = UUID.randomUUID();
         UUID siteId = UUID.randomUUID();
-        LocalDateTime startedAt = LocalDateTime.now().minusHours(2);
-        LocalDateTime completedAt = LocalDateTime.now();
+        LocalDateTime startedAt = LocalDateTime.now(ZoneOffset.UTC).minusHours(2);
+        LocalDateTime completedAt = LocalDateTime.now(ZoneOffset.UTC);
 
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(id);
@@ -120,7 +120,7 @@ class BatchResponseDtoTest {
         when(batch.getUploadedFilesCount()).thenReturn(0);
         when(batch.getTotalSize()).thenReturn(0L);
         when(batch.getHasErrors()).thenReturn(false);
-        when(batch.getStartedAt()).thenReturn(LocalDateTime.now());
+        when(batch.getStartedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(batch.getCompletedAt()).thenReturn(null);
         return batch;
     }

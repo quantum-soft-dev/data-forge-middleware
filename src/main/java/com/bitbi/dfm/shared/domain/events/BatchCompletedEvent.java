@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.domain.events;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -27,7 +28,7 @@ public record BatchCompletedEvent(
      * @param totalSize total size in bytes
      */
     public BatchCompletedEvent(UUID batchId, UUID accountId, int uploadedFilesCount, long totalSize) {
-        this(UUID.randomUUID(), LocalDateTime.now(), batchId, accountId, uploadedFilesCount, totalSize);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), batchId, accountId, uploadedFilesCount, totalSize);
     }
 
     /**
@@ -40,7 +41,7 @@ public record BatchCompletedEvent(
      */
     @Deprecated
     public BatchCompletedEvent(UUID batchId, int uploadedFilesCount, long totalSize) {
-        this(UUID.randomUUID(), LocalDateTime.now(), batchId, null, uploadedFilesCount, totalSize);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), batchId, null, uploadedFilesCount, totalSize);
     }
 
     @Override

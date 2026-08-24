@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.presentation.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -50,7 +51,7 @@ public record HistoryClearResultDto(
                 deletedTotalBytes,
                 failedS3Keys != null ? failedS3Keys : List.of(),
                 true, // plugin is always deactivated
-                LocalDateTime.now()
+                LocalDateTime.now(ZoneOffset.UTC)
         );
     }
 }

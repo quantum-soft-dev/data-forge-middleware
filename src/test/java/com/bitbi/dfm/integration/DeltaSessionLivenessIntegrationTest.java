@@ -114,7 +114,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         UUID batchId = insertInProgressBatch(accountId, siteId,
                 dbNow.minusMinutes(90), dbNow.minusMinutes(70));
 
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
         assertTrue(batchRepository.findExpiredBatches(cutoff).stream()
                         .anyMatch(b -> b.getId().equals(batchId)),
                 "precondition: the sweeper's SELECT sees this batch as expired");
@@ -140,7 +140,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
                 dbNow.minusMinutes(90), dbNow.minusMinutes(70));
 
         boolean reaped = batchLifecycleService.markBatchNotCompletedIfStillExpired(
-                batchId, LocalDateTime.now().minusMinutes(60));
+                batchId, LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60));
 
         assertTrue(reaped, "a silent session is still reclaimed");
         assertEquals(BatchStatus.NOT_COMPLETED,
@@ -158,7 +158,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         UUID fresh = insertInProgressBatch(accountId, freshV2Site(accountId, "legacy-b"),
                 dbNow.minusMinutes(30), null);
 
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
 
         assertTrue(batchLifecycleService.markBatchNotCompletedIfStillExpired(expired, cutoff),
                 "legacy batch older than the timeout is reaped by started_at");
@@ -180,7 +180,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         LocalDateTime dbNow = LocalDateTime.now(ZoneOffset.UTC);
         UUID batchId = insertInProgressBatch(accountId, siteId,
                 dbNow.minusMinutes(90), dbNow.minusMinutes(70));
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60);
 
         int touchers = 6;
         ExecutorService pool = Executors.newFixedThreadPool(touchers + 1);

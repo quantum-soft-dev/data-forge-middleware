@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.domain.events;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -19,7 +20,7 @@ public record ErrorLoggedEvent(
 ) implements DomainEvent {
 
     public ErrorLoggedEvent(UUID errorLogId, UUID siteId, UUID batchId, String type) {
-        this(UUID.randomUUID(), LocalDateTime.now(), errorLogId, siteId, batchId, type);
+        this(UUID.randomUUID(), LocalDateTime.now(ZoneOffset.UTC), errorLogId, siteId, batchId, type);
     }
 
     @Override

@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -122,7 +123,7 @@ public class Site {
         String normalizedSiteName = validateAndNormalizeSiteName(siteName);
 
         UUID id = UUID.randomUUID();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         SiteType resolvedType = siteType != null ? siteType : SiteType.DBF;
 
         return new Site(id, accountId, domain.toLowerCase().trim(), normalizedSiteName, clientSecretHash,
@@ -211,7 +212,7 @@ public class Site {
             throw new IllegalArgumentException("DisplayName cannot be blank");
         }
         this.displayName = newDisplayName.trim();
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void updateRetentionDays(int retentionDays) {
@@ -219,7 +220,7 @@ public class Site {
             throw new IllegalArgumentException("Retention days must be between 1 and " + MAX_RETENTION_DAYS);
         }
         this.retentionDays = retentionDays;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void deactivate() {
@@ -227,7 +228,7 @@ public class Site {
             throw new IllegalStateException("Site is already deactivated");
         }
         this.isActive = false;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void activate() {
@@ -235,7 +236,7 @@ public class Site {
             throw new IllegalStateException("Site is already active");
         }
         this.isActive = true;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -253,7 +254,7 @@ public class Site {
             throw new IllegalArgumentException("ClientSecretHash cannot be blank");
         }
         this.clientSecretHash = newClientSecretHash;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -288,13 +289,13 @@ public class Site {
 
     @PrePersist
     protected void onCreate() {
-        if (createdAt == null) createdAt = LocalDateTime.now();
-        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
+        if (updatedAt == null) updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @Override

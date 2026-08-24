@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -184,7 +185,7 @@ class SiteTest {
     private Site createSiteWithDomain(String domain) {
         UUID id = UUID.randomUUID();
         UUID accountId = UUID.randomUUID();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         // Derive siteName the same way the production code does
         String siteName = domain;

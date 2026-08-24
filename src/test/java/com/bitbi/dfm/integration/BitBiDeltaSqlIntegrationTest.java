@@ -196,7 +196,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
      */
     private List<PluginSqlGeneration> generationsInSqlChangesOrder() {
         return sqlGenerationRepository.findBySiteIdAndCreatedAtAfter(
-                        SITE_ID, LocalDateTime.now().minusDays(1))
+                        SITE_ID, LocalDateTime.now(ZoneOffset.UTC).minusDays(1))
                 .stream()
                 .filter(generation -> seededBatchIds.contains(generation.getSourceBatchId()))
                 .toList();

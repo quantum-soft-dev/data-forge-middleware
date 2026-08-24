@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -73,7 +74,7 @@ class DeltaIngestionSubmitSchemaContractTest {
     void validSchemaReturnsBumpedVersion() {
         SiteSchema saved = mock(SiteSchema.class);
         when(saved.getSchemaVersion()).thenReturn(3);
-        when(saved.getUpdatedAt()).thenReturn(LocalDateTime.now());
+        when(saved.getUpdatedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(siteSchemaService.upsertSchema(eq(SITE), any())).thenReturn(saved);
 
         SchemaResponse response = stub.submitSchema(schemaRequest());

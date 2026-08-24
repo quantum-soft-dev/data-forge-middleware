@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 
@@ -37,9 +38,9 @@ class SiteSchemaTest {
         @Test
         @DisplayName("should set createdAt and updatedAt on create")
         void shouldSetTimestampsOnCreate() {
-            LocalDateTime before = LocalDateTime.now().minusSeconds(1);
+            LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1);
             SiteSchema schema = SiteSchema.create(UUID.randomUUID(), Map.of());
-            LocalDateTime after = LocalDateTime.now().plusSeconds(1);
+            LocalDateTime after = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
 
             assertThat(schema.getCreatedAt()).isBetween(before, after);
             assertThat(schema.getUpdatedAt()).isBetween(before, after);

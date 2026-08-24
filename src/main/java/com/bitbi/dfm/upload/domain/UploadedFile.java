@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -75,7 +76,7 @@ public class UploadedFile {
 
         UUID id = UUID.randomUUID();
         String s3Key = s3Path + originalFileName;
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         return new UploadedFile(id, batchId, originalFileName, s3Key, fileSize,
                 contentType, fileChecksum.value(), now);
@@ -83,7 +84,7 @@ public class UploadedFile {
 
     @PrePersist
     protected void onCreate() {
-        if (uploadedAt == null) uploadedAt = LocalDateTime.now();
+        if (uploadedAt == null) uploadedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @Override
