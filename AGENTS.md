@@ -275,9 +275,11 @@ pages/{feature}/            # Route pages
   bigger set, **lowercase `now()` inside SQL string literals** across eleven further classes the
   ticket never named (`ParquetExportIntegrationTest`, `SegmentedRebaselineIntegrationTest`,
   `SqlGenerationConcurrentClaimIntegrationTest`, `DeviceAuthRefreshContractTest` among them). 174
-  rewrites in 27 fixture files; `DeltaBatchParquetQueueRestContractTest` already carried the right form,
-  which is what the ticket meant by "the correct shape is known where correctness happened to
-  matter".
+  rewrites in 27 fixture files; three of the four statements in
+  `DeltaBatchParquetQueueRestContractTest` already carried the right form — its lease-deadline
+  arithmetic, where being wrong would have shown — which is what the ticket meant by "the correct
+  shape is known where correctness happened to matter"; the fourth, a plain seed in the same file,
+  did not.
   **The guard is #286's scanner with two more roots** — `src/test/java` and
   `src/test/resources/*.sql` — plus the shape-and-count exemption machinery of #280
   (`RawTimestampReadConventionTest`), because a test tree carries two things production SQL does
