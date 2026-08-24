@@ -33,7 +33,7 @@ export async function getVerifyInfo(userCode: string): Promise<DeviceVerifyInfoR
   const response = await apiClient.get<DeviceVerifyInfoResponse>(
     `${DEVICE_AUTHORIZATION_VERIFY}?code=${encodeURIComponent(userCode)}`,
     // The verification page renders this call's failures itself, with a message
-    // per status (400 already processed, 404 unknown or expired). Letting the
+    // per status (400 already processed, 404 unknown, 410 expired). Letting the
     // global interceptor toast them as well produces two reports of one failure,
     // and for a lookup superseded by a later keystroke the toast is the only
     // one the user sees — over a flow that goes on to succeed (issue #211).
@@ -79,18 +79,8 @@ export async function denyAuthorization(userCode: string): Promise<DeviceVerifyR
   return response.data;
 }
 
-/**
- * Alternative: Deny via DELETE method.
- *
- * @param userCode - The user code to deny
- */
-export async function denyAuthorizationDelete(userCode: string): Promise<void> {
-  await apiClient.delete(`${DEVICE_AUTHORIZATION_VERIFY}?code=${encodeURIComponent(userCode)}`);
-}
-
 export const deviceAuthApi = {
   getVerifyInfo,
   approveAuthorization,
   denyAuthorization,
-  denyAuthorizationDelete,
 };

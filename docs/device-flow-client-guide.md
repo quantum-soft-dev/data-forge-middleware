@@ -686,6 +686,7 @@ api_base_url = "https://dev.dfm.bitbi.io"
 | `access_denied` | User clicked Deny | Restart authorization |
 | `expired_token` | Took too long | Restart authorization (15 min limit) |
 | `invalid_grant` | Wrong deviceCode | Check you're using correct code |
+| Browser shows **Code Expired** | The submitted `userCode` was valid but its authorization window elapsed — on the lookup, or on Approve when the code ran out while the confirm card was open | Start a new authorization request on the device; the verification page distinguishes this from an unknown code |
 | 401 on Batch API | Expired or invalid access token | Refresh via `POST /api/v1/device/auth/refresh` |
 | A "Resource not found." toast on the verification page, over a flow that then succeeds | Fixed in #211: the page used to look a code up one keystroke before it was complete, and the 404 for that partial code reached the global error toast | Reload the page; on a build that carries #211 it cannot happen |
 | `verificationUriComplete` opened with an empty code field | Fixed in #211: the login redirect dropped the query string | Retype the code; on a build that carries #211 the parameter survives |
@@ -698,6 +699,7 @@ api_base_url = "https://dev.dfm.bitbi.io"
 |---------|------|---------|
 | 1.0.0 | 2025-01-12 | Initial release |
 | 1.0.1 | 2026-08-19 | `verificationUriComplete` pre-fills the code again, and a partial code is no longer looked up (issue #211) |
+| 1.0.2 | 2026-08-20 | Verification lookups distinguish an expired authorization from an unknown code; the browser presents the expired-code recovery action (issue #219) |
 
 ---
 

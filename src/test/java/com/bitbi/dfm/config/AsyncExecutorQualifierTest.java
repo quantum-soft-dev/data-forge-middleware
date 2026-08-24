@@ -656,7 +656,7 @@ class AsyncExecutorQualifierTest {
      * @param code          the source with comments removed and every literal copied verbatim
      * @param insideLiteral one entry per character of {@code code}
      */
-    private record Stripped(String code, boolean[] insideLiteral) {
+    record Stripped(String code, boolean[] insideLiteral) {
     }
 
     /**
@@ -701,8 +701,12 @@ class AsyncExecutorQualifierTest {
      * <em>is</em> a string literal; the mask is how a match that begins inside one — an
      * {@code @Async} named in a log line or an exception message — is told apart from an annotation.
      * </p>
+     *
+     * <p>Package-private so {@code RawTimestampReadConventionTest} (#280) scans the same way. Its
+     * own fixtures are Java sources held in string literals, so it needs the mask and not only the
+     * stripped text: without it the guard would report its own test data as a violation.</p>
      */
-    private static Stripped strip(String source) {
+    static Stripped strip(String source) {
         StringBuilder code = new StringBuilder(source.length());
         List<Boolean> literal = new ArrayList<>(source.length());
         int index = 0;
