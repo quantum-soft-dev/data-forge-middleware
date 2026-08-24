@@ -360,6 +360,36 @@ src/main/java/com/bitbi/dfm/
 - **uploaded_files**: File metadata with S3 keys and checksums
 - **error_logs**: Partitioned by month with JSONB metadata
 
+### Time zones
+
+Every zone-independent `TIMESTAMP` column in this schema holds a **UTC wall clock**, and there are
+two ways to read one. They agree only while the JVM runs in UTC, so the deployed container declares
+that zone instead of inheriting it (`ENV TZ=UTC` in the `Dockerfile`, held by
+`ContainerTimeZoneContractTest`).
+
+- **Through Hibernate** — an entity's `LocalDateTime` field. `spring.jpa.properties.hibernate.jdbc.time_zone: UTC`
+  makes Hibernate read a bound `LocalDateTime` as wall clock *in the JVM's zone* and store the same
+  instant in UTC; a read converts back. Write and read therefore cancel out, so this path is
+  self-consistent in any zone — but off UTC the value it returns is the JVM zone's wall clock, not
+  the column's.
+- **Through raw JDBC** (`JdbcTemplate` / `NamedParameterJdbcTemplate`) — no conversion: bind a
+  `LocalDateTime` directly (JDBC 4.2) and read with `rs.getObject(column, LocalDateTime.class)`.
+  This is the column's own value, i.e. UTC.
+
+`java.sql.Timestamp` is banned in `src/` in either direction (`Timestamp.valueOf`, `new Timestamp(…)`,
+`rs.getTimestamp(…)`), because it is an instant and so silently carries the JVM's default zone.
+`rs.getTimestamp(col).toLocalDateTime()` cancels that conversion for almost every value and is
+therefore easy to mistake for a no-op, but not for a wall clock that falls in the JVM zone's DST
+gap: that local time does not exist, `Calendar` resolves it forward, and the value comes back
+shifted by the transition. `RawTimestampReadConventionTest` holds the ban and carries the one
+deliberate exemption.
+
+The producing side is **not** yet uniform — parts of the code build a `LocalDateTime` with
+`LocalDateTime.now()` (the JVM zone, which the Hibernate conversion then makes correct) and parts
+with `LocalDateTime.now(ZoneOffset.UTC)` (already UTC, which that same conversion applies a second
+time). Off UTC those two disagree; under the UTC contract above they do not. Tracked separately —
+see issue #282.
+
 ### Key Business Rules
 
 1. **One Active Batch Per Site**: Only one IN_PROGRESS batch allowed per site

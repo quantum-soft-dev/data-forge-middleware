@@ -262,6 +262,34 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- utc-read-convention: A zone-independent `TIMESTAMP` column has one documented reading convention,
+  and the JVM zone the two paths agree in is declared rather than inherited (issue #280, from the
+  #278/#279 review). Two conventions existed with nothing asserting they matched: **Hibernate**
+  (`hibernate.jdbc.time_zone: UTC`) reads a bound `LocalDateTime` as JVM-local wall clock and stores
+  that instant in UTC, converting back on read — symmetric, so self-consistent in any zone; **raw
+  JDBC** (`ParquetExportCatalogDao`, the only such reader in `src/main`) does not convert, so it
+  returns the column's own UTC value. Identical on a UTC JVM, off by the zone's offset elsewhere —
+  #279's mechanism. **Option 1 + guard + a UTC container; option 2 rejected on a fact the ticket
+  lacked**: dropping `hibernate.jdbc.time_zone: UTC` unifies the readers and splits the writers —
+  `src/main` has 65 `LocalDateTime.now()` calls (correct *because* of the conversion) and 44
+  `LocalDateTime.now(ZoneOffset.UTC)` calls in delta (already UTC, converted twice), so it repairs
+  44 places and breaks 65 and is coherent only after all 109 producers are normalised (**#282**).
+  The three catalog reads become `rs.getObject("produced_at", LocalDateTime.class)` — a narrow fix
+  and not a restatement: `getTimestamp(col).toLocalDateTime()` cancels its own conversion for every
+  value *except* a stored wall clock in the JVM zone's DST gap, which `Calendar` resolves forward
+  (correcting `commit-gate-outside-ci`'s "net identity" below). The guard is **static** by decision:
+  `RawTimestampReadConventionTest` bans `rs.getTimestamp`, `Timestamp.valueOf` and `new Timestamp`
+  across `src/`, because the obvious "read both ways and compare" guard is red on every non-UTC JVM,
+  i.e. #279 recreated by its own prevention; it reuses `AsyncExecutorQualifierTest.strip` (now
+  package-private, literal mask included, since its fixtures are sources in string literals) and
+  carries one exemption with its reason (`ChangelogSegmentQueueMarkerClobberTest.asStored`), which
+  fails once stale. The container's zone was an accident of the base image and is now a contract:
+  `ENV TZ=UTC` in both runtime stages — through `TZ`, not `-Duser.timezone` in `JAVA_OPTS`, which
+  callers replace wholesale (`docker-compose.prod.yml`) — held by `ContainerTimeZoneContractTest`
+  (every runtime stage declares UTC; no manifest pins another zone). Both mutation-proven. No REST,
+  gRPC, proto, DTO, migration (**V58 stays free**), configuration-key, metric, S3-key or frontend
+  change; `hibernate.jdbc.time_zone: UTC` is untouched, so no written row changes meaning. See
+  `README.md` ("Time zones").
 - commit-gate-outside-ci: The per-task gate stopped lying in both directions (issue #278, folding
   **#279**; both found finishing #205/PR #255, both claimed `build.gradle.kts`, so they could never
   have run in parallel). **Part B — red where nothing is broken**:

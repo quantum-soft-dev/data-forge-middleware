@@ -18,6 +18,20 @@ import java.util.UUID;
  * key is computed in SQL with the exact {@code S3CheckpointStorage.deltaKey} format so the
  * keyset cursor {@code (produced_at, s3_key)} is stable and totally ordered across both sources.
  * </p>
+ *
+ * <p><strong>Time zone.</strong> {@code produced_at} is an alias of an ordinary zone-independent
+ * {@code TIMESTAMP} column ({@code changelog_segments.egress_at} and its checkpoint / batch
+ * equivalents), which by this schema's convention holds a <em>UTC wall clock</em>. Both directions
+ * here take the column at its own type and involve no zone: {@code since} and the cursor bind as
+ * {@code LocalDateTime} through JDBC 4.2, and {@code produced_at} is read with
+ * {@code getObject(column, LocalDateTime.class)}. Never {@code Timestamp.valueOf} or
+ * {@code rs.getTimestamp}: both carry the JVM's default zone, and although a read followed by
+ * {@code toLocalDateTime()} cancels that conversion for almost every value, it does not for one
+ * that falls in the JVM zone's DST gap — such a wall clock does not exist locally and comes back
+ * shifted by the transition. The Hibernate path over these same columns converts
+ * ({@code hibernate.jdbc.time_zone: UTC}) and therefore agrees with this one only while the JVM
+ * runs in UTC, which the deployed container declares. Held by
+ * {@code RawTimestampReadConventionTest} (#280); see {@code README.md}, "Time zones".</p>
  */
 @Repository
 public class ParquetExportCatalogDao {
@@ -65,7 +79,7 @@ public class ParquetExportCatalogDao {
         return jdbc.query(sql.toString(), params, (rs, i) -> new CatalogRow(
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.DELTA, rs.getLong("first_seq"), rs.getLong("last_seq"), null,
-                rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
+                rs.getObject("produced_at", LocalDateTime.class), rs.getString("s3_key"),
                 null, null, null));
     }
 
@@ -94,7 +108,7 @@ public class ParquetExportCatalogDao {
         return jdbc.query(sql.toString(), params, (rs, i) -> new CatalogRow(
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.CHECKPOINT, null, null, rs.getLong("seq"),
-                rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
+                rs.getObject("produced_at", LocalDateTime.class), rs.getString("s3_key"),
                 null, null, null));
     }
 
@@ -131,7 +145,7 @@ public class ParquetExportCatalogDao {
         return jdbc.query(sql.toString(), params, (rs, i) -> new CatalogRow(
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.BATCH, rs.getObject("first_seq", Long.class), rs.getObject("last_seq", Long.class),
-                null, rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
+                null, rs.getObject("produced_at", LocalDateTime.class), rs.getString("s3_key"),
                 rs.getObject("batch_id", UUID.class), rs.getString("status"),
                 rs.getObject("artifact_id", UUID.class)));
     }
