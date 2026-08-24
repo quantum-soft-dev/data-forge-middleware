@@ -113,6 +113,12 @@ class AgentJournalConsistencyTest {
                     .as("no journal entry parsed out of %s — the section heading or the entry "
                             + "shape changed and this guard has gone blind", document)
                     .isNotEmpty();
+            assertThat((long) slugs.size())
+                    .as("the Recent Changes section of %s holds fewer entries than the file has "
+                            + "entry-shaped lines — the section read stopped early (a '## ' line "
+                            + "inside a fenced block, or an entry moved out of the section) and "
+                            + "everything below it is unchecked", document)
+                    .isEqualTo(entryShapedLines(document));
             assertThat(duplicates)
                     .as("entries repeated in %s — two copies drift apart, and a reader resolves "
                             + "the contradiction by accident (#205 found exactly that)", document)
@@ -129,22 +135,55 @@ class AgentJournalConsistencyTest {
     private static List<String> journalSlugs(Path document) throws IOException {
         List<String> slugs = new ArrayList<>();
         boolean inSection = false;
+        boolean inFence = false;
         for (String line : Files.readAllLines(document)) {
-            if (line.strip().equals(SECTION)) {
+            if (line.stripLeading().startsWith("```")) {
+                inFence = !inFence;
+                continue;
+            }
+            if (!inFence && line.strip().equals(SECTION)) {
                 inSection = true;
                 continue;
             }
             if (!inSection) {
                 continue;
             }
-            if (line.startsWith("## ")) {
+            if (!inFence && line.startsWith("## ")) {
                 break;
             }
             Matcher matcher = ENTRY.matcher(line);
-            if (matcher.find()) {
+            if (!inFence && matcher.find()) {
                 slugs.add(matcher.group(1));
             }
         }
         return slugs;
+    }
+
+    /**
+     * Every entry-shaped line below the section heading, counted without any section logic.
+     *
+     * <p>The cross-check that {@link #journalSlugs} did not stop early. That read ends at the next
+     * {@code ## } heading, so a heading-shaped line inside a fenced block would truncate it
+     * silently and leave every entry below unchecked — a false green, where "parsed nothing" is
+     * visible and "parsed the first half" is not. Counted from the heading down because the same
+     * bullet shape is used above it (the "Naming" list), and "Recent Changes" is the last section
+     * of both files. It is deliberately blind to fences, so an entry that ever quotes an
+     * entry-shaped line inside one fails this loudly rather than weakening the check.</p>
+     */
+    private static long entryShapedLines(Path document) throws IOException {
+        List<String> lines = Files.readAllLines(document);
+        int heading = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).strip().equals(SECTION)) {
+                heading = i;
+                break;
+            }
+        }
+        assertThat(heading)
+                .as("no '%s' heading in %s", SECTION, document)
+                .isNotNegative();
+        return lines.subList(heading + 1, lines.size()).stream()
+                .filter(line -> ENTRY.matcher(line).find())
+                .count();
     }
 }

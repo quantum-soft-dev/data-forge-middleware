@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
@@ -167,7 +167,11 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
      * and the assertion holds in every zone).</p>
      */
     private static LocalDateTime asStored(LocalDateTime bound) {
-        return bound.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        // Timestamp.valueOf, not atZone: this is the conversion the binding itself performs, and
+        // the two disagree on an ambiguous local time — the repeated hour after a DST fall-back,
+        // where Calendar resolution takes the standard offset and ZonedDateTime the daylight one.
+        // An hour's divergence once a year, in exactly the zones this fix exists for.
+        return Timestamp.valueOf(bound).toInstant().atZone(ZoneOffset.UTC).toLocalDateTime();
     }
 
     private Row load(UUID id) {
