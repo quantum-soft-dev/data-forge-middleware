@@ -11,11 +11,17 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +30,8 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
 
 /**
  * T3.5b — changelog retention prunes segments at/below the durable checkpoint (DB row + S3 object),
@@ -63,6 +71,36 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private MeterRegistry meterRegistry;
+
+    @MockitoSpyBean
+    private S3FileStorageService objectDeleter;
+
+    /** Every observed {@code deleteObjects}: was a transaction open, and which keys did it carry. */
+    private record ObjectDelete(boolean insideTransaction, List<String> keys) {
+    }
+
+    private final List<ObjectDelete> objectDeletes = Collections.synchronizedList(new ArrayList<>());
+
+    /**
+     * Installed before the test body runs (issue #234, review round 3), and what that does and does
+     * not buy is worth stating precisely (review round 5). It removes the window in which
+     * <em>this</em> test's own work — the persist, the checkpoint build — could invoke the spy
+     * while it is being stubbed. It does <b>not</b> quiesce a background caller of this
+     * context-wide bean (batch retention's cron pass, a wipe in flight); the test profile keeps
+     * those sweeps at an hour (#159 / #167), which is what makes the residual improbable, exactly
+     * as #175 argued for its counter. Recording is unconditional and thread-safe; the assertion
+     * filters by this test's own key, so another caller's round trip is not its business.
+     */
+    @BeforeEach
+    void recordTransactionStateAtObjectDelete() {
+        objectDeletes.clear();
+        doAnswer(invocation -> {
+            List<String> keys = List.copyOf(invocation.getArgument(0));
+            objectDeletes.add(new ObjectDelete(
+                    TransactionSynchronizationManager.isActualTransactionActive(), keys));
+            return invocation.callRealMethod();
+        }).when(objectDeleter).deleteObjects(anyList());
+    }
 
     @Test
     void prunesBelowCheckpointSegmentsAndKeepsReconstructionCorrect() {
@@ -167,6 +205,41 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
                 "both markers set: the row is deleted");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty());
         segmentStorage.delete(key); // the statement deletes rows only; keep the shared bucket clean
+    }
+
+    /**
+     * Issue #234 — the batched {@code DeleteObjects} must run with no transaction open.
+     *
+     * <p>The unit tests pin the annotation and the call order; only the wired application can show
+     * that the repository's own short transactions — the projection read and each conditional row
+     * delete, each started by a Spring proxy a unit test does not have — really have committed by
+     * the time the objects go. The spy records
+     * {@link TransactionSynchronizationManager#isActualTransactionActive()} at the delete and then
+     * performs the real one.</p>
+     */
+    @Test
+    void theObjectDeleteRunsWithNoTransactionOpen() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        checkpointService.buildCheckpoint(SITE);
+        String prunedKey = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow().getS3Key();
+        markSegmentsProcessed(SITE);
+
+        assertEquals(1, retentionService.prune(SITE));
+
+        // Scoped to the deletion of this test's own key: a concurrent caller's round trip in the
+        // same context is not this assertion's business (review round 1).
+        List<Boolean> insideTransaction;
+        synchronized (objectDeletes) {
+            insideTransaction = objectDeletes.stream()
+                    .filter(delete -> delete.keys().contains(prunedKey))
+                    .map(ObjectDelete::insideTransaction)
+                    .toList();
+        }
+        assertEquals(List.of(false), insideTransaction,
+                "the pruned object must be deleted exactly once, with no transaction open (issue #234)");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
+        assertFalse(segmentStorage.exists(prunedKey), "segment S3 object pruned");
     }
 
     private double heldBack(String reason) {

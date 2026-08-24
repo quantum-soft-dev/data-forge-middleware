@@ -2138,6 +2138,44 @@ proxy boundary (they were `protected` self-invocations). `ParquetExportFileServi
 queries the catalog through `ParquetExportCatalogQuery` and only then probes S3; a row is still
 dropped only on a known absence (issue **#157**) and dropped candidates still advance the cursor.
 
+### No S3 inside the retention pass (issue #234)
+
+The same rule, one tick over. `ChangelogRetentionService.prune` was `@Transactional` around the
+whole pass, so its object deletes ran with that transaction — and every row lock it had taken —
+still open: on the nightly `CheckpointScheduler` tick, per site, serially, for a hold proportional
+to the site's backlog. It opens **no** transaction of its own now. The below-checkpoint projection
+read and each conditional row delete (`deleteByIdIfProcessed`) are the repository's own short
+transactions, and the batched 1000-key `DeleteObjects` runs with nothing open; `prune` throws if a
+transaction is already active, so the hold cannot be reintroduced silently.
+
+Two consequences worth knowing. The ordering is unchanged and is what makes a crash mid-pass
+converge — the row first, its object only after the delete reported success — so the worst outcome
+is an unreferenced object the #158 orphan sweep reclaims, never a row whose object is gone. And
+partial progress now **stands** where it used to roll back: a pass interrupted after fifty rows has
+pruned fifty segments rather than none. That is the intended direction (a pruned row is durable
+work, not a step of one atomic pass), and it is also why a failed object delete is still summarized
+rather than thrown — the rows are already gone. For the same reason the object delete runs in a
+`finally`: a failure inside the loop (a lock timeout on one row, a pool timeout, a failover) leaves
+those rows deleted, so their keys go to S3 anyway before the exception leaves `prune`. The keys are also flushed to S3 **every 1000** during the loop rather than only at the end, so a pod
+kill mid-pass strands at most one chunk of objects — free in round trips, since `deleteObjects`
+chunks at 1000 anyway. The #158 orphan sweep is the backstop for a crash, not the plan for an
+ordinary exception — it ships `delta.s3-orphan.dry-run: true`, so its reclaim is inert until an
+operator turns it on. The pass's
+**reporting** is in that `finally` too: the held-back counters, their WARN and the `Pruned N` INFO
+describe work that is now durable, so an aborted pass says what it did instead of reading as
+"nothing happened" behind `CheckpointScheduler`'s per-site failure line — and
+`delta.retention.segments.held-back` does not read zero for a pass that did observe a backlog.
+
+**What the pass buys and what it pays.** The hold drops — that is the term the pool's floor
+arithmetic (#161) is written in — but the *number* of transactions rises: one `begin`/`commit` and
+one pool acquisition per pruned segment, where the pass used to take one of each. For a site whose
+below-checkpoint set is large (the first prune after a long checkpoint outage; the set is unbounded
+since #212), the nightly tick therefore spends longer on that site in wall-clock terms, and each
+acquisition is independently subject to `spring.datasource.hikari.connection-timeout` (30 s) under
+saturation. That is the deliberate trade of this shape everywhere it is used here (#147, #164): a
+connection released between statements is available to everything else in the pod, where one held
+across a network round trip is not.
+
 ### A queue's mark cannot un-mark the other (issue #245)
 
 The two queue markers used to be stamped by saving the **whole entity captured at claim**.
