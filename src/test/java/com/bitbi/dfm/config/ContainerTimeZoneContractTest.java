@@ -48,9 +48,24 @@ class ContainerTimeZoneContractTest {
             Pattern.CASE_INSENSITIVE);
     private static final Pattern ENV_TZ = Pattern.compile("(?m)^\\s*ENV\\s+TZ\\s*=\\s*\"?([A-Za-z0-9/_+-]+)\"?\\s*$",
             Pattern.CASE_INSENSITIVE);
-    /** {@code TZ: "UTC"} / {@code TZ=UTC} / {@code - name: TZ} + {@code value: …} in YAML. */
-    private static final Pattern YAML_TZ = Pattern.compile(
-            "(?m)^\\s*-?\\s*(?:name:\\s*)?[\"']?TZ[\"']?\\s*[:=]\\s*[\"']?([A-Za-z0-9/_+-]+)[\"']?\\s*$");
+    /** A zone value: {@code Europe/Berlin}, {@code UTC}, {@code Etc/GMT+3}. */
+    private static final String ZONE = "([A-Za-z0-9/_+-]+)";
+    /** ConfigMap / compose {@code TZ: value}, and the compose list form {@code - TZ=value}. */
+    private static final Pattern YAML_TZ_ASSIGNMENT = Pattern.compile(
+            "(?m)^\\s*-?\\s*[\"']?TZ[\"']?\\s*[:=]\\s*[\"']?" + ZONE + "[\"']?\\s*$");
+    /**
+     * The Kubernetes container env form, where the name and the value are two separate lines:
+     * {@code - name: TZ} then {@code value: "Europe/Berlin"} (or {@code valueFrom:}).
+     */
+    private static final Pattern YAML_TZ_ENV_NAME = Pattern.compile(
+            "(?m)^\\s*-?\\s*name:\\s*[\"']?TZ[\"']?\\s*$");
+    private static final Pattern YAML_ENV_VALUE = Pattern.compile(
+            "^\\s*value:\\s*[\"']?" + ZONE + "[\"']?\\s*$");
+    /** The flow-mapping spelling of the same entry: <code>{name: TZ, value: X}</code>. */
+    private static final Pattern YAML_TZ_ENV_INLINE = Pattern.compile(
+            "\\{\\s*name:\\s*[\"']?TZ[\"']?\\s*,\\s*value:\\s*[\"']?" + ZONE + "[\"']?\\s*}");
+    /** What an unresolvable value reads as: the guard cannot prove it is UTC, so it fails closed. */
+    private static final String UNRESOLVED = "<not a literal>";
 
     @Test
     @DisplayName("every runtime stage of the Dockerfile sets TZ=UTC")
@@ -70,10 +85,9 @@ class ContainerTimeZoneContractTest {
     void noManifestPinsAnotherZone() {
         List<String> offenders = new ArrayList<>();
         for (Path file : manifests()) {
-            Matcher matcher = YAML_TZ.matcher(read(file));
-            while (matcher.find()) {
-                if (!"UTC".equalsIgnoreCase(matcher.group(1))) {
-                    offenders.add(RunOwnedScratch.projectRoot().relativize(file) + " sets TZ=" + matcher.group(1));
+            for (String zone : declaredTimeZones(read(file))) {
+                if (!"UTC".equalsIgnoreCase(zone)) {
+                    offenders.add(RunOwnedScratch.projectRoot().relativize(file) + " sets TZ=" + zone);
                 }
             }
         }
@@ -102,6 +116,86 @@ class ContainerTimeZoneContractTest {
     @DisplayName("the Dockerfile reader does not read a TZ set before any stage alias")
     void theReaderIgnoresWhatNoStageOwns() {
         assertThat(timeZonePerStage("ENV TZ=UTC\nFROM base AS production\nRUN true\n")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("the manifest reader sees every spelling of a container env var")
+    void theManifestReaderSeesEverySpelling() {
+        assertThat(declaredTimeZones("  TZ: \"Europe/Berlin\"\n")).containsExactly("Europe/Berlin");
+        assertThat(declaredTimeZones("      - TZ=Europe/Berlin\n")).containsExactly("Europe/Berlin");
+        assertThat(declaredTimeZones("""
+                        env:
+                          - name: TZ
+                            value: "Europe/Berlin"
+                """)).containsExactly("Europe/Berlin");
+        assertThat(declaredTimeZones("          - {name: TZ, value: Europe/Berlin}\n"))
+                .containsExactly("Europe/Berlin");
+    }
+
+    @Test
+    @DisplayName("a TZ the reader cannot resolve fails closed")
+    void anUnresolvableEnvValueIsNotTakenForUtc() {
+        assertThat(declaredTimeZones("""
+                        env:
+                          - name: TZ
+                            valueFrom:
+                              configMapKeyRef: {name: forge-config, key: TZ}
+                """)).containsExactly(UNRESOLVED);
+    }
+
+    @Test
+    @DisplayName("the manifest reader does not read a neighbouring env var as TZ")
+    void theManifestReaderIgnoresOtherEnvVars() {
+        assertThat(declaredTimeZones("""
+                        env:
+                          - name: TZDATA_PATH
+                            value: /usr/share/zoneinfo
+                          - name: SPRING_PROFILES_ACTIVE
+                            value: prod
+                """)).isEmpty();
+    }
+
+    /**
+     * Every time zone a manifest pins, in all three spellings a container env var takes.
+     *
+     * <p>The two-line Kubernetes form is the one that matters: it is how a {@code Deployment} sets
+     * an env var, it wins over the image's {@code ENV}, and a reader that only understands
+     * {@code KEY: value} would pass it silently — a guard blind to the commonest spelling of the
+     * thing it forbids. An env entry whose value is not a literal ({@code valueFrom}) reads as
+     * {@link #UNRESOLVED} rather than as absent, so the guard fails closed on what it cannot
+     * prove.</p>
+     */
+    static List<String> declaredTimeZones(String yaml) {
+        List<String> zones = new ArrayList<>();
+        Matcher assignment = YAML_TZ_ASSIGNMENT.matcher(yaml);
+        while (assignment.find()) {
+            zones.add(assignment.group(1));
+        }
+        Matcher inline = YAML_TZ_ENV_INLINE.matcher(yaml);
+        while (inline.find()) {
+            zones.add(inline.group(1));
+        }
+        String[] lines = yaml.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (!YAML_TZ_ENV_NAME.matcher(lines[i]).matches()) {
+                continue;
+            }
+            // The value is the sibling key of the same list entry, so it is the next non-blank
+            // line; anything that is not a literal `value:` leaves the zone unresolved.
+            String value = UNRESOLVED;
+            for (int j = i + 1; j < lines.length; j++) {
+                if (lines[j].isBlank()) {
+                    continue;
+                }
+                Matcher matcher = YAML_ENV_VALUE.matcher(lines[j]);
+                if (matcher.matches()) {
+                    value = matcher.group(1);
+                }
+                break;
+            }
+            zones.add(value);
+        }
+        return zones;
     }
 
     /** Stage alias → the zone that stage's last {@code ENV TZ} declares. */

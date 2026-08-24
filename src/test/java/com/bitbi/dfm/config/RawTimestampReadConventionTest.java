@@ -9,6 +9,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,16 +49,33 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RawTimestampReadConventionTest {
 
     /**
-     * Relative path → why that file may still name a banned shape.
+     * One earned use of a banned shape: which file, which shape, how many occurrences, and why.
      *
-     * <p>An entry whose file no longer contains one is itself a failure: a stale exemption is how a
-     * ban quietly stops being one.</p>
+     * @param path       repository-relative path, forward slashes
+     * @param shape      the one banned shape this file may name — any other still fails
+     * @param occurrences how many times it may name it — a second one is a new decision, not a
+     *                   consequence of this exemption
+     * @param reason     why the shape is right here, read by whoever finds the failure
      */
-    private static final Map<String, String> ALLOWED = Map.of(
+    private record Exemption(String path, String shape, int occurrences, String reason) {
+    }
+
+    /**
+     * The banned shapes this repository has decided are right where they stand.
+     *
+     * <p>Scoped to a shape and a count rather than to a file, because the reason an exemption
+     * carries is about one line: exempting the whole file would let the next
+     * {@code rs.getTimestamp} into the one class whose subject is this very conversion, with the
+     * guard green. An entry whose file no longer matches it exactly — shape gone, or named more
+     * often than it was earned — is itself a failure, since a stale exemption is how a ban quietly
+     * stops being one.</p>
+     */
+    private static final List<Exemption> ALLOWED = List.of(new Exemption(
             "src/test/java/com/bitbi/dfm/delta/infrastructure/ChangelogSegmentQueueMarkerClobberTest.java",
+            "Timestamp.valueOf(...)", 1,
             "asStored() models the Hibernate binding's own JVM-zone conversion on purpose, so that "
                     + "a row written through the repository can be compared with the raw column in "
-                    + "any zone (#278, part B).");
+                    + "any zone (#278, part B)."));
 
     /** The shapes that reach the JVM default zone without saying so. */
     private static final Map<String, Pattern> BANNED = new LinkedHashMap<>(Map.of(
@@ -83,10 +101,7 @@ class RawTimestampReadConventionTest {
         List<Violation> violations = new ArrayList<>();
         for (Path file : javaSources()) {
             String relative = relative(file);
-            if (ALLOWED.containsKey(relative)) {
-                continue;
-            }
-            violations.addAll(scan(relative, read(file)));
+            violations.addAll(unexempted(relative, scan(relative, read(file))));
         }
         assertThat(violations)
                 .withFailMessage(() -> "These sources read or build a timestamp through the JVM's "
@@ -112,16 +127,35 @@ class RawTimestampReadConventionTest {
     @Test
     @DisplayName("an exemption whose file no longer needs it fails")
     void everyAllowlistEntryIsStillEarned() {
-        for (Map.Entry<String, String> entry : ALLOWED.entrySet()) {
-            Path file = RunOwnedScratch.projectRoot().resolve(entry.getKey());
+        for (Exemption exemption : ALLOWED) {
+            Path file = RunOwnedScratch.projectRoot().resolve(exemption.path());
             assertThat(Files.exists(file))
-                    .withFailMessage("Allowlisted file %s does not exist — drop the entry", entry.getKey())
+                    .withFailMessage("Exempted file %s does not exist — drop the entry", exemption.path())
                     .isTrue();
-            assertThat(scan(entry.getKey(), read(file)))
-                    .withFailMessage("%s no longer names a banned shape, so its exemption is stale "
-                            + "and must be removed: %s", entry.getKey(), entry.getValue())
-                    .isNotEmpty();
+            long found = scan(exemption.path(), read(file)).stream()
+                    .filter(v -> v.shape().equals(exemption.shape()))
+                    .count();
+            assertThat(found)
+                    .withFailMessage("%s names %s %d time(s), and %d were earned: %s. Fewer means the "
+                                    + "exemption is stale and must be removed; more means a new use "
+                                    + "nobody decided on.",
+                            exemption.path(), exemption.shape(), found, exemption.occurrences(),
+                            exemption.reason())
+                    .isEqualTo(exemption.occurrences());
         }
+    }
+
+    @Test
+    @DisplayName("an exemption covers its own shape and nothing else in the same file")
+    void anExemptionDoesNotCoverTheRestOfItsFile() {
+        Exemption exemption = ALLOWED.get(0);
+        List<Violation> found = List.of(
+                new Violation(exemption.path(), 1, exemption.shape()),
+                new Violation(exemption.path(), 2, exemption.shape()),
+                new Violation(exemption.path(), 3, "rs.getTimestamp(...)"));
+        assertThat(unexempted(exemption.path(), found))
+                .extracting(Violation::line)
+                .containsExactly(2, 3);
     }
 
     @Test
@@ -154,6 +188,26 @@ class RawTimestampReadConventionTest {
                 """))
                 .extracting(Violation::shape)
                 .containsExactlyInAnyOrder("rs.getTimestamp(...)", "Timestamp.valueOf(...)", "new Timestamp(...)");
+    }
+
+    /** The violations of {@code path} that no exemption accounts for, earliest first. */
+    private static List<Violation> unexempted(String path, List<Violation> found) {
+        Map<String, Integer> budget = new LinkedHashMap<>();
+        for (Exemption exemption : ALLOWED) {
+            if (exemption.path().equals(path)) {
+                budget.merge(exemption.shape(), exemption.occurrences(), Integer::sum);
+            }
+        }
+        List<Violation> remaining = new ArrayList<>();
+        for (Violation violation : found.stream().sorted(Comparator.comparingInt(Violation::line)).toList()) {
+            Integer left = budget.get(violation.shape());
+            if (left != null && left > 0) {
+                budget.put(violation.shape(), left - 1);
+                continue;
+            }
+            remaining.add(violation);
+        }
+        return remaining;
     }
 
     /** Every banned shape in {@code source}, comments and string literals excluded. */

@@ -290,6 +290,20 @@ pages/{feature}/            # Route pages
   gRPC, proto, DTO, migration (**V58 stays free**), configuration-key, metric, S3-key or frontend
   change; `hibernate.jdbc.time_zone: UTC` is untouched, so no written row changes meaning. See
   `README.md` ("Time zones").
+  **Review round 1 found both guards blind in the same direction — passing while the thing they
+  forbid is present.** The manifest scan read only `KEY: value`, so the **canonical Kubernetes env
+  form** — `- name: TZ` on one line, `value: …` on the next, which is how a `Deployment` sets a
+  variable and which wins over the image's `ENV` — was invisible: a manifest could pin
+  `Europe/Berlin` with every assertion green, i.e. the container contract defeated in the one place
+  it is actually written. All three spellings are read now (assignment, two-line env entry, flow
+  mapping), a `valueFrom` whose value is not a literal reads as unresolved rather than as absent so
+  the guard fails closed on what it cannot prove, and the reader has tests of its own. And the
+  source ban exempted a whole **file** where its reason covered one **line**: the next
+  `rs.getTimestamp` added to `ChangelogSegmentQueueMarkerClobberTest` — the one class whose subject
+  is this very conversion — would have passed unseen. The exemption is scoped to a shape and a
+  count, so a second use is a new decision rather than a consequence of the first. Both fixes are
+  mutation-proven (a `- name: TZ` env entry in `deployment-backend.yaml`; a `getTimestamp` added
+  beside the exempted `Timestamp.valueOf`).
 - commit-gate-outside-ci: The per-task gate stopped lying in both directions (issue #278, folding
   **#279**; both found finishing #205/PR #255, both claimed `build.gradle.kts`, so they could never
   have run in parallel). **Part B — red where nothing is broken**:
