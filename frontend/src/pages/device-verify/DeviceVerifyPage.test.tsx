@@ -163,6 +163,17 @@ describe('DeviceVerifyPage', () => {
     expect(screen.getByText('Device code not found')).toBeInTheDocument();
   });
 
+  it('shows the expired-code recovery card when the authorization has expired (HTTP 410)', async () => {
+    search.code = 'ABCD-1234';
+    vi.mocked(deviceAuthApi.getVerifyInfo).mockRejectedValue(httpError(410));
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Code Expired', level: 2 })).toBeInTheDocument();
+    expect(screen.getByText(/start a new authorization request on your device/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enter New Code' })).toBeInTheDocument();
+  });
+
   // The global toast is suppressed for this call, so the page's own message is
   // the only report and must not blame the code for an outage (#211 review).
   it('does not blame the code when the request never reached the server', async () => {
@@ -202,6 +213,24 @@ describe('DeviceVerifyPage', () => {
     await waitFor(() =>
       expect(deviceAuthApi.approveAuthorization).toHaveBeenCalledWith('ABCD-1234')
     );
+  });
+
+  // The code can expire while the confirm card sits open — the page does not
+  // poll — so approving is the second, and likelier, way into the expired
+  // state (#219 review). "Please try again" would ask for a retry that can
+  // never succeed.
+  it('shows the expired-code recovery card when approving an expired code (HTTP 410)', async () => {
+    search.code = 'ABCD-1234';
+    vi.mocked(deviceAuthApi.approveAuthorization).mockRejectedValue(httpError(410));
+
+    renderPage();
+    await screen.findByText('Authorize Device');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Approve & Create Site' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Code Expired', level: 2 })
+    ).toBeInTheDocument();
   });
 
   it('denies the authorization', async () => {

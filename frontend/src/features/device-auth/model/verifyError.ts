@@ -42,7 +42,14 @@ export function describeVerifyFailure(error: unknown): string {
     case 403:
       return 'You do not have permission to authorize this device.';
     case 404:
-      return serverWording(error) ?? 'Device code not found or expired. Please check the code and try again.';
+      // Expiry is 410 since #219, so a 404 really is an unknown code: telling
+      // the user it may have expired would send them to start a new
+      // authorization instead of re-reading the code on the device.
+      return serverWording(error) ?? 'Device code not found. Please check the code and try again.';
+    case 410:
+      // The expired-code recovery card carries its own copy; this is the
+      // fallback for any caller that renders the message instead.
+      return 'This device code has expired. Please start a new authorization request on your device.';
     default:
       // Anything else is about Data Forge, not about the code the user typed:
       // sending them back to retype a good code would be a false accusation.

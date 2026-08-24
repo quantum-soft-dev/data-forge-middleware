@@ -25,6 +25,7 @@ import { Label } from '@/shared/ui/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
 import { severityTokens } from '@/shared/ui/tokens';
+import { getServerErrorStatus } from '@/shared/api/error-handler';
 import {
   useVerifyInfo,
   useApproveAuthorization,
@@ -37,6 +38,16 @@ import {
 import { AlertTriangle, CheckCircle2, XCircle, Smartphone, Loader2, Server } from 'lucide-react';
 
 type PageState = 'input' | 'confirm' | 'success' | 'denied' | 'expired' | 'error';
+
+/**
+ * The server answers 410 for a code that was real and ran out (issue #219).
+ * Three call sites need it: the lookup, and the two actions — the confirm card
+ * does not poll, so a code can expire while it sits open and only the action
+ * discovers it.
+ */
+function isExpiredResponse(error: unknown): boolean {
+  return getServerErrorStatus(error) === 410;
+}
 
 export default function DeviceVerifyPage() {
   const search = useSearch({ from: '/device-verify' }) as { code?: string };
@@ -86,7 +97,7 @@ export default function DeviceVerifyPage() {
   if (verifyInfoError && verifyInfoError !== reportedError) {
     setReportedError(verifyInfoError);
 
-    setPageState('error');
+    setPageState(isExpiredResponse(verifyInfoError) ? 'expired' : 'error');
     // The global toast is suppressed for this call, so this message is the only
     // report of the failure and has to distinguish a bad code from a bad day.
     setErrorMessage(describeVerifyFailure(verifyInfoError));
@@ -105,6 +116,18 @@ export default function DeviceVerifyPage() {
     }
   };
 
+  // An action that discovers the expiry moves the page to the same recovery
+  // card the lookup does; "please try again" would ask for a retry that can
+  // never succeed.
+  const handledExpiry = (error: unknown): boolean => {
+    if (!isExpiredResponse(error)) {
+      return false;
+    }
+    setErrorMessage('');
+    setPageState('expired');
+    return true;
+  };
+
   const handleApprove = async () => {
     try {
       setErrorMessage('');
@@ -112,6 +135,9 @@ export default function DeviceVerifyPage() {
       setCreatedSiteName(result.siteName);
       setPageState('success');
     } catch (error) {
+      if (handledExpiry(error)) {
+        return;
+      }
       const errorMsg = (error as { response?: { data?: { error_description?: string } } })
         ?.response?.data?.error_description;
       setErrorMessage(errorMsg || 'Failed to authorize device. Please try again.');
@@ -124,6 +150,9 @@ export default function DeviceVerifyPage() {
       await denyMutation.mutateAsync(userCode);
       setPageState('denied');
     } catch (error) {
+      if (handledExpiry(error)) {
+        return;
+      }
       const errorMsg = (error as { response?: { data?: { error_description?: string } } })
         ?.response?.data?.error_description;
       setErrorMessage(errorMsg || 'Failed to deny authorization. Please try again.');

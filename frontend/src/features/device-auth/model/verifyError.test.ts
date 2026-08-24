@@ -19,30 +19,39 @@ describe('describeVerifyFailure', () => {
     expect(describeVerifyFailure(httpError(400))).toMatch(/already been processed/i);
   });
 
-  it('names an unknown or expired code (404), preferring the server wording', () => {
+  it('names an unknown code (404), preferring the server wording', () => {
     expect(describeVerifyFailure(httpError(404, { error_description: 'Device code not found' })))
       .toBe('Device code not found');
-    expect(describeVerifyFailure(httpError(404))).toMatch(/not found or expired/i);
+    expect(describeVerifyFailure(httpError(404))).toMatch(/not found/i);
+    expect(describeVerifyFailure(httpError(404))).not.toMatch(/expired/i);
+  });
+
+  // Expiry became 410 in #219; the page renders its own card, but the message
+  // must be right for any caller that shows it.
+  it('names an expired code (410) rather than a bad one', () => {
+    const message = describeVerifyFailure(httpError(410));
+    expect(message).toMatch(/expired/i);
+    expect(message).not.toMatch(/not found/i);
   });
 
   it('does not blame the code for a network failure', () => {
     const message = describeVerifyFailure(new Error('Network Error'));
 
-    expect(message).not.toMatch(/not found or expired/i);
+    expect(message).not.toMatch(/not found/i);
     expect(message).toMatch(/connection/i);
   });
 
   it('does not blame the code for a server failure', () => {
     const message = describeVerifyFailure(httpError(500));
 
-    expect(message).not.toMatch(/not found or expired/i);
+    expect(message).not.toMatch(/not found/i);
     expect(message).toMatch(/try again/i);
   });
 
   it('does not blame the code for a refused request', () => {
     const message = describeVerifyFailure(httpError(403));
 
-    expect(message).not.toMatch(/not found or expired/i);
+    expect(message).not.toMatch(/not found/i);
     expect(message).toMatch(/permission/i);
   });
 
