@@ -295,6 +295,43 @@ pages/{feature}/            # Route pages
   **`com.bitbi.dfm.documentation.*`** rather than one class, since naming classes one by one is how
   the next guard is added and never run. Test, docs and hook only: no production code, REST, gRPC,
   proto, DTO, migration (**V58 stays free**), configuration-key, metric, S3-key or frontend change.
+- retention-no-s3-in-transaction: The changelog retention pass no longer holds a HikariCP connection
+  across its object deletes (issue #234). `ChangelogRetentionService.prune` was `@Transactional`
+  around everything, so the batched `DeleteObjects` round trip ran with the pass's transaction — and
+  every row lock it had taken — still open, on the nightly tick, per site, serially, for a hold
+  proportional to the site's backlog; the pool floor arithmetic (#161) assumes background work
+  releases between statements, and every neighbour already states the invariant (#147, #164, #176) —
+  retention was simply never named by them. **The #164 shape, nothing more**: the wrapping
+  `@Transactional` is gone, the projection read and each conditional row delete are short
+  transactions of their own, the S3 half runs with nothing open, and a `refuseInsideTransaction()`
+  guard is checked before anything is read (a caller that wrapped the pass would restore the hold
+  with every assertion still passing). The other two DoD items were already delivered by #212's
+  review round 1: one batched 1000-key `DeleteObjects`, and row first / object after the delete
+  reported success, so a crash between them leaves an unreferenced object for the #158 sweep.
+  **The one behaviour change is stated rather than implied**: partial progress now stands where it
+  used to roll back — the intended direction (a pruned row is durable work), and why the
+  failed-object-delete catch stays. **Six review rounds, all the same asymmetry**: durable partial
+  progress needs durable accounting, so the object delete, the held-back counters, their WARN and
+  the `Pruned N` line all moved into the `finally` (an exception inside the loop used to leak
+  precisely the objects the row-first ordering exists to bound, and the #212 stuck-backlog alarm
+  read zero for a pass that had just observed the backlog); the reporting is attempted step by step,
+  since one `try` around four statements still half-emits the alarm; a reporting failure is logged
+  **as a reporting failure** rather than swallowed (which loses it) or rethrown (which sends an
+  operator to a healthy site through `CheckpointScheduler`'s generic catch); the swallow while
+  unwinding is one helper, tightened to `Throwable` bar `VirtualMachineError`, because a teardown
+  `NoClassDefFoundError` would both replace the loop's exception and escape
+  `catch (RuntimeException)`, ending the whole tick; keys are flushed every 1000 **during** the
+  loop, and handed over as a copy; and the chunk lines are chunk-accurate. Test corrections of the
+  same class: the annotation guard read only the method-level `@Transactional` (a class-level or
+  `jakarta` one would have restored the hold with the assertion green), one unit assertion was
+  **vacuous**, one test's `verify` passed through a swallowed NPE, and the integration spy's stub
+  registration raced (#119/#159/#226's flake class). **The cost is written down beside the benefit**:
+  the hold drops, the number of transactions rises to one per pruned segment, each subject to the
+  30 s `connection-timeout` — the deliberate trade of this shape everywhere it is used. The finding
+  **not** taken is that transaction count over an unbounded set under `buildLock`, which can starve
+  the later sites of a tick; it needs native SQL and belongs to **#193**, which now carries the
+  evidence. No REST, gRPC, proto, DTO, migration (V57 applied, V58 free), configuration-key, metric,
+  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("No S3 inside the retention pass").
 - docs-recent-changes-drifts: Four accumulating documents now describe the repository they are about (issue #205, folding **#218**); none is a code defect, all four are the "one document contradicts another about the same place" case, and they share no files with each other or with product code. **The guide's connection floor said four long ticks**: #158 added `DeltaS3OrphanSweeper` as a fifth `Cost.LONG` tick and moved the floor to `5 long ticks + 2 request reserve = 7`, and `application.yml`, the #158 entry and `BackgroundConnectionDemandTest` (deriving the term from `ScheduledTaskInventoryTest.longRunningTaskCount()` — four annotated `Cost.LONG` tasks plus the programmatic `BatchRetentionScheduler` cron) all say five; the guide was the only surface left on the old number, because round 4 of #158's review fixed `application.yml` and not the guide. It says five. **`AGENTS.md` was missing `prefix-walk-paged`** (#199 wrote it to `CLAUDE.md` only) and carried `split-scratch-ceilings` **twice**, the copies differing exactly in the clause #153 made stale — an assertion and its superseded variant in one file, which an agent reading top to bottom resolves by accident; the entry is restored between `test-profile-scratch-directory` and `s3-orphan-sweep` (its `CLAUDE.md` position) and the stale duplicate deleted. **`README.md` documented `./gradlew contractTest`** (#218), which `build.gradle.kts` does not register — it declares `test` (with `-PexcludeIntegration`) and `integrationTest` — so it names the supported gate, matching "Commands" and the gates table, with `--tests '*ContractTest'` for one class; a real `contractTest` task was rejected as a new gate nobody asked for. **`docs/cr-bitbi-delta-sql.md` residual risk 3** described the delta-SQL queue holding a connection across S3 as a live trade-off, retired by #164 (the claim and mark are short transactions; the class Javadoc, the guide and the #164 entry say so) — removed rather than reworded, and the list renumbers, the retention item keeping #212's narrowing. **The DoD's third item — a guard for the missing entry — is answered yes, reversing what the ticket was written to say.** Its census of 2026-08-19 found one omission and three same-day merges landing in both files; re-run four days later, `AGENTS.md` is missing **three more** fresh entries, each written to `CLAUDE.md` by its own PR — `adopt-path-side-effects` (#246), `double-nan-sql-literal` (#233), `signed-nan-classification` (#238). One omission is a slip, four in a week is a mechanism, and the mechanism is that the omission is **invisible in the diff** of a PR touching only one file, which no review habit catches. The ticket's other argument — a guard needs a hand-placed boundary, "a second convention maintained by nobody" — is the half that is wrong: the journals are genuinely unequal (81 slugs to 97, 13 of the 16 differences being `033`–`042` plus `tag-driven-dev-deploy`, `plugin-secret-reveal`, `agent-migration-doc-consistency`, which `AGENTS.md` stopped carrying and later resumed), but entries are only prepended and never removed, so the anchor at the end of that gap (`042-parquet-phase-metrics`) never moves — one constant set once, the shape `MigrationDocumentationConsistencyTest` (#104) already has over these two files. Above it the predicate is mechanical with no false positive. Building it needs the three entries backfilled first, so it is **#278**, not this branch. Documentation only: no product code, test, REST, gRPC, proto, DTO, migration (**V58 stays free**), configuration-key, metric, S3-key or frontend change.
 - unpaired-sql-started: A lost SQL-generation unique claim writes `SQL_GENERATION_ADOPTED` so
   the account's plugin log is not left with an unpaired `SQL_GENERATION_STARTED` (issue #260,
