@@ -49,11 +49,15 @@ done <<< "$staged"
 status=0
 
 if [ "$migration_guidance_changed" = true ] && [ "$backend_changed" = false ]; then
-  echo "▶ pre-commit: migration documentation consistency"
+  echo "▶ pre-commit: agent documentation consistency"
+  # The whole package rather than one class: every guard over AGENTS.md / CLAUDE.md lives here
+  # (migration pointers #104, the Recent Changes journal #278), and a docs-only commit is exactly
+  # the one that can break any of them. Naming classes one by one is how the next guard is added
+  # and silently never run.
   if ! ./gradlew test -PexcludeIntegration \
-      --tests com.bitbi.dfm.documentation.MigrationDocumentationConsistencyTest \
+      --tests 'com.bitbi.dfm.documentation.*' \
       --no-daemon --console=plain; then
-    echo "✖ Migration documentation drift detected — commit blocked."
+    echo "✖ Agent documentation drift detected — commit blocked."
     status=1
   fi
 fi
