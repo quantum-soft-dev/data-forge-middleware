@@ -180,17 +180,29 @@ public interface JpaChangelogSegmentRepository
 
     // Targeted UPDATEs of one marker, not a save of the claimed entity (issue #245): since #164
     // the claim lock is released before S3, so a merge of the claim-time snapshot would write the
-    // other queue's marker back to NULL. CURRENT_TIMESTAMP matches markFullSnapshotPluginSqlProcessed.
+    // other queue's marker back to NULL.
+    //
+    // Native, and only because JPQL has no AT TIME ZONE (issue #286). The marker columns are
+    // zone-independent TIMESTAMPs holding a UTC wall clock, like everything else this application
+    // writes, while a bare CURRENT_TIMESTAMP is resolved in the database session's zone — which
+    // pgjdbc takes from the JVM's default. Keeping the database as the time source is #245's own
+    // choice (one clock across pods), so the expression says UTC instead of moving the clock into
+    // the application; it is the one JpaBatchParquetArtifactRepository's catalog watermark uses.
+    // All three marker statements here share it.
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
-    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = CURRENT_TIMESTAMP WHERE s.id = :id")
+    @Query(value = "UPDATE changelog_segments SET plugin_sql_at = "
+            + "CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp) WHERE id = :id",
+            nativeQuery = true)
     int markPluginSqlProcessed(UUID id);
 
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
-    @Query("UPDATE ChangelogSegment s SET s.egressAt = CURRENT_TIMESTAMP WHERE s.id = :id")
+    @Query(value = "UPDATE changelog_segments SET egress_at = "
+            + "CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp) WHERE id = :id",
+            nativeQuery = true)
     int markEgressed(UUID id);
 
     @Override
@@ -269,9 +281,11 @@ public interface JpaChangelogSegmentRepository
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
-    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = CURRENT_TIMESTAMP "
-            + "WHERE s.siteId = :siteId AND s.provisional = false "
-            + "AND s.mode = 'FULL_SNAPSHOT' AND s.pluginSqlAt IS NULL")
+    @Query(value = "UPDATE changelog_segments SET plugin_sql_at = "
+            + "CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp) "
+            + "WHERE site_id = :siteId AND provisional = false "
+            + "AND mode = 'FULL_SNAPSHOT' AND plugin_sql_at IS NULL",
+            nativeQuery = true)
     int markFullSnapshotPluginSqlProcessed(UUID siteId);
 
     // flushAutomatically for the same reason as flipProvisionalByBatchId: clearAutomatically alone

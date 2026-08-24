@@ -378,12 +378,23 @@ clock — in an entity, after a raw-JDBC read, and in the DTOs, which serialize 
   merely left to habit.
 - **Through raw JDBC** (`JdbcTemplate` / `NamedParameterJdbcTemplate`) — bind a `LocalDateTime`
   directly (JDBC 4.2) and read with `rs.getObject(column, LocalDateTime.class)`.
-- **From the database's own clock** — a JPQL `SET … = CURRENT_TIMESTAMP` is evaluated by
-  PostgreSQL in the *session's* zone, which pgjdbc sets from the JVM's. That producer is UTC
-  because the JVM is, which is one of the two reasons the container still declares its zone rather
-  than inheriting it (`ENV TZ=UTC` in the `Dockerfile`, held by `ContainerTimeZoneContractTest`);
-  the other is that logs then read in UTC. Native SQL says it outright instead —
-  `clock_timestamp() AT TIME ZONE 'UTC'` in the Parquet Export catalog watermark.
+- **From the database's own clock** — some statements let PostgreSQL stamp the value, deliberately:
+  one clock across a fleet whose pods may disagree about the time (#245). PostgreSQL resolves
+  `CURRENT_TIMESTAMP` in the *session's* zone, and pgjdbc sets that zone from the JVM's default at
+  connect time, so the statement must say UTC itself:
+  `CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp)`. JPQL has no `AT TIME ZONE`, so every
+  such statement is native SQL — the queue markers in `JpaChangelogSegmentRepository`, the
+  revocations in `JpaRefreshTokenRepository`, the activation touch in `JpaAccountPluginRepository`,
+  and the Parquet Export catalog watermark. A bare clock function in production SQL fails the build
+  (`DatabaseClockConventionTest`), and that the statements really do write UTC in a non-UTC session
+  is `DatabaseClockUtcIntegrationTest`.
+  Two populations are deliberately outside that ban and neither can reach production data: eleven
+  **applied** migrations declare columns `DEFAULT CURRENT_TIMESTAMP` — never edited, forward-only,
+  and unreachable because every INSERT on those tables maps the column (new migrations are held to
+  the convention) — and test fixtures, which seed rows with the bare form.
+  `ENV TZ=UTC` in the `Dockerfile` (`ContainerTimeZoneContractTest`) is therefore belt-and-braces
+  for the session zone rather than load-bearing; it still earns its place by making logs read in
+  UTC.
 
 A field held as `Instant` needs no rule: its binding stores the UTC wall clock in every zone and
 never consulted `hibernate.jdbc.time_zone` at all.
@@ -396,8 +407,10 @@ a `LocalDateTime` field and an `Instant` one) but runs in whatever zone the JVM 
 outside UTC that makes it mutation-sensitive, while in CI, which runs in UTC, the conversion it
 guards against would be the identity and the test would stay green. It deliberately does **not**
 switch the JVM's default zone to change that — pgjdbc derives a connection's PostgreSQL session zone
-from that default, and the test suite shares one pool, so a non-UTC session could leak onto another
-test's `CURRENT_TIMESTAMP` write.
+from that default, and the test suite shares one pool, so a non-UTC session would leak onto another
+test's fixture, which still seeds rows with a bare `CURRENT_TIMESTAMP`. `DatabaseClockUtcIntegrationTest`
+moves the session zone the safe way instead — `SET LOCAL`, undone by the transaction it runs in — so
+its teeth do not depend on the ambient zone.
 
 `java.sql.Timestamp` is banned in `src/` in either direction (`Timestamp.valueOf`, `new Timestamp(…)`,
 `rs.getTimestamp(…)`), because it is an instant and so silently carries the JVM's default zone.

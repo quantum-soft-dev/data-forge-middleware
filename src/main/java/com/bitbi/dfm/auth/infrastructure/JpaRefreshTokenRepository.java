@@ -27,14 +27,22 @@ public interface JpaRefreshTokenRepository extends JpaRepository<RefreshToken, U
     @Query("SELECT rt FROM RefreshToken rt WHERE rt.tokenHash = :tokenHash")
     Optional<RefreshToken> findByTokenHash(String tokenHash);
 
+    // Native, and only because JPQL has no AT TIME ZONE (issue #286): revoked_at is a
+    // zone-independent TIMESTAMP holding a UTC wall clock, while a bare CURRENT_TIMESTAMP is
+    // resolved in the database session's zone, which pgjdbc takes from the JVM's default. The
+    // entity's own writer binds an Instant, which is always UTC, so off UTC one column would have
+    // received two different clocks. Same expression as the catalog watermark in
+    // JpaBatchParquetArtifactRepository; the database stays the time source (#245).
     @Override
     @Modifying
-    @Query("UPDATE RefreshToken rt SET rt.revokedAt = CURRENT_TIMESTAMP WHERE rt.siteId = :siteId AND rt.revokedAt IS NULL")
+    @Query(value = "UPDATE refresh_tokens SET revoked_at = CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp) "
+            + "WHERE site_id = :siteId AND revoked_at IS NULL", nativeQuery = true)
     int revokeAllBySiteId(UUID siteId);
 
     @Override
     @Modifying
-    @Query("UPDATE RefreshToken rt SET rt.revokedAt = CURRENT_TIMESTAMP WHERE rt.familyId = :familyId AND rt.revokedAt IS NULL")
+    @Query(value = "UPDATE refresh_tokens SET revoked_at = CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp) "
+            + "WHERE family_id = :familyId AND revoked_at IS NULL", nativeQuery = true)
     int revokeAllByFamilyId(UUID familyId);
 
     @Override
