@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
@@ -86,7 +86,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
     @DisplayName("a plugin-SQL mark leaves the egress retry columns intact")
     void sqlMarkLeavesEgressRetryStateIntact() {
         UUID id = seedPending().getId();
-        LocalDateTime retryAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
+        LocalDateTime retryAt = LocalDateTime.now().plusMinutes(5);
         assertThat(segmentRepository.deferEgress(id, retryAt, 0)).isEqualTo(1);
 
         assertThat(segmentRepository.markPluginSqlProcessed(id)).isEqualTo(1);
@@ -95,7 +95,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
         assertThat(row.pluginSqlAt()).isNotNull();
         assertThat(row.egressAt()).as("egress is still owed").isNull();
         assertThat(row.egressAttempts()).isEqualTo(1);
-        assertThat(row.egressRetryAt()).isEqualToIgnoringNanos(retryAt);
+        assertThat(row.egressRetryAt()).isEqualToIgnoringNanos(asStored(retryAt));
         assertThat(row.pluginSqlAttempts()).isZero();
         assertThat(row.pluginSqlRetryAt()).isNull();
     }
@@ -104,7 +104,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
     @DisplayName("an egress mark leaves the plugin-SQL retry columns intact")
     void egressMarkLeavesSqlRetryStateIntact() {
         UUID id = seedPending().getId();
-        LocalDateTime retryAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
+        LocalDateTime retryAt = LocalDateTime.now().plusMinutes(5);
         assertThat(segmentRepository.deferPluginSql(id, retryAt, 0)).isEqualTo(1);
 
         assertThat(segmentRepository.markEgressed(id)).isEqualTo(1);
@@ -113,7 +113,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
         assertThat(row.egressAt()).isNotNull();
         assertThat(row.pluginSqlAt()).as("plugin SQL is still owed").isNull();
         assertThat(row.pluginSqlAttempts()).isEqualTo(1);
-        assertThat(row.pluginSqlRetryAt()).isEqualToIgnoringNanos(retryAt);
+        assertThat(row.pluginSqlRetryAt()).isEqualToIgnoringNanos(asStored(retryAt));
         assertThat(row.egressAttempts()).isZero();
         assertThat(row.egressRetryAt()).isNull();
     }
@@ -152,6 +152,24 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
         return segmentRepository.save(segment);
     }
 
+    /**
+     * The wall clock a {@link LocalDateTime} parameter actually lands as in the row.
+     *
+     * <p>These columns are {@code TIMESTAMP} without a zone (V55) and the entity holds them as
+     * {@link LocalDateTime}, but {@code hibernate.jdbc.time_zone: UTC} (application.yml) makes
+     * Hibernate read a bound {@code LocalDateTime} as JVM-local wall clock and store the same
+     * instant in UTC. Production is symmetric — it writes and reads through Hibernate, so the
+     * conversion cancels — while this class deliberately reads the <em>row</em> through
+     * {@link JdbcTemplate}, where it does not. Writing a UTC wall clock and comparing it with the
+     * raw column therefore differed by the JVM's offset: green in CI (UTC) and deterministically
+     * red anywhere else, failing the mandatory per-task gate on commits that touch nothing
+     * (issue #278, part B; the offset is zero in UTC, so this conversion is the identity there
+     * and the assertion holds in every zone).</p>
+     */
+    private static LocalDateTime asStored(LocalDateTime bound) {
+        return bound.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+    }
+
     private Row load(UUID id) {
         return jdbc.queryForObject("""
                 SELECT plugin_sql_at, egress_at,
@@ -159,16 +177,12 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
                        egress_attempts, egress_retry_at
                 FROM changelog_segments WHERE id = ?
                 """, (rs, i) -> new Row(
-                toLocal(rs.getTimestamp("plugin_sql_at")),
-                toLocal(rs.getTimestamp("egress_at")),
+                rs.getObject("plugin_sql_at", LocalDateTime.class),
+                rs.getObject("egress_at", LocalDateTime.class),
                 rs.getInt("plugin_sql_attempts"),
-                toLocal(rs.getTimestamp("plugin_sql_retry_at")),
+                rs.getObject("plugin_sql_retry_at", LocalDateTime.class),
                 rs.getInt("egress_attempts"),
-                toLocal(rs.getTimestamp("egress_retry_at"))), id);
-    }
-
-    private static LocalDateTime toLocal(Timestamp timestamp) {
-        return timestamp == null ? null : timestamp.toLocalDateTime();
+                rs.getObject("egress_retry_at", LocalDateTime.class)), id);
     }
 
     private record Row(LocalDateTime pluginSqlAt, LocalDateTime egressAt,
