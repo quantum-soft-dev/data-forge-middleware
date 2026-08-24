@@ -156,7 +156,17 @@ public class BatchParquetFinalizationService {
             return 0;
         }
         List<ChangelogSegment> segments = segmentRepository.findByBatchIdOrderByFirstSeq(batchId);
-        if (segments.isEmpty() || !segments.get(0).getSiteId().equals(siteId)) {
+        if (segments.isEmpty()) {
+            // Said out loud rather than answered with a silent 0 (issue #244): this is the legacy
+            // backfill's own version of "segments pruned, artifact unproducible", and the download
+            // that triggered it is about to answer 404 for a batch that looks perfectly complete.
+            log.warn("No completed-batch Parquet can be built for batch {}: its changelog segments "
+                            + "are gone (retention, a history wipe or a re-baseline) — the records "
+                            + "remain available through the site's checkpoint (issue #244)",
+                    batchId);
+            return 0;
+        }
+        if (!segments.get(0).getSiteId().equals(siteId)) {
             return 0;
         }
         return enqueue(batchId, siteId, segments);
@@ -224,9 +234,14 @@ public class BatchParquetFinalizationService {
                 built = metrics.timeBatchParquetBuild(() -> buildAndUpload(claims));
             } catch (RuntimeException e) {
                 String error = Objects.toString(e.getMessage(), e.getClass().getSimpleName());
+                // A pruned segment set is the one batch-wide failure that cannot repair itself
+                // (issue #244), so it settles now instead of after an hour of identical retries.
+                boolean permanent = e instanceof BatchSegmentsUnavailableException;
                 built = new LinkedHashMap<>();
                 for (Claim claim : claims) {
-                    built.put(claim.artifactId(), BuildOutcome.failed(error));
+                    built.put(claim.artifactId(), permanent
+                            ? BuildOutcome.permanentlyFailed(error)
+                            : BuildOutcome.failed(error));
                 }
             }
             for (Claim claim : claims) {
@@ -424,7 +439,8 @@ public class BatchParquetFinalizationService {
         List<ChangelogSegment> segments = segmentRepository
                 .findByBatchIdOrderByFirstSeq(firstClaim.batchId());
         if (segments.isEmpty()) {
-            throw new IllegalStateException("Batch has no published changelog segments");
+            // Deterministic and permanent (issue #244): nothing re-creates a pruned segment.
+            throw new BatchSegmentsUnavailableException(firstClaim.batchId());
         }
         Map<String, TableSchema> schemas = schemaService.getTableSchemas(firstClaim.siteId());
         Map<UUID, BuildOutcome> outcomes = new LinkedHashMap<>();

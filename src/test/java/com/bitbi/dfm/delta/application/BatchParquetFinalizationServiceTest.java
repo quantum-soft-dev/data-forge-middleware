@@ -531,6 +531,43 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void aPrunedSegmentSetAbandonsTheArtifactOnItsFirstAttemptInsteadOfRetryingForAnHour() {
+        // Issue #244 — the window the retention hold-back deliberately does not cover: an
+        // ABANDONED row requeued later (039) or the legacy backfill (037) can find the batch's
+        // raw segments already pruned. That is deterministic, so retrying it to the attempt cap
+        // only delays the same ending by an hour and buries the reason.
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of());
+
+        assertTrue(newService(7).finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus(),
+                "an unproducible artifact is settled at once, not after max-attempts");
+        assertEquals(1, artifact.getAttemptCount());
+        assertTrue(artifact.getLastError().contains("pruned"),
+                () -> "the error names why the artifact cannot be produced: "
+                        + artifact.getLastError());
+        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void onDemandBackfillOfABatchWhoseSegmentsWerePrunedEnqueuesNothing() {
+        // The same ending on the backfill path: nothing to build, and the caller's download
+        // answers 404 — reported rather than silently returning zero.
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        Batch finished = batch(BatchStatus.COMPLETED);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of());
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(finished));
+
+        assertEquals(0, service.enqueueBatchForSite(siteId, batchId));
+
+        verify(artifactRepository, never()).insertPendingIfAbsent(any(), any(), any(), any(), any());
+    }
+
+    @Test
     void claimsWithTheConfiguredBackoffAndLeaseWindows() {
         when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of());

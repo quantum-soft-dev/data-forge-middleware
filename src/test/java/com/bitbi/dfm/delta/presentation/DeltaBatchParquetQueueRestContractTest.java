@@ -47,6 +47,24 @@ class DeltaBatchParquetQueueRestContractTest extends BaseIntegrationTest {
         jdbc.update("DELETE FROM batch_parquet_artifacts WHERE batch_id = ?", BATCH_ID);
         insert(ABANDONED_ID, "orders", "ABANDONED", 7, "schema mismatch", "2 hours");
         insert(PENDING_ID, "customers", "PENDING", 0, null, "1 minute");
+        seedSegment();
+    }
+
+    /**
+     * The batch's raw changelog segment — what a requeued build replays (issue #244): without one
+     * the route answers 409 rather than requeueing. Both markers are stamped so the global,
+     * site-blind queues can never claim it (#175).
+     */
+    private void seedSegment() {
+        jdbc.update("DELETE FROM changelog_segments WHERE batch_id = ?", BATCH_ID);
+        jdbc.update("""
+                INSERT INTO changelog_segments (id, site_id, batch_id, first_seq, last_seq,
+                                                record_count, content_hash, s3_key, mode,
+                                                provisional, plugin_sql_at, egress_at)
+                VALUES (?, ?, ?, 1, 5, 10, 'hash', ?, 'DELTA', FALSE,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), SITE_ID, BATCH_ID,
+                "delta/" + SITE_ID + "/segments/" + UUID.randomUUID() + ".pb.gz");
     }
 
     @Test
@@ -162,4 +180,21 @@ class DeltaBatchParquetQueueRestContractTest extends BaseIntegrationTest {
 
     private record MapRow(String status, int attempts, Object claimToken, String lastError) {
     }
+    @Test
+    void requeueIsRefusedWhenTheBatchHasNoChangelogSegmentsLeft() throws Exception {
+        // Issue #244: retention holds a batch's segments back only while an artifact row is
+        // UNFINISHED, so an ABANDONED row requeued long afterwards can find them pruned — and no
+        // attempt could then produce the artifact.
+        jdbc.update("DELETE FROM changelog_segments WHERE batch_id = ?", BATCH_ID);
+
+        mockMvc.perform(post(REQUEUE_URL.formatted(SITE_ID, BATCH_ID, ABANDONED_ID))
+                        .header("Authorization", ADMIN_TOKEN))
+                .andExpect(status().isConflict());
+
+        String status = jdbc.queryForObject(
+                "SELECT status FROM batch_parquet_artifacts WHERE id = ?", String.class,
+                ABANDONED_ID);
+        assertThat(status).isEqualTo("ABANDONED");
+    }
+
 }

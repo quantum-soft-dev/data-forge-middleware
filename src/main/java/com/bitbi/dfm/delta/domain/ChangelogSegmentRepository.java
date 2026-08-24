@@ -324,6 +324,18 @@ public interface ChangelogSegmentRepository {
     boolean existsCommittedPendingBelowCheckpoint(UUID siteId, long checkpointSeq);
 
     /**
+     * Whether a batch still has any committed (non-provisional) changelog segment (issue #244).
+     *
+     * <p>The completed-batch Parquet replay reads exactly this set, so an empty answer means the
+     * artifact can no longer be produced — what the admin requeue route checks before spending an
+     * attempt on it.</p>
+     *
+     * @param batchId batch (= Delta session) identifier
+     * @return {@code true} if at least one non-provisional segment of the batch survives
+     */
+    boolean existsCommittedByBatchId(UUID batchId);
+
+    /**
      * How much pending queue work a batch's committed segments still carry (issue #212). Read by
      * the batch deleters — batch retention (the deliberate outer horizon of the queues' retry) and
      * the explicit admin delete — so destroying pending work is counted and logged rather than

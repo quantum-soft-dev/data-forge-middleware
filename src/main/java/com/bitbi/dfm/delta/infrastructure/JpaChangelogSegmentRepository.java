@@ -235,6 +235,11 @@ public interface JpaChangelogSegmentRepository
     boolean existsCommittedPendingBelowCheckpoint(UUID siteId, long checkpointSeq);
 
     @Override
+    @Query("SELECT COUNT(s) > 0 FROM ChangelogSegment s "
+            + "WHERE s.batchId = :batchId AND s.provisional = false")
+    boolean existsCommittedByBatchId(UUID batchId);
+
+    @Override
     @Query("SELECT COALESCE(SUM(CASE WHEN s.pluginSqlAt IS NULL THEN 1 ELSE 0 END), 0) AS pendingPluginSql, "
             + "COALESCE(SUM(CASE WHEN s.egressAt IS NULL THEN 1 ELSE 0 END), 0) AS pendingEgress "
             + "FROM ChangelogSegment s WHERE s.batchId = :batchId AND s.provisional = false")

@@ -6,6 +6,7 @@ import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.site.domain.Site;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -23,14 +24,17 @@ import java.util.UUID;
 public class BatchParquetQueueService {
 
     private final BatchParquetArtifactRepository artifactRepository;
+    private final ChangelogSegmentRepository segmentRepository;
     private final AdminActionLogRepository auditRepository;
     private final int leaseSeconds;
 
     public BatchParquetQueueService(BatchParquetArtifactRepository artifactRepository,
+                                    ChangelogSegmentRepository segmentRepository,
                                     AdminActionLogRepository auditRepository,
                                     @Value("${delta.batch-parquet.lease-seconds:1800}")
                                     int leaseSeconds) {
         this.artifactRepository = artifactRepository;
+        this.segmentRepository = segmentRepository;
         this.auditRepository = auditRepository;
         this.leaseSeconds = leaseSeconds;
     }
@@ -54,6 +58,13 @@ public class BatchParquetQueueService {
         BatchParquetArtifactStatus previousStatus = artifact.getStatus();
         if (!isRequeueable(artifact, previousStatus)) {
             throw new ArtifactNotRequeueableException(artifactId, previousStatus);
+        }
+        // Issue #244: the replay reads the batch's raw segments, and retention holds them back only
+        // while an artifact row is UNFINISHED — an ABANDONED row requeued long afterwards is
+        // precisely the window where they may be gone. Refuse here rather than queue an attempt
+        // whose only possible ending is the same ABANDONED with a different error.
+        if (!segmentRepository.existsCommittedByBatchId(batchId)) {
+            throw new ArtifactUnproducibleException(artifactId, batchId);
         }
 
         artifact.requeue();
@@ -93,7 +104,25 @@ public class BatchParquetQueueService {
     /** The artifact is already healthy, retryable, published, or still has a live build lease. */
     public static class ArtifactNotRequeueableException extends RuntimeException {
         public ArtifactNotRequeueableException(UUID artifactId, BatchParquetArtifactStatus status) {
-            super("Batch Parquet artifact " + artifactId + " cannot be requeued in status " + status);
+            this("Batch Parquet artifact " + artifactId + " cannot be requeued in status " + status);
+        }
+
+        protected ArtifactNotRequeueableException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * The artifact is recoverable in principle but its batch's raw changelog segments are gone,
+     * so no attempt can produce it (issue #244). A subclass, so the route keeps answering 409 —
+     * the state is not recoverable, which is what that status already means here.
+     */
+    public static class ArtifactUnproducibleException extends ArtifactNotRequeueableException {
+        public ArtifactUnproducibleException(UUID artifactId, UUID batchId) {
+            super("Batch Parquet artifact " + artifactId + " cannot be requeued: batch " + batchId
+                    + " has no published changelog segments left (retention, a history wipe or a "
+                    + "re-baseline took them), so no attempt can produce it — the records remain "
+                    + "available through the site's checkpoint");
         }
     }
 }

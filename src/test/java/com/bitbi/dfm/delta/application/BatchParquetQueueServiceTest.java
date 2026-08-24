@@ -6,6 +6,7 @@ import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.site.domain.Site;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,14 +33,18 @@ class BatchParquetQueueServiceTest {
     private static final UUID ARTIFACT_ID = UUID.randomUUID();
 
     private BatchParquetArtifactRepository repository;
+    private ChangelogSegmentRepository segmentRepository;
     private AdminActionLogRepository auditRepository;
     private BatchParquetQueueService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(BatchParquetArtifactRepository.class);
+        segmentRepository = mock(ChangelogSegmentRepository.class);
         auditRepository = mock(AdminActionLogRepository.class);
-        service = new BatchParquetQueueService(repository, auditRepository, 1800);
+        // The batch's raw segments are there unless a test says otherwise (issue #244).
+        when(segmentRepository.existsCommittedByBatchId(BATCH_ID)).thenReturn(true);
+        service = new BatchParquetQueueService(repository, segmentRepository, auditRepository, 1800);
     }
 
     @Test
@@ -144,4 +149,28 @@ class BatchParquetQueueServiceTest {
         when(site.getAccountId()).thenReturn(ACCOUNT_ID);
         return site;
     }
+    @Test
+    void refusesToRequeueAnArtifactWhoseBatchHasNoSegmentsLeft() {
+        // Issue #244 — the window the retention hold-back does not cover: an ABANDONED row is
+        // terminal, so its batch's segments are prunable and may already be gone. Queueing an
+        // attempt would spend the whole backoff window to reach the same ABANDONED.
+        BatchParquetArtifact artifact = artifact(BatchParquetArtifactStatus.ABANDONED,
+                LocalDateTime.now(ZoneOffset.UTC));
+        when(repository.findForUpdate(ARTIFACT_ID, SITE_ID, BATCH_ID))
+                .thenReturn(Optional.of(artifact));
+        when(segmentRepository.existsCommittedByBatchId(BATCH_ID)).thenReturn(false);
+
+        BatchParquetQueueService.ArtifactUnproducibleException refusal = assertThrows(
+                BatchParquetQueueService.ArtifactUnproducibleException.class,
+                () -> service.requeue(site(), BATCH_ID, ARTIFACT_ID, "10.0.0.1", "agent"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                refusal.getMessage().contains("no published changelog segments"),
+                () -> "the refusal says why: " + refusal.getMessage());
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus(),
+                "the row is left as it was");
+        verify(repository, never()).save(artifact);
+        verify(auditRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
 }
