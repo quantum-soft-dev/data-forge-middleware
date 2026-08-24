@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.infrastructure;
 
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -197,7 +198,8 @@ public interface JpaChangelogSegmentRepository
     java.util.List<String> findAllS3KeysBySiteId(UUID siteId);
 
     @Override
-    @Query("SELECT s.id AS id, s.s3Key AS s3Key, s.pluginSqlAt AS pluginSqlAt, s.egressAt AS egressAt "
+    @Query("SELECT s.id AS id, s.s3Key AS s3Key, s.batchId AS batchId, "
+            + "s.pluginSqlAt AS pluginSqlAt, s.egressAt AS egressAt "
             + "FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false "
             + "AND s.lastSeq <= :checkpointSeq ORDER BY s.firstSeq")
     java.util.List<PrunableSegmentView> findBelowCheckpointBySiteId(UUID siteId, long checkpointSeq);
@@ -220,8 +222,11 @@ public interface JpaChangelogSegmentRepository
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("DELETE FROM ChangelogSegment s WHERE s.id = :id "
-            + "AND s.pluginSqlAt IS NOT NULL AND s.egressAt IS NOT NULL")
-    int deleteByIdIfProcessed(UUID id);
+            + "AND s.pluginSqlAt IS NOT NULL AND s.egressAt IS NOT NULL "
+            + "AND NOT EXISTS (SELECT 1 FROM BatchParquetArtifact a WHERE a.batchId = s.batchId "
+            + "AND a.status IN :unfinishedArtifactStatus)")
+    int deleteByIdIfProcessed(UUID id,
+                              java.util.Collection<BatchParquetArtifactStatus> unfinishedArtifactStatus);
 
     @Override
     @Query("SELECT COUNT(s) > 0 FROM ChangelogSegment s WHERE s.siteId = :siteId "

@@ -12,8 +12,10 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDateTime;
 import jakarta.persistence.LockModeType;
@@ -193,6 +195,12 @@ public interface JpaBatchParquetArtifactRepository
             ON CONFLICT (batch_id, table_name) DO NOTHING
             """, nativeQuery = true)
     int insertPendingIfAbsent(UUID id, UUID batchId, UUID siteId, String tableName, LocalDateTime now);
+
+    @Override
+    @Query("SELECT DISTINCT a.batchId FROM BatchParquetArtifact a "
+            + "WHERE a.batchId IN :batchIds AND a.status IN :statuses")
+    Set<UUID> findBatchIdsWithStatusIn(@Param("batchIds") Collection<UUID> batchIds,
+                                      @Param("statuses") Collection<BatchParquetArtifactStatus> statuses);
 
     @Override
     @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.siteId = :siteId AND a.s3Key IS NOT NULL")

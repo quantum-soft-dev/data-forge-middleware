@@ -296,10 +296,17 @@ public interface ChangelogSegmentRepository {
      * {@code plugin_sql_at} site-wide) makes the delete a no-op instead of destroying a
      * freshly-pending queue entry; the caller deletes the S3 object only after this reported 1.
      *
-     * @param id segment identifier
-     * @return 1 if the row was deleted, 0 if it was pending again (or already gone)
+     * <p>Since issue #244 the same statement also refuses a segment whose batch still owes a
+     * completed-batch Parquet build ({@link BatchParquetArtifactStatus#UNFINISHED}), for the same
+     * reason and against the same race: a lazy download backfill (037) or an admin requeue (039)
+     * committing between retention's read and this delete creates the work row that needs these
+     * very segments.</p>
+     *
+     * @param id                       segment identifier
+     * @param unfinishedArtifactStatus the artifact statuses that still owe a build
+     * @return 1 if the row was deleted, 0 if it owed work again (or was already gone)
      */
-    int deleteByIdIfProcessed(UUID id);
+    int deleteByIdIfProcessed(UUID id, java.util.Collection<BatchParquetArtifactStatus> unfinishedArtifactStatus);
 
     /**
      * Whether any committed below-checkpoint segment of a site still owes queue work
@@ -337,6 +344,9 @@ public interface ChangelogSegmentRepository {
         UUID getId();
 
         String getS3Key();
+
+        /** The batch this segment belongs to — the completed-batch Parquet hold-back's key (#244). */
+        UUID getBatchId();
 
         LocalDateTime getPluginSqlAt();
 

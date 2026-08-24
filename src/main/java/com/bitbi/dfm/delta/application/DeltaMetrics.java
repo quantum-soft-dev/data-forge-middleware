@@ -102,6 +102,13 @@ public class DeltaMetrics {
     public static final String RETENTION_PENDING_PLUGIN_SQL = "pending_plugin_sql";
     /** Held back because {@code egress_at IS NULL} — the delta-Parquet egress queue still owes it. */
     public static final String RETENTION_PENDING_EGRESS = "pending_egress";
+    /**
+     * Held back because the batch still owes a completed-batch Parquet build (issue #244) — an
+     * artifact row in {@link com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus#UNFINISHED},
+     * whose replay reads these raw segments. Bounded by construction, unlike the two queue markers:
+     * the row leaves that set after {@code delta.batch-parquet.max-attempts} attempts.
+     */
+    public static final String RETENTION_PENDING_BATCH_PARQUET = "pending_batch_parquet";
     static final String PHASE_TOTAL = "total";
     static final Set<String> BATCH_PARQUET_PHASES =
             Set.of("download", "decode", "decimal_scan", "write", "upload", PHASE_TOTAL);
@@ -141,6 +148,7 @@ public class DeltaMetrics {
     private final Counter checkpointOrphanDeletesFailed;
     private final Counter retentionHeldBackPluginSql;
     private final Counter retentionHeldBackEgress;
+    private final Counter retentionHeldBackBatchParquet;
     private final Counter retentionDeletedPendingPluginSql;
     private final Counter retentionDeletedPendingEgress;
     private final Map<String, Timer> batchParquetPhases;
@@ -210,6 +218,7 @@ public class DeltaMetrics {
         this.checkpointOrphanDeletesFailed = orphanDeletesFailed(registry, ORPHAN_PREFIX_CHECKPOINTS);
         this.retentionHeldBackPluginSql = retentionHeldBack(registry, RETENTION_PENDING_PLUGIN_SQL);
         this.retentionHeldBackEgress = retentionHeldBack(registry, RETENTION_PENDING_EGRESS);
+        this.retentionHeldBackBatchParquet = retentionHeldBack(registry, RETENTION_PENDING_BATCH_PARQUET);
         this.retentionDeletedPendingPluginSql = retentionDeletedPending(registry, RETENTION_PENDING_PLUGIN_SQL);
         this.retentionDeletedPendingEgress = retentionDeletedPending(registry, RETENTION_PENDING_EGRESS);
         this.batchParquetPhases = phaseTimers(registry, "delta.batch-parquet.duration",
@@ -267,7 +276,8 @@ public class DeltaMetrics {
     private static Counter retentionHeldBack(MeterRegistry registry, String reason) {
         return Counter.builder("delta.retention.segments.held-back")
                 .description("Below-checkpoint segments retention would have pruned but held back "
-                        + "because their queue work is still pending, by reason")
+                        + "because their queue work or completed-batch Parquet build is still "
+                        + "pending, by reason")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
     }
 
@@ -522,7 +532,7 @@ public class DeltaMetrics {
      * Only segments the audit window would actually have pruned are counted: a pending segment
      * still inside the window is retained by the window, not by the predicate.</p>
      *
-     * <p>Read each {@code reason} series independently — "is this queue stalling retention": a
+     * <p>Read each {@code reason} series independently — "is this consumer stalling retention": a
      * segment owing <em>both</em> counts on both, so the sum over reasons can exceed the number of
      * held-back segments (the per-consumer honesty of
      * {@code delta.parquet.unrepresentable-decimals}). And read it as a <b>census, not an arrival
@@ -539,10 +549,15 @@ public class DeltaMetrics {
      * reinit re-pends a site's audit window by design ({@code clearPluginSqlBySiteId}), so a
      * one-pass spike after a reinit is benign.</p>
      *
-     * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL} or {@link #RETENTION_PENDING_EGRESS}
+     * @param reason {@link #RETENTION_PENDING_PLUGIN_SQL}, {@link #RETENTION_PENDING_EGRESS} or
+     *               {@link #RETENTION_PENDING_BATCH_PARQUET}
      * @param count  how many segments were held back for that reason
      */
     public void retentionSegmentsHeldBack(String reason, long count) {
+        if (RETENTION_PENDING_BATCH_PARQUET.equals(reason)) {
+            retentionHeldBackBatchParquet.increment(count);
+            return;
+        }
         retentionReasonCounter(reason, retentionHeldBackPluginSql, retentionHeldBackEgress)
                 .increment(count);
     }

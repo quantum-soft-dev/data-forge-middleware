@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.application;
 
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PrunableSegmentView;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
@@ -11,7 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -43,6 +46,21 @@ import java.util.UUID;
  * segments still count toward the audit window — the window keeps its meaning ("the most recent N
  * below-checkpoint segments"), and the hold-back retains segments on top of it rather than
  * re-shaping it.</p>
+ *
+ * <p><b>A pending completed-batch Parquet build is not prunable either (issue #244).</b> The
+ * 036/038 finalization replays a batch's <em>raw</em> segments on every attempt, so a batch whose
+ * artifact row is still {@link BatchParquetArtifactStatus#UNFINISHED} needs them — and the decision
+ * is per <b>batch</b>, not per segment: pruning part of a batch would leave the replay silently
+ * truncated (the row-count guard derives its expectation from the segments actually loaded) rather
+ * than failed, which is worse than pruning all of it. Counted on
+ * {@code delta.retention.segments.held-back{reason=pending_batch_parquet}} beside the two queue
+ * markers. Unlike those, this hold-back is <b>bounded by construction</b>: an artifact row leaves
+ * {@code UNFINISHED} after {@code delta.batch-parquet.max-attempts} attempts (~1 h), so it cannot
+ * pin a segment indefinitely. The two windows it deliberately does not cover — an
+ * {@code ABANDONED} row requeued later (039) and the legacy lazy backfill (037), neither of which
+ * has an unfinished row while retention runs — do not fail silently either: the replay classifies a
+ * pruned segment set as a <em>permanent</em> failure naming retention instead of retrying it for an
+ * hour, the admin requeue refuses an unproducible artifact, and the backfill logs it.</p>
  *
  * <p><b>Deliberately no age or count bound of this pass's own on the hold-back.</b> The main
  * permanent-stall scenario — a mistyped {@code plugin.sql-generation.heap-threshold-percent} making
@@ -94,17 +112,20 @@ public class ChangelogRetentionService {
     private static final int OBJECT_DELETE_CHUNK = 1000;
 
     private final ChangelogSegmentRepository segmentRepository;
+    private final BatchParquetArtifactRepository artifactRepository;
     private final S3FileStorageService objectDeleter;
     private final DeltaSyncStateService syncStateService;
     private final DeltaMetrics metrics;
     private final int auditWindowSegments;
 
     public ChangelogRetentionService(ChangelogSegmentRepository segmentRepository,
+                                     BatchParquetArtifactRepository artifactRepository,
                                      S3FileStorageService objectDeleter,
                                      DeltaSyncStateService syncStateService,
                                      DeltaMetrics metrics,
                                      @Value("${delta.retention.audit-window-segments:20}") int auditWindowSegments) {
         this.segmentRepository = segmentRepository;
+        this.artifactRepository = artifactRepository;
         this.objectDeleter = objectDeleter;
         this.syncStateService = syncStateService;
         this.metrics = metrics;
@@ -132,6 +153,9 @@ public class ChangelogRetentionService {
                 segmentRepository.findBelowCheckpointBySiteId(siteId, checkpointSeq);
 
         int pruneCount = Math.max(0, belowCheckpoint.size() - auditWindowSegments);
+        // One census read per pass, over the candidate batches only (issue #244) — never one query
+        // per segment, and never per site: a batch is the unit of the decision.
+        Set<UUID> batchesOwedParquet = batchesOwedParquet(belowCheckpoint, pruneCount);
         List<String> pendingObjectDeletes = new ArrayList<>();
         HeldBackTally heldBack = new HeldBackTally();
         int prunedRows = 0;
@@ -145,10 +169,12 @@ public class ChangelogRetentionService {
         try {
             for (int i = 0; i < pruneCount; i++) {
                 PrunableSegmentView segment = belowCheckpoint.get(i);
-                if (heldBack.countIfPending(segment.isPendingPluginSql(), segment.isPendingEgress())) {
+                if (heldBack.count(segment.isPendingPluginSql(), segment.isPendingEgress(),
+                        batchesOwedParquet.contains(segment.getBatchId()))) {
                     continue;
                 }
-                if (segmentRepository.deleteByIdIfProcessed(segment.getId()) == 1) {
+                if (segmentRepository.deleteByIdIfProcessed(
+                        segment.getId(), BatchParquetArtifactStatus.UNFINISHED) == 1) {
                     // Row first, object after the row delete reported success: a crash in between
                     // leaves an unreferenced object for the #158 orphan sweep, never a row whose
                     // object is gone.
@@ -169,11 +195,15 @@ public class ChangelogRetentionService {
                     }
                     continue;
                 }
-                // The row read as processed above but the conditional delete refused it: a reinit
-                // committed in between and re-pended it (or another deleter took it). Re-read and
-                // count it by what the row says now; a row that vanished counts nowhere.
-                segmentRepository.findById(segment.getId()).ifPresent(rePended ->
-                        heldBack.countIfPending(rePended.isPendingPluginSql(), rePended.isPendingEgress()));
+                // The row read as prunable above but the conditional delete refused it: a reinit
+                // committed in between and re-pended it, a lazy backfill or an admin requeue
+                // created the artifact row that needs it (issue #244), or another deleter took it.
+                // Re-read and count it by what the row says now; a row that vanished counts
+                // nowhere, and a row whose markers are still done can only have been refused by
+                // the artifact predicate the same statement carries.
+                segmentRepository.findById(segment.getId()).ifPresent(refused ->
+                        heldBack.count(refused.isPendingPluginSql(), refused.isPendingEgress(),
+                                !refused.isPendingPluginSql() && !refused.isPendingEgress()));
             }
             unwinding = false;
         } finally {
@@ -263,14 +293,16 @@ public class ChangelogRetentionService {
                         DeltaMetrics.RETENTION_PENDING_PLUGIN_SQL, heldBack.pendingPluginSql),
                 () -> metrics.retentionSegmentsHeldBack(
                         DeltaMetrics.RETENTION_PENDING_EGRESS, heldBack.pendingEgress),
+                () -> metrics.retentionSegmentsHeldBack(
+                        DeltaMetrics.RETENTION_PENDING_BATCH_PARQUET, heldBack.pendingBatchParquet),
                 () -> {
                     if (heldBack.segments > 0) {
                         log.warn("Held back {} below-checkpoint segment(s) with pending work for "
-                                        + "site {} — {} awaiting plugin SQL, {} awaiting egress; "
-                                        + "retention does not delete unprocessed queue work "
-                                        + "(issue #212)",
+                                        + "site {} — {} awaiting plugin SQL, {} awaiting egress, "
+                                        + "{} awaiting the completed-batch Parquet build; retention "
+                                        + "does not delete unprocessed work (issues #212, #244)",
                                 heldBack.segments, siteId, heldBack.pendingPluginSql,
-                                heldBack.pendingEgress);
+                                heldBack.pendingEgress, heldBack.pendingBatchParquet);
                     }
                 },
                 () -> {
@@ -364,16 +396,34 @@ public class ChangelogRetentionService {
         }
     }
 
+    /**
+     * The distinct batches among the segments this pass would prune that still owe a
+     * completed-batch Parquet build (issue #244).
+     */
+    private Set<UUID> batchesOwedParquet(List<PrunableSegmentView> belowCheckpoint, int pruneCount) {
+        Set<UUID> candidates = new LinkedHashSet<>();
+        for (int i = 0; i < pruneCount; i++) {
+            candidates.add(belowCheckpoint.get(i).getBatchId());
+        }
+        if (candidates.isEmpty()) {
+            return Set.of();
+        }
+        return artifactRepository.findBatchIdsWithStatusIn(
+                candidates, BatchParquetArtifactStatus.UNFINISHED);
+    }
+
     /** The hold-back census of one pass — the same counting for the view and the re-read (R2-9). */
     private static final class HeldBackTally {
 
         private int segments;
         private int pendingPluginSql;
         private int pendingEgress;
+        private int pendingBatchParquet;
 
-        /** @return {@code true} when the segment was pending (and has now been counted) */
-        private boolean countIfPending(boolean pluginSqlPending, boolean egressPending) {
-            if (!pluginSqlPending && !egressPending) {
+        /** @return {@code true} when the segment owed work (and has now been counted) */
+        private boolean count(boolean pluginSqlPending, boolean egressPending,
+                              boolean batchParquetPending) {
+            if (!pluginSqlPending && !egressPending && !batchParquetPending) {
                 return false;
             }
             segments++;
@@ -382,6 +432,9 @@ public class ChangelogRetentionService {
             }
             if (egressPending) {
                 pendingEgress++;
+            }
+            if (batchParquetPending) {
+                pendingBatchParquet++;
             }
             return true;
         }
