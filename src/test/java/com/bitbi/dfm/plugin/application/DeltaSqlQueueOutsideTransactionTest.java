@@ -28,6 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -95,6 +97,7 @@ class DeltaSqlQueueOutsideTransactionTest {
         assertTrue(queueService.processNextPending());
         assertFalse(generationSawTransaction.get(),
                 "generation (semaphore + S3) must run after the claim transaction has closed");
-        assertTrue(segment.getPluginSqlAt() != null);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 }

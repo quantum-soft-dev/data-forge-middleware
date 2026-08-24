@@ -45,7 +45,9 @@ import java.util.function.Supplier;
  *       directory was full, tagged {@code writer=checkpoint_frame|checkpoint_table|batch_artifact}.
  *       Transient by nature — it says the directory was busy, not that the artifact was too big —
  *       so it is its own counter rather than a value on any of the meters below, neither the
- *       permanent {@code builds.aborted} nor the per-table {@code tables.unmaterialized}</li>
+ *       permanent {@code builds.aborted} nor the per-table {@code tables.unmaterialized}. Since
+ *       issue #193 a {@code batch_artifact} refusal can also mean the writer hit the checkpoint
+ *       reserved share rather than the whole directory</li>
  *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
  *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
  *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped

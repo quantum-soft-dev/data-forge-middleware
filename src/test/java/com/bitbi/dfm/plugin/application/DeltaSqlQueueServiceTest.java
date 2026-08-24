@@ -24,6 +24,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -109,8 +110,8 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(processed).isTrue();
         verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACTIVATION_ID);
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 
     @Test
@@ -134,8 +135,8 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(processed).isTrue();
         verifyNoInteractions(sqlGenerationService);
-        assertThat(segment.getPluginSqlAt()).isNotNull();
-        verify(segmentRepository).save(segment);
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 
     @Test
@@ -163,7 +164,8 @@ class DeltaSqlQueueServiceTest {
         // audit warning signals reinit required
         verify(pluginAuditService).logSqlGenerationFailed(
                 eq("bit-bi"), eq(ACCOUNT_ID), eq(BATCH_ID), eq(SITE_ID), anyString(), anyLong());
-        assertThat(segment.getPluginSqlAt()).isNotNull();
+        verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        verify(segmentRepository, never()).save(segment);
     }
 
     @Test
@@ -189,7 +191,9 @@ class DeltaSqlQueueServiceTest {
                 eq("bit-bi"), eq(ACCOUNT_ID), any(), eq(SITE_ID), anyString(), anyLong());
         assertThat(meterRegistry.counter("sql.generation.delta.rebaseline.detected").count()).isEqualTo(1.0);
         // Both segments are still consumed — the queue must not stall on the quiet one.
-        assertThat(second.getPluginSqlAt()).isNotNull();
+        verify(segmentRepository).markPluginSqlProcessed(first.getId());
+        verify(segmentRepository).markPluginSqlProcessed(second.getId());
+        verify(segmentRepository, never()).save(any());
         verifyNoInteractions(sqlGenerationService);
     }
 
@@ -238,6 +242,7 @@ class DeltaSqlQueueServiceTest {
         assertThat(retryAt.getValue()).isAfter(before.plusSeconds(59));
         assertThat(segment.getPluginSqlAt()).as("still the durable queue entry").isNull();
         verify(segmentRepository, never()).save(segment);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
     }
@@ -321,5 +326,67 @@ class DeltaSqlQueueServiceTest {
     void shouldRegisterTheQueueSeriesAtZero() {
         assertThat(meterRegistry.find("sql.generation.delta.segments.deferred").counter()).isNotNull();
         assertThat(meterRegistry.find("sql.generation.delta.segments.poisoned").counter()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("a semaphore timeout spends no attempt and is not a verdict on the segment (#261)")
+    void shouldNotSpendAnAttemptOnSemaphoreTimeout() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new SqlGenerationService.SemaphoreTimeoutAbortedException(BATCH_ID));
+
+        assertThatThrownBy(() -> queueService.processNextPending())
+                .isInstanceOf(SqlGenerationService.SemaphoreTimeoutAbortedException.class)
+                .isInstanceOf(SqlGenerationService.PodLevelAbortedException.class);
+
+        assertThat(segment.getPluginSqlAt()).isNull();
+        verify(segmentRepository, never()).save(segment);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("memory-pressure refusal is the same pod-level exemption, by the shared parent (#261)")
+    void shouldNotSpendAnAttemptOnMemoryPressure() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new SqlGenerationService.MemoryPressureAbortedException(BATCH_ID));
+
+        assertThatThrownBy(() -> queueService.processNextPending())
+                .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
+                .isInstanceOf(SqlGenerationService.PodLevelAbortedException.class);
+
+        assertThat(segment.getPluginSqlAt()).isNull();
+        verify(segmentRepository, never()).save(segment);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("a wrapped S3 IOException is this segment's failure, not a pod-level refusal (#261)")
+    void shouldDeferAWrappedS3FailureAsTheSegmentsOwn() {
+        // Decided rather than inherited: a bucket outage and a missing object for this batch
+        // arrive as the same wrap, and a missing object should poison. An outage that lasts
+        // the doubling window is an incident either way; the per-wake bound plus
+        // "many at once means systemic" is how to read it.
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new SqlGenerationService.SqlGenerationException(
+                        "Failed to read files for SQL generation",
+                        new IOException("The specified key does not exist")));
+        when(segmentRepository.deferPluginSql(any(), any(), anyInt())).thenReturn(1);
+
+        assertThat(queueService.processNextPending()).isFalse();
+
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any(), eq(0));
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
     }
 }

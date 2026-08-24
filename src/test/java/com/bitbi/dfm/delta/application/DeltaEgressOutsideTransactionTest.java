@@ -107,7 +107,7 @@ class DeltaEgressOutsideTransactionTest {
         order.verify(segmentRepository).findNextPendingEgress(eq(1), any());
         order.verify(changelogSegmentService).readRecords("changelog/key");
         order.verify(storage).uploadDelta(eq(SITE), eq("orders"), eq(1L), eq(1L), any(byte[].class));
-        order.verify(segmentRepository).save(segment);
+        order.verify(segmentRepository).markEgressed(segment.getId());
         assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
     }
 

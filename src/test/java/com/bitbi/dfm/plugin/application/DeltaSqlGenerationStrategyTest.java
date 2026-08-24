@@ -335,4 +335,65 @@ class DeltaSqlGenerationStrategyTest {
         assertThat(result).isNotNull();
         assertThat(result.sqlContent()).contains("DELETE FROM priced WHERE id = 'Infinity'");
     }
+
+    /**
+     * Issue #240's second fork: Parquet DECIMAL's NULL is the contract, so SQL follows it for
+     * <em>data</em> cells too. A {@code numeric(p,s)} column whose value arrives as
+     * {@code double_value} / a non-finite {@code string_value} is NULL in every Parquet artifact
+     * ({@code toBigDecimal} cannot render a non-finite into a DECIMAL whatever Java type it arrived
+     * as). Until this, the SQL stream rendered {@code 'NaN'} for those cells — valid PostgreSQL that
+     * stored a value the baseline does not have. Keys of that combination are already skipped
+     * (issue #233); the data half is this ticket.
+     *
+     * <p>Controls: a {@code double precision} data cell is still quoted ({@link
+     * #shouldRenderNonFiniteDoubleAsQuotedLiteral}), and a <em>bare</em> {@code numeric} is Avro
+     * STRING so it is not a DECIMAL destination either.</p>
+     */
+    @Test
+    @DisplayName("should render a non-finite data cell as NULL when its column is a Parquet decimal")
+    void shouldNullNonFiniteDataCellInADecimalColumn() throws IOException {
+        Map<String, TableSchema> typed = Map.of(
+                "priced", new TableSchema(
+                        List.of(new TableSchema.ColumnDefinition("id", "bigint", false),
+                                new TableSchema.ColumnDefinition("price", "numeric(10,2)", true),
+                                new TableSchema.ColumnDefinition("note", "varchar", true)),
+                        List.of("id"), List.of()),
+                "measured", new TableSchema(
+                        List.of(new TableSchema.ColumnDefinition("id", "bigint", false),
+                                new TableSchema.ColumnDefinition("reading", "double precision", true)),
+                        List.of("id"), List.of()),
+                "tokened", new TableSchema(
+                        List.of(new TableSchema.ColumnDefinition("id", "bigint", false),
+                                new TableSchema.ColumnDefinition("amount", "numeric", true)),
+                        List.of("id"), List.of()));
+
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("priced", Op.UPDATE, 1, Map.of("id", intVal(1)),
+                        Map.of("price", dbl(Double.NaN))),
+                record("priced", Op.UPDATE, 2, Map.of("id", intVal(2)),
+                        Map.of("price", str("Infinity"), "note", str("kept"))),
+                record("priced", Op.INSERT, 3, Map.of("id", intVal(3)),
+                        Map.of("price", dbl(Double.NEGATIVE_INFINITY))),
+                record("measured", Op.UPDATE, 4, Map.of("id", intVal(4)),
+                        Map.of("reading", dbl(Double.NaN))),
+                record("tokened", Op.UPDATE, 5, Map.of("id", intVal(5)),
+                        Map.of("amount", dbl(Double.NaN)))));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 5, "DELTA")),
+                typed, Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .contains("UPDATE priced SET price = NULL WHERE id = 1")
+                .contains("UPDATE priced SET")
+                .contains("price = NULL")
+                .contains("note = 'kept'")
+                .contains("VALUES (3, NULL)")
+                .contains("UPDATE measured SET reading = 'NaN' WHERE id = 4")
+                .contains("UPDATE tokened SET amount = 'NaN' WHERE id = 5")
+                .doesNotContain("SET price = 'NaN'")
+                .doesNotContain("VALUES (3, '-Infinity')");
+        assertThat(result.stats().updates()).isEqualTo(4);
+        assertThat(result.stats().inserts()).isEqualTo(1);
+    }
 }

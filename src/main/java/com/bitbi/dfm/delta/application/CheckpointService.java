@@ -957,9 +957,10 @@ public class CheckpointService {
      * both meant the value had to be set for the harsher of the two, which left it above the
      * deployed scratch volume and made a kubelet eviction the first thing to happen.</p>
      *
-     * <p>The file is uploaded and deleted here rather than kept open across the snapshot loop. The
-     * deployed scratch budget is {@code 2 x max(table, frame)} — one file per build path, not one
-     * per artifact — so holding both at once would silently double the checkpoint term.</p>
+     * <p>The file is uploaded and deleted here rather than kept open across the snapshot loop, so
+     * the checkpoint path holds one scratch file at a time. Batch writers cannot take the last
+     * {@code max-frame-temp-bytes} of the directory budget (issue #193), which is what keeps a
+     * completed-batch backlog from starving this write.</p>
      */
     private void uploadFrame(UUID siteId, long seq, Map<String, Map<String, FoldedRow>> state) {
         prepareScratchDirectory();
@@ -1012,6 +1013,11 @@ public class CheckpointService {
             // never repairs itself (#153), and this one clears the moment the batch workers holding
             // the directory finish. delta.parquet.scratch.refused{writer=checkpoint_frame} already
             // counted it inside the budget.
+            //
+            // A completed-batch backlog cannot take the reserved share (#193): batch writers stop
+            // at max-scratch-bytes minus this frame ceiling. Seeing this with the directory budget
+            // on is therefore a reserve of zero, a misconfiguration, or a checkpoint writer
+            // competing with itself — not the operator's backlog.
             log.error("The checkpoint reload frame for site {} at seq {} could not be written "
                     + "because the shared Parquet scratch directory was full — the build is "
                     + "abandoned before any snapshot was written, so nothing durable changed and "
@@ -1305,7 +1311,10 @@ public class CheckpointService {
      * End the build: the shared scratch directory had no room for this table's snapshot.
      *
      * <p>Returns the exception rather than throwing it, so the call site reads
-     * {@code throw scratchDirectoryFull(...)} and the compiler can see the branch ends.</p>
+     * {@code throw scratchDirectoryFull(...)} and the compiler can see the branch ends. A
+     * completed-batch backlog cannot take the reserved share (#193); seeing this with the
+     * directory budget on is a reserve of zero or a misconfiguration, not the operator's
+     * backlog.</p>
      */
     private static RuntimeException scratchDirectoryFull(UUID siteId, String tableName,
                                                         RuntimeException error) {

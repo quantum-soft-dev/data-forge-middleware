@@ -114,9 +114,7 @@ Metrics added: `sql.generation.delta.segments.processed`, `.records.skipped.no_s
 1. Reinit→download overlap (above) — small window, documented behavior.
 2. FULL_SNAPSHOT requires a manual reinit; until then affected tables emit no SQL (audit is the
    signal).
-3. The queue claim transaction holds a DB connection across S3 I/O — same accepted trade-off as
-   parquet egress, capped at `delta-max-concurrent` (2).
-4. If retention ever outpaces a fully-backlogged queue, unprocessed segments could be purged.
+3. If retention ever outpaces a fully-backlogged queue, unprocessed segments could be purged.
    Narrowed by issue #212: **changelog** retention now holds a pending below-checkpoint segment
    back (those the audit window would have pruned are counted on
    `delta.retention.segments.held-back{reason=...}`, with one WARN per site per pass; a pending

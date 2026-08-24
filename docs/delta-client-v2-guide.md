@@ -1070,6 +1070,15 @@ pod-private volume until the next sweep tick (#141) and its owner is gone, so no
 it; and kubelet acts on usage *exceeding* the limit rather than reaching it — solving to exact
 equality would make the budget itself an eviction.
 
+**A reserved share for the nightly checkpoint (issue #193).** That volume-residue gigabyte is not
+this. Batch writers may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` (1.5 GiB on this deployment, leaving 3.5 GiB for
+completed-batch artifacts). The checkpoint path holds one scratch file at a time (#178), so the
+reserve is one file's worth — the declared size of the largest one. Checkpoint writers still see
+the whole directory budget when it is idle. Unbounded (the shipped default) ignores the reserve.
+A refusal is still a transient `delta.parquet.scratch.refused`, never a tag on
+`delta.checkpoint.builds.aborted`.
+
 It is **charged as bytes are written**, by the same two counting streams that already enforce the
 per-file ceilings, and released when the file is deleted. It is not reserved at the ceiling up
 front: the ceilings are 1 GiB against artifacts in the low hundreds of MiB, so a three-table batch
@@ -1104,13 +1113,15 @@ volume was busy, so:
   both end the build. Since #153 the frame is written first and is the largest file a build
   produces, and `CheckpointScheduler` walks sites serially — so a directory held full for the length
   of the 02:00 sweep aborts *every* site's build at its first write, and retention is frozen
-  fleet-wide for that night. Nothing reserves a share for the checkpoint path, so until #193 the
-  mitigation is entirely "size the key with room to spare" — read
-  `max_over_time(delta_parquet_scratch_bytes[7d])` before lowering it. The batch side degrades one artifact at a time;
-  this side degrades by whole sites. Nothing is lost (the next night repeats the fold), the pre-#150
-  behaviour on this deployment was a kubelet eviction of the pod, which is worse — but the asymmetry
-  is real, `delta.parquet.scratch.refused{writer=checkpoint_frame}` is the series to alert on, and
-  giving the checkpoint path a reserved share is **#193**;
+  fleet-wide for that night. Since #193 a completed-batch backlog cannot do that: batch writers
+  may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`
+  (the declared size of the largest scratch file the checkpoint path holds, and it holds only
+  one at a time), so the nightly frame always has somewhere to land. Checkpoint writers still
+  see the whole budget when the directory is idle. Unbounded (the shipped default) ignores the
+  reserve — there is nothing to reserve a share of. A refusal here is still absent from
+  `delta.checkpoint.builds.aborted`. `delta.parquet.scratch.refused{writer=checkpoint_frame}`
+  remains the series for a checkpoint writer that did hit a full directory (a reserve of zero,
+  or a misconfiguration where the frame ceiling exceeds the directory);
 - a **completed-batch artifact** takes the ordinary backoff instead of the first-attempt
   `ABANDONED` its own ceiling earns it, so the download answers `409` rather than a permanent `404`
   — **while attempts remain**. The type distinction buys back the first attempt, not the cap: a
@@ -1149,28 +1160,27 @@ exactly the disagreement the `numeric` rule exists to prevent, and would drop a 
 can carry. A `double` key needs no exception either: PostgreSQL compares `NaN` equal to itself, so
 `WHERE reading = 'NaN'` addresses the row.
 
-**The declared type is what decides on the Parquet side, and the wire case is what decides here** —
-so one combination still disagrees, and it is the combination the schema contract already forbids. A
-client that declares a column `numeric(p,s)` and nevertheless sends the value as `double_value` — or
-as a `string_value` spelling one of the three (see [Value typing](#value-typing): *never send these
-as `double_value`*) — has that cell written NULL by every Parquet writer, since `toBigDecimal`
-cannot render a non-finite into a DECIMAL whatever Java type it arrived as, counted on
-`delta.parquet.unrepresentable-decimals{reason=non_finite}`, while the SQL stream renders `'NaN'`.
+**The declared type is what decides.** A client that declares a column `numeric(p,s)` and nevertheless
+sends the value as `double_value` — or as a `string_value` spelling one of the three (see
+[Value typing](#value-typing): *never send these as `double_value`*) — has that cell written NULL by
+every Parquet writer, since `toBigDecimal` cannot render a non-finite into a DECIMAL whatever Java
+type it arrived as, counted on `delta.parquet.unrepresentable-decimals{reason=non_finite}`. The SQL
+stream follows that NULL for **data** cells (issue #240): quoting `'NaN'` would store a value the
+baseline does not have. `SqlStatementGenerator` still keys on the wire type because it has no
+schema; `DeltaSqlGenerationStrategy` degrades the Java value to null before the generator sees it.
 
-The **key** is guarded: quoting the literal would have turned a loud failure into a silent one —
-before #233 the bare `NaN` was invalid SQL that Bit BI rejected, whereas `col = 'NaN'` applies
-cleanly against a baseline row whose key cell is NULL and matches nothing — so such a record is
-skipped, on the same WARN and `sql.generation.delta.records.skipped.unrepresentable_key` as the
-`decimal_value` case. The `string_value` spelling is guarded with it: that one was never loud in the
-first place — a quoted string has always been valid SQL — so it is the same silent divergence one
-wire case over. An *unparseable* string such as `abc` in the same column needs no guard: Parquet
-nulls it too, but its SQL fails at apply time with `invalid input syntax for type numeric`, and only
-a value both sides consider legal can diverge quietly. An `INSERT` is skipped by the same rule, on
-purpose — PostgreSQL would create the row, but every later `UPDATE` and `DELETE` carrying that key
-is skipped, so it would be a row this stream can create and never address again. The **data** cells of that combination still differ (NULL in Parquet,
-`'NaN'` in SQL), as they did before with the SQL merely invalid on top; teaching the SQL path the
-destination type for those is a decision of its own and belongs to issue #240, which owns the
-question for both sides.
+The **key** is skipped rather than nulled — that skip is **the SQL path's alone**, and it is what
+stops a quoted `'NaN'` from addressing a baseline row whose key cell is NULL. Before #233 the bare
+`NaN` was invalid SQL that Bit BI rejected; `col = 'NaN'` applies cleanly and matches nothing, so
+such a record is dropped with a WARN and
+`sql.generation.delta.records.skipped.unrepresentable_key`, the same series as the `decimal_value`
+case. The `string_value` spelling is skipped with it: that one was never loud in the first place —
+a quoted string has always been valid SQL. An *unparseable* string such as `abc` in the same column
+needs no skip: Parquet nulls it too, but its SQL fails at apply time with
+`invalid input syntax for type numeric`, and only a value both sides consider legal can diverge
+quietly. An `INSERT` is skipped by the same rule, on purpose — PostgreSQL would create the row, but
+every later `UPDATE` and `DELETE` carrying that key is skipped, so it would be a row this stream can
+create and never address again.
 
 A *bare* `numeric` is not in this at all: it maps to Avro STRING to carry the token losslessly, so
 nothing is degraded and nothing is skipped. The guard asks
@@ -1194,15 +1204,16 @@ applies to them.
 
 PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the extractor sends them as
 `decimal_value` tokens. Parquet DECIMAL is a scaled integer with no representation for any of them,
-so the cell is written **NULL** — and it is written NULL **whatever the destination column is**,
-which is a deliberate simplification rather than a necessity.
-
-Two declared types could keep the value: a bare `numeric`/`decimal` maps to Avro STRING precisely so
-the value travels in its on-the-wire form, and `double precision` maps to Avro DOUBLE, which carries
-`NaN` natively. Storing it there was tried and taken back out — it made the Parquet writers and the
-Bit BI SQL path disagree about the same cell (the checkpoint keeping a value the delta stream
-nulled), and the coercion it needed narrowed a non-finite into a `bigint` column as `0`. One rule
-for every column is what ships; keeping more is its own piece of work.
+so the cell is written **NULL** — and it is written NULL **whatever the destination column is**.
+That is the contract. Two declared types could keep the value (a bare `numeric`/`decimal` maps to
+Avro STRING so the token travels losslessly; `double precision` maps to Avro DOUBLE, which carries
+`NaN` natively), and storing it there was tried inside PR #232 and taken back out: each review
+round's fix opened a hole elsewhere on the same coercion path, the last of them a non-finite
+narrowed into a `bigint` as `0`, uncounted. Issue #240 keeps that NULL-everywhere rule rather than
+re-introducing destination-aware storage. The Bit BI SQL stream agrees: a `decimal_value` that
+cannot parse is SQL NULL, and a non-finite arriving as `double_value` / `string_value` into a
+column that materialises as a Parquet DECIMAL is SQL NULL too. A column declared `real` /
+`double precision` is the other section — those values are kept, and quoted.
 
 **A `NOT NULL` column is not an exception to that**, and until issue #237 it was — expensively. The
 checkpoint snapshot mapped a `NOT NULL` column to a REQUIRED Parquet field, so the NULL above made
@@ -1232,7 +1243,10 @@ many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the
   client, not something these series will tell you about.
 - **`malformed`** — a token `BigDecimal` cannot parse at all. A client defect somebody has to fix.
   Before this change it threw and was therefore loud, so it keeps a signal of its own rather than
-  disappearing into the same NULL as the legal case.
+  disappearing into the same NULL as the legal case. Surrounding whitespace is **not** malformed:
+  `parseDecimal` trims, matching `isNonFiniteToken` and `ChangelogFold.normalizeDecimal`, so
+  `" 1.5 "` is stored as `1.5` rather than counted here (issue #240). The token that remains
+  unparseable after the trim is the defect.
 
 Read the series as **cells, not rows or files**: a row with two such columns counts twice, and the
 same source cell is counted again by every *Parquet* consumer that renders it — per-segment egress,
@@ -1253,11 +1267,13 @@ artifact, and the baseline can contain a row the delta stream will never address
 those files (`sites/{siteId}/files`, Parquet Export) see rows with a NULL key.
 
 A `decimal_value` reaches that skip whatever the column is declared as, because this pipeline cannot
-store the value under any decimal declaration. Issue #233 added a second, narrower reason: a
-non-finite arriving as `double_value` or as a non-finite `string_value` is representable and is
-normally rendered — but not when the column it keys is declared `numeric(p,s)`, where the Parquet
-side must write NULL and the two would otherwise disagree about which row the statement addresses.
-See [A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted).
+store the value under any decimal declaration — `hasUnrepresentableKey` was that `DECIMAL_VALUE`
+predicate, now `unaddressableKeyReason`. Issue #233 closed the wire-case gap for **keys**: a
+non-finite arriving as `double_value` or as a non-finite `string_value` is representable on the
+wire and is normally rendered — but not when the column it keys materialises as a Parquet DECIMAL,
+where the writers must write NULL and a quoted `'NaN'` would address no row. Issue #240 closed the
+same gap for **data** cells, by following the Parquet NULL rather than quoting. See
+[A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted).
 
 
 **What this does not give you:** for a `numeric` column `NaN` is not `NULL`, so a row-for-row
@@ -1366,6 +1382,18 @@ build's files are exactly as old as the build, so a lower age deletes live work.
 
 **"One sweep interval" means the tick runs when it is due.** That is a statement about the
 scheduler, so the scheduler is pinned rather than inherited (issue **#146**).
+
+**A sweep interval of `0` is refused at startup**, naming the key and the value (issue **#251**).
+`@Scheduled(fixedDelayString)` accepts `0` and runs the tick back-to-back for ever — a busy-loop
+on a green rollout — and a negative value fails inside Spring's parser without naming the key.
+`ScheduledIntervalValidator` walks every `fixedDelayString` / `fixedRateString` placeholder
+(`delta.egress.sweep-ms`, `delta.batch-parquet.sweep-ms`, `delta.s3-orphan.sweep-ms`,
+`delta.parquet.scratch-orphan-sweep-ms`, `delta.ingestion.staged-sweep-millis`,
+`delta.ingestion.provisional-sweep-millis`, `plugin.parquet-export.purge-interval-ms`, and
+`plugin.sql-generation.delta-sweep-ms` which #185 already closed per-bean) and refuses `< 1`.
+A newly added interval key is validated without a constructor copy.
+`initialDelayString` of `0` is fire-immediately and is not an interval — the crash-recovery
+pass and the scratch sweep keep that. ISO-8601 `PT0S` is the same busy-loop as `0`.
 `SchedulingConfiguration` declares the application's `TaskScheduler` — a `ThreadPoolTaskScheduler`
 of `spring.task.scheduling.pool.size` (**7**, overridable with `SPRING_TASK_SCHEDULING_POOL_SIZE`)
 — so the nightly checkpoint build, which can hold its thread for hours, leaves threads for the
@@ -1536,7 +1564,7 @@ So, in order, to give the pool more room:
    together, which is what stops the pool quietly outgrowing the database. At the default the
    ceiling already allows up to 12.
 2. Or lower a remaining long holder — after **#164** the two queue workers are short (claim/mark
-   only; S3 and the generation semaphore run with no transaction open), so the floor is the four
+   only; S3 and the generation semaphore run with no transaction open), so the floor is the five
    long scheduled ticks plus the request reserve. Shortening or dropping a `Cost.LONG` tick is
    what moves it now.
 
@@ -1616,7 +1644,7 @@ ownership, admin routes require ROLE_ADMIN):
 
 | Endpoint | Method | Access | Purpose |
 |---|---|---|---|
-| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags and `nextCheckpointBuildAt` (when the scheduled build next runs — #213); 404 until the client first connects |
+| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags, `nextCheckpointBuildAt` (when the scheduled build next runs — #213) and `lastCheckpointBuildAbort`/`At` (why a scheduled visit of a site that still has no checkpoint produced nothing — #224; `lastCheckpointBuildMessage` is admin-only); 404 until the client first connects |
 | `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with the `hasParquet` presence flag (`hasCsv` removed — #113) |
 | `.../delta/checkpoints/{table}/download?format=parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click. `format=csv` answers `410 Gone`: the snapshot is no longer produced |
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while an attempt is queued, running or pending retry (`PENDING`/`BUILDING`/`FAILED`); `404` when absent or abandoned after `max-attempts` (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
@@ -1626,7 +1654,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`; released with a `lastRebuildOutcome` verdict when the attempt finishes — #186) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
 | `.../delta/rebaseline` | DELETE | owner · admin | Takes a pending request back (issue #84): clears `rebaseline_requested` only — watermark, checkpoints and segments untouched → `GetSyncState` answers `PROCEED` again. Idempotent, always `200`, `status` says what it achieved: `cancelled` (called off before the client was told), `snapshot-in-progress` (a FULL_SNAPSHOT is uploading and still replaces the baseline), `client-notified` (the client already holds NEED_REBASELINE and may start at any moment), `not-requested` (nothing was pending) |
-| `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
+| `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll), including `lastCheckpointBuildAbort` so a failed first build is not painted as a wait (#224) |
 
 All endpoints are documented in the OpenAPI spec (`/v3/api-docs`, Swagger UI).
 
@@ -1708,24 +1736,37 @@ a day is both more actionable and independent of whether a checkpoint exists. **
 applied is not in this state at all**: an all-zero row — what a wipe leaves, and what a re-baseline
 requested for a client that never connected creates — is on neither of `CheckpointScheduler`'s work
 lists (segments, unmaterialized `checkpoints` rows), so promising it a build would be a promise
-nothing keeps, and there is nothing waiting either. And the state says *no checkpoint exists*, not
-*the build is healthy*: it **cannot age itself out**, because nothing persisted says how long a site
-has been waiting — `site_sync_state` has no creation timestamp, and every whole-site abort
-(`frame_too_large`, `lossy_refold`, `history_gone`, a fold over `max-fold-bytes`, a deferral) leaves
-no `checkpoints` row either, so a first build that has failed thirty nights carries byte-for-byte the
-payload of a site ingested this afternoon. It is deliberately **not** bounded by lag magnitude: a
-first FULL_SNAPSHOT is unbounded, so that bound would report the largest sites as critical on day one,
-which is the defect this removes. What is done instead — both surfaces keep the count, and the card
-names the build the state should not outlive ("Still missing a day later? The build is not
-completing" — a day rather than "after that", because the sweep walks sites serially and a build
-deferred behind the fold budget of #178 is a designed miss that repairs itself next tick) — with the
-durable alarm staying where it belongs (`delta.checkpoint.builds.aborted`,
-`delta.checkpoint.tables.given-up`, `delta.seq.lag`); separating the two payloads needs persisted
-state and a migration, filed as **#224**. Building a checkpoint on the ingest path when a site's first
-snapshot commits was the alternative and was **not** taken: it moves a whole-site fold onto the
-commit that the nightly cron exists to keep off it, and it would have to queue behind the same fold
-budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to introduce, since
-what was wrong was the reporting rather than the schedule.
+nothing keeps, and there is nothing waiting either. And the wait says *no checkpoint exists*, not
+*the build is healthy*.
+
+**A first checkpoint build that keeps failing (issue #224)**. The wait cannot age itself out on
+`lastCheckpointSeq == 0` alone: every whole-site abort (`frame_too_large`, a fold over
+`max-fold-bytes`, a deferral, an S3 read denial) writes no `checkpoints` row and leaves the pointer
+at zero, so thirty failed nights used to carry byte-for-byte the payload of a site ingested this
+afternoon. Bounding it by lag magnitude was the obvious answer and is still the wrong one — a first
+`FULL_SNAPSHOT` is unbounded, so that bound would report the largest sites as critical on day one,
+which is the defect #213 removed. What separates the two payloads is a persisted abort on
+`site_sync_state` (V56: `last_checkpoint_build_abort` / `_abort_at` / `_message`), written where
+`CheckpointScheduler` catches the abort and **only while `last_checkpoint_seq` is still 0**. A
+healthy build does not touch those columns — it advances the pointer. A wipe and a re-baseline drop
+them, because both zero the pointer and an abort about the discarded baseline would then read as
+"the first build of the new one already failed". A discard under the build and a deferral cut short
+by shutdown are not recorded (#162). The values sit beside `lastRebuildOutcome`: `FAILED`,
+`FOLD_TOO_LARGE`, `FRAME_TOO_LARGE`, `SCRATCH_FULL`, `FRAME_UNAVAILABLE`, `DEFERRED`. Both
+projections carry the reason and its time; the diagnosis string is admin-only, the same split as
+`lastRebuildMessage`. Bulk health carries the reason so the site-list pill can switch. On the
+frontend that is `first-checkpoint-failed`: a refusal that never repairs itself
+(`FOLD_TOO_LARGE`, `FRAME_TOO_LARGE`, `FAILED`, `FRAME_UNAVAILABLE`) paints the chip
+**Checkpoint failed** in critical, a contention abort (`DEFERRED`, `SCRATCH_FULL`) takes the
+abort's own elevated label, and the pill keeps the count either way. The card names the abort
+instead of "Still missing a day later?". Only a spent wait is recorded as `DEFERRED` — a
+non-spent probe is not an attempt (#178).
+The durable alarms are unchanged (`delta.checkpoint.builds.aborted`,
+`delta.checkpoint.tables.given-up`, `delta.seq.lag`). Building a checkpoint on the ingest path when a
+site's first snapshot commits was the alternative and was **not** taken: it moves a whole-site fold
+onto the commit that the nightly cron exists to keep off it, and it would have to queue behind the
+same fold budget (#152/#178) and scratch budget (#150) — a cost this ticket has no reason to
+introduce, since what was wrong was the reporting rather than the schedule.
 
 **The Upload History File column is the same defect, not an egress delay (issue #214, folded in)**:
 the **File** pill on a delta batch serves the unified completed-batch artifact of 036
@@ -2135,6 +2176,25 @@ saturation. That is the deliberate trade of this shape everywhere it is used her
 connection released between statements is available to everything else in the pod, where one held
 across a network round trip is not.
 
+### A queue's mark cannot un-mark the other (issue #245)
+
+The two queue markers used to be stamped by saving the **whole entity captured at claim**.
+`ChangelogSegment` has no `@Version`, so a merge writes every updatable field. Since #164 the
+claim lock is released before the work, the window is minutes wide: the SQL worker claims
+(`egress_at = NULL`), the egress worker claims the same row, stamps `egress_at`, commits; the
+SQL worker then saved its snapshot — writing `plugin_sql_at` **and `egress_at = NULL`**,
+re-pending work that had already run. The other direction is the same. Before #212 that
+self-healed (the re-pended worker re-ran, same keys overwritten); after #212 the columns are
+also **retention's predicate**, so a clobbered marker held the segment back from pruning
+until the re-run stamped it again, and `delta.retention.segments.held-back` counted phantom
+stalls in the window.
+
+Each success path is now a targeted `UPDATE ... SET plugin_sql_at` / `egress_at WHERE id = ?`,
+the same shape `deferPluginSql` / `deferEgress` already used for a failed attempt. A queue's
+mark cannot un-mark the other, and it cannot reset the other queue's retry columns either
+(`plugin_sql_attempts` / `_retry_at`, `egress_attempts` / `_retry_at`). No `@Version` column
+and no migration — V57 stays free.
+
 ### No S3 inside the ingestion commit (issue #147)
 
 The commit of a session — the tail segment's row, the watermark advance, the batch completion, and
@@ -2303,13 +2363,14 @@ repairable stall into permanent, unrecoverable loss of that batch's SQL, which i
 #212 had just stopped. The attempt count therefore escalates **reporting** instead of taking a
 verdict, and the one bounded ending stays batch retention (`delta.retention.segments.deleted-pending`).
 
-**Two failures are exempt and still end the drain rather than being deferred.** The
-memory-pressure refusal (below), and a failure while the pod is shutting down — the S3 client or
-the data source may already be closed, so that is the process ending rather than the segment
-failing, and #162's rule is that such an ending records no verdict. The #164 "no transaction across
-S3" guard is checked *before* the queue claims anything, for the same reason: swallowed into a
-deferral, a caller that wrapped the drain in a transaction would read as "every segment in the
-queue is poison data" instead of as the wiring mistake it is.
+**Pod-level refusals and shutdown still end the drain rather than being deferred.** Memory
+pressure and a semaphore timeout share `PodLevelAbortedException` (below). A failure while the
+pod is shutting down — the S3 client or the data source may already be closed — is the process
+ending rather than the segment failing, and #162's rule is that such an ending records no
+verdict. The #164 "no transaction across S3" guard is checked *before* the queue claims
+anything, for the same reason: swallowed into a deferral, a caller that wrapped the drain in a
+transaction would read as "every segment in the queue is poison data" instead of as the wiring
+mistake it is.
 
 **What the escalation looks like.** Every failed attempt increments
 `sql.generation.delta.segments.deferred` (SQL) or `delta.egress.errors` (egress — the
@@ -2331,27 +2392,29 @@ retries once its cooldown ends. A deferral whose UPDATE matches no row — the w
 replica while this attempt was failing, or the row is gone — is not reported at all, so the
 counters never send an operator after a segment that is already done.
 
-**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
-claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
-own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
-any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
-failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
-prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
-"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+**Pod-level refusals on the SQL side are exempt** (issue #261) and still end the drain.
+`PodLevelAbortedException` is the type the queue can tell from a segment's own failure; both
+subclasses spend no attempt, move neither `sql.generation.delta.segments.deferred` nor
+`.poisoned`, and the next wake starts over. Deferring either would walk healthy segments towards
+the poisoned report and let a transient overload become a verdict on the data — the rule #150,
+#162 and #178 already hold elsewhere.
 
-**One systemic refusal on the SQL side is still counted, and it is a known limit rather than a
-claim** (review round 2, filed as **#261**): only `MemoryPressureAbortedException` has a type of its
-own, so a **semaphore timeout** — `plugin.sql-generation.semaphore-timeout-seconds`, thrown before
-any per-segment work — arrives as a plain `SqlGenerationException` and is deferred like a data
-failure. Sustained contention therefore walks healthy heads towards the poisoned ERROR, whose text
-prescribes fixing the data. The per-wake bound above keeps it to one segment per wake, and the
-"many at once means systemic" rule is how to read it until #261 gives that refusal a type.
+- **Memory pressure** (`MemoryPressureAbortedException`, #181) — a reading of the *pod's* heap
+  taken before any work, so every segment claimed while it lasts would meet it.
+- **Semaphore timeout** (`SemaphoreTimeoutAbortedException`) —
+  `plugin.sql-generation.semaphore-timeout-seconds`, thrown before any per-segment work and before
+  the memory-pressure check. Sustained contention (both `max-concurrent` permits busy) times out
+  every claimed head; walking those towards the poisoned ERROR would prescribe "fix the data" for
+  a busy pod. The timeout seconds and the wait-queue length stay in the WARN at the raise site,
+  not in the exception message (that text reaches the owner's 500 body).
 
-**The memory-pressure refusal is exempt** and still ends the drain. `MemoryPressureAbortedException`
-(#181) is a reading of the *pod's* heap taken before any work, so every segment claimed while it
-lasts would meet it: it spends no attempt, moves neither counter, and the next wake starts over.
-Deferring it would walk healthy segments towards the poisoned report and let a transient overload
-become a verdict on the data — the rule #150, #162 and #178 already hold elsewhere.
+**A wrapped S3 failure is this segment's own**, decided rather than inherited. A bucket outage
+and a missing object for this batch arrive as the same wrap (`SqlGenerationException` with an
+`IOException` cause, or a `SqlFileStorageException` from the PUT), and a missing object should
+poison. An outage that outlasts the doubling window is an incident either way; the per-wake bound
+plus "many at once means systemic" is how to read that population. The poisoned ERROR's "fix the
+cause, reinit the plugin, or delete the batch" is then the right instruction for an object that
+is gone, and the right instruction for an outage that has lasted an hour.
 
 **What one poison costs the rest of the fleet, stated in numbers** (review round 3): a drain that
 meets a poisoned head spends that wake on it and stops, and at the doubling cap each such head is

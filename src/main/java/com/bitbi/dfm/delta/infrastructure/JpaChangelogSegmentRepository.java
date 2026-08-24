@@ -177,6 +177,21 @@ public interface JpaChangelogSegmentRepository
             + "AND s.egressAttempts = :attemptsAtClaim")
     int deferEgress(UUID id, java.time.LocalDateTime retryAt, int attemptsAtClaim);
 
+    // Targeted UPDATEs of one marker, not a save of the claimed entity (issue #245): since #164
+    // the claim lock is released before S3, so a merge of the claim-time snapshot would write the
+    // other queue's marker back to NULL. CURRENT_TIMESTAMP matches markFullSnapshotPluginSqlProcessed.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = CURRENT_TIMESTAMP WHERE s.id = :id")
+    int markPluginSqlProcessed(UUID id);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.egressAt = CURRENT_TIMESTAMP WHERE s.id = :id")
+    int markEgressed(UUID id);
+
     @Override
     @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId")
     java.util.List<String> findAllS3KeysBySiteId(UUID siteId);

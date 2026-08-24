@@ -144,6 +144,7 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
       <ActivityCard
         lagSamples={lagSamples}
         status={status}
+        abort={state.lastCheckpointBuildAbort}
         segments={segmentsQuery.data}
         showThroughput={canManage && !segmentsQuery.isError}
       />

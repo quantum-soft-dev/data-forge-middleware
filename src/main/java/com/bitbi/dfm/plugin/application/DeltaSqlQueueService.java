@@ -34,7 +34,10 @@ import java.util.Set;
  * reused), and marks it processed. This class opens <em>no</em> transaction of its own
  * (issue #164): the claim query, the skip/snapshot path and the {@code plugin_sql_at} write
  * are short repository transactions, and generation — which first waits on the SQL semaphore
- * and then talks to S3 — runs with nothing open. A failure before the mark leaves the
+ * and then talks to S3 — runs with nothing open. The mark is a targeted
+ * {@code UPDATE ... SET plugin_sql_at} of that column only (issue #245), not a save of the
+ * entity captured at claim — a merge would un-stamp {@code egress_at} if the egress worker
+ * had finished in between. A failure before the mark leaves the
  * segment pending and the sweep retries. <b>That retry's horizon (issue #212):</b>
  * {@code ChangelogRetentionService} holds a pending segment back from pruning, so the retry is no
  * longer silently bounded by changelog retention. What ends it is the segment being processed, an
@@ -152,22 +155,24 @@ public class DeltaSqlQueueService {
                 suspendBaselines(segment, site, activation.get());
             } else {
                 // throws on failure → mark is skipped → the segment stays the durable queue entry.
-                // Since #181 the memory-pressure abort is one such failure (it used to return an
-                // empty Optional, indistinguishable from "no changes", and the segment was consumed
-                // with its SQL never generated); the condition belongs to the pod rather than the
-                // batch, so the next sweep generates normally once the heap recovers.
+                // A PodLevelAbortedException (#261, memory pressure of #181 or a semaphore timeout)
+                // is rethrown rather than deferred: it belongs to the pod, not this batch, so the
+                // next sweep generates normally once the condition clears.
                 sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
             }
-            segment.markPluginSqlProcessed();
-            segmentRepository.save(segment);
+            // Targeted UPDATE of this marker only (issue #245): a save of the claim-time snapshot
+            // would merge egress_at back to NULL after the egress worker had already stamped it.
+            segmentRepository.markPluginSqlProcessed(segment.getId());
             return true;
-        } catch (SqlGenerationService.MemoryPressureAbortedException e) {
-            // Deliberately not deferred and not counted as this segment's attempt (issue #243).
-            // The refusal is a reading of the pod's heap taken before any work, so it is systemic
-            // and self-repairing: every segment claimed while it lasts would meet it, and walking
-            // this one towards the poisoned report would turn a transient overload into a verdict
-            // on the data — the rule #150/#162/#178 already hold elsewhere. Ending the drain is
-            // also the right answer here, since the next claim would be refused too.
+        } catch (SqlGenerationService.PodLevelAbortedException e) {
+            // Deliberately not deferred and not counted as this segment's attempt (issue #261,
+            // generalising #181 / #243). Memory pressure and a semaphore timeout are both
+            // readings of the *pod* taken before any per-segment work, so every head claimed
+            // while they last would meet them. Walking this one towards the poisoned report
+            // would turn a transient overload into a verdict on the data — the rule
+            // #150/#162/#178 already hold elsewhere. Ending the drain is also the right
+            // answer, since the next claim would be refused too. A wrapped S3 failure is
+            // *not* this type: a missing object for this batch should still poison.
             throw e;
         } catch (RuntimeException e) {
             deferSegment(segment, e);

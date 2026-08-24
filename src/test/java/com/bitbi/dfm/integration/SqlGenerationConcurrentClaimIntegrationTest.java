@@ -92,8 +92,9 @@ import static org.mockito.Mockito.verify;
  * new test can start red against it: with the {@code DataIntegrityViolationException} catch in
  * {@code persistOrAdoptExisting} removed, the losing thread throws instead of adopting and this
  * test fails on the future's exception; with the adopt lookup removed, it fails on the callers
- * disagreeing; and with the {@code claim.adopted()} branch of #246 removed, it fails on two audit
- * entries and doubled statement counters.</p>
+ * disagreeing; with the {@code claim.adopted()} branch of #246 removed, it fails on two
+ * {@code SQL_GENERATION_COMPLETED} entries and doubled statement counters; and with the
+ * {@code logSqlGenerationAdopted} call of #260 removed, it fails waiting for the ADOPTED row.</p>
  *
  * <p>The spy makes this class's Spring context its own — the usual, accepted price of a bean
  * override here (the {@code S3ChangelogSegmentStorage} spy of issue #147 is the precedent); the
@@ -232,6 +233,22 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
                     .untilAsserted(() -> assertThat(completionAuditKeys(batchId))
                             .containsExactly(survivingKey));
 
+            // The loser's STARTED is paired with ADOPTED naming the same surviving generation and
+            // key — not a second COMPLETED (#246) and not FAILED (nothing failed). Awaited because
+            // the write is @Async on pluginExecutor, same as STARTED.
+            UUID survivingGenerationId = firstResult.get().getId();
+            Awaitility.await("the adopted audit entry for batch " + batchId)
+                    .atMost(Duration.ofSeconds(20))
+                    .pollInterval(Duration.ofMillis(100))
+                    .untilAsserted(() -> assertThat(adoptedAuditRows(batchId))
+                            .as("exactly one SQL_GENERATION_ADOPTED entry, naming the winner")
+                            .containsExactly(survivingGenerationId + "|" + survivingKey));
+            Awaitility.await("no second adopted audit entry for batch " + batchId)
+                    .during(Duration.ofMillis(500))
+                    .atMost(Duration.ofSeconds(5))
+                    .untilAsserted(() -> assertThat(adoptedAuditRows(batchId))
+                            .containsExactly(survivingGenerationId + "|" + survivingKey));
+
             // Statement counters describe the batch, so the losing attempt must not double them.
             assertThat(statementCount("inserts") - insertsBefore)
                     .as("one INSERT record, counted once").isEqualTo(1.0);
@@ -259,6 +276,19 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
         return jdbc.queryForList(
                 "SELECT metadata->>'s3Key' FROM plugin_audit_logs "
                         + "WHERE action_type = 'SQL_GENERATION_COMPLETED' "
+                        + "AND metadata->>'batchId' = ? ORDER BY occurred_at, id",
+                String.class, batchId.toString());
+    }
+
+    /**
+     * {@code generationId|s3Key} of every {@code SQL_GENERATION_ADOPTED} audit entry for one
+     * batch, in write order. Scoped by the batch this method minted.
+     */
+    private List<String> adoptedAuditRows(UUID batchId) {
+        return jdbc.queryForList(
+                "SELECT (metadata->>'generationId') || '|' || (metadata->>'s3Key') "
+                        + "FROM plugin_audit_logs "
+                        + "WHERE action_type = 'SQL_GENERATION_ADOPTED' "
                         + "AND metadata->>'batchId' = ? ORDER BY occurred_at, id",
                 String.class, batchId.toString());
     }

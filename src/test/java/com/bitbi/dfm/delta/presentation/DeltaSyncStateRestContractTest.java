@@ -63,6 +63,16 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                 """, outcome, message, siteId);
     }
 
+    private void seedCheckpointBuildAbort(UUID siteId, String abort, String message) {
+        jdbc.update("""
+                UPDATE site_sync_state
+                   SET last_checkpoint_seq = 0, last_checkpoint_at = NULL,
+                       last_checkpoint_build_abort = ?, last_checkpoint_build_abort_at = '2026-07-05 02:00:00',
+                       last_checkpoint_build_message = ?
+                 WHERE site_id = ?
+                """, abort, message, siteId);
+    }
+
     @Nested
     @DisplayName("GET /api/v1/account/sites/{siteId}/delta/sync-state (owner)")
     class OwnerSyncState {
@@ -96,7 +106,28 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.lastRebuildOutcome").value(nullValue()))
                     .andExpect(jsonPath("$.lastRebuildOutcomeAt").value(nullValue()))
-                    .andExpect(jsonPath("$.lastRebuildMessage").value(nullValue()));
+                    .andExpect(jsonPath("$.lastRebuildMessage").value(nullValue()))
+                    .andExpect(jsonPath("$.lastCheckpointBuildAbort").value(nullValue()))
+                    .andExpect(jsonPath("$.lastCheckpointBuildAbortAt").value(nullValue()))
+                    .andExpect(jsonPath("$.lastCheckpointBuildMessage").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("returns the last scheduled-build abort and its time, but withholds the diagnosis")
+        void shouldReturnTheCheckpointBuildAbortWithoutItsMessage() throws Exception {
+            // Issue #224: the owner is the user staring at a site whose first checkpoint never
+            // arrived, so the reason and its time are what the projection owes them. The message
+            // is the exception's own text, withheld the same way as lastRebuildMessage.
+            seedSyncState(OWNED_SITE);
+            seedCheckpointBuildAbort(OWNED_SITE, "FOLD_TOO_LARGE",
+                    "The checkpoint fold reached an estimated 9000000 bytes");
+
+            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE))
+                            .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lastCheckpointBuildAbort").value("FOLD_TOO_LARGE"))
+                    .andExpect(jsonPath("$.lastCheckpointBuildAbortAt").isNotEmpty())
+                    .andExpect(jsonPath("$.lastCheckpointBuildMessage").value(nullValue()));
         }
 
         @Test
@@ -199,6 +230,22 @@ class DeltaSyncStateRestContractTest extends BaseIntegrationTest {
                     .andExpect(jsonPath("$.lastRebuildOutcomeAt").isNotEmpty())
                     .andExpect(jsonPath("$.lastRebuildMessage")
                             .value("another checkpoint build held the fold budget"));
+        }
+
+        @Test
+        @DisplayName("returns the last scheduled-build abort with its diagnosis")
+        void shouldReturnTheCheckpointBuildAbortWithItsMessage() throws Exception {
+            seedSyncState(FOREIGN_SITE);
+            seedCheckpointBuildAbort(FOREIGN_SITE, "FRAME_TOO_LARGE",
+                    "the reload frame crossed delta.checkpoint.max-frame-temp-bytes");
+
+            mockMvc.perform(get(ADMIN_URL.formatted(FOREIGN_SITE))
+                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.lastCheckpointBuildAbort").value("FRAME_TOO_LARGE"))
+                    .andExpect(jsonPath("$.lastCheckpointBuildAbortAt").isNotEmpty())
+                    .andExpect(jsonPath("$.lastCheckpointBuildMessage")
+                            .value("the reload frame crossed delta.checkpoint.max-frame-temp-bytes"));
         }
 
         @Test

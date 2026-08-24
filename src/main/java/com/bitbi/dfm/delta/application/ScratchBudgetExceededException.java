@@ -2,7 +2,8 @@ package com.bitbi.dfm.delta.application;
 
 /**
  * Raised when a writer's next bytes would take the shared scratch <em>directory</em> past
- * {@code delta.parquet.max-scratch-bytes} (issue #150).
+ * {@code delta.parquet.max-scratch-bytes} (issue #150), or — for a batch writer — past that
+ * budget minus the checkpoint reserved share (issue #193).
  *
  * <p><b>Deliberately not an {@link ArtifactSizeLimitExceededException}</b>, and not a subclass of
  * one either. That exception is a verdict on the artifact: it is deterministically too large for its
@@ -21,11 +22,36 @@ package com.bitbi.dfm.delta.application;
 public final class ScratchBudgetExceededException extends RuntimeException {
 
     ScratchBudgetExceededException(String writer, long neededBytes, long budgetBytes, long liveBytes) {
-        super("The Parquet scratch directory is full: writer " + writer + " needed " + neededBytes
-                + " more bytes and only " + Math.max(0L, budgetBytes - liveBytes) + " of the "
-                + budgetBytes + " bytes of delta.parquet.max-scratch-bytes were free (live writers "
-                + "hold " + liveBytes + "). Nothing is wrong with this artifact — raise that key "
+        this(writer, neededBytes, budgetBytes, budgetBytes, 0L, liveBytes, liveBytes);
+    }
+
+    ScratchBudgetExceededException(String writer, long neededBytes, long writerCeiling,
+                                   long budgetBytes, long reservedBytes, long liveBytes,
+                                   long writerLiveBytes) {
+        super(message(writer, neededBytes, writerCeiling, budgetBytes, reservedBytes, liveBytes,
+                writerLiveBytes));
+    }
+
+    private static String message(String writer, long neededBytes, long writerCeiling,
+                                  long budgetBytes, long reservedBytes, long liveBytes,
+                                  long writerLiveBytes) {
+        long writerRoom = Math.max(0L, writerCeiling - writerLiveBytes);
+        long directoryRoom = Math.max(0L, budgetBytes - liveBytes);
+        long free = Math.min(writerRoom, directoryRoom);
+        StringBuilder text = new StringBuilder();
+        text.append("The Parquet scratch directory is full: writer ").append(writer)
+                .append(" needed ").append(neededBytes)
+                .append(" more bytes and only ").append(free).append(" of the ")
+                .append(writerCeiling).append(" bytes this writer may use were free (live writers hold ")
+                .append(liveBytes).append("; delta.parquet.max-scratch-bytes is ").append(budgetBytes);
+        if (reservedBytes > 0L) {
+            text.append(", ").append(reservedBytes)
+                    .append(" of which is reserved for a checkpoint frame via "
+                            + "delta.checkpoint.max-frame-temp-bytes");
+        }
+        text.append("). Nothing is wrong with this artifact — raise that key "
                 + "together with the volume behind it, or lower "
                 + "delta.batch-parquet.max-concurrent");
+        return text.toString();
     }
 }

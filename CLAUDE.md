@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V55**, next is **V56**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V57**, next is **V58**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -230,7 +230,14 @@ alone, so their absence is not a failure. `./gradlew test -PexcludeIntegration` 
 (~30 contract tests use Testcontainers); without it the gate dies inside `Unsafe.java`. Never
 write off a red check without checking which test it is.
 
-The merge into `develop` never happens without a human go-ahead. Normally that go-ahead is per PR,
+The merge into `develop` never happens without a human go-ahead — but the go-ahead can be given by
+invoking a command as well as by answering a question, and **two** commands carry it: the
+per-run `/github-issue-runner` (below) and the per-issue **`/task <n>`**, whose step 6 merges its
+own PR because typing the command *is* the authorization for that one issue. Both still verify
+every readiness condition; the authorization removes the question, not the checks. `/github-issue`
+does **not** carry it: it stops at readiness and hands the decision over.
+
+Normally, then, the go-ahead is per PR,
 via `/merge <pr>` (invoking it is the authorization). That command re-checks readiness, merges
 with **squash** (one issue = one commit, as the whole current history), closes the issue, moves
 the card to `Done` and strips the `status: *` labels. `deleteBranchOnMerge` is off in the repo
@@ -380,7 +387,8 @@ says nothing about *which* ticket survives, which stays a judgement about where 
 
 `/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
 up to **three** issues in flight and picks up the next as a slot frees. Invoking it gives the
-merge go-ahead **for that run** — the one exception to the per-PR gate above. Nothing else
+merge go-ahead **for that run** — one of the two standing exceptions to the per-PR gate above, the
+other being `/task <n>`, which carries it for a single issue. Nothing else
 relaxes: every readiness condition and every `/merge` check is still verified, merges stay
 serialized one at a time, the dispatcher writes no code itself, and an executor's report is
 re-verified against GitHub before anything is merged.
@@ -450,6 +458,34 @@ columns in order — jumping is not allowed:
 there, shipped or absorbed alike. The `duplicate` label is what separates the two — see "A ticket
 closed as absorbed carries `duplicate`" above.
 
+A closed ticket has **no** `status: *` label. The column is `Done`; the live labels (`ready`,
+`in progress`, `in review`, `ready to merge`, `blocked`) are a state machine for open work, and
+a closed ticket wearing one is a wrong answer to `gh issue list --label "status: in progress"`
+and to `/merge`'s ambiguous-target lookup (`--label "status: ready to merge"`). `/merge` used
+to remove only the two names a squash-merge is expected to carry, and only from the `Closes #<n>`
+issue — so a ticket closed from `ready` / `in progress` / `blocked`, an absorbed close, a runner
+duplicate close, a GitHub-UI close, or the auto-close `Closes` fires at squash time, kept
+whatever it had (#89 still read in progress a month after it shipped). **Every close route
+strips every `status:*` actually present.** Query then remove, because `gh issue edit
+--remove-label` 404s if the named label is not on the issue, which is why a fixed two-name list
+*was* the defect:
+
+```bash
+while IFS= read -r label; do
+  gh issue edit <n> --remove-label "$label"
+done < <(gh issue view <n> --json labels --jq '.labels[].name | select(startswith("status:"))')
+```
+
+The load-bearing backstop is `.github/workflows/strip-closed-status-labels.yml`: it fires on
+`issues: closed` (covers the routes the commands never see) and weekly / `workflow_dispatch`
+(covers a label added after close, an Action that failed, and a close performed with
+`GITHUB_TOKEN` — GitHub does not chain `GITHUB_TOKEN` events, so `issues: closed` would not
+fire for that one). A scheduled auto-strip is worth
+having here — closed + `status:*` is always wrong, no false positive — and was declined as a
+journal guard on #205, where a missing `AGENTS.md` entry needs a judgement. The Action is not a
+reason for a command to skip the loop: a just-closed ticket still wearing a live label poisons
+the next `gh issue list` in that same session.
+
 Moving the board needs the `project` token scope — if `gh project` fails with
 `INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
 only the label. Always re-read the board after a transition: a command that exited 0 is not proof
@@ -502,6 +538,7 @@ frontend gate.
 | `SQL_GENERATION_STARTED` | SQL generation began for batch |
 | `SQL_GENERATION_COMPLETED` | SQL generation finished (includes stats: insertCount, updateCount, deleteCount) |
 | `SQL_GENERATION_FAILED` | SQL generation error (includes errorMessage) |
+| `SQL_GENERATION_ADOPTED` | This attempt lost the unique claim and adopted the winner's generation (issue #260; metadata: generationId, s3Key) |
 
 #### User-Facing Plugin Logs
 - **Endpoint**: `GET /api/v1/account/plugins/{pluginId}/logs`
@@ -581,7 +618,7 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V55**; next migration is **V56** (do not reuse numbers)
+- Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
 - retention-no-s3-in-transaction: The changelog retention pass no longer holds a HikariCP
@@ -689,9 +726,318 @@ pages/{feature}/            # Route pages
   `ChangelogRetentionIntegrationTest` — only the application can show that the repository's own
   proxied short transactions have actually committed by the time the objects go, so a
   `@MockitoSpyBean` records `isActualTransactionActive()` at the real `deleteObjects`. No REST,
-  gRPC, proto, DTO, migration (V55 is the last applied, V56 free), configuration-key, metric, S3-key
+  gRPC, proto, DTO, migration (V57 is the last applied, V58 free), configuration-key, metric, S3-key
   or frontend change. See `docs/delta-client-v2-guide.md` ("No S3 inside the retention pass").
-||||||| 8cf800a2
+- docs-recent-changes-drifts: Four accumulating documents now describe the repository they are
+  about (issue #205, folding **#218**). None is a code defect; all four are the case this file
+  already calls out — one document says one thing and another says something else about the same
+  place — and they are one branch because they share no files with each other and none with
+  product code. **The guide's connection floor said four long ticks.** #158 / PR #198 added
+  `DeltaS3OrphanSweeper` as a fifth `Cost.LONG` tick and moved the floor to
+  `5 long ticks + 2 request reserve = 7`; round 4 of that review fixed the contradiction inside
+  `application.yml`, the #158 journal entry says five, and `BackgroundConnectionDemandTest`
+  derives the term from `ScheduledTaskInventoryTest.longRunningTaskCount()` — four annotated
+  `Cost.LONG` tasks plus the programmatic `BatchRetentionScheduler` cron, so five. The guide was
+  the only surface left carrying the old number, precisely because it lives outside the file that
+  review touched. It says five. **`AGENTS.md` was missing `prefix-walk-paged`** (#199 / PR #203
+  wrote it to `CLAUDE.md` only) and carried `split-scratch-ceilings` **twice**, the two copies
+  differing in exactly the clause #153 made stale — an assertion and its superseded variant living
+  in one file, which an agent reading top to bottom resolves by accident. The entry is restored
+  between `test-profile-scratch-directory` and `s3-orphan-sweep`, its position in `CLAUDE.md`; the
+  stale duplicate is deleted and the corrected copy kept. **`README.md` documented
+  `./gradlew contractTest`** (#218), a task `build.gradle.kts` does not register — it declares
+  exactly `test` (with `-PexcludeIntegration`) and `integrationTest` — so the one command a
+  newcomer runs to check the contract suite failed with "task not found". It names the supported
+  gate, matching "Commands" in this file and the gates table, with `--tests '*ContractTest'` for a
+  single class; adding a real `contractTest` task was rejected as a new gate nobody asked for.
+  **`docs/cr-bitbi-delta-sql.md` residual risk 3** still described the delta-SQL queue as holding
+  a database connection across S3 as a live accepted trade-off, which #164 retired:
+  `processNextPending` dropped its wrapping `@Transactional`, the claim and the mark are short
+  repository transactions, and the class Javadoc, the guide ("No S3 inside a queue worker") and
+  the #164 entry all say so. Removed rather than reworded — there is no residual risk left to
+  state — and the list renumbers; the retention item keeps the narrowing #212 gave it.
+  **The DoD's third item — is a guard worth having for the missing journal entry — is answered
+  yes, and the reversal is the durable part.** #205 was written to answer *no*, on a census of
+  2026-08-19 that found a single omission and three same-day merges landing correctly in both
+  files. Finishing the ticket four days later re-ran that census and the premise was gone:
+  `AGENTS.md` is missing **three more** fresh entries, each written to `CLAUDE.md` by its own PR —
+  `adopt-path-side-effects` (#246), `double-nan-sql-literal` (#233), `signed-nan-classification`
+  (#238). One omission is a slip; four in a week is a mechanism, and the mechanism is that the
+  omission is **invisible in the diff** of a PR that touches only one of the two files, so no
+  amount of review habit catches it. The *other* half of #205's reasoning — that a guard would
+  need a hand-placed boundary, "a second convention maintained by nobody" — is half right and the
+  half that is wrong is what unblocks the guard: the two journals are genuinely unequal (81 slugs
+  to 97 today, 13 of the 16 differences being the `033`–`042` block plus
+  `tag-driven-dev-deploy`, `plugin-secret-reveal` and `agent-migration-doc-consistency`, which
+  `AGENTS.md` stopped carrying and later resumed), but entries are only ever **prepended and never
+  removed**, so the anchor at the end of that gap — `042-parquet-phase-metrics` — never moves. It
+  is one constant set once, not a convention, which is exactly the shape
+  `MigrationDocumentationConsistencyTest` (#104) already has over these same two files. Above that
+  anchor the predicate is mechanical and has no false positive, since the repository's convention
+  is that an entry rides in both. Building it needs the three missing entries backfilled first, so
+  it is **#278** rather than this branch, and this entry is what stops the answer being lost.
+  Documentation only: no product code, test, REST, gRPC, proto, DTO, migration (**V58 stays
+  free**), configuration-key, metric, S3-key or frontend change.
+- unpaired-sql-started: A lost SQL-generation unique claim now writes a terminal
+  `SQL_GENERATION_ADOPTED` instead of leaving the account's plugin log with an unpaired
+  `SQL_GENERATION_STARTED` (issue #260, the gap #246 named and left open). Since #246 the loser of
+  `uk_sql_gen_source_batch` adopts the winner's generation and writes no second
+  `SQL_GENERATION_COMPLETED` — that entry named the S3 object the adopt path had just deleted —
+  so a raced batch read as two "Generating SQL..." lines and one "SQL Generated". The vocabulary
+  had no value for that outcome: reusing `COMPLETED` is the duplicate #246 removed, and `FAILED`
+  is a `success = false` row claiming an error that did not happen. **New action type**, not
+  retiring the pairing: `PluginActionType.SQL_GENERATION_ADOPTED`, V57 widens
+  `chk_plugin_audit_logs_action_type` (NOT VALID + VALIDATE, the V44/V48 split), metadata names
+  the adopted `generationId` and the winner's `s3Key`, and the Logs tab labels it **SQL Already
+  Generated**. Written immediately (`@Async("pluginExecutor")` + save), like STARTED, because the
+  attempt happened regardless of any surrounding transaction and the winner already owns the row.
+  `SQL_REGENERATION_*` stay as read-only history (#190). The pairing invariant of
+  `generateSqlForBatch` is stated and pinned: every exit that writes STARTED writes a terminal
+  (`COMPLETED`, no-changes COMPLETED, `FAILED`, or `ADOPTED`); documented exceptions (baseline /
+  missing batch data, #181 memory-pressure above STARTED, #261 semaphore timeout before
+  `doGenerateSqlForBatch`) write neither. `SqlGenerationStartedPairingTest` holds the inventory
+  (the adopt early-return writes ADOPTED before it returns); the behavioral exits live in
+  `SqlGenerationServiceTest.DeltaV2Routing`; the real-constraint twin
+  `SqlGenerationConcurrentClaimIntegrationTest` awaits exactly one ADOPTED row naming the
+  surviving generation and key, still exactly one COMPLETED carrying the surviving key, still one
+  `claims.lost`. No REST, gRPC, proto, DTO shape, configuration-key, metric-name, S3-key or
+  TanStack-Query-key change; no `specs/NNN-*`. See `docs/020-sql-generation-optimization.md`.
+- checkpoint-scratch-reserve: A completed-batch backlog can no longer fill the Parquet scratch
+  directory for the length of the 02:00 sweep and abort every site's nightly checkpoint (issue
+  **#193**, the asymmetry #150 named and left open). `delta.parquet.max-scratch-bytes` is one pool
+  shared by three writers; the batch side degrades one artifact at a time, while a refused
+  checkpoint frame (or, since #150 r2, a refused table snapshot) ends the build, and
+  `CheckpointScheduler` walks sites serially — so a directory held full overnight froze
+  `last_checkpoint_seq` and retention fleet-wide. **Reserved share**, the ticket's first option:
+  batch writers may use at most the directory budget minus `delta.checkpoint.max-frame-temp-bytes`,
+  already the declared size of the largest scratch file the checkpoint path holds, and it holds
+  only one at a time (#178). That is a floor for the nightly sweep, not a ceiling — a checkpoint
+  writer still sees the whole budget when the directory is idle — compared against batch live
+  bytes, not the directory total, so a frame in flight does not shrink the batch share a second
+  time — and batch cannot consume into the reserved bytes even after the frame is deleted, which
+  is the gap before the table snapshot opens. Unbounded (the shipped default) ignores the reserve; a negative reserve is none; a
+  reserve larger than the budget leaves batch with zero. A refused reservation keeps existing
+  failure modes (`FAILED` + backoff for batch; the build ends for checkpoint) and is still off
+  `delta.checkpoint.builds.aborted`, whose values are permanent by contract (#153) —
+  `delta.parquet.scratch.refused` is the series. No new configuration key. Deployed arithmetic
+  is unchanged (5 GiB directory, 1.5 GiB frame, 3.5 GiB batch share); the ceiling-budget guard
+  now requires that share to fit at least one completed-batch artifact. Tests first, mutation
+  by dropping the batch cap. No REST, gRPC, proto, DTO, migration (**V57 stays free**),
+  configuration-key, metric-name, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("A reserved share for the nightly checkpoint").
+- nonfinite-decimal-storage: A non-finite / unparseable decimal stays NULL for every destination,
+  Parquet and SQL agreeing, and a padded finite token is kept (issue #240, the destination-aware
+  fork deferred from #215 / PR #232). **The first fork is not taken.** Keeping `NaN` on a bare
+  `numeric` (Avro STRING) or `double precision` (Avro DOUBLE) was implemented in PR #232 and
+  reverted after a non-finite narrowed into a `bigint` wrote `0` uncounted; this run keeps today's
+  rule rather than rewriting that coercion. Two gaps that rule still had are closed. **Data cells
+  of the forbidden combination.** A column declared `numeric(p,s)` whose value arrives as
+  `double_value` / a non-finite `string_value` was NULL in every Parquet artifact and `'NaN'` in
+  the SQL stream — valid PostgreSQL storing a value the baseline does not have. Keys of that
+  combination were already skipped (#233); `DeltaSqlGenerationStrategy` now degrades those *data*
+  cells to null before `SqlStatementGenerator` (which has no schema and still keys on the wire
+  type). A `double precision` or bare `numeric` destination is not a DECIMAL and is still quoted.
+  **A padded finite decimal is a value, not a defect.** `isNonFiniteToken` already trimmed;
+  `parseDecimal` was handed the token raw, so `" 1.5 "` — a legal number, and a shape
+  `ChangelogFold.normalizeDecimal` already retries trimmed — was NULL and counted
+  `reason=malformed`. `parseDecimal` trims. The guide's "A key column is the exception" paragraph
+  names the consumer (SQL; both Parquet writers write a key cell NULL like any other), and the
+  `hasUnrepresentableKey` wire-case gap is closed for keys (#233, `unaddressableKeyReason`) and
+  for data (this). Tests first, mutation-shaped: the padded mapper/writer cases fail with the
+  raw parse restored, the SQL-NULL case fails if the strategy keeps quoting. No REST, gRPC,
+  proto, DTO, **no migration (V57 stays free)**, no `specs/NNN-*`, configuration-key, metric-name,
+  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A value the column type cannot
+  hold", "A non-finite `double` is kept, and quoted").
+- scheduled-interval-floor: A `@Scheduled(fixedDelayString)` of `0` no longer busy-loops, and a
+  negative value no longer fails Spring's parser without naming the key (issue #251, the class of
+  misconfiguration #185 closed for `plugin.sql-generation.delta-sweep-ms` and review of PR #247
+  named at every other interval site). **Mechanism-level, not per-bean**:
+  `ScheduledIntervalValidator` walks every `fixedDelayString` / `fixedRateString` placeholder
+  during singleton construction — before `ScheduledAnnotationBeanPostProcessor` starts the ticks
+  — and refuses `< 1` with a message naming the key and the value. A newly added interval key is
+  validated without a constructor `@Value` copy; `ScheduledTaskInventoryTest` keeps the walk
+  honest by requiring it to agree with an independent inventory scan (a scan gone blind is
+  otherwise an empty, green validator). `initialDelayString` of `0` stays fire-immediately (the
+  crash-recovery pass, the scratch sweep); ISO-8601 `PT0S` is the same busy-loop as `0` and is
+  refused as `0`. **Same anonymous-refusal class**: `AccountProperties` now quotes
+  `account.max-concurrent-batches` and the offending value. Test-profile overrides stay well
+  above the floor. Tests first; mutation by restoring a `0` on any discovered key. No REST, gRPC,
+  proto, DTO, migration (**V57 stays free**), configuration-key *name*, metric, S3-key or
+  frontend change. See `docs/delta-client-v2-guide.md` ("One sweep interval"),
+  `docs/020-sql-generation-optimization.md`.
+- closed-status-labels: A closed ticket keeps no live `status: *` label (issue #257, found
+  working #230). Status lives in two places — the Kanban column and the repo label — and this
+  file already said a close ends with "статусные метки сняты". The label half was not actually
+  cleaned: `/merge` step 5.3 removed exactly two names (`ready to merge`, `in review`) and only
+  from the `Closes #<n>` issue, so a ticket closed from `ready` / `in progress` / `blocked`, an
+  absorbed close, a runner duplicate close, a GitHub-UI close, or `Closes` auto-close before
+  that step, kept whatever it had. Five closed issues wore a live status on 2026-08-20
+  (#228/#226/#215 `ready to merge`, #93 `ready`, #89 `in progress` a month after it shipped);
+  a day of runner merges added six more. `gh issue list --label "status: in progress"` and
+  `/merge`'s ambiguous-target lookup are both read across states often enough that a closed
+  ticket wearing one is a wrong answer waiting to happen. **Both a rule in the commands and
+  repo automation, not a choice of one.** Commands cannot see a UI close or the auto-close
+  `Closes` fires at squash time, before step 5.3. Automation cannot unstick the next `gh issue
+  list` in the same session if the agent skips the strip. The command-side shape is **query
+  then remove** — `gh issue edit --remove-label` 404s if the named label is not on the issue,
+  which is why a fixed two-name list was the defect, and why #230's absorbed path naming three
+  other labels would have failed the `duplicate` add on a ticket that was not in those three
+  states. The load-bearing backstop is `.github/workflows/strip-closed-status-labels.yml` on
+  `issues: closed` (prefix `status:`, issues not PRs) plus a weekly/`workflow_dispatch` sweep
+  that lists repo labels with that prefix and strips them from closed issues — the sweep also
+  covers a close performed with `GITHUB_TOKEN`, which GitHub will not chain into
+  `issues: closed`. **A scheduled
+  guard is worth having here and was declined as a journal guard on #205**: closed +
+  `status:*` is always wrong and auto-strip has no false positive, whereas a missing
+  `AGENTS.md` entry needs a judgement. Backfill is a census, not the issue's own five: the
+  five plus the six that accumulated before this landed (eleven closed issues). No production code, REST, gRPC,
+  proto, DTO, migration (**V57 stays free**), configuration-key, metric, S3-key or frontend
+  change.
+- queue-marker-clobber: A queue's mark cannot un-mark the other (issue #245, found reviewing
+  #212). Both workers stamped their marker by saving the whole entity captured at claim, and
+  `ChangelogSegment` has no `@Version`. Since #164 the claim lock is released before S3, so the
+  SQL worker could save a snapshot whose `egress_at` was still `NULL` after the egress worker
+  had already stamped it — and the other way round. Self-healing until #212 made those columns
+  retention's predicate; a clobbered marker then held the segment back from pruning and
+  `delta.retention.segments.held-back` counted phantom stalls. **Targeted `UPDATE ... SET
+  plugin_sql_at` / `egress_at WHERE id = ?`**, the same shape `deferPluginSql`/`deferEgress`
+  already used; `@Version` would have taken V57 (#260's). A mark of A also leaves B's retry
+  columns (`x_attempts` / `x_retry_at`) intact. Tests first: the services never `save` the
+  claim-time snapshot, and an interleaving test (mark A after B, both directions, plus the
+  retry columns, plus two threads) requires both markers set. No REST, gRPC, proto, DTO,
+  migration (V56 current, V57 free), configuration-key, metric-name, S3-key or frontend
+  change. See `docs/delta-client-v2-guide.md` ("A queue's mark cannot un-mark the other").
+- dbf-column-types: DBF SQL generation receives its column types from the site's `TableSchema`,
+  so the documented empty-cell contract is the one in force and a non-numeric cell in a numeric
+  column can no longer become raw SQL (issue #263, filed reviewing #233). The only production
+  caller — `DbfSqlGenerationStrategy` — passed `Map.of()`, so `formatValue` always fell back to
+  `CHARACTER`: empty `I`/`Y` cells became `NULL` rather than `0`, numerics were quoted, and the
+  unquoted numeric branch was a latent injection the day a caller supplied real types
+  (`0); DROP TABLE customers; --` emitted verbatim). **Wiring, not deletion**: types come from
+  `SqlGenerationContext.tableSchemas` (now loaded for DBF as well as CDC), mapped by new
+  `DbfColumnType.fromSqlType` (`integer`/`serial`/`bigint` → INTEGER empty→`0`, `money` →
+  CURRENCY empty→`0`, `numeric`/`decimal` → NUMERIC, `real`/`double precision` → FLOAT, a
+  one-letter DBF code still works). No schema for the table keeps the previous CHARACTER
+  fallback. A numeric cell is unquoted only when it is numeric-shaped; anything else is quoted
+  and escaped — the injection stays closed even with types live. Tests cover rendering
+  **through** `DbfSqlGenerationStrategy` (the empty map is what let the divergence live in
+  generator-only tests) plus the mapping and the injection cases on the generator. Guide
+  `docs/bitbi-integration.md` describes the rendering actually in force. No REST, gRPC, proto,
+  DTO, migration (V56 current, V57 free), configuration-key, metric, S3-key or frontend change.
+- liveness-teardown-fk: `DeltaSessionLivenessIntegrationTest.cleanUpSeededData` no longer loses a
+  race against its own ingestion (issue #265, seen once on CI at
+  `DELETE FROM batches WHERE site_id = ?` as a `DataIntegrityViolationException` of the class's
+  own `@AfterEach`, not an assertion; green on re-run of sha `ea6f9e34`). #226/#228 already
+  swept the two non-cascade FKs onto `batches` by the relationship each constraint uses;
+  what the teardown lacked was a guarantee that **nothing writes a new referencing row between
+  those statements**. The CI log named only the exception type. **The constraint is
+  `changelog_segments_batch_id_fkey` (V30, no `ON DELETE` action)** — a session commit landing
+  after the segment sweep and before the batch delete blocks it exactly this way — and the
+  twin is `fk_account_plugins_baseline_batch` (V25, `ON DELETE RESTRICT`).
+  **`error_logs.batch_id` is not a blocker**: V5 had no cascade, V22 added
+  `ON DELETE CASCADE`, and a planted error log now goes with the batch. **Shape:**
+  quiesce the in-process gRPC server/channel (`awaitTermination`, so a still-running
+  `SessionEnd` cannot outlive the test) **and** retry the teardown once after re-sweeping
+  those two relationships; a remaining failure is an `IllegalStateException` quoting
+  `SQLSTATE=` and `constraint=`, so the next occurrence is itself (the #226/#207
+  complaint). Extracted as `SeededSiteTeardown` (site and account arms), tests first
+  outside `**/integration/**` so the fast gate runs them: two leftover-then-clear
+  methods construct the window, one per constraint, and require the retry to remove
+  the row rather than merely survive; a third plants an `error_log` and requires the
+  unfixed `DELETE FROM batches` to succeed; a fourth requires the named-failure
+  wrapper to carry the structured prefix (mutation: dropping `SQLSTATE=` from the
+  formatter fails it even though the PG message already contains the constraint
+  name). Test-only — no production code, REST, gRPC, proto, DTO, migration
+  (**V57 stays free**), configuration-key, metric, S3-key or frontend change.
+- sql-queue-pod-refusal: The delta-SQL queue can tell a pod-level refusal from a segment's own
+  failure (issue #261, the limit #243 named rather than closed). `processNextPending` exempted
+  only `MemoryPressureAbortedException` from spending an attempt, so a semaphore timeout
+  (`acquireSemaphore`, before any per-segment work) and a wrapped S3 `IOException` arrived as a
+  plain `SqlGenerationException` and walked healthy heads towards
+  `sql.generation.delta.segments.poisoned`. **The type is a shared parent**,
+  `PodLevelAbortedException`: the queue rethrows every subclass, spends no attempt, moves
+  neither `deferred` nor `poisoned`, and ends the drain — the next claim would meet it too.
+  Memory pressure keeps its subclass; the semaphore timeout is new
+  `SemaphoreTimeoutAbortedException`. The timeout seconds and wait-queue length stay in the WARN
+  at the raise site, not in the exception message (that text reaches the owner's 500 body).
+  **The wrapped S3 failure stays this segment's own**, decided rather than inherited: a bucket
+  outage and a missing object for this batch arrive as the same wrap, and a missing object
+  should poison. An outage that outlasts the doubling window is an incident either way; the
+  per-wake bound plus "many at once means systemic" is how to read that population. Tests first
+  (queue exemption red against the old MemoryPressure-only catch; concurrency timeout pins the
+  raise site). No REST, gRPC, proto, DTO, migration (V56 current, V57 free), configuration-key,
+  metric-name, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("How to read
+  them"), `docs/020-sql-generation-optimization.md`.
+
+- error-toast-401: The global error toast handler no longer speaks out of turn on
+  every 401 path (issue #239, the four routes #225 documented rather than closed).
+  None of them is about interceptor registration count. **The decision the ticket
+  asked for:** a failed refresh rejects the original Axios 401, not the Auth0
+  error, so `.response` and `.config` survive (`suppressErrorToast`,
+  `getServerErrorStatus`); the Auth0 error is the recovery attempt and travels as
+  `error.cause`. Rejecting the Auth0 error looked cheaper and would have closed
+  routes 2–3 together, but it changes what every downstream caller receives from a
+  failed refresh into something that is neither a 401 nor their request.
+  **What a failed refresh says, and who says it.** Refresh succeeds and the retry
+  succeeds → no toast (already pinned by #225). Refresh succeeds and the retry
+  fails → one toast from the inner pass; the outer chain (re-entered by
+  `apiClient.request`) sees that mark and stays quiet. Refresh fails
+  for a named reason → that reason's toast alone (network during refresh, Auth0
+  unavailable, or "Failed to refresh session"), owned by `interceptors.ts`, which
+  now honours `suppressErrorToast` on its own toasts. Refresh fails on the
+  expired-refresh-token branch → silence, so the logout redirect stays quiet, and
+  the mark stops this handler filling that silence with the leftover-401 session
+  toast.
+  Refresh not initialized / already retried → one leftover-401 toast, chosen
+  deliberately: "Your session is no longer valid. Please sign in again." A 401 is
+  never a network error and never the generic unexpected-error default. Tests
+  first over all four routes; `error-handler.test.ts` already wired
+  `setupResponseInterceptor` beside the handler. No `App.tsx` change (registration
+  order was already correct). Frontend only: no backend, REST, gRPC, proto, DTO,
+  migration, configuration-key, metric, S3-key or route change. The "exactly one
+  toast" claim in `docs/delta-client-v2-guide.md` is about download pills whose
+  presign requests suppress the global toast, so it was true throughout and stays
+  true — and `suppressErrorToast` now actually holds on the 401 path those
+  callers can also hit.
+  **Review round 1** trimmed the production comments that had pasted this
+  write-up, corrected the over-claim that both interceptors mark on a failed
+  retry (only the inner handler does; `AGENTS.md` already said so), pinned
+  `suppressErrorToast` on Auth0-unavailable and the handler's Auth0 leak
+  guard, and noted that `return apiClient.request` is deliberately not
+  awaited so a rejected retry cannot enter the refresh-failure catch.
+  **Review round 2** corrected the expired-token comment (and this entry) that
+  still named a network toast: after rejecting the original 401, an unmarked
+  pass would hit leftover `case 401`, not the no-response branch.
+- failing-first-checkpoint: A first checkpoint build that keeps failing is no longer the same
+  payload as one that is not due yet (issue #224, the bound #213 left open). Since #213 a site with
+  `last_checkpoint_seq = 0` and records applied reads as a neutral **"No checkpoint yet"** — right
+  for an afternoon ingest waiting on `delta.checkpoint.cron`. Every whole-site abort
+  (`frame_too_large`, a fold over `max-fold-bytes`, a deferral, an S3 read denial) writes no
+  `checkpoints` row and leaves the pointer at zero, so thirty failed nights carried byte-for-byte
+  that payload; `nextCheckpointBuildAt` cannot separate them either, being the next cron occurrence
+  recomputed per request. Bounding it by lag magnitude was the obvious answer and is still the wrong
+  one — a first `FULL_SNAPSHOT` is unbounded, so that bound would report the largest sites as
+  critical on day one, which is the defect #213 removed. **Shape 2 of the ticket**, not 1: a
+  persisted abort of the scheduled visit (the forced rebuild already has `lastRebuildOutcome` —
+  #186), not a `created_at` from which "the last scheduled occurrence has passed" would be inferred.
+  V56 adds nullable `site_sync_state.last_checkpoint_build_abort` / `_abort_at` / `_message`.
+  `CheckpointScheduler` writes them from its catch, and `DeltaSyncStateService.recordCheckpointBuildAbort`
+  no-ops once `lastCheckpointSeq` is past zero, so a healthy build still writes nothing and a later
+  abort of an already-checkpointed site does not take a column. Values: `FAILED`, `FOLD_TOO_LARGE`,
+  `FRAME_TOO_LARGE`, `SCRATCH_FULL`, `FRAME_UNAVAILABLE`, `DEFERRED`. A discard under the build and a
+  deferral cut short by shutdown are not recorded (#162). A wipe and a re-baseline drop the abort,
+  because both zero the pointer and an abort about the discarded baseline would then read as "the
+  first build of the new one already failed". Additive DTO: reason and time on both sync-state
+  projections and on bulk health; `lastCheckpointBuildMessage` on the **admin** projection only, the
+  same split as `lastRebuildMessage`. On the frontend the field is `z.string()`, not `z.enum`, and
+  `getSyncStatus` reads it as `first-checkpoint-failed`: the chip says **Checkpoint failed**, the
+  pill **Checkpoint failed · 1.2k**, the card names the abort. Stalled still wins.
+  **Review round 1** wrapped the persist so a flush error cannot escape the per-site catch and
+  end the tick, split prune out of that catch (a retention failure is not a first-checkpoint
+  abort; a shutdown-ended build returns an empty fold and does not throw), recorded `DEFERRED`
+  only on a spent wait (a probe is not an attempt), and painted contention aborts elevated
+  rather than critical. No gRPC, proto, configuration-key, metric-name, S3-key or route change.
+  See `docs/delta-client-v2-guide.md` ("A first checkpoint build that keeps failing").
 - double-nan-sql-literal: A non-finite `double` reaches Bit BI as a quoted literal, so the SQL it is
   handed is valid PostgreSQL (issue #233). `SqlStatementGenerator.formatJsonValue` rendered every
   `Number` through `toString()`, and PostgreSQL `real`/`double precision` legitimately hold `NaN` and
@@ -868,6 +1214,7 @@ pages/{feature}/            # Route pages
   deferral is precisely the round-1 defect, one systemic outage walking the whole backlog in a
   chain, so the trade is documented in the guide instead. The semaphore-timeout exemption was raised
   again and stays #261 for the same reason as in round 2.
+
 - adopt-path-side-effects: The loser of the SQL-generation unique claim stops reporting the
   winner's success as its own (issue #246, a pre-existing defect promoted out of the withdrawn
   findings inbox #242 after #190/PR #236 made the race deterministic in a test). Since #164 two
@@ -1140,7 +1487,8 @@ pages/{feature}/            # Route pages
   still current, V55 free), configuration-key, S3-key or frontend change; both meter names are
   new, nothing existing is renamed. See `docs/delta-client-v2-guide.md` ("Retention does not
   delete unprocessed work", Metrics), `docs/020-sql-generation-optimization.md`,
-  `docs/cr-bitbi-delta-sql.md` (risk 4 narrowed, not struck).
+  `docs/cr-bitbi-delta-sql.md` (the retention residual risk narrowed, not struck — listed as item
+  4 then, renumbered to 3 by #205 when the obsolete connection-hold item above it was removed).
   **Round 2 reviewed what round 1 introduced, and three of its findings cut into round 1's own
   fixes.** The A3 drain was silencing far more than its justification named: with the default
   window of 20, retention never emptied a quiet site's below-checkpoint list even before #212, so
@@ -1215,6 +1563,7 @@ pages/{feature}/            # Route pages
   no REST, gRPC, proto, DTO, metric, S3-key, configuration-key-**name** or frontend change; key
   names and defaults are untouched — only an out-of-range value's fate changes.
   See `docs/020-sql-generation-optimization.md`.
+
 - shared-fixture-hygiene: The shared fixture now sweeps leftover rows that block `DELETE FROM sites`
   / `DELETE FROM accounts`, and rows that have no path back to the seed at all (issue #228, folding
   **#229** and **#220**; parent #226 / PR #227 closed what blocked `DELETE FROM batches`). Three

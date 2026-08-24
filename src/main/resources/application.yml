@@ -178,6 +178,7 @@ batch:
 # Account Configuration
 account:
   # Effective per-account concurrent batch limit, enforced by BatchLifecycleService via AccountProperties.
+  # >= 1; a non-positive value fails startup naming this key (issue #251).
   max-concurrent-batches: ${ACCOUNT_MAX_CONCURRENT_BATCHES:5}
 
 # JWT Configuration (Device Authorization Flow access tokens)
@@ -261,7 +262,7 @@ plugin:
     presign-ttl-seconds: ${PLUGIN_PARQUET_EXPORT_PRESIGN_TTL_SECONDS:60}
     # Keep consumed/expired download_links rows this long before purging
     purge-retention-days: ${PLUGIN_PARQUET_EXPORT_PURGE_RETENTION_DAYS:7}
-    # Purge sweep cadence
+    # Purge sweep cadence. >= 1 ms; 0 busy-loops and is refused at startup (#251).
     purge-interval-ms: ${PLUGIN_PARQUET_EXPORT_PURGE_INTERVAL_MS:3600000}
     # Absolute URL prefix for one-time download links; empty = derive from the request
     base-url: ${PLUGIN_PARQUET_EXPORT_BASE_URL:}
@@ -281,7 +282,8 @@ plugin:
     # reading of a live JVM is never 0, so a threshold of 0 refuses every generation.
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
     # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size (>= 1) and fallback sweep
-    # interval (>= 1 ms), both validated in DeltaSqlSweepWorker (#185)
+    # interval (>= 1 ms), both validated in DeltaSqlSweepWorker (#185). The interval is also
+    # on the mechanism-level @Scheduled floor (#251): 0 busy-loops.
     delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}
     delta-sweep-ms: ${PLUGIN_SQL_GENERATION_DELTA_SWEEP_MS:60000}
     # A segment whose generation fails is held out of the queue for this long, doubling per attempt
@@ -343,7 +345,8 @@ delta:
     # batch is resumable onto a batch the timeout sweeper has already reaped, which used to fail late
     # at the final commit (030). Guarded by DeltaIngestionStagedTtlConfigTest.
     staged-ttl-millis: ${DELTA_STAGED_TTL_MILLIS:3000000}
-    # How often the staged-session eviction sweep runs.
+    # How often the staged-session eviction sweep runs. >= 1 ms; 0 busy-loops and is refused
+    # at startup (#251).
     staged-sweep-millis: ${DELTA_STAGED_SWEEP_MILLIS:300000}
     # CONTINUOUS mode also seals a non-empty segment this long after the last seal (time trigger),
     # so a low-throughput stream that never reaches the record count still bounds staleness.
@@ -359,6 +362,7 @@ delta:
     snapshot-seal-records: ${DELTA_SNAPSHOT_SEAL_RECORDS:25000}
     # Orphaned provisional segments (a snapshot whose pod died mid-stream) collected per sweep pass.
     provisional-sweep-batch: ${DELTA_PROVISIONAL_SWEEP_BATCH:500}
+    # >= 1 ms; 0 busy-loops and is refused at startup (#251).
     provisional-sweep-millis: ${DELTA_PROVISIONAL_SWEEP_MILLIS:900000}
   checkpoint:
     # The only schedule on which checkpoints are produced (an operator-forced rebuild aside), so it
@@ -473,6 +477,8 @@ delta:
     # create-to-delete interval (completed-batch files are created before replay starts). Raise it
     # if a build can run longer.
     scratch-orphan-age-seconds: ${DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS:14400}
+    # >= 1 ms; 0 busy-loops and is refused at startup (#251). initialDelayString of 0 on this
+    # tick is fire-immediately and is not an interval.
     scratch-orphan-sweep-ms: ${DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS:3600000}
     # Set this only where the temp-dirs above are written by this pod and nobody else — the
     # deployed `parquet-scratch` emptyDir, which survives a container restart but not the pod
@@ -501,11 +507,16 @@ delta:
     # k8s/base/configmap.yaml. Unbounded still MEASURES: delta.parquet.scratch.bytes follows the
     # writers either way, and max(that gauge) is how this key is sized before it is turned on.
     # Per JVM, so it is a real bound only where scratch-private-to-pod above holds.
+    # Since issue #193, batch writers may use at most this minus
+    # delta.checkpoint.max-frame-temp-bytes, so a completed-batch backlog cannot fill the
+    # directory for the length of the 02:00 sweep. Checkpoint writers still see the whole
+    # budget. Unbounded ignores the reserve — there is nothing to reserve a share of.
     max-scratch-bytes: ${DELTA_PARQUET_MAX_SCRATCH_BYTES:0}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
-    # Fallback sweep interval (ms) picking up segments missed by the commit-time wake
+    # Fallback sweep interval (ms) picking up segments missed by the commit-time wake.
+    # >= 1 ms; 0 busy-loops and is refused at startup (#251).
     sweep-ms: ${DELTA_EGRESS_SWEEP_MS:60000}
     # The delta-SQL queue's twin (issue #243): a segment whose egress fails is held out of the queue
     # for this long, doubling per attempt (capped at 64x), so one unreadable object cannot stall
@@ -517,6 +528,7 @@ delta:
   batch-parquet:
     # Completed-session artifacts are separate from the realtime per-segment egress above.
     max-concurrent: ${DELTA_BATCH_PARQUET_MAX_CONCURRENT:2}
+    # Fallback sweep interval (ms). >= 1 ms; 0 busy-loops and is refused at startup (#251).
     sweep-ms: ${DELTA_BATCH_PARQUET_SWEEP_MS:60000}
     # Base failure backoff; doubles per attempt (capped at 64x), so the attempt ceiling below spans
     # a window wide enough to ride out a transient S3 outage rather than ~5 flat minutes.
@@ -580,10 +592,11 @@ delta:
     # The population changes once per nightly checkpoint build, so daily is as often as this can
     # find anything new. It walks every site prefix in the bucket, so it is a Cost.LONG tick in the
     # ScheduledTaskInventoryTest audit — it holds no connection across S3 (#164), but it does hold
-    # its scheduler thread.
+    # its scheduler thread. >= 1 ms; 0 busy-loops and is refused at startup (#251).
     sweep-ms: ${DELTA_S3_ORPHAN_SWEEP_MS:86400000}
     # Nothing here is crash recovery — an orphan is a day old by definition — so the first pass
-    # stays out of the startup window, unlike the queue-drain sweeps.
+    # stays out of the startup window, unlike the queue-drain sweeps. 0 here is fire-immediately
+    # (an initial delay, not an interval) and is not refused as a busy-loop.
     initial-delay-ms: ${DELTA_S3_ORPHAN_INITIAL_DELAY_MS:600000}
 
 # OpenAPI Configuration

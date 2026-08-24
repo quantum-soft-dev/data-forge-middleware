@@ -101,6 +101,27 @@ class ValueMapperTest {
     }
 
     /**
+     * {@link #isNonFiniteToken} trims; {@code parseDecimal} used to be handed the token raw, and
+     * {@link BigDecimal} rejects surrounding whitespace. So {@code " 1.5 "} — a perfectly legal
+     * number, and a shape {@link ChangelogFold} already retries trimmed so it folds with {@code "1.5"}
+     * as one row — was unparseable, degraded to NULL, and counted
+     * {@code reason=malformed}: silent loss of a value this pipeline can represent exactly, in the
+     * counter defined as "a client defect somebody has to fix" (issue #240, evidence from #238).
+     */
+    @Test
+    void aPaddedFiniteDecimalIsKeptRatherThanCountedMalformed() {
+        for (String token : new String[]{" 1.5 ", "1.5 ", " 1.5", "\t12.50\n"}) {
+            Value value = Value.newBuilder().setDecimalValue(token).build();
+            assertEquals(new BigDecimal(token.trim()), ValueMapper.toJava(value),
+                    token + " is a finite number this pipeline can store");
+            assertFalse(ValueMapper.isMalformedDecimal(value),
+                    token + " is not a client defect");
+            assertFalse(ValueMapper.isNonFiniteDecimal(value));
+            assertFalse(ValueMapper.isUnrepresentable(value));
+        }
+    }
+
+    /**
      * The bulk path must degrade the single column and keep every other column of the row.
      */
     @Test
