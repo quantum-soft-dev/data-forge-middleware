@@ -388,10 +388,15 @@ clock — in an entity, after a raw-JDBC read, and in the DTOs, which serialize 
   and the Parquet Export catalog watermark. A bare clock function in production SQL fails the build
   (`DatabaseClockConventionTest`), and that the statements really do write UTC in a non-UTC session
   is `DatabaseClockUtcIntegrationTest`.
-  Two populations are deliberately outside that ban and neither can reach production data: eleven
+  The ban covers the test tree too (#287): a fixture that seeds a row from the session's clock is
+  compared, off UTC, against values the application writes in UTC, so the test is red or green for
+  a reason that is not its own. Two shapes are exempt there and each names why — a column that is
+  `TIMESTAMPTZ`, where the bare form is the *correct* one and wrapping it would be the defect, and
+  prose in a class with no database access that quotes the shape in order to talk about it.
+  One population stays outside the ban and cannot reach production data: eleven
   **applied** migrations declare columns `DEFAULT CURRENT_TIMESTAMP` — never edited, forward-only,
   and unreachable because every INSERT on those tables maps the column (new migrations are held to
-  the convention) — and test fixtures, which seed rows with the bare form.
+  the convention).
   `ENV TZ=UTC` in the `Dockerfile` (`ContainerTimeZoneContractTest`) is therefore belt-and-braces
   for the session zone rather than load-bearing; it still earns its place by making logs read in
   UTC.
@@ -406,11 +411,18 @@ property end to end (write through JPA, read the same column through raw JDBC, r
 a `LocalDateTime` field and an `Instant` one) but runs in whatever zone the JVM is in: on a machine
 outside UTC that makes it mutation-sensitive, while in CI, which runs in UTC, the conversion it
 guards against would be the identity and the test would stay green. It deliberately does **not**
-switch the JVM's default zone to change that — pgjdbc derives a connection's PostgreSQL session zone
-from that default, and the test suite shares one pool, so a non-UTC session would leak onto another
-test's fixture, which still seeds rows with a bare `CURRENT_TIMESTAMP`. `DatabaseClockUtcIntegrationTest`
-moves the session zone the safe way instead — `SET LOCAL`, undone by the transaction it runs in — so
-its teeth do not depend on the ambient zone.
+switch the JVM's default zone to change that, and #287 — which took the fixtures out of the
+session-zone population — **does not lift that restriction**, only replaces its reason.
+`TimeZone.setDefault` is a mutation of the whole process, shared with the background workers of
+every cached context, and pgjdbc reads a connection's session zone at *connect* time, so a
+connection opened during the window carries a non-UTC session back into the pool and outlives the
+test that set it: the blast radius is the suite, not the method. What such a connection can still
+reach is smaller than before but not empty — a `TIMESTAMPTZ` column read into a `LocalDateTime`
+converts through that zone, and `DatabaseClockUtcIntegrationTest` measures the session clock on
+purpose. Against that stands no gain this repository does not already have: `SET LOCAL`, undone by
+the transaction it runs in, is how that test moves the zone safely. It buys nothing *here*, though
+— the conversion this test guards is Hibernate's, keyed on the JVM's zone rather than the
+session's — so the CI blind spot stands, and what closes it is the static guard.
 
 `java.sql.Timestamp` is banned in `src/` in either direction (`Timestamp.valueOf`, `new Timestamp(…)`,
 `rs.getTimestamp(…)`), because it is an instant and so silently carries the JVM's default zone.

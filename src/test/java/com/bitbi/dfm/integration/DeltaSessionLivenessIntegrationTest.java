@@ -355,7 +355,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
     /** Seed a prior baseline for the site: one committed segment plus a built checkpoint. */
     private void seedBaseline(UUID accountId, UUID siteId) {
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                        + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), siteId, """
                         {"tables": {"customers": {
                           "columns": [{"name": "id", "type": "bigint", "nullable": false}],
@@ -495,7 +495,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, id, "030-" + tag + "-" + id + "@test.local", "030 " + tag);
         createdAccounts.add(id);
         return id;
@@ -506,7 +506,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
-                VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
+                VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 'V2')
                 """, id, accountId, "030-" + tag + "-" + id + ".test.local", "030 " + tag,
                 "030-" + tag + "-" + id);
         createdSites.add(id);

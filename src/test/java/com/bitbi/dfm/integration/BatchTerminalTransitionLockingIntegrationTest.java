@@ -181,7 +181,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         for (BatchStatus terminal : List.of(BatchStatus.COMPLETED, BatchStatus.FAILED,
                 BatchStatus.NOT_COMPLETED, BatchStatus.CANCELLED)) {
             UUID batchId = expiredBatch("term-" + terminal.name().toLowerCase());
-            jdbc.update("UPDATE batches SET status = ?, completed_at = now() WHERE id = ?",
+            jdbc.update("UPDATE batches SET status = ?, completed_at = now() AT TIME ZONE 'UTC' WHERE id = ?",
                     terminal.name(), batchId);
             LocalDateTime before = lastActivityOf(batchId);
 
@@ -259,7 +259,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 """, id, "031-" + tag + "-" + id + "@test.local", "031 " + tag);
         createdAccounts.add(id);
         return id;
@@ -270,7 +270,7 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         jdbc.update("""
                 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name,
                                    is_active, created_at, updated_at, site_name, client_api_version)
-                VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
+                VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', ?, 'V2')
                 """, id, accountId, "031-" + tag + "-" + id + ".test.local", "031 " + tag,
                 "031-" + tag + "-" + id);
         createdSites.add(id);

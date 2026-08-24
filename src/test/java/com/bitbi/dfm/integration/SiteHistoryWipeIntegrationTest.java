@@ -112,7 +112,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         jdbc.update("UPDATE sites SET client_api_version = 'V2' WHERE id = ?", SITE_ID);
         // A live session is a 409 by design; the seed leaves one open.
         jdbc.update("""
-                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
                 WHERE site_id = ? AND status = 'IN_PROGRESS'
                 """, SITE_ID);
         jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", SITE_ID);
@@ -297,7 +297,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, last_activity_at, session_mode)
-                VALUES (?, ?, ?, 'IN_PROGRESS', 'x/', 0, 0, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                VALUES (?, ?, ?, 'IN_PROGRESS', 'x/', 0, 0, false, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC',
                         'CONTINUOUS')
                 """, batchId, ACCOUNT_ID, SITE_ID);
 
@@ -580,7 +580,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at)
-                VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now(), now(), now())
+                VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
                 """, batchId, ACCOUNT_ID, SITE_ID, "delta/" + batchId + "/");
         return batchId;
     }
@@ -589,14 +589,14 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         jdbc.update("""
                 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size,
                                             content_type, checksum, uploaded_at)
-                VALUES (?, ?, 'data.csv', ?, 1024, 'text/csv', 'abc', now())
+                VALUES (?, ?, 'data.csv', ?, 1024, 'text/csv', 'abc', now() AT TIME ZONE 'UTC')
                 """, UUID.randomUUID(), batchId, "wipe-test/" + batchId + "/data.csv");
     }
 
     private void seedErrorLog(UUID batchId) {
         jdbc.update("""
                 INSERT INTO error_logs (id, batch_id, site_id, type, title, message, occurred_at)
-                VALUES (?, ?, ?, 'TEST', 'boom', 'boom', now())
+                VALUES (?, ?, ?, 'TEST', 'boom', 'boom', now() AT TIME ZONE 'UTC')
                 """, UUID.randomUUID(), batchId, SITE_ID);
     }
 
@@ -606,7 +606,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                     (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
                      checksum, attempt_count, created_at, updated_at, ready_at, version)
                 VALUES (?, ?, ?, 'customers', 'READY', ?, 2, 4, 'checksum', 1,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 0)
                 """, UUID.randomUUID(), SITE_ID, batchId, s3Key);
     }
 
@@ -638,7 +638,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 """;
         jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE_ID);
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                        + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE_ID, schemaJson);
     }
 

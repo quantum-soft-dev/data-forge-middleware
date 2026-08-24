@@ -292,7 +292,7 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         assertTrue(sealedBeforeDrop > 0);
 
         // Reap the staged session's batch, exactly as the timeout sweeper would.
-        jdbc.update("UPDATE batches SET status = 'NOT_COMPLETED', completed_at = now() "
+        jdbc.update("UPDATE batches SET status = 'NOT_COMPLETED', completed_at = now() AT TIME ZONE 'UTC' "
                 + "WHERE site_id = ? AND status = 'IN_PROGRESS'", SITE);
 
         // The client resumes as DELTA; the server must open a replacement batch and carry the
@@ -324,7 +324,7 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
      * would reject every session here with ACTIVE_SESSION_EXISTS.
      */
     private void releaseActiveBatch() {
-        jdbc.update("UPDATE batches SET status = 'FAILED', completed_at = now() "
+        jdbc.update("UPDATE batches SET status = 'FAILED', completed_at = now() AT TIME ZONE 'UTC' "
                 + "WHERE site_id = ? AND status = 'IN_PROGRESS'", SITE);
     }
 
@@ -417,7 +417,7 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
                 """;
         jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE);
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                        + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE, schemaJson);
     }
 }

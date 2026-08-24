@@ -91,7 +91,7 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                     (id, site_id, batch_id, first_seq, last_seq, record_count, content_hash, s3_key,
                      mode, created_at, egress_at, plugin_sql_at, stats)
                 VALUES (?, ?, ?, 100, 250, 5, 'hash', 'delta/seg.pb.gz', 'DELTA',
-                        now(), now(), now(), '{"orders": {"inserts": 5, "updates": 0, "deletes": 0}}'::jsonb)
+                        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', '{"orders": {"inserts": 5, "updates": 0, "deletes": 0}}'::jsonb)
                 """, UUID.randomUUID(), SITE_STORE_01,
                 UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890")); // COMPLETED batch of store-01 (test-data.sql)
         storage.uploadDelta(SITE_STORE_01, "orders", 100, 250, "parquet-bytes-delta".getBytes(StandardCharsets.UTF_8));
@@ -157,7 +157,7 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                     (id, site_id, batch_id, first_seq, last_seq, record_count, content_hash, s3_key,
                      mode, created_at, egress_at, plugin_sql_at, stats)
                 VALUES (?, ?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 300, 400, 3, 'hash', 'delta/seg2.pb.gz', 'DELTA',
-                        now(), '2026-07-27 12:00:00', now(),
+                        now() AT TIME ZONE 'UTC', '2026-07-27 12:00:00', now() AT TIME ZONE 'UTC',
                         '{"t_alpha": {"inserts": 1}, "t_beta": {"inserts": 1}, "t_gamma": {"inserts": 1}}'::jsonb)
                 """, UUID.randomUUID(), SITE_STORE_01);
         for (String table : new String[]{"t_alpha", "t_beta", "t_gamma"}) {
@@ -289,7 +289,7 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                 INSERT INTO download_links (id, token, account_plugin_id, s3_key, file_name,
                                             expires_at, consumed_at, created_at)
                 VALUES (?, 'old-consumed-token-1234567890123456789012', ?, 'k', 'f.parquet',
-                        now() - interval '9 days', now() - interval '9 days', now() - interval '10 days')
+                        now() AT TIME ZONE 'UTC' - interval '9 days', now() AT TIME ZONE 'UTC' - interval '9 days', now() AT TIME ZONE 'UTC' - interval '10 days')
                 """, UUID.randomUUID(), accountPluginId);
 
         purgeScheduler.purgeStaleLinks();
@@ -460,8 +460,8 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                 INSERT INTO batch_parquet_artifacts
                     (id, batch_id, site_id, table_name, status, s3_key, row_count, file_size, checksum,
                      attempt_count, first_seq, last_seq, created_at, updated_at, ready_at, version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, COALESCE(?::timestamp, now()),
-                        COALESCE(?::timestamp, now()), ?::timestamp, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, COALESCE(?::timestamp, now() AT TIME ZONE 'UTC'),
+                        COALESCE(?::timestamp, now() AT TIME ZONE 'UTC'), ?::timestamp, 0)
                 """, id, batchId, siteId, table, status, s3Key,
                 "READY".equals(status) ? 10L : null,
                 "READY".equals(status) ? 100L : null,

@@ -142,47 +142,47 @@ DELETE FROM accounts WHERE email LIKE '%@example.com' OR email LIKE '%@test.loca
 -- Test accounts
 -- NOTE: identity_provider_user_id must follow Auth0 format: {provider}|{alphanumeric} (e.g., 'auth0|abc123')
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, identity_provider_user_id)
-VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-test@example.com', 'Admin Test Account', true, '2025-09-06 00:00:00', CURRENT_TIMESTAMP, 'auth0|admintest123456');
+VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-test@example.com', 'Admin Test Account', true, '2025-09-06 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'auth0|admintest123456');
 
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, identity_provider_user_id)
-VALUES ('0199bab1-fad2-bf76-c478-eae1f61e1c17', 'test-account-2@example.com', 'Test Account 2', true, '2025-09-16 00:00:00', CURRENT_TIMESTAMP, 'auth0|60f7b8a8b4a0f10074c5d0e1');
+VALUES ('0199bab1-fad2-bf76-c478-eae1f61e1c17', 'test-account-2@example.com', 'Test Account 2', true, '2025-09-16 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'auth0|60f7b8a8b4a0f10074c5d0e1');
 
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-VALUES ('0199bab2-3cbd-cc95-a989-57ba51d258c8', 'inactive@example.com', 'Inactive Account', false, '2025-09-26 00:00:00', CURRENT_TIMESTAMP);
+VALUES ('0199bab2-3cbd-cc95-a989-57ba51d258c8', 'inactive@example.com', 'Inactive Account', false, '2025-09-26 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC');
 
 -- Plugin system test account (used by PluginActivationIntegrationTest, PluginAuditIntegrationTest, etc.)
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, identity_provider_user_id)
-VALUES ('0199baac-f851-7ed9-5963-00dbaf07b233', 'plugin-test@example.com', 'Plugin Test Account', true, '2025-12-01 00:00:00', CURRENT_TIMESTAMP, 'auth0|plugintest123456');
+VALUES ('0199baac-f851-7ed9-5963-00dbaf07b233', 'plugin-test@example.com', 'Plugin Test Account', true, '2025-12-01 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'auth0|plugintest123456');
 
 -- Test sites (with BCrypt hashed client_secret_hash)
 -- NOTE: After migration V7, column renamed from client_secret to client_secret_hash
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('b2c3d4e5-f6a7-8901-bcde-f12345678901', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-site.example.com', '$2a$10$zOS1.KWMj6b2crXsM1hsh.hssSJghfUH1Wdxx3RMQzzNfK5zzPhBK', 'Admin Test Site', true, '2025-09-11 00:00:00', CURRENT_TIMESTAMP, 'admin-site.example.com', 'V2');
+VALUES ('b2c3d4e5-f6a7-8901-bcde-f12345678901', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-site.example.com', '$2a$10$zOS1.KWMj6b2crXsM1hsh.hssSJghfUH1Wdxx3RMQzzNfK5zzPhBK', 'Admin Test Site', true, '2025-09-11 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'admin-site.example.com', 'V2');
 -- Plaintext: admin-site-secret
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199baac-f852-753f-6fc3-7c994fc38654', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-01.example.com', '$2a$10$w4ybRJqsZPH4IWHXHaN1rukDAfZc6Ri4P45Hpk3mlfbZpHIHYYyBm', 'Store 01', true, '2025-09-21 00:00:00', CURRENT_TIMESTAMP, 'store-01.example.com', 'V2');
+VALUES ('0199baac-f852-753f-6fc3-7c994fc38654', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-01.example.com', '$2a$10$w4ybRJqsZPH4IWHXHaN1rukDAfZc6Ri4P45Hpk3mlfbZpHIHYYyBm', 'Store 01', true, '2025-09-21 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'store-01.example.com', 'V2');
 -- Plaintext: valid-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-02.example.com', '$2a$10$R2zm98c/.YXxfrR3dDvj6uYfGv7ITs7cyqpWwpImC1n/tTq20bQqG', 'Store 02', true, '2025-09-26 00:00:00', CURRENT_TIMESTAMP, 'store-02.example.com', 'V2');
+VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-02.example.com', '$2a$10$R2zm98c/.YXxfrR3dDvj6uYfGv7ITs7cyqpWwpImC1n/tTq20bQqG', 'Store 02', true, '2025-09-26 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'store-02.example.com', 'V2');
 -- Plaintext: inactive-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-ca3b-e41c-5521-2f4b33fda8b6', '0199bab1-fad2-bf76-c478-eae1f61e1c17', 'store-03.example.com', '$2a$10$8KGp8l7VXbUwby9yQACEEuOYuBApd8uWzSy4hGppksFbIC07MdnB2', 'Store 03', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'store-03.example.com', 'V2');
+VALUES ('0199bab0-ca3b-e41c-5521-2f4b33fda8b6', '0199bab1-fad2-bf76-c478-eae1f61e1c17', 'store-03.example.com', '$2a$10$8KGp8l7VXbUwby9yQACEEuOYuBApd8uWzSy4hGppksFbIC07MdnB2', 'Store 03', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'store-03.example.com', 'V2');
 -- Plaintext: batch-test-secret
 
 -- Sites for AuthenticationIntegrationTest
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-1111-1111-1111-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'test-store.example.com', '$2a$10$gMwFxteMaHb0kkSu3vaK7.z1PD7tXwSxtwZz.Ib.tzITdaFg.nbRy', 'Test Store', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'test-store.example.com', 'V2');
+VALUES ('0199bab0-1111-1111-1111-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'test-store.example.com', '$2a$10$gMwFxteMaHb0kkSu3vaK7.z1PD7tXwSxtwZz.Ib.tzITdaFg.nbRy', 'Test Store', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'test-store.example.com', 'V2');
 -- Plaintext: test-client-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-2222-2222-2222-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'inactive-store.example.com', '$2a$10$H.wcapH9pLI0XcM6Sz1EHeECA2axttsYPjE90GObxmOEkDvgYDEgi', 'Inactive Store', false, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'inactive-store.example.com', 'V2');
+VALUES ('0199bab0-2222-2222-2222-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'inactive-store.example.com', '$2a$10$H.wcapH9pLI0XcM6Sz1EHeECA2axttsYPjE90GObxmOEkDvgYDEgi', 'Inactive Store', false, '2025-10-01 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'inactive-store.example.com', 'V2');
 -- Plaintext: inactive-secret
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-3333-3333-3333-333333333333', '0199bab2-3cbd-cc95-a989-57ba51d258c8', 'orphaned-store.example.com', '$2a$10$t.QXSUqKLALkr4yq6F5PLuX78.Zl1WDYCKF.ZAXW3oym4XNxMv8aO', 'Orphaned Store (inactive parent)', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'orphaned-store.example.com', 'V2');
+VALUES ('0199bab0-3333-3333-3333-333333333333', '0199bab2-3cbd-cc95-a989-57ba51d258c8', 'orphaned-store.example.com', '$2a$10$t.QXSUqKLALkr4yq6F5PLuX78.Zl1WDYCKF.ZAXW3oym4XNxMv8aO', 'Orphaned Store (inactive parent)', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'orphaned-store.example.com', 'V2');
 -- Plaintext: orphaned-secret
 
 -- Test batches
@@ -197,11 +197,11 @@ VALUES ('c3d4e5f6-a7b8-9012-cdef-123456789012', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 -- IN_PROGRESS_BATCH_ID for Device Batch Controller tests (TC15-TC20)
 -- Used for complete/fail/cancel/get operations
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
-VALUES ('b1c2d3e4-f5a6-7890-bcde-f12345678903', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/', 1, 1024, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL);
+VALUES ('b1c2d3e4-f5a6-7890-bcde-f12345678903', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/', 1, 1024, false, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', NULL);
 
 -- IN_PROGRESS batch for store-02 (same account, different site) - used for TC17 cross-site authorization test
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
-VALUES ('b1c2d3e4-f5a6-7890-bcde-f12345678905', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-02.example.com/2025-10-06/13-00/', 1, 1024, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL);
+VALUES ('b1c2d3e4-f5a6-7890-bcde-f12345678905', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-02.example.com/2025-10-06/13-00/', 1, 1024, false, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', NULL);
 
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('0199bab2-ca1c-3d0e-441d-adb776a62579', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'FAILED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-04/10-00/', 3, 3072, true, '2025-10-04 10:00:00', '2025-10-04 10:00:00', '2025-10-04 10:30:00');
@@ -227,15 +227,15 @@ VALUES ('a1b2c3d4-e5f6-7890-abcd-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 
 -- File for IN_PROGRESS batch (TC15-TC20)
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
-VALUES ('0199bab3-a134-e3e5-e76e-7ba0a7c44fa5', 'b1c2d3e4-f5a6-7890-bcde-f12345678903', 'existing-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/existing-file.csv', 1024, 'text/csv', 'abc123def456', CURRENT_TIMESTAMP);
+VALUES ('0199bab3-a134-e3e5-e76e-7ba0a7c44fa5', 'b1c2d3e4-f5a6-7890-bcde-f12345678903', 'existing-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/existing-file.csv', 1024, 'text/csv', 'abc123def456', CURRENT_TIMESTAMP AT TIME ZONE 'UTC');
 
 -- File for store-02 IN_PROGRESS batch (TC17)
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
-VALUES ('b1c2d3e4-aaaa-bbbb-cccc-dddddddddddd', 'b1c2d3e4-f5a6-7890-bcde-f12345678905', 'store-02-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-02.example.com/2025-10-06/13-00/store-02-file.csv', 1024, 'text/csv', 'store02checksum', CURRENT_TIMESTAMP);
+VALUES ('b1c2d3e4-aaaa-bbbb-cccc-dddddddddddd', 'b1c2d3e4-f5a6-7890-bcde-f12345678905', 'store-02-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-02.example.com/2025-10-06/13-00/store-02-file.csv', 1024, 'text/csv', 'store02checksum', CURRENT_TIMESTAMP AT TIME ZONE 'UTC');
 
 -- File for store-03 batch (used for cross-tenant authorization tests)
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
-VALUES ('0199bab3-eeee-eeee-eeee-eeeeeeeeeeee', '0199bab2-dddd-dddd-dddd-dddddddddddd', 'store-03-file.csv', '0199bab1-fad2-bf76-c478-eae1f61e1c17/store-03.example.com/2025-10-06/13-00/store-03-file.csv', 2048, 'text/csv', 'xyz789abc123', CURRENT_TIMESTAMP);
+VALUES ('0199bab3-eeee-eeee-eeee-eeeeeeeeeeee', '0199bab2-dddd-dddd-dddd-dddddddddddd', 'store-03-file.csv', '0199bab1-fad2-bf76-c478-eae1f61e1c17/store-03.example.com/2025-10-06/13-00/store-03-file.csv', 2048, 'text/csv', 'xyz789abc123', CURRENT_TIMESTAMP AT TIME ZONE 'UTC');
 
 -- Test error logs
 INSERT INTO error_logs (id, batch_id, site_id, type, title, message, metadata, occurred_at)

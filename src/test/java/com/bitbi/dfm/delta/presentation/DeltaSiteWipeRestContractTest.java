@@ -45,7 +45,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         // The seed leaves an IN_PROGRESS batch on the site; a live session is a 409 by design, and
         // the tests that care about that re-open one explicitly.
         jdbc.update("""
-                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
                 WHERE site_id = ? AND status = 'IN_PROGRESS'
                 """, OWNED_SITE);
         jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", OWNED_SITE);
@@ -167,7 +167,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, last_activity_at, session_mode)
                 VALUES (?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', ?, 'IN_PROGRESS', 'x/', 0, 0, false,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'CONTINUOUS')
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'CONTINUOUS')
                 """, UUID.randomUUID(), OWNED_SITE);
 
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
@@ -185,7 +185,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, last_activity_at, session_mode)
                 VALUES (?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', ?, 'IN_PROGRESS', 'x/', 0, 0, false,
-                        CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '2 days',
+                        CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - INTERVAL '2 days', CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - INTERVAL '2 days',
                         'CONTINUOUS')
                 """, UUID.randomUUID(), OWNED_SITE);
 

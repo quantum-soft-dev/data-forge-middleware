@@ -43,12 +43,24 @@ import static org.assertj.core.api.Assertions.assertThat;
  * connect time</em>, and this suite shares one database and one pool across cached contexts with
  * {@code minimum-idle: 0} and a ten-second idle timeout, so a connection opened during such a
  * window would carry a non-UTC session zone back into the pool. An unrelated test's fixture — some
- * forty of which still seed rows with a bare {@code CURRENT_TIMESTAMP} — would then write a local
+ * forty of which then seeded rows with a bare {@code CURRENT_TIMESTAMP} — would write a local
  * wall clock into a column everything else fills with UTC: a silent, order-dependent failure in a
  * shared database, which is the #226/#245 class of defect and far worse than the blind spot it was
- * buying. #286 took the six production statements that used to be in that population out of it, so
- * the hazard is now the fixtures alone; the safe way to move the zone is
- * {@code DatabaseClockUtcIntegrationTest}'s, a {@code SET LOCAL} the transaction undoes.</p>
+ * buying.</p>
+ *
+ * <p><strong>#287 closed that population and the restriction still stands.</strong> #286 took the
+ * six production statements out of it and #287 the fixtures, so the specific hazard named above is
+ * gone — and the reason is now the mechanism rather than the population. {@code
+ * TimeZone.setDefault} mutates the whole JVM, shared with the background workers of every cached
+ * context, and the zone a pooled connection carries is fixed when it is <em>opened</em>: such a
+ * connection outlives the method that set it, so the blast radius is the suite. What it can still
+ * reach is smaller but not empty — a {@code TIMESTAMPTZ} column read into a {@code LocalDateTime}
+ * converts through that zone, and {@code DatabaseClockUtcIntegrationTest} reads the session clock
+ * on purpose to measure its offset. Against that, nothing is bought that is not already available:
+ * that test moves the zone the safe way, with a {@code SET LOCAL} the transaction undoes. It is
+ * not a substitute <em>here</em> — the conversion this test guards is Hibernate's, keyed on the
+ * JVM's zone and not the session's — so the CI blind spot stands, and
+ * {@code TimestampProducerConventionTest} is what closes it.</p>
  */
 @DisplayName("A TIMESTAMP column round-trips as UTC")
 class TimestampRoundTripIntegrationTest extends BaseIntegrationTest {

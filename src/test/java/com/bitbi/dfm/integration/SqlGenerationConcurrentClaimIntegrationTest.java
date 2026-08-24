@@ -140,7 +140,7 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
         // Retire the shared queue's backlog with one statement instead of rendering it: pending
         // rows hold no semaphore permits, so nothing needs to run — they only need to stop being
         // claimable while this test's own rows are in flight.
-        jdbc.update("UPDATE changelog_segments SET plugin_sql_at = now() WHERE plugin_sql_at IS NULL");
+        jdbc.update("UPDATE changelog_segments SET plugin_sql_at = now() AT TIME ZONE 'UTC' WHERE plugin_sql_at IS NULL");
 
         // Seeding order is the #175 gate described in the class Javadoc: segment first (pending,
         // but no activation exists yet, so a claim in the window skips without generating), then
@@ -148,7 +148,7 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
         UUID batchId = seedBatch();
         changelogSegmentService.persist(SITE_ID, batchId, "DELTA", 1L, List.of(
                 rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
-        jdbc.update("UPDATE changelog_segments SET plugin_sql_at = now(), egress_at = now() WHERE batch_id = ?",
+        jdbc.update("UPDATE changelog_segments SET plugin_sql_at = now() AT TIME ZONE 'UTC', egress_at = now() AT TIME ZONE 'UTC' WHERE batch_id = ?",
                 batchId);
         AccountPlugin activation = accountPluginRepository.save(
                 AccountPlugin.activate(ACCOUNT_ID, "bit-bi", Map.of("tenantId", "t1")));
@@ -301,7 +301,7 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
         UUID batchId = UUID.randomUUID();
         jdbc.update("INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, "
                         + "total_size, has_errors, started_at, created_at, completed_at) "
-                        + "VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now(), now(), now())",
+                        + "VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 batchId, ACCOUNT_ID, SITE_ID, "delta/" + batchId + "/");
         return batchId;
     }
@@ -323,7 +323,7 @@ class SqlGenerationConcurrentClaimIntegrationTest extends BaseIntegrationTest {
                 """;
         jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE_ID);
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                        + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE_ID, schemaJson);
     }
 

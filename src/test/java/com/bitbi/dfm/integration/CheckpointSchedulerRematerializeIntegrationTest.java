@@ -208,7 +208,7 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
                 """;
         jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE);
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                        + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE, schemaJson);
     }
 

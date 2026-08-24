@@ -126,7 +126,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
                 """;
         jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE_ID);
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                        + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE_ID, schemaJson);
     }
 
@@ -134,7 +134,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         UUID batchId = UUID.randomUUID();
         jdbc.update("INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, "
                         + "total_size, has_errors, started_at, created_at, completed_at) "
-                        + "VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now(), now(), now())",
+                        + "VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 batchId, ACCOUNT_ID, SITE_ID, "delta/" + batchId + "/");
         seededBatchIds.add(batchId);
         return batchId;

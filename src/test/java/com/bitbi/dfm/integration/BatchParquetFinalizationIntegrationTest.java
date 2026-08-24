@@ -435,7 +435,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                 }
                 """;
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?::jsonb, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                        + "VALUES (?, ?, ?::jsonb, 1, CURRENT_TIMESTAMP AT TIME ZONE 'UTC', CURRENT_TIMESTAMP AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE_ID, schemaJson);
     }
 

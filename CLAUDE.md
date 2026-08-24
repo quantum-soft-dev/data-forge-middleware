@@ -621,6 +621,59 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- test-fixture-db-clock: The test fixtures are the fourth producer of a zone-independent
+  `TIMESTAMP` column, and they say UTC out loud like the other three (issue #287, found working
+  #286, which deliberately left them: about forty places, a sweep of its own size). A fixture
+  seeding `CURRENT_TIMESTAMP` takes the clock in the **session's** zone, which pgjdbc sets from the
+  JVM's, so off UTC it disagrees with the UTC the application writes — and a test comparing a
+  seeded age against an application value is then deterministically red or green **for a reason
+  that is not its own**, the #278/#279 class where the gate lies to a developer outside UTC.
+  **The population was larger than the ticket's list, and finding that is what the guard bought:**
+  the eight named files are 65 occurrences, but a first run of the extended scan surfaced two more
+  spellings nobody had grepped for — `NOW()` in `BatchRetentionIntegrationTest` and, much the
+  bigger set, **lowercase `now()` inside SQL string literals** across eleven further classes the
+  ticket never named (`ParquetExportIntegrationTest`, `SegmentedRebaselineIntegrationTest`,
+  `SqlGenerationConcurrentClaimIntegrationTest`, `DeviceAuthRefreshContractTest` among them). 174
+  rewrites in 27 fixture files; three of the four statements in
+  `DeltaBatchParquetQueueRestContractTest` already carried the right form — its lease-deadline
+  arithmetic, where being wrong would have shown — which is what the ticket meant by "the correct
+  shape is known where correctness happened to matter"; the fourth, a plain seed in the same file,
+  did not.
+  **The guard is #286's scanner with two more roots** — `src/test/java` and
+  `src/test/resources/*.sql` — plus the shape-and-count exemption machinery of #280
+  (`RawTimestampReadConventionTest`), because a test tree carries two things production SQL does
+  not. **A `TIMESTAMPTZ` column is the exemption that matters**: for
+  `device_authorizations.expires_at`/`created_at` (V21) the bare form is the *correct* one — the
+  value is an instant, not a wall clock — and wrapping it yields a `timestamp` PostgreSQL then
+  reinterprets in the session's zone on assignment, i.e. the fix would be the defect. It is the
+  only such hit in the whole tree, established by mapping every occurrence to its column and every
+  column to its migration rather than by inspection. The other exemptions are prose in classes with
+  no database access, plus the one bare read `DatabaseClockUtcIntegrationTest` needs to measure how
+  far the session's clock is from UTC. **The scanner's own file is the single file-wide exclusion**
+  and it is checked rather than argued: its literals are the scan's input, so it must still carry
+  the banned shapes (a stale exclusion hides whatever is written there next) and it must contain no
+  `JdbcTemplate`/`EntityManager`/`DataSource`/`@Sql` **outside comments and literals** — read that
+  way because the assertion itself, and the Javadoc explaining it, name those types in order to
+  talk about them.
+  **The third acceptance criterion is answered no, and the reason changes rather than
+  disappears.** `TimestampRoundTripIntegrationTest` still does not switch the JVM's default zone.
+  The hazard it named — a leaked non-UTC session reaching an unrelated fixture's bare
+  `CURRENT_TIMESTAMP` — is what this ticket closes, but `TimeZone.setDefault` is a mutation of the
+  whole process, shared with the background workers of ~24 cached contexts, and a pooled
+  connection's session zone is fixed when it is **opened**, so it outlives the method that set it:
+  the blast radius is the suite, not the test. What such a connection can still reach is smaller
+  but not empty — a `TIMESTAMPTZ` column read into a `LocalDateTime` converts through that zone,
+  and `DatabaseClockUtcIntegrationTest` reads the session clock on purpose. And nothing is bought
+  that the repository does not already have safely (`SET LOCAL`, undone by its transaction) —
+  which, stated rather than implied, is **not** a substitute here either: the conversion that test
+  guards is Hibernate's, keyed on the JVM's zone and not the session's, so the CI blind spot stands
+  and `TimestampProducerConventionTest` is what closes it.
+  Test and documentation only: no production code, REST, gRPC, proto, DTO, migration (**V58 stays
+  free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change. Mutation-proven in
+  both directions — restore one bare `CURRENT_TIMESTAMP` in `test-data.sql` and the scan names that
+  line; leave an exemption whose file no longer matches its shape and count and the staleness check
+  fails (observed for real mid-run, at 31 occurrences against a budget of 2). See `README.md`
+  ("Time zones").
 - db-clock-utc: The database clock — the third producer of a zone-independent `TIMESTAMP` column —
   says UTC itself instead of inheriting it from the session zone (issue #286, found working #282 and
   filed rather than folded in). #282 brought every **Java** producer to one convention and removed
