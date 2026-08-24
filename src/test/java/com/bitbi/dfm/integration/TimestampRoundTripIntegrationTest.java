@@ -6,8 +6,6 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -22,26 +20,35 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * A zone-independent {@code TIMESTAMP} column holds the same UTC wall clock whichever path writes
- * or reads it, in whichever zone the JVM happens to run (issue #282).
+ * or reads it (issue #282).
  *
  * <p><strong>Why this test could not exist before.</strong> #280 wanted exactly this statement and
  * refused it: with {@code spring.jpa.properties.hibernate.jdbc.time_zone: UTC} in place, a value
  * written through JPA and read back through {@link JdbcTemplate} differs by the JVM's offset, so
- * the test would have been green in CI and deterministically red for every developer outside UTC —
- * #279 recreated by the guard meant to prevent it. Removing that setting is what makes the
- * statement true, and asserting it is what stops the setting coming back unnoticed.</p>
+ * the test would have been red for every developer outside UTC — #279 recreated by the guard meant
+ * to prevent it. Removing that setting is what makes the statement true in every zone.</p>
  *
- * <p><strong>Why it sets the JVM's default zone instead of inheriting it.</strong> Inherited, the
- * property is observable only off UTC, so in CI the test would be unable to fail — it would pass
- * against the very conversion it exists to keep out. Choosing the zone makes it red under mutation
- * everywhere. The mutation is restoring the setting: both methods then fail on a shifted column.</p>
+ * <p><strong>Where the teeth are, stated plainly.</strong> This test runs in whatever zone the JVM
+ * is in. On a developer's machine outside UTC that makes it mutation-sensitive — restore the
+ * setting and both methods fail. In CI, which runs in UTC, the removed conversion is the identity
+ * and this test would stay green, so it is <em>not</em> what stops the setting coming back there:
+ * {@code TimestampProducerConventionTest} asserts the setting's absence directly and gives the same
+ * answer in every environment. The two are complementary — one pins the configuration, this one
+ * pins that the paths actually agree end to end, which would also catch a conversion arriving by
+ * some other route (a dialect change, a Hibernate upgrade).</p>
  *
- * <p>Changing the default zone is process-global, and safe here for a reason this ticket supplies:
- * the suite runs in one JVM with no parallel forks (#207), and since #282 every producer names
- * {@code ZoneOffset.UTC} explicitly, so a background sweep running in a cached context during the
- * window cannot read the zone this test installed. It is restored in a {@code finally}.</p>
+ * <p><strong>Why it does not set the JVM's default zone to get teeth in CI.</strong> An earlier cut
+ * did, running each case in UTC, {@code Asia/Jerusalem} and {@code America/Los_Angeles}. It was
+ * withdrawn: pgjdbc takes a connection's PostgreSQL session zone from the JVM's default <em>at
+ * connect time</em>, and this suite shares one database and one pool across cached contexts with
+ * {@code minimum-idle: 0} and a ten-second idle timeout, so a connection opened during such a
+ * window would carry a non-UTC session zone back into the pool. A later JPQL
+ * {@code SET … = CURRENT_TIMESTAMP} from an unrelated test — six of those exist — would then write
+ * a local wall clock into a column everything else fills with UTC: a silent, order-dependent
+ * failure in a shared database, which is the #226/#245 class of defect and far worse than the
+ * blind spot it was buying.</p>
  */
-@DisplayName("A TIMESTAMP column round-trips as UTC in any JVM zone")
+@DisplayName("A TIMESTAMP column round-trips as UTC")
 class TimestampRoundTripIntegrationTest extends BaseIntegrationTest {
 
     /** store-01.example.com, seeded by test-data.sql. */
@@ -61,67 +68,66 @@ class TimestampRoundTripIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
-    @ParameterizedTest(name = "JVM in {0}")
-    @ValueSource(strings = {"UTC", "Asia/Jerusalem", "America/Los_Angeles"})
+    @Test
     @DisplayName("a LocalDateTime stamped by an entity reaches the column as the UTC wall clock")
-    void aLocalDateTimeFieldIsStoredAndReadAsTheColumnsOwnValue(String zone) {
-        inZone(zone, () -> {
-            LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
-            ChangelogSegment segment = segmentRepository.save(ChangelogSegment.create(
-                    SITE, BATCH, 1L, 5L, 5L, "hash-282",
-                    "delta/" + SITE + "/segments/282-" + UUID.randomUUID() + ".pb.gz", "DELTA", Map.of()));
-
+    void aLocalDateTimeFieldIsStoredAndReadAsTheColumnsOwnValue() {
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
+        ChangelogSegment segment = segmentRepository.save(ChangelogSegment.create(
+                SITE, BATCH, 1L, 5L, 5L, "hash-282",
+                "delta/" + SITE + "/segments/282-" + UUID.randomUUID() + ".pb.gz", "DELTA", Map.of()));
+        try {
             LocalDateTime raw = jdbc.queryForObject(
                     "SELECT created_at FROM changelog_segments WHERE id = ?",
                     LocalDateTime.class, segment.getId());
 
-            assertThat(raw)
-                    .as("the raw column must equal what the entity stamped — a conversion on the "
-                            + "JPA path would shift it by the JVM's offset from %s", zone)
-                    .isEqualTo(segment.getCreatedAt());
+            assertSameWallClock(raw, segment.getCreatedAt(),
+                    "the raw column must be what the entity stamped — a conversion on the JPA path "
+                            + "would shift it by this JVM's offset (" + TimeZone.getDefault().getID() + ")");
             assertThat(raw)
                     .as("and that value must be a UTC wall clock, not this JVM's local one")
                     .isBetween(before.minus(TOLERANCE), LocalDateTime.now(ZoneOffset.UTC).plus(TOLERANCE));
-
+        } finally {
             jdbc.update("DELETE FROM changelog_segments WHERE id = ?", segment.getId());
-        });
+        }
     }
 
     @Test
-    @DisplayName("an Instant field stores the UTC wall clock whatever the JVM zone")
-    void anInstantFieldIsStoredAsUtcInEveryZone() {
+    @DisplayName("an Instant field stores the UTC wall clock")
+    void anInstantFieldIsStoredAsUtc() {
         // The measurement this ticket's decision rests on: Instant binding never consulted
-        // hibernate.jdbc.time_zone, so removing that setting could not shift the ~15 TIMESTAMP
-        // columns held as Instant (refresh_tokens, account_plugins, plugin_configs,
-        // admin_action_logs, comparison_results, file_comparisons) — which is why no data
-        // migration was needed. Asserted so that a future Hibernate upgrade cannot change it
-        // quietly.
-        for (String zone : new String[]{"UTC", "Asia/Jerusalem", "America/Los_Angeles"}) {
-            inZone(zone, () -> {
-                RefreshToken token = refreshTokenRepository.save(
-                        RefreshToken.createNewFamily(SITE, "tz-282-" + UUID.randomUUID()));
+        // hibernate.jdbc.time_zone, so removing that setting could not shift the TIMESTAMP columns
+        // held as Instant (refresh_tokens, account_plugins, plugin_configs, admin_action_logs,
+        // comparison_results, file_comparisons) — which is why no data migration was needed.
+        // Asserted so a future Hibernate upgrade cannot change it quietly.
+        RefreshToken token = refreshTokenRepository.save(
+                RefreshToken.createNewFamily(SITE, "tz-282-" + UUID.randomUUID()));
+        try {
+            LocalDateTime raw = jdbc.queryForObject(
+                    "SELECT created_at FROM refresh_tokens WHERE id = ?",
+                    LocalDateTime.class, token.getId());
 
-                LocalDateTime raw = jdbc.queryForObject(
-                        "SELECT created_at FROM refresh_tokens WHERE id = ?",
-                        LocalDateTime.class, token.getId());
-
-                assertThat(raw)
-                        .as("an Instant must reach the column as its UTC wall clock, in %s as in UTC", zone)
-                        .isEqualTo(LocalDateTime.ofInstant(token.getCreatedAt(), ZoneOffset.UTC));
-
-                jdbc.update("DELETE FROM refresh_tokens WHERE id = ?", token.getId());
-            });
+            assertSameWallClock(raw, LocalDateTime.ofInstant(token.getCreatedAt(), ZoneOffset.UTC),
+                    "an Instant must reach the column as its UTC wall clock");
+        } finally {
+            jdbc.update("DELETE FROM refresh_tokens WHERE id = ?", token.getId());
         }
     }
 
-    /** Runs {@code body} with the JVM's default zone set to {@code zone}, restoring it after. */
-    private static void inZone(String zone, Runnable body) {
-        TimeZone original = TimeZone.getDefault();
-        try {
-            TimeZone.setDefault(TimeZone.getTimeZone(zone));
-            body.run();
-        } finally {
-            TimeZone.setDefault(original);
-        }
+    /**
+     * The two values name the same wall clock, up to what the column can store.
+     *
+     * <p>Not {@code isEqualTo}: PostgreSQL {@code TIMESTAMP} keeps microseconds, and the JVM clock
+     * has finer resolution on Linux than on macOS — so an exact comparison passes on a developer's
+     * machine and fails in CI on the digits the column rounded away, which is what the first cut of
+     * this test did. Not {@code isEqualToIgnoringNanos} either: storage <em>rounds</em>, so a stamp
+     * at {@code …:17.9999996} lands in the next second, a field that comparison still checks. The
+     * shift this test exists to detect is a zone offset — whole hours, or 30 minutes at the finest
+     * — so nothing near a millisecond is a defect it could see.</p>
+     */
+    private static void assertSameWallClock(LocalDateTime raw, LocalDateTime expected, String reason) {
+        assertThat(raw).as(reason).isNotNull();
+        assertThat(Duration.between(raw, expected).abs())
+                .as("%s (column %s, stamped %s)", reason, raw, expected)
+                .isLessThan(Duration.ofMillis(1));
     }
 }

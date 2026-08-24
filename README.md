@@ -396,8 +396,9 @@ happens to run in UTC.
 `rs.getTimestamp(col).toLocalDateTime()` cancels that conversion for almost every value and is
 therefore easy to mistake for a no-op, but not for a wall clock that falls in the JVM zone's DST
 gap: that local time does not exist, `Calendar` resolves it forward, and the value comes back
-shifted by the transition. `RawTimestampReadConventionTest` holds the ban and carries the one
-deliberate exemption.
+shifted by the transition. `RawTimestampReadConventionTest` holds the ban; it carries no exemption
+today (the one it had existed only to reapply the conversion #282 removed) and an entry added later
+must name a shape, a count and a reason.
 
 Until #282 the producing side was not uniform — parts of the code built a `LocalDateTime` with
 `LocalDateTime.now()` (the JVM zone, which the Hibernate conversion then made correct) and parts

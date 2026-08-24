@@ -662,14 +662,22 @@ pages/{feature}/            # Route pages
   `TimestampRoundTripIntegrationTest` is the end-to-end statement #280 wanted and refused: write
   through JPA, read the same column through `JdbcTemplate`, require equality. With the conversion in
   place that test is red on every non-UTC JVM — #279 recreated by its own guard — and removing the
-  conversion is what makes it true. It **sets** the JVM default zone (UTC, `Asia/Jerusalem`,
-  `America/Los_Angeles`) rather than inheriting it, so it can fail in CI too; inherited, the property
-  is observable only off UTC and the test would pass against the conversion it exists to keep out.
-  Setting a process-global zone is safe precisely because of this ticket: the suite is one JVM with no
-  parallel forks (#207), and every producer now names `ZoneOffset.UTC`, so a background sweep in a
-  cached context cannot read the installed zone. Both mutation-proven — restore the setting and the
-  two non-UTC cases go red while UTC stays green, which is the shape of the defect; restore one bare
-  `now()` and the scan goes red.
+  conversion is what makes it true. **Where the teeth are is stated rather than assumed**: it runs in
+  the ambient zone, so on a developer's machine outside UTC it is mutation-sensitive, while in CI —
+  which runs in UTC, where the removed conversion is the identity — it would stay green, so what
+  stops the setting coming back there is the static guard, which asserts its absence directly in
+  every environment. **A cut that switched the JVM default zone (UTC, `Asia/Jerusalem`,
+  `America/Los_Angeles`) to buy teeth in CI was written and withdrawn in review**, and the reason is
+  worth keeping: pgjdbc takes a connection's PostgreSQL session zone from the JVM default *at connect
+  time*, and this suite shares one database and one pool across cached contexts with
+  `minimum-idle: 0` and a ten-second idle timeout — so a connection opened inside such a window
+  carries a non-UTC session zone back into the pool, and a later JPQL `SET … = CURRENT_TIMESTAMP`
+  from an unrelated test writes a local wall clock into a column everything else fills with UTC. That
+  is the #226/#245 class of silent, order-dependent contamination, and much worse than the blind spot
+  it was buying — the hazard is created by the very pgjdbc behaviour this entry documents two
+  paragraphs down. Mutation-proven where each guard can be: restore the setting and the static guard
+  goes red anywhere (and the round trip goes red off UTC); restore one bare `now()` and the scan goes
+  red.
   **Two simplifications are consequences, not tidying**: `ChangelogSegmentQueueMarkerClobberTest.asStored()`
   (#278, part B) existed only to reapply the binding's conversion so a repository write could be
   compared with the raw column in any zone — it is the identity now and is gone, and with it the only
@@ -682,7 +690,7 @@ pages/{feature}/            # Route pages
   zone, because pgjdbc sets the session zone from it — so off UTC those statements write local wall
   clock into the same columns. Rewriting them as bound parameters moves the time source out of the
   database, which #245 chose deliberately for the queue markers, so it is its own decision and is
-  filed rather than taken. `ENV TZ=UTC` and `ContainerTimeZoneContractTest` (#280) stay: their role
+  filed rather than taken (**#286**). `ENV TZ=UTC` and `ContainerTimeZoneContractTest` (#280) stay: their role
   changes from load-bearing to belt-and-braces plus that session zone. No REST, gRPC, proto, DTO,
   migration (**V58 stays free**), `specs/NNN-*`, configuration-key *name*, metric, S3-key or frontend
   change. See `README.md` ("Time zones").

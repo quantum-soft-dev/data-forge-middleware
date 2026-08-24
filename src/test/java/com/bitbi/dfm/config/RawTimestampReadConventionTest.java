@@ -25,11 +25,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the build rather than by review habit (issue #280).
  *
  * <p><strong>What the column holds.</strong> Every {@code TIMESTAMP} column in this schema stores a
- * <em>UTC wall clock</em>. Raw JDBC reads exactly that; the Hibernate path
- * ({@code spring.jpa.properties.hibernate.jdbc.time_zone: UTC}) converts a bound
- * {@code LocalDateTime} from the JVM's zone into UTC on write and back on read, so the two agree on
- * one condition only — the JVM runs in UTC, which the deployed container now declares rather than
- * inherits ({@code ContainerTimeZoneContractTest}).</p>
+ * <em>UTC wall clock</em>, and both ways of reading one return exactly that. When this guard was
+ * written the Hibernate path converted — {@code spring.jpa.properties.hibernate.jdbc.time_zone: UTC}
+ * took a bound {@code LocalDateTime} from the JVM's zone into UTC on write and back on read — so
+ * the two agreed only while the JVM ran in UTC. #282 removed that setting and made every producer
+ * yield UTC directly ({@code TimestampProducerConventionTest}), so the agreement is now
+ * unconditional; the container still declares its zone
+ * ({@code ContainerTimeZoneContractTest}) for the database session's clock and for legible logs.</p>
  *
  * <p><strong>Why these three shapes are banned.</strong> They are the ones that reach the JVM's
  * default zone silently. {@code java.sql.Timestamp} is an instant, so both directions across it
