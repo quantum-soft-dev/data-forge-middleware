@@ -1,6 +1,8 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PrunableSegmentView;
@@ -15,11 +17,15 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -42,6 +48,7 @@ class ChangelogRetentionServiceTest {
 
     private static final UUID SITE = UUID.randomUUID();
     private static final String HELD_BACK_METER = "delta.retention.segments.held-back";
+    private static final UUID BATCH = UUID.randomUUID();
     private static final LocalDateTime DONE = LocalDateTime.of(2026, 8, 1, 0, 0);
 
     @Mock
@@ -50,6 +57,8 @@ class ChangelogRetentionServiceTest {
     private S3FileStorageService objectDeleter;
     @Mock
     private DeltaSyncStateService syncStateService;
+    @Mock
+    private BatchParquetArtifactRepository artifactRepository;
 
     private SimpleMeterRegistry registry;
     private DeltaMetrics metrics;
@@ -58,11 +67,19 @@ class ChangelogRetentionServiceTest {
     void setUp() {
         registry = new SimpleMeterRegistry();
         metrics = new DeltaMetrics(registry);
+        // No batch owes a completed-batch Parquet build unless a test says so (issue #244).
+        lenient().when(artifactRepository.findBatchIdsWithStatusIn(anyCollection(), anyCollection()))
+                .thenReturn(Set.of());
+    }
+
+    private void batchOwesParquet(UUID... batchIds) {
+        when(artifactRepository.findBatchIdsWithStatusIn(anyCollection(),
+                eq(BatchParquetArtifactStatus.UNFINISHED))).thenReturn(Set.of(batchIds));
     }
 
     private ChangelogRetentionService service(int auditWindowSegments) {
-        return new ChangelogRetentionService(segmentRepository, objectDeleter, syncStateService,
-                metrics, auditWindowSegments);
+        return new ChangelogRetentionService(segmentRepository, artifactRepository, objectDeleter,
+                syncStateService, metrics, auditWindowSegments);
     }
 
     private void checkpointAt(long seq) {
@@ -70,11 +87,16 @@ class ChangelogRetentionServiceTest {
                 .thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L, 0L));
     }
 
-    private record View(UUID id, String key, LocalDateTime pluginSqlAt, LocalDateTime egressAt)
-            implements PrunableSegmentView {
+    private record View(UUID id, String key, UUID batchId, LocalDateTime pluginSqlAt,
+                        LocalDateTime egressAt) implements PrunableSegmentView {
         @Override
         public UUID getId() {
             return id;
+        }
+
+        @Override
+        public UUID getBatchId() {
+            return batchId;
         }
 
         @Override
@@ -94,19 +116,19 @@ class ChangelogRetentionServiceTest {
     }
 
     private static View processed(String key) {
-        return new View(UUID.randomUUID(), key, DONE, DONE);
+        return new View(UUID.randomUUID(), key, BATCH, DONE, DONE);
     }
 
     private static View pendingPluginSql(String key) {
-        return new View(UUID.randomUUID(), key, null, DONE);
+        return new View(UUID.randomUUID(), key, BATCH, null, DONE);
     }
 
     private static View pendingEgress(String key) {
-        return new View(UUID.randomUUID(), key, DONE, null);
+        return new View(UUID.randomUUID(), key, BATCH, DONE, null);
     }
 
     private static View pendingBoth(String key) {
-        return new View(UUID.randomUUID(), key, null, null);
+        return new View(UUID.randomUUID(), key, BATCH, null, null);
     }
 
     private void belowCheckpoint(long checkpointSeq, View... views) {
@@ -115,7 +137,7 @@ class ChangelogRetentionServiceTest {
     }
 
     private void deleteSucceeds() {
-        when(segmentRepository.deleteByIdIfProcessed(any())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(any(), anyCollection())).thenReturn(1);
         when(objectDeleter.deleteObjects(anyList()))
                 .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
     }
@@ -134,7 +156,8 @@ class ChangelogRetentionServiceTest {
         int pruned = service(0).prune(SITE);
 
         assertEquals(1, pruned, "a fully processed below-checkpoint segment is pruned");
-        verify(segmentRepository).deleteByIdIfProcessed(processed.id());
+        verify(segmentRepository).deleteByIdIfProcessed(processed.id(),
+                BatchParquetArtifactStatus.UNFINISHED);
         // One batched DeleteObjects call carrying exactly the keys whose row delete succeeded —
         // not one round trip per object (the #212 review's efficiency finding).
         verify(objectDeleter).deleteObjects(List.of(processed.key()));
@@ -150,7 +173,7 @@ class ChangelogRetentionServiceTest {
         int pruned = service(0).prune(SITE);
 
         assertEquals(0, pruned, "pending work is not prunable");
-        verify(segmentRepository, never()).deleteByIdIfProcessed(any());
+        verify(segmentRepository, never()).deleteByIdIfProcessed(any(), anyCollection());
         verify(objectDeleter, never()).deleteObjects(anyList());
         assertEquals(1.0, heldBack("pending_plugin_sql"));
         assertEquals(0.0, heldBack("pending_egress"));
@@ -164,7 +187,7 @@ class ChangelogRetentionServiceTest {
         int pruned = service(0).prune(SITE);
 
         assertEquals(0, pruned, "pending work is not prunable");
-        verify(segmentRepository, never()).deleteByIdIfProcessed(any());
+        verify(segmentRepository, never()).deleteByIdIfProcessed(any(), anyCollection());
         verify(objectDeleter, never()).deleteObjects(anyList());
         assertEquals(0.0, heldBack("pending_plugin_sql"));
         assertEquals(1.0, heldBack("pending_egress"));
@@ -181,7 +204,7 @@ class ChangelogRetentionServiceTest {
         int pruned = service(0).prune(SITE);
 
         assertEquals(0, pruned);
-        verify(segmentRepository, never()).deleteByIdIfProcessed(any());
+        verify(segmentRepository, never()).deleteByIdIfProcessed(any(), anyCollection());
         assertEquals(1.0, heldBack("pending_plugin_sql"));
         assertEquals(1.0, heldBack("pending_egress"));
     }
@@ -202,8 +225,8 @@ class ChangelogRetentionServiceTest {
         int pruned = service(1).prune(SITE);
 
         assertEquals(1, pruned, "the oldest processed segment is pruned as before");
-        verify(segmentRepository).deleteByIdIfProcessed(oldestProcessed.id());
-        verify(segmentRepository, never()).deleteByIdIfProcessed(pendingSql.id());
+        verify(segmentRepository).deleteByIdIfProcessed(eq(oldestProcessed.id()), anyCollection());
+        verify(segmentRepository, never()).deleteByIdIfProcessed(eq(pendingSql.id()), anyCollection());
         verify(objectDeleter).deleteObjects(List.of(oldestProcessed.key()));
         // Only the segment the window would have pruned counts as held back; the newest one is
         // retained by the window itself, so it is not part of the backlog signal.
@@ -220,7 +243,7 @@ class ChangelogRetentionServiceTest {
         checkpointAt(10L);
         View racedOver = processed("delta/s/1.pb.gz");
         belowCheckpoint(10L, racedOver);
-        when(segmentRepository.deleteByIdIfProcessed(racedOver.id())).thenReturn(0);
+        when(segmentRepository.deleteByIdIfProcessed(eq(racedOver.id()), anyCollection())).thenReturn(0);
         ChangelogSegment rePended = ChangelogSegment.create(racedOver.id(), SITE, UUID.randomUUID(),
                 1L, 5L, 5L, "hash", racedOver.key(), "DELTA", null);
         rePended.markEgressed(); // plugin SQL re-pended, egress still done
@@ -240,7 +263,7 @@ class ChangelogRetentionServiceTest {
         checkpointAt(10L);
         View vanished = processed("delta/s/1.pb.gz");
         belowCheckpoint(10L, vanished);
-        when(segmentRepository.deleteByIdIfProcessed(vanished.id())).thenReturn(0);
+        when(segmentRepository.deleteByIdIfProcessed(eq(vanished.id()), anyCollection())).thenReturn(0);
         when(segmentRepository.findById(vanished.id())).thenReturn(Optional.empty());
 
         int pruned = service(0).prune(SITE);
@@ -262,13 +285,112 @@ class ChangelogRetentionServiceTest {
         checkpointAt(10L);
         View processed = processed("delta/s/1.pb.gz");
         belowCheckpoint(10L, processed);
-        when(segmentRepository.deleteByIdIfProcessed(processed.id())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(eq(processed.id()), anyCollection())).thenReturn(1);
         when(objectDeleter.deleteObjects(anyList()))
                 .thenThrow(software.amazon.awssdk.core.exception.SdkClientException.create("connection reset"));
 
         int pruned = service(0).prune(SITE);
 
         assertEquals(1, pruned, "the row deletes stand; the objects are the sweep's to reclaim");
+    }
+
+    @Test
+    void holdsBackASegmentWhoseBatchStillOwesItsCompletedBatchParquet() {
+        // Issue #244: batch_parquet_artifacts is a third durable consumer of raw segments. The
+        // 036/038 finalization replays them on every attempt, so a segment pruned while its
+        // artifact row is PENDING/BUILDING/FAILED makes that replay fail permanently.
+        checkpointAt(10L);
+        belowCheckpoint(10L, processed("delta/s/1.pb.gz"));
+        batchOwesParquet(BATCH);
+
+        int pruned = service(0).prune(SITE);
+
+        assertEquals(0, pruned, "a batch that still owes its Parquet build keeps its segments");
+        verify(segmentRepository, never()).deleteByIdIfProcessed(any(), anyCollection());
+        verify(objectDeleter, never()).deleteObjects(anyList());
+        assertEquals(1.0, heldBack("pending_batch_parquet"));
+        assertEquals(0.0, heldBack("pending_plugin_sql"), "the queue markers are done");
+        assertEquals(0.0, heldBack("pending_egress"));
+    }
+
+    @Test
+    void holdsBackEverySegmentOfSuchABatchTogether() {
+        // The decision is per batch, never per segment: pruning part of a batch leaves the replay
+        // silently truncated (expectedRowCount is derived from the segments actually loaded), which
+        // is worse than the empty set the whole-batch hold-back prevents.
+        checkpointAt(30L);
+        View first = processed("delta/s/1.pb.gz");
+        View second = processed("delta/s/2.pb.gz");
+        belowCheckpoint(30L, first, second);
+        batchOwesParquet(BATCH);
+
+        int pruned = service(0).prune(SITE);
+
+        assertEquals(0, pruned);
+        verify(segmentRepository, never()).deleteByIdIfProcessed(any(), anyCollection());
+        assertEquals(2.0, heldBack("pending_batch_parquet"));
+    }
+
+    @Test
+    void prunesASegmentWhoseBatchHasOnlyTerminalArtifactRows() {
+        // READY and ABANDONED are terminal and prunable — the bound on this hold-back. An
+        // ABANDONED row requeued later is the window this predicate deliberately does not cover.
+        checkpointAt(10L);
+        View processed = processed("delta/s/1.pb.gz");
+        belowCheckpoint(10L, processed);
+        batchOwesParquet(); // no batch in UNFINISHED
+        deleteSucceeds();
+
+        int pruned = service(0).prune(SITE);
+
+        assertEquals(1, pruned);
+        verify(objectDeleter).deleteObjects(List.of(processed.key()));
+        assertEquals(0.0, heldBack("pending_batch_parquet"));
+    }
+
+    @Test
+    void asksTheArtifactCensusOncePerPassWithTheDistinctCandidateBatches() {
+        // One query per pass over the batches the window would prune — not one per segment, and
+        // not one per site: the batches inside the audit window are never candidates.
+        checkpointAt(30L);
+        View otherBatch = new View(UUID.randomUUID(), "delta/s/2.pb.gz", UUID.randomUUID(), DONE, DONE);
+        View inWindow = new View(UUID.randomUUID(), "delta/s/3.pb.gz", UUID.randomUUID(), DONE, DONE);
+        belowCheckpoint(30L, processed("delta/s/1.pb.gz"), otherBatch, inWindow);
+        deleteSucceeds();
+
+        service(1).prune(SITE);
+
+        org.mockito.ArgumentCaptor<java.util.Collection<UUID>> asked =
+                org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(artifactRepository).findBatchIdsWithStatusIn(asked.capture(),
+                eq(BatchParquetArtifactStatus.UNFINISHED));
+        assertEquals(Set.of(BATCH, otherBatch.batchId()), Set.copyOf(asked.getValue()),
+                "the distinct candidate batches, and not the one inside the audit window");
+    }
+
+    @Test
+    void countsARefusedDeleteWhoseMarkersAreDoneAsTheBatchParquetHoldBack() {
+        // The TOCTOU of #244: a lazy backfill (037) or an admin requeue (039) committing between
+        // the census read and the conditional delete creates the work row that needs these
+        // segments. The predicate travels with the DELETE, so the statement refuses — and a row
+        // whose markers are still done can only have been refused by that predicate.
+        checkpointAt(10L);
+        View racedOver = processed("delta/s/1.pb.gz");
+        belowCheckpoint(10L, racedOver);
+        when(segmentRepository.deleteByIdIfProcessed(eq(racedOver.id()), anyCollection())).thenReturn(0);
+        ChangelogSegment stillProcessed = ChangelogSegment.create(racedOver.id(), SITE, BATCH,
+                1L, 5L, 5L, "hash", racedOver.key(), "DELTA", null);
+        stillProcessed.markEgressed();
+        stillProcessed.markPluginSqlProcessed();
+        when(segmentRepository.findById(racedOver.id())).thenReturn(Optional.of(stillProcessed));
+
+        int pruned = service(0).prune(SITE);
+
+        assertEquals(0, pruned);
+        verify(objectDeleter, never()).deleteObjects(anyList());
+        assertEquals(1.0, heldBack("pending_batch_parquet"));
+        assertEquals(0.0, heldBack("pending_plugin_sql"));
+        assertEquals(0.0, heldBack("pending_egress"));
     }
 
     @Test
@@ -280,4 +402,30 @@ class ChangelogRetentionServiceTest {
         assertEquals(0, pruned);
         verify(segmentRepository, never()).findBelowCheckpointBySiteId(any(), org.mockito.ArgumentMatchers.anyLong());
     }
+    @Test
+    void chunksTheArtifactCensusSoAHugeBacklogCannotOverflowTheParameterLimit() {
+        // Review round 1: the below-checkpoint set is unbounded since #212, so one IN list over
+        // every candidate batch can exceed PostgreSQL's 32767 bind parameters — failing the whole
+        // pass for exactly the backlog it exists to clear.
+        checkpointAt(10_000L);
+        View[] views = new View[1001];
+        for (int i = 0; i < views.length; i++) {
+            views[i] = new View(UUID.randomUUID(), "delta/s/" + i + ".pb.gz", UUID.randomUUID(),
+                    DONE, DONE);
+        }
+        belowCheckpoint(10_000L, views);
+        deleteSucceeds();
+        List<Integer> chunkSizes = new java.util.ArrayList<>();
+        when(artifactRepository.findBatchIdsWithStatusIn(anyCollection(), anyCollection()))
+                .thenAnswer(invocation -> {
+                    chunkSizes.add(((java.util.Collection<?>) invocation.getArgument(0)).size());
+                    return Set.of();
+                });
+
+        assertEquals(1001, service(0).prune(SITE));
+
+        assertEquals(List.of(1000, 1), chunkSizes,
+                "the census is issued in bounded chunks, not one statement per pass");
+    }
+
 }

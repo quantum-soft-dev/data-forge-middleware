@@ -2253,12 +2253,12 @@ below-checkpoint segments are retained", and the hold-back retains segments on t
 than re-shaping it, so a pending segment does not shield an older processed one from the window.
 
 **The hold-back is counted and logged, not silent in the other direction.**
-`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}` counts, per pass,
-the segments the window would have pruned but the predicate retained — a pending segment still
-*inside* the window is retained by the window, not the predicate, and is not counted. Both series
-are registered at zero so an alert can predate the first occurrence. Read each `reason`
-independently — "is this queue stalling retention" — a segment owing both moves both, so the sum
-over reasons can exceed the number of held-back segments. Read it as a **census, not an arrival
+`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress|pending_batch_parquet}`
+counts, per pass, the segments the window would have pruned but the predicate retained — a pending
+segment still *inside* the window is retained by the window, not the predicate, and is not counted.
+Every series is registered at zero so an alert can predate the first occurrence. Read each `reason`
+independently — "is this consumer stalling retention" — a segment owing more than one moves each,
+so the sum over reasons can exceed the number of held-back segments. Read it as a **census, not an arrival
 rate**: the same held-back segment is counted again every pass until one of its endings takes it.
 Two caveats for whoever writes the alert: the prune runs only after a **successful** checkpoint
 build (`CheckpointScheduler`), so a site whose build aborts nightly shows **zero** here while its
@@ -2288,10 +2288,35 @@ value in the `plugin.sql-generation.*` block fails the context at startup), and 
 poison batch is loud through `sql.generation.errors`, the #181 audit entries and, since #243,
 `delta.egress.errors` plus the two poisoned counters below.
 
-**What the hold-back guarantee covers, exactly**: the two queue markers. A third durable consumer
-of raw segments exists — the completed-batch Parquet replay (`batch_parquet_artifacts`, 036/038
-retries, 039 requeue, 037 legacy backfill) — and no retention predicate consults it; extending the
-predicate there is its own decision, #244.
+**The completed-batch Parquet build is the third consumer, and it is held back too (issue #244).**
+`batch_parquet_artifacts` is the durable queue of the 036/038 finalization, and every attempt
+replays the batch's **raw** segments (`findByBatchIdOrderByFirstSeq`). A below-checkpoint segment
+whose batch still has an artifact row in `PENDING`, `BUILDING` or `FAILED` is therefore retained,
+counted on `delta.retention.segments.held-back{reason=pending_batch_parquet}` beside the two queue
+markers and named in the same per-site WARN. Three things about it are worth knowing:
+
+- **The unit is the batch, not the segment.** All of a batch's below-checkpoint segments are held
+  or none are. A partial prune would be *worse* than an empty one: the replay derives its expected
+  row count from the segments it actually loaded, so the guard agrees with the truncation and the
+  artifact publishes `READY` silently missing rows.
+- **It is bounded by construction**, unlike the two queue markers. A row leaves that set after
+  `delta.batch-parquet.max-attempts` attempts (~1 h) — as `READY` or as `ABANDONED` — so this
+  hold-back cannot pin storage indefinitely and needs no bound of the prune's own.
+- **Two windows it deliberately does not cover, and what they do instead.** `READY` and
+  `ABANDONED` are terminal, so an `ABANDONED` row **requeued** much later (039) and the **legacy
+  lazy backfill** (037, a batch that predates 036 and has no rows at all) can both find the raw
+  segments already gone — retention had nothing to consult when it ran. Neither fails silently
+  now: the replay classifies a missing segment set as a **permanent** failure naming retention, so
+  the artifact is `ABANDONED` on its first attempt instead of after an hour of identical retries;
+  the admin requeue answers **409** with the same reason rather than queueing an attempt that
+  cannot succeed; and the backfill logs the unproducible batch instead of returning zero rows
+  silently, after which the download answers 404 — that line deliberately does **not** name
+  retention as the cause, because a session that sealed nothing has no segments either and never
+  had any. **The residual, stated rather than implied**: a
+  batch *partly* pruned while all its artifact rows were terminal can still be requeued or
+  backfilled, and the artifact it produces then covers only the surviving segments. The records
+  themselves are not lost in any of these cases — they are in the site's checkpoint; the per-batch
+  artifact is.
 
 **What a stall costs while it lasts** (so the bill is read before it arrives): held-back segments
 keep the site named by `findDistinctSiteIds()`, so every nightly tick pays one idle build probe,
@@ -2707,7 +2732,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.s3-orphan.candidates{prefix=segments|checkpoints}`,
 `delta.s3-orphan.reclaimed{prefix=segments|checkpoints}`,
 `delta.s3-orphan.delete-failed{prefix=segments|checkpoints}`,
-`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress}`,
+`delta.retention.segments.held-back{reason=pending_plugin_sql|pending_egress|pending_batch_parquet}`,
 `delta.retention.segments.deleted-pending{reason=pending_plugin_sql|pending_egress}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.errors`, `delta.egress.segments.poisoned`,
@@ -2767,7 +2792,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.s3-orphan.candidates{prefix=segments\|checkpoints}` | `delta_s3_orphan_candidates_total{prefix=...}` |
 | `delta.s3-orphan.reclaimed{prefix=segments\|checkpoints}` | `delta_s3_orphan_reclaimed_total{prefix=...}` |
 | `delta.s3-orphan.delete-failed{prefix=segments\|checkpoints}` | `delta_s3_orphan_delete_failed_total{prefix=...}` |
-| `delta.retention.segments.held-back{reason=pending_plugin_sql\|pending_egress}` | `delta_retention_segments_held_back_total{reason=...}` |
+| `delta.retention.segments.held-back{reason=pending_plugin_sql\|pending_egress\|pending_batch_parquet}` | `delta_retention_segments_held_back_total{reason=...}` |
 | `delta.retention.segments.deleted-pending{reason=pending_plugin_sql\|pending_egress}` | `delta_retention_segments_deleted_pending_total{reason=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |

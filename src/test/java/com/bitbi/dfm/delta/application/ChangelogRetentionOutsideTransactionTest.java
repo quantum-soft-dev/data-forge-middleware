@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.PrunableSegmentView;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -27,6 +28,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -47,13 +50,17 @@ class ChangelogRetentionOutsideTransactionTest {
 
     private static final UUID SITE = UUID.randomUUID();
     private static final LocalDateTime DONE = LocalDateTime.of(2026, 8, 1, 0, 0);
+    private static final UUID BATCH = UUID.randomUUID();
 
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final S3FileStorageService objectDeleter = mock(S3FileStorageService.class);
     private final DeltaSyncStateService syncStateService = mock(DeltaSyncStateService.class);
+    private final BatchParquetArtifactRepository artifactRepository =
+            mock(BatchParquetArtifactRepository.class);
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final ChangelogRetentionService service = new ChangelogRetentionService(
-            segmentRepository, objectDeleter, syncStateService, new DeltaMetrics(registry), 0);
+            segmentRepository, artifactRepository, objectDeleter, syncStateService,
+            new DeltaMetrics(registry), 0);
 
     @AfterEach
     void clearAmbientTransaction() {
@@ -96,7 +103,7 @@ class ChangelogRetentionOutsideTransactionTest {
                 .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
         View processed = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(processed));
-        when(segmentRepository.deleteByIdIfProcessed(processed.id())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(eq(processed.id()), anyCollection())).thenReturn(1);
         // Review round 2: asserting isActualTransactionActive() here would be vacuous — this
         // service is built with new(), the repository is a mock and there is no transaction
         // manager, so nothing in this class could make it fail. That property is pinned by
@@ -110,7 +117,7 @@ class ChangelogRetentionOutsideTransactionTest {
         // Row first, object after: a crash in between leaves an unreferenced object for the #158
         // orphan sweep, never a row whose object is gone.
         var order = inOrder(segmentRepository, objectDeleter);
-        order.verify(segmentRepository).deleteByIdIfProcessed(processed.id());
+        order.verify(segmentRepository).deleteByIdIfProcessed(eq(processed.id()), anyCollection());
         order.verify(objectDeleter).deleteObjects(List.of(processed.key()));
     }
 
@@ -126,8 +133,8 @@ class ChangelogRetentionOutsideTransactionTest {
         View first = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
         View failing = new View(UUID.randomUUID(), "delta/s/2.pb.gz", DONE, DONE);
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(first, failing));
-        when(segmentRepository.deleteByIdIfProcessed(first.id())).thenReturn(1);
-        when(segmentRepository.deleteByIdIfProcessed(failing.id()))
+        when(segmentRepository.deleteByIdIfProcessed(eq(first.id()), anyCollection())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(eq(failing.id()), anyCollection()))
                 .thenThrow(new CannotAcquireLockException("lock timeout"));
         when(objectDeleter.deleteObjects(anyList()))
                 .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
@@ -148,7 +155,7 @@ class ChangelogRetentionOutsideTransactionTest {
         View pending = new View(UUID.randomUUID(), "delta/s/1.pb.gz", null, DONE);
         View failing = new View(UUID.randomUUID(), "delta/s/2.pb.gz", DONE, DONE);
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(pending, failing));
-        when(segmentRepository.deleteByIdIfProcessed(failing.id()))
+        when(segmentRepository.deleteByIdIfProcessed(eq(failing.id()), anyCollection()))
                 .thenThrow(new CannotAcquireLockException("lock timeout"));
 
         assertThrows(CannotAcquireLockException.class, () -> service.prune(SITE));
@@ -170,7 +177,7 @@ class ChangelogRetentionOutsideTransactionTest {
             views.add(new View(UUID.randomUUID(), "delta/s/" + i + ".pb.gz", DONE, DONE));
         }
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(views);
-        when(segmentRepository.deleteByIdIfProcessed(any())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(any(), anyCollection())).thenReturn(1);
         List<Integer> chunkSizes = new ArrayList<>();
         when(objectDeleter.deleteObjects(anyList())).thenAnswer(invocation -> {
             chunkSizes.add(((List<?>) invocation.getArgument(0)).size());
@@ -194,12 +201,12 @@ class ChangelogRetentionOutsideTransactionTest {
         doThrow(new IllegalStateException("meter conflict"))
                 .when(brokenMetrics).retentionSegmentsHeldBack(any(), org.mockito.ArgumentMatchers.anyLong());
         ChangelogRetentionService withBrokenMetrics = new ChangelogRetentionService(
-                segmentRepository, objectDeleter, syncStateService, brokenMetrics, 0);
+                segmentRepository, artifactRepository, objectDeleter, syncStateService, brokenMetrics, 0);
         when(syncStateService.getSyncState(SITE))
                 .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
         View processed = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(processed));
-        when(segmentRepository.deleteByIdIfProcessed(processed.id())).thenReturn(1);
+        when(segmentRepository.deleteByIdIfProcessed(eq(processed.id()), anyCollection())).thenReturn(1);
         when(objectDeleter.deleteObjects(anyList()))
                 .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
 
@@ -214,12 +221,12 @@ class ChangelogRetentionOutsideTransactionTest {
         doThrow(new IllegalStateException("meter conflict"))
                 .when(brokenMetrics).retentionSegmentsHeldBack(any(), org.mockito.ArgumentMatchers.anyLong());
         ChangelogRetentionService withBrokenMetrics = new ChangelogRetentionService(
-                segmentRepository, objectDeleter, syncStateService, brokenMetrics, 0);
+                segmentRepository, artifactRepository, objectDeleter, syncStateService, brokenMetrics, 0);
         when(syncStateService.getSyncState(SITE))
                 .thenReturn(new SyncStateView(10L, 10L, 1, false, false, 0L, 0L));
         View failing = new View(UUID.randomUUID(), "delta/s/1.pb.gz", DONE, DONE);
         when(segmentRepository.findBelowCheckpointBySiteId(SITE, 10L)).thenReturn(List.of(failing));
-        when(segmentRepository.deleteByIdIfProcessed(failing.id()))
+        when(segmentRepository.deleteByIdIfProcessed(eq(failing.id()), anyCollection()))
                 .thenThrow(new CannotAcquireLockException("lock timeout"));
 
         assertThrows(CannotAcquireLockException.class, () -> withBrokenMetrics.prune(SITE));
@@ -230,6 +237,11 @@ class ChangelogRetentionOutsideTransactionTest {
         @Override
         public UUID getId() {
             return id;
+        }
+
+        @Override
+        public UUID getBatchId() {
+            return BATCH;
         }
 
         @Override

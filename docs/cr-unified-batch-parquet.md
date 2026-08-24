@@ -99,6 +99,26 @@ transaction (115). An idle poll costs one index probe. Losing the race to a peer
 in between costs one wasted watermark tick and never a missed settlement: the row stays claimable
 until some transaction actually stamps it.
 
+**Retention keeps the raw segments an attempt still needs (issue #244).** Every attempt replays the
+batch's raw changelog segments, and changelog retention prunes below-checkpoint segments on its own
+schedule — so an attempt that had to wait (a multi-day backlog, the backoff window) could find its
+input gone. Since #244 `ChangelogRetentionService.prune` consults `batch_parquet_artifacts`: a
+segment whose batch still has a row in `PENDING`, `BUILDING` or `FAILED` is held back, all of a
+batch's segments together (a partial prune would leave the replay silently truncated, because the
+row-count guard derives its expectation from the segments actually loaded). That hold-back is
+bounded by construction — a row leaves those statuses within `max-attempts` — so it cannot pin
+storage the way a stuck queue marker can.
+
+`READY` and `ABANDONED` are terminal and therefore prunable, which leaves two windows the predicate
+cannot cover: an `ABANDONED` row **requeued** long afterwards through the admin route below, and the
+**legacy backfill** of a pre-036 batch that has no rows at all. Both now say so instead of retrying
+into the same ending — a missing segment set is classified as a **permanent** failure naming
+retention (so the artifact is `ABANDONED` on its first attempt), the requeue route answers `409`
+with the same reason rather than queueing an attempt that cannot succeed, and the backfill logs the
+unproducible batch. A batch pruned only in part while all its rows were terminal can still be
+requeued, and the artifact then covers the surviving segments; the records themselves remain
+available through the site's checkpoint in every one of these cases.
+
 `delta.batch-parquet.max-temp-bytes` is enforced by the file output stream while Parquet is written,
 not after a complete oversized file has consumed the disk budget. Crossing it is deterministic for
 the same input and is therefore `ABANDONED` on the first attempt instead of rewritten up to seven

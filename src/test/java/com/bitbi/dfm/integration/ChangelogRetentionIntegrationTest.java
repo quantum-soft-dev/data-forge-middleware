@@ -3,6 +3,8 @@ package com.bitbi.dfm.integration;
 import com.bitbi.dfm.delta.application.ChangelogRetentionService;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
@@ -22,6 +24,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +75,9 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private MeterRegistry meterRegistry;
+
+    @Autowired
+    private BatchParquetArtifactRepository artifactRepository;
 
     @MockitoSpyBean
     private S3FileStorageService objectDeleter;
@@ -177,6 +184,69 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
+     * Issue #244 — a segment whose batch still owes its completed-batch Parquet build survives the
+     * prune even with every queue marker set, because the 036/038 finalization replays these raw
+     * segments on its next attempt. Once the artifact row is terminal the same segment is pruned.
+     */
+    @Test
+    void holdsBackASegmentWhoseBatchStillOwesItsCompletedBatchParquet() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        checkpointService.buildCheckpoint(SITE);
+        markSegmentsProcessed(SITE); // both queues done — only the artifact row holds it now
+        UUID artifactId = UUID.randomUUID();
+        artifactRepository.insertPendingIfAbsent(artifactId, BATCH1, SITE, "customers",
+                LocalDateTime.now(ZoneOffset.UTC));
+        double before = heldBack("pending_batch_parquet");
+
+        int held = retentionService.prune(SITE);
+
+        assertEquals(0, held, "a batch that still owes its Parquet build keeps its segments");
+        ChangelogSegment survivor = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L)
+                .orElseThrow(() -> new AssertionError("the segment row must survive the prune"));
+        assertTrue(segmentStorage.exists(survivor.getS3Key()), "its S3 object survives too");
+        assertEquals(1.0, heldBack("pending_batch_parquet") - before,
+                "the hold-back is counted under its own reason");
+
+        // The artifact reaches a terminal status (here: the row is gone with its batch) and the
+        // same segment is prunable again.
+        artifactRepository.deleteByBatchId(BATCH1);
+        String key = survivor.getS3Key();
+        assertEquals(1, retentionService.prune(SITE), "terminal artifact rows do not hold segments");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
+        assertFalse(segmentStorage.exists(key), "segment S3 object pruned");
+    }
+
+    /**
+     * Issue #244 — the artifact half of the conditional DELETE's predicate, against the real
+     * statement. A lazy backfill (037) or an admin requeue (039) committing between retention's
+     * census read and this delete creates exactly the work row that needs these segments, and SQL
+     * inside {@code @Query} is a contract neither the compiler nor CI catches.
+     */
+    @Test
+    void theConditionalDeleteRefusesASegmentWhoseBatchOwesItsParquetAtTheSqlLevel() {
+        changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann"))));
+        markSegmentsProcessed(SITE);
+        ChangelogSegment segment = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
+        String key = segment.getS3Key();
+        artifactRepository.insertPendingIfAbsent(UUID.randomUUID(), BATCH1, SITE, "customers",
+                LocalDateTime.now(ZoneOffset.UTC));
+
+        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId(),
+                        BatchParquetArtifactStatus.UNFINISHED),
+                "an UNFINISHED artifact row must make the statement refuse");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent());
+
+        artifactRepository.deleteByBatchId(BATCH1);
+        assertEquals(1, segmentRepository.deleteByIdIfProcessed(segment.getId(),
+                        BatchParquetArtifactStatus.UNFINISHED),
+                "with no unfinished row left the statement deletes");
+        assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty());
+        segmentStorage.delete(key); // the statement deletes rows only; keep the shared bucket clean
+    }
+
+    /**
      * Review round 2, R2-2 — the conditional DELETE's marker predicate, exercised against the
      * real statement. It is the A2 fix's last line of defense (a reinit re-pending the row between
      * retention's read and its delete), and SQL inside {@code @Query} is a contract neither the
@@ -190,18 +260,21 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
         ChangelogSegment segment = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
         String key = segment.getS3Key();
 
-        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId()),
+        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId(),
+                        BatchParquetArtifactStatus.UNFINISHED),
                 "both markers NULL: the predicate must refuse");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent());
 
         segment.markPluginSqlProcessed(); // egress still owed — the OR must still refuse
         segmentRepository.save(segment);
-        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId()),
+        assertEquals(0, segmentRepository.deleteByIdIfProcessed(segment.getId(),
+                        BatchParquetArtifactStatus.UNFINISHED),
                 "one marker NULL: the predicate must still refuse");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent());
 
         markSegmentsProcessed(SITE);
-        assertEquals(1, segmentRepository.deleteByIdIfProcessed(segment.getId()),
+        assertEquals(1, segmentRepository.deleteByIdIfProcessed(segment.getId(),
+                        BatchParquetArtifactStatus.UNFINISHED),
                 "both markers set: the row is deleted");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty());
         segmentStorage.delete(key); // the statement deletes rows only; keep the shared bucket clean

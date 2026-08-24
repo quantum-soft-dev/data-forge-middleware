@@ -1,7 +1,9 @@
 package com.bitbi.dfm.delta.domain;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.time.LocalDateTime;
 
@@ -105,6 +107,22 @@ public interface BatchParquetArtifactRepository {
      * @return 1 when a row was created, 0 when one already existed
      */
     int insertPendingIfAbsent(UUID id, UUID batchId, UUID siteId, String tableName, LocalDateTime now);
+
+    /**
+     * Which of these batches still owe a completed-batch Parquet build (issue #244).
+     *
+     * <p>Changelog retention's census read: a batch with a row in
+     * {@link BatchParquetArtifactStatus#UNFINISHED} still replays its raw segments on the next
+     * attempt, so those segments are held back. One query per prune pass over the candidate batch
+     * ids — the decision is per batch, never per segment, because a partial prune would leave the
+     * replay silently truncated rather than failed.</p>
+     *
+     * @param batchIds candidate batches (the segments the audit window would prune)
+     * @param statuses the statuses that still owe a build ({@code UNFINISHED})
+     * @return the subset of {@code batchIds} carrying at least one artifact row in {@code statuses}
+     */
+    Set<UUID> findBatchIdsWithStatusIn(Collection<UUID> batchIds,
+                                       Collection<BatchParquetArtifactStatus> statuses);
 
     /** Recorded keys of a site's published artifacts — the wipe's exact-key fallback. */
     List<String> findS3KeysBySiteId(UUID siteId);
