@@ -1153,14 +1153,18 @@ pod-private volume until the next sweep tick (#141) and its owner is gone, so no
 it; and kubelet acts on usage *exceeding* the limit rather than reaching it — solving to exact
 equality would make the budget itself an eviction.
 
-**A reserved share for the nightly checkpoint (issue #193).** That volume-residue gigabyte is not
-this. Batch writers may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus
-`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` (1.5 GiB on this deployment, leaving 3.5 GiB for
-completed-batch artifacts). The checkpoint path holds one scratch file at a time (#178), so the
-reserve is one file's worth — the declared size of the largest one. Checkpoint writers still see
-the whole directory budget when it is idle. Unbounded (the shipped default) ignores the reserve.
-A refusal is still a transient `delta.parquet.scratch.refused`, never a tag on
-`delta.checkpoint.builds.aborted`.
+**A reserved share for the nightly checkpoint (issue #193, widened by #292).** That volume-residue
+gigabyte is not this. Batch writers may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus what the
+checkpoint path holds *at one time*. Until #292 that was one file — the folded build wrote the frame,
+uploaded it and deleted it before the first table's file existed (#178) — so the reserve was
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` alone. The streamed bootstrap build's snapshot passes read
+the frame, so it stays on the volume beside a snapshot file, and the reserve is
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES` — 1.5 GiB + 1 GiB on this
+deployment, leaving **2.5 GiB** for completed-batch artifacts, which still clears their own 1 GiB
+ceiling. Why one snapshot rather than `W` of them is worked through in "One exception to 'one
+checkpoint scratch file at a time'" above. Checkpoint writers still see the whole directory budget
+when it is idle. Unbounded (the shipped default) ignores the reserve. A refusal is still a transient
+`delta.parquet.scratch.refused`, never a tag on `delta.checkpoint.builds.aborted`.
 
 It is **charged as bytes are written**, by the same two counting streams that already enforce the
 per-file ceilings, and released when the file is deleted. It is not reserved at the ceiling up

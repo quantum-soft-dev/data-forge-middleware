@@ -341,7 +341,12 @@ pages/{feature}/            # Route pages
   `max-frame-temp-bytes + max-temp-bytes` — the frame **and one snapshot** — deployed 1.5 GiB + 1 GiB
   of the 5 GiB directory, leaving batch a 2.5 GiB share that still clears its own 1 GiB ceiling, and
   `ParquetScratchCeilingBudgetTest` asserts both (mutation-proven: lower the deployed directory budget
-  and it names the frame, the snapshot and their sum). **The reviewers' stronger form —
+  and it names the frame, the snapshot and their sum). **That corrects the `checkpoint-scratch-reserve`
+  entry below**, which records the arithmetic #193 shipped — "5 GiB directory, 1.5 GiB frame, 3.5 GiB
+  batch share" — and whose batch share is 2.5 GiB from this ticket onwards; the stale copies of it in
+  `k8s/base/configmap.yaml` and in the guide's own #193 paragraph were found by review round 1 and
+  rewritten rather than left to contradict the paragraph three screens above them.
+  **The reviewers' stronger form —
   `frame + W x table <= budget` — was declined with its arithmetic, not waved off**: it demands
   9.5 GiB of a 6 GiB volume at the shipped W=8, and it is a rule this repository does not apply to the
   batch side either, where the guard asserts `batchShare >= batchCeiling` rather than
