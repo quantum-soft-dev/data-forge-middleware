@@ -54,6 +54,29 @@ class CheckpointFrameTest {
         assertEquals(state, reseeded, "a streamed frame must re-fold to the exact state");
     }
 
+    @Test
+    void aRowWhoseKeyColumnIsNotInItsDataStillEmitsThatKey() {
+        // Since #290 a row's key is read back out of its data columns, so the row that has no such
+        // column — a client is free to send a key column in `key` only — is the one the
+        // reconstruction can lose. Losing it silently is the worst outcome available here: the frame
+        // is the next build's seed, and an INSERT with an empty key re-folds under a different
+        // identity, so every such row collapses onto one.
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("m", Op.INSERT, key("id", 1L), data("name", "Ann")),
+                rec("m", Op.INSERT, key("id", 2L), data("name", "Bob"))));
+
+        assertEquals(2, state.get("m").size(), "two rows, keyed only by what the key map carried");
+        List<ChangeRecord> frame = CheckpointFrame.toRecords(state);
+        assertEquals(List.of(1L, 2L), frame.stream()
+                        .map(r -> r.getKeyMap().get("id").getIntValue()).toList(),
+                "the frame must carry each row's own key");
+        assertTrue(frame.stream().noneMatch(r -> r.getDataMap().containsKey("id")),
+                "and must not invent a data column the source never sent");
+
+        assertEquals(state, ChangelogFold.fold(Map.of(), frame),
+                "re-folding the frame reproduces the exact state");
+    }
+
     private static List<ChangeRecord> copy(Iterable<ChangeRecord> records) {
         List<ChangeRecord> copied = new ArrayList<>();
         records.forEach(copied::add);

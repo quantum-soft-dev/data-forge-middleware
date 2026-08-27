@@ -841,7 +841,7 @@ public class CheckpointService {
      * <p>The running total is kept by {@link ChangelogFold#apply}, which returns what each record
      * did to the state's size, so the budget costs one addition per record rather than a walk over
      * the fold — the weighing itself is proportional to the width of the row that record touches,
-     * no wider than the map copy the fold does for it anyway. It is an estimate — see
+     * no wider than the array copy the fold does for it anyway. It is an estimate — see
      * {@link ChangelogFold#estimatedRetainedBytes(String, ChangelogFold.FoldedRow)} — and it is
      * compared against a budget expressed in the same units, so the two are wrong together or not
      * at all.</p>

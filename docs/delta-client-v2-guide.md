@@ -912,9 +912,22 @@ Two things now stand between a large site and that:
   key, and nothing written: the abort happens before the frame upload, so the pointer, the per-table
   keys and the frame stay exactly where they were. A refusal costs one site's build; the OOMKill it
   replaces cost the pod.
+- **A row carries its columns once (issue #290).** The fold used to hold, per row, a map entry and a
+  freshly minted `String` for every column *name* — five million rows retaining five million copies
+  of the same twenty names — plus a second copy of the key columns beside the data that already
+  carried them. A table now owns one canonical set of names and a row is an array of values aligned
+  with it; the key is read back out of those values, with a small side array only for the rare row
+  whose key column never appears in its data. Measured on a twenty-column row with eight-character
+  string values, the estimate goes **4747 → 2216 bytes, a factor of 2.1**, and it is a factor of
+  ~3.5 on narrow numeric rows where the names dominated most. The row's identity string is
+  deliberately **not** shortened to a hash: a collision folds two distinct rows into one, which is
+  silent data loss, and verifying the full key on a hit means keeping the full key anyway. This
+  multiplies the ceiling; it does not remove it — spilling the fold to disk with an external sort is
+  separate work, still not done.
 
 Three things to know before tuning it. The unit is an **estimate** — a coarse per-row object-graph
-figure (map entries, column-name strings, the values, the row's identity string), not the records'
+figure (the row's array of values, the values themselves, the row's identity string, plus the
+table's column names counted once — issue #290), not the records'
 wire size, because the fold retains a Java object graph an order of magnitude larger than its
 protobuf encoding; it is within a small factor of the truth, which is what a budget expressed as a
 fraction of `-Xmx` needs. It has one known blind spot, and it is worth a lower key where it applies:
