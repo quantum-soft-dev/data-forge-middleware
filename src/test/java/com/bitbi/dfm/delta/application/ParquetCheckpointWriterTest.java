@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -631,6 +632,62 @@ class ParquetCheckpointWriterTest {
             return s.getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElseThrow();
         }
         return s;
+    }
+
+    /**
+     * The bootstrap build (issue #292) cannot call {@link ParquetCheckpointWriter#writeParquet}: it
+     * has no per-table row collection to hand it — the rows of eighty-odd tables arrive interleaved
+     * from one pass over the local frame, so several tables must be open at once and fed row by row.
+     * What must not happen is a second renderer: the schema, the coercion and the degradation tally
+     * of {@code #215}/{@code #237}/{@code #240} have to be the ones the general path uses, or the
+     * two artifacts of one site disagree about the same cell. So the streaming form is the pieces
+     * {@code writeParquet} is itself composed of, and the proof is that the two produce the
+     * <b>same bytes</b> — including the widened decimal envelope, which is the one part of the
+     * schema that depends on the data rather than on the declaration.
+     */
+    @Test
+    void anOpenTableFedRowByRowProducesTheSameFileAsWriteParquet() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("amount", "numeric(4,2)", true),
+                col("label", "text", true)),
+                List.of("id"), List.of());
+
+        List<Map<String, Value>> rows = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            Map<String, Value> row = new LinkedHashMap<>();
+            row.put("id", intVal(i));
+            // 123456.78 needs precision 8 against the declared 4 — the envelope must widen, and it
+            // can only do that after seeing every row.
+            row.put("amount", decVal(i == 3 ? "123456.78" : (i == 4 ? "NaN" : "1." + i)));
+            row.put("label", strVal("row-" + i));
+            rows.add(row);
+        }
+
+        Path expectedFile = tempDir.resolve("expected.parquet");
+        DecimalDegradeTally expected = ParquetCheckpointWriter.writeParquet(expectedFile, "t", schema,
+                rows, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        ParquetCheckpointWriter.DecimalEnvelope envelope =
+                ParquetCheckpointWriter.decimalEnvelope(ParquetSchemaMapper.toAvroSchema("t", schema));
+        assertTrue(envelope.measuresAnything(), "a declared decimal column must be measured");
+        rows.forEach(envelope::observe);
+
+        Path streamedFile = tempDir.resolve("streamed.parquet");
+        DecimalDegradeTally streamed;
+        try (ParquetCheckpointWriter.OpenTable table = ParquetCheckpointWriter.openTable(
+                streamedFile, "t", schema, envelope.widened(), Long.MAX_VALUE, ROW_GROUP_BYTES,
+                TestScratchLeases.unbounded())) {
+            for (Map<String, Value> row : rows) {
+                table.write(row);
+            }
+            streamed = table.tally();
+        }
+
+        assertArrayEquals(Files.readAllBytes(expectedFile), Files.readAllBytes(streamedFile),
+                "the streaming form must render byte-for-byte what writeParquet renders");
+        assertEquals(expected.nonFiniteCount(), streamed.nonFiniteCount(), "same degradation tally");
+        assertEquals(expected.malformedCount(), streamed.malformedCount(), "same degradation tally");
     }
 
     private static ColumnDefinition col(String name, String type, boolean nullable) {
