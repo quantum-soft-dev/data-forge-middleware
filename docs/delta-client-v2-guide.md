@@ -1103,6 +1103,26 @@ read the frame, so it stays on the volume until the last table is written, besid
 directory with no room for it ends the build gracefully (the next tick retries) rather than filling
 the volume.
 
+**So the #193 reserve is the frame *plus one snapshot*, and only one.** Batch writers stop at
+`DELTA_PARQUET_MAX_SCRATCH_BYTES` minus what the checkpoint path holds at one time, which used to be
+the frame alone and is now `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES`
+— deployed, 1.5 GiB + 1 GiB = 2.5 GiB of the 5 GiB directory, leaving batch a 2.5 GiB share that
+still fits its own 1 GiB ceiling. `ParquetScratchCeilingBudgetTest` asserts both, so the deployed
+numbers cannot drift apart from this paragraph.
+
+It is deliberately **not** `frame + W x table`, for the same reason the batch share is not
+`max-concurrent x batch ceiling`: the per-file keys are safety ceilings, not size estimates — the
+deployed ones are gigabytes against artifacts in the low hundreds of MiB — and the directory is
+charged by bytes *actually written*, which is the trade #150 settled when it chose incremental
+charging over reserving at the ceiling. Reserving `8 x 1 GiB` would demand 9.5 GiB of a 6 GiB volume
+and refuse writers that fit many times over. What the arithmetic guarantees is **progress**: the
+streamed build can always write its frame and one snapshot whatever a completed-batch backlog is
+doing. The writers after the first take whatever the directory has free, and a refusal is the
+ordinary transient outcome — the build ends, nothing durable moves, the next tick tries again. The
+reciprocal is worth knowing too: with `W > 1` the checkpoint path can hold rather more of the shared
+directory at once than it used to, so a completed-batch artifact may spend extra backoff attempts
+while a large first checkpoint is being built.
+
 **The guards fail differently, and the deployed one is the harshest.** Crossing an application
 ceiling is graceful and observable: a checkpoint table is skipped as
 `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, a completed-batch artifact is

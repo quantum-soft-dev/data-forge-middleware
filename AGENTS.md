@@ -332,6 +332,28 @@ pages/{feature}/            # Route pages
   streamed build, since there is no fold to return. Production callers ignore the value; five
   re-baseline integration assertions that read it now fold the **published frame** instead, which is
   the better subject anyway — it is what the next build seeds from.
+  **Review round 1 found the one thing this path changed underneath a neighbouring budget, and two
+  reviewers found it independently.** The #193 scratch reserve is `delta.checkpoint.max-frame-temp-bytes`
+  and its justification is a sentence this ticket falsified: "the declared size of the largest scratch
+  file the checkpoint path holds, and it holds only one at a time (#178)". The streamed path's snapshot
+  passes *read* the frame, so it stays on the volume beside the table files, and batch writers were
+  still being held back by a reserve sized for a path that no longer exists. The reserve is now
+  `max-frame-temp-bytes + max-temp-bytes` — the frame **and one snapshot** — deployed 1.5 GiB + 1 GiB
+  of the 5 GiB directory, leaving batch a 2.5 GiB share that still clears its own 1 GiB ceiling, and
+  `ParquetScratchCeilingBudgetTest` asserts both (mutation-proven: lower the deployed directory budget
+  and it names the frame, the snapshot and their sum). **The reviewers' stronger form —
+  `frame + W x table <= budget` — was declined with its arithmetic, not waved off**: it demands
+  9.5 GiB of a 6 GiB volume at the shipped W=8, and it is a rule this repository does not apply to the
+  batch side either, where the guard asserts `batchShare >= batchCeiling` rather than
+  `max-concurrent x batchCeiling`. The per-file keys are safety ceilings, not size estimates — the
+  deployed ones are gigabytes against artifacts in the low hundreds of MiB — and the directory is
+  charged by bytes *actually written*, which is exactly the trade #150 settled when it chose
+  incremental charging over reserving at the ceiling; reserving at the ceilings would refuse writers
+  that fit many times over. So what the arithmetic guarantees is **progress** (frame + one snapshot,
+  always), the writers after the first take whatever is free, and a refusal is the ordinary transient
+  ending with the next tick retrying. The reciprocal is written down rather than left implicit: with
+  `W > 1` the checkpoint path can hold more of the shared directory at once, so a completed-batch
+  artifact may spend extra backoff attempts while a large first checkpoint builds.
   No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric-name, S3-key or
   frontend change; two new configuration keys, both with the shipped behaviour as their default.
   See `docs/delta-client-v2-guide.md` ("The first bound is heap", "Sizing note").

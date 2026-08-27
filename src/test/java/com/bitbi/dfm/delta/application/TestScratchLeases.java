@@ -37,6 +37,8 @@ final class TestScratchLeases {
      * checkpoint frame always has a reserved share (issue #193).
      */
     static ParquetScratchBudget budgetOf(long maxBytes, long checkpointReserveBytes) {
-        return new ParquetScratchBudget(new SimpleMeterRegistry(), maxBytes, checkpointReserveBytes);
+        // The reserve is the frame ceiling plus a snapshot ceiling since #292; a test that wants one
+        // number states it as the frame half and leaves the snapshot half at zero.
+        return new ParquetScratchBudget(new SimpleMeterRegistry(), maxBytes, checkpointReserveBytes, 0L);
     }
 }

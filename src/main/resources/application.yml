@@ -451,8 +451,12 @@ delta:
     # table. Must be >= 1; 0 is refused at startup (#251) rather than silently writing nothing.
     # SCRATCH NOTE: unlike the folded path, this one holds the frame open across the snapshot
     # passes (they read it), so its peak is the frame plus up to W snapshot files rather than one
-    # file at a time. A directory too small for that ends the build and the next tick retries —
-    # see docs/delta-client-v2-guide.md ("Sizing note").
+    # file at a time. What the #193 reserve guarantees is PROGRESS, not that peak: batch writers now
+    # stop at max-scratch-bytes minus (max-frame-temp-bytes + max-temp-bytes), so the streamed build
+    # can always write its frame and ONE snapshot whatever a completed-batch backlog is doing. The
+    # writers after the first take whatever the directory has free; a refusal ends the build and the
+    # next tick retries, and raising W past what the directory can hold buys retries rather than
+    # speed. See docs/delta-client-v2-guide.md ("Sizing note").
     snapshot-writers: ${DELTA_CHECKPOINT_SNAPSHOT_WRITERS:8}
     # How long a build waits for the process's fold budget before it is DEFERRED (issue #178).
     # max-fold-bytes above bounds one fold, and one JVM can hold two — the nightly sweep and a
