@@ -986,7 +986,7 @@ public class CheckpointService {
         // checkpoint reserve of issue #193 is what keeps a completed-batch backlog out of them.
         ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
         try {
-            BootstrapFrameWriter.FrameManifest manifest =
+            CheckpointFrameWriter.FrameManifest manifest =
                     streamSegmentsIntoFrame(siteId, segments, frame, lease);
             if (manifest == null) {
                 return null;
@@ -1028,7 +1028,7 @@ public class CheckpointService {
      * @return what the frame holds, or {@code null} when the session broke the all-{@code INSERT}
      *         contract and the build must fold instead
      */
-    private BootstrapFrameWriter.FrameManifest streamSegmentsIntoFrame(UUID siteId,
+    private CheckpointFrameWriter.FrameManifest streamSegmentsIntoFrame(UUID siteId,
                                                                        List<ChangelogSegment> segments,
                                                                        Path frame,
                                                                        ScratchLease lease) {
@@ -1037,7 +1037,7 @@ public class CheckpointService {
             // phase=fold, because this is what replaces it: the segment downloads it always
             // covered, and the writing of the frame that the fold would otherwise have paid for
             // later. phase=download_frame stays absent, as it is on any build with no seed frame.
-            BootstrapFrameWriter.FrameManifest manifest;
+            CheckpointFrameWriter.FrameManifest manifest;
             try (OutputStream out = new CappedOutputStream(
                             Files.newOutputStream(frame), maxFrameTempBytes, lease);
                     BootstrapFrameWriter writer = BootstrapFrameWriter.open(out)) {
@@ -1075,7 +1075,7 @@ public class CheckpointService {
      */
     private int writeSnapshotsFromFrame(UUID siteId,
                                         Path frame,
-                                        BootstrapFrameWriter.FrameManifest manifest,
+                                        CheckpointFrameWriter.FrameManifest manifest,
                                         long seq,
                                         SiteEpoch epoch) {
         stopIfShuttingDown(siteId);

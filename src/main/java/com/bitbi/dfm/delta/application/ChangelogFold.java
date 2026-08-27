@@ -4,6 +4,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 
 import java.io.Serial;
+import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.AbstractSet;
 import java.util.ArrayList;
@@ -389,8 +390,23 @@ public final class ChangelogFold {
      *         fold.
      */
     public static long apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record) {
+        return apply(state, record, identityOf(record.getKeyMap()));
+    }
+
+    /**
+     * {@link #apply(Map, ChangeRecord)} with the row identity already in hand.
+     *
+     * <p>For a caller that needs the identity for something of its own — {@link ChangelogMerge}
+     * keys its patch and tombstone sets by it — so that one {@link String} is built once and
+     * shared with the fold's own map key rather than built a second time and retained twice.</p>
+     *
+     * @param state    the fold so far — mutated
+     * @param record   the next changelog record, in sequence order
+     * @param identity {@code identityOf(record.getKeyMap())}
+     * @return the change in the fold's estimated retained heap, in bytes
+     */
+    static long apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record, String identity) {
         FoldedTable table = table(state, record.getTable());
-        String identity = identityOf(record.getKeyMap());
         Map<String, Value> recordData = record.getDataMap();
         Map<String, Value> recordKey = record.getKeyMap();
         switch (record.getOp()) {
@@ -439,6 +455,75 @@ public final class ChangelogFold {
                 return 0L;
             }
         }
+    }
+
+    /**
+     * Apply an {@code UPDATE} that must keep <b>only the columns it names</b> (issue #293).
+     *
+     * <p>{@link #apply} seeds a brand-new row with its key columns, because in a whole-site fold a
+     * row that no {@code INSERT} preceded has nowhere else to get its primary key from. A merge
+     * against a streamed base frame has somewhere else: the base row. So the delta must be able to
+     * say "these columns changed" rather than "this is the whole row", and this is that shape — the
+     * row's values array carries exactly the record's data columns, and its key stays readable
+     * through {@code keyOnly} for the case where the base turns out not to have the row after
+     * all.</p>
+     *
+     * <p>Merging a second update into a row this created goes back through {@link #apply}, whose
+     * existing-row branch overwrites named columns and touches nothing else — which is the same
+     * accumulation either way.</p>
+     *
+     * @param state    the delta so far — mutated
+     * @param record   an {@code UPDATE} whose row the delta does not hold
+     * @param identity {@code identityOf(record.getKeyMap())}
+     * @return the change in the delta's estimated retained heap, in bytes
+     */
+    static long applyPatch(Map<String, Map<String, FoldedRow>> state, ChangeRecord record, String identity) {
+        FoldedTable table = table(state, record.getTable());
+        Map<String, Value> recordKey = record.getKeyMap();
+        Map<String, Value> recordData = record.getDataMap();
+        long shared = declareAll(table, recordData.keySet());
+        Value[] values = valuesOf(table, recordData, NO_VALUES);
+        String[] keyNames = table.keyNamesFor(recordKey);
+        FoldedRow row = new FoldedRow(table, keyNames, values,
+                keyOnly(table, keyNames, recordKey, values));
+        table.put(identity, row);
+        return shared + estimatedRetainedBytes(identity, row);
+    }
+
+    /**
+     * 64-bit FNV-1a over a row identity's UTF-8 bytes — the one such function in this package.
+     *
+     * <p>Not a cryptographic hash and it does not need to be: nothing adversarial reaches here.
+     * What it does need is to spread well over the shapes real keys take — short ASCII strings
+     * differing in a few characters — which is what FNV-1a is for. Two callers depend on that
+     * spread for different reasons: {@link BootstrapFrameWriter} keys its repeated-key guard by it,
+     * where a collision costs a fallback to the fold, and {@link ChangelogMerge} partitions both
+     * sides of a merge by it, where an uneven spread costs an uneven pass. They share one function
+     * so a change to it cannot make them disagree about which rows are which.</p>
+     */
+    static long identityHash64(String identity) {
+        long h = 0xcbf29ce484222325L;
+        for (byte b : identity.getBytes(StandardCharsets.UTF_8)) {
+            h ^= (b & 0xffL);
+            h *= 0x100000001b3L;
+        }
+        return h;
+    }
+
+    /**
+     * What a set entry costs when it is the only thing holding the identity string — a tombstone,
+     * whose row the delta no longer has.
+     */
+    static long identityRetainedBytes(String identity) {
+        return SET_ENTRY_BYTES + stringBytes(identity);
+    }
+
+    /**
+     * What a set entry costs when the identity string it holds is already charged to the row it
+     * belongs to — a patch marker, whose row the delta still has.
+     */
+    static long identityReferenceBytes() {
+        return SET_ENTRY_BYTES;
     }
 
     private static FoldedTable table(Map<String, Map<String, FoldedRow>> state, String name) {
@@ -565,6 +650,9 @@ public final class ChangelogFold {
 
     /** A {@link String} header plus its (compact, one byte per Latin-1 character) array header. */
     private static final long STRING_BYTES = 48L;
+
+    /** A {@code HashSet} entry: its node object and the table slot pointing at it. */
+    private static final long SET_ENTRY_BYTES = 48L;
 
     /**
      * A protobuf {@code Value}: object header, the generated message's {@code memoizedSize} and
