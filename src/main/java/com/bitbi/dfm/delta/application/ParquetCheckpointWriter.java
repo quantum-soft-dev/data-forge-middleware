@@ -83,24 +83,103 @@ public final class ParquetCheckpointWriter {
     public static DecimalDegradeTally writeParquet(Path output, String tableName, TableSchema tableSchema,
                                     Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes,
                                     ScratchLease lease) {
-        DecimalDegradeTally nonFinite = new DecimalDegradeTally();
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
-        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
-                        new FileOutputFile(output, maxBytes, lease))
-                .withSchema(avro)
-                .withDataModel(logicalTypeModel())
-                .withConf(new PlainParquetConfiguration())
-                .withRowGroupSize(rowGroupBytes)
-                .withCompressionCodec(CODEC)
-                .build()) {
+        DecimalDegradeTally nonFinite;
+        try (OpenTable table = openTable(output, tableName, tableSchema, avro, maxBytes, rowGroupBytes, lease)) {
             for (Map<String, Value> row : rows) {
-                writer.write(toRecord(avro, tableSchema, row, nonFinite));
+                table.write(row);
             }
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
+            nonFinite = table.tally();
         }
         warnDegraded(tableName, nonFinite);
         return nonFinite;
+    }
+
+    /**
+     * One table's Parquet file, open and fed row by row — what {@link #writeParquet} is composed of,
+     * and the form the bootstrap build needs (issue #292).
+     *
+     * <p>That build has no per-table row collection to iterate: the rows of every table arrive
+     * interleaved from a single pass over the locally written frame, so a group of tables is open at
+     * once and each record is routed to its table. Rendering it through anything but the pieces
+     * {@code writeParquet} uses would be a second renderer, and the two artifacts of one site would
+     * eventually disagree about the same cell — so the schema, the coercion and the degradation
+     * tally here are literally the ones the general path uses.</p>
+     *
+     * <p>The Avro schema is passed in rather than derived here, because the decimal envelope
+     * ({@link DecimalEnvelope}) can only be closed once every row has been seen — which for the
+     * streaming caller is a pass of its own, before any writer is opened.</p>
+     *
+     * @param output        the local file to write (truncated if it exists)
+     * @param tableName     table name, for the failure message
+     * @param tableSchema   the stored PG schema, which drives coercion by declared type
+     * @param avro          the record schema to write, decimals already widened
+     * @param maxBytes      refuse to put more than this many bytes on local disk
+     * @param rowGroupBytes the configured row-group budget
+     * @param lease         this file's share of the shared scratch directory (issue #150)
+     * @return the open writer; the caller closes it and reports {@link OpenTable#tally()}
+     */
+    static OpenTable openTable(Path output, String tableName, TableSchema tableSchema, Schema avro,
+                               long maxBytes, long rowGroupBytes, ScratchLease lease) {
+        return new OpenTable(output, tableName, tableSchema, avro, maxBytes, rowGroupBytes, lease);
+    }
+
+    /** See {@link #openTable}. */
+    static final class OpenTable implements AutoCloseable {
+
+        private final String tableName;
+        private final TableSchema tableSchema;
+        private final Schema avro;
+        private final DecimalDegradeTally nonFinite = new DecimalDegradeTally();
+        private final ParquetWriter<GenericRecord> writer;
+        private long rowCount;
+
+        private OpenTable(Path output, String tableName, TableSchema tableSchema, Schema avro,
+                          long maxBytes, long rowGroupBytes, ScratchLease lease) {
+            this.tableName = tableName;
+            this.tableSchema = tableSchema;
+            this.avro = avro;
+            try {
+                this.writer = AvroParquetWriter.<GenericRecord>builder(
+                                new FileOutputFile(output, maxBytes, lease))
+                        .withSchema(avro)
+                        .withDataModel(logicalTypeModel())
+                        .withConf(new PlainParquetConfiguration())
+                        .withRowGroupSize(rowGroupBytes)
+                        .withCompressionCodec(CODEC)
+                        .build();
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
+            }
+        }
+
+        void write(Map<String, Value> row) {
+            try {
+                writer.write(toRecord(avro, tableSchema, row, nonFinite));
+                rowCount++;
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
+            }
+        }
+
+        /** How many rows this writer was fed — the row count the {@code checkpoints} row records. */
+        long rowCount() {
+            return rowCount;
+        }
+
+        /** The degradation tally so far; complete once every row has been written. */
+        DecimalDegradeTally tally() {
+            return nonFinite;
+        }
+
+        @Override
+        public void close() {
+            try {
+                writer.close();
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
+            }
+        }
     }
 
     /**
@@ -169,19 +248,54 @@ public final class ParquetCheckpointWriter {
     }
 
     static Schema widenDecimalsToFit(Schema recordSchema, Iterable<Map<String, Value>> rows) {
-        Map<String, LogicalTypes.Decimal> declared = new java.util.LinkedHashMap<>();
-        for (Schema.Field field : recordSchema.getFields()) {
-            if (branch(field.schema()).getLogicalType() instanceof LogicalTypes.Decimal decimal) {
-                declared.put(field.name(), decimal);
-            }
-        }
-        if (declared.isEmpty()) {
+        DecimalEnvelope envelope = decimalEnvelope(recordSchema);
+        if (!envelope.measuresAnything()) {
             return recordSchema;
         }
-
-        Map<String, Integer> needed = new java.util.LinkedHashMap<>();
-        declared.forEach((name, decimal) -> needed.put(name, decimal.getPrecision()));
         for (Map<String, Value> row : rows) {
+            envelope.observe(row);
+        }
+        return envelope.widened();
+    }
+
+    /**
+     * The incremental form of {@link #widenDecimalsToFit}: observe rows one at a time, then close
+     * the envelope (issue #292).
+     *
+     * <p>{@code widenDecimalsToFit} traverses the rows twice — once to measure, once to write —
+     * which the general path affords by holding the table's rows in the fold. The bootstrap build
+     * holds nothing: it measures every table in one pass over the local frame and writes them in the
+     * passes after it, so measuring has to be something a caller can drive record by record. Both
+     * paths reach it through this one accumulator, so a schema widened on one is the schema widened
+     * on the other.</p>
+     */
+    static DecimalEnvelope decimalEnvelope(Schema recordSchema) {
+        return new DecimalEnvelope(recordSchema);
+    }
+
+    /** See {@link #decimalEnvelope}. */
+    static final class DecimalEnvelope {
+
+        private final Schema recordSchema;
+        private final Map<String, LogicalTypes.Decimal> declared = new java.util.LinkedHashMap<>();
+        private final Map<String, Integer> needed = new java.util.LinkedHashMap<>();
+
+        private DecimalEnvelope(Schema recordSchema) {
+            this.recordSchema = recordSchema;
+            for (Schema.Field field : recordSchema.getFields()) {
+                if (branch(field.schema()).getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+                    declared.put(field.name(), decimal);
+                    needed.put(field.name(), decimal.getPrecision());
+                }
+            }
+        }
+
+        /** Whether this table declares a decimal column at all — if not, no pass is worth making. */
+        boolean measuresAnything() {
+            return !declared.isEmpty();
+        }
+
+        void observe(Map<String, Value> row) {
             for (Map.Entry<String, LogicalTypes.Decimal> column : declared.entrySet()) {
                 Value value = row.get(column.getKey());
                 Object java = value == null ? null : ValueMapper.toJava(value);
@@ -197,6 +311,15 @@ public final class ParquetCheckpointWriter {
             }
         }
 
+        /** The record schema with every declared decimal wide enough for what was observed. */
+        Schema widened() {
+            return ParquetCheckpointWriter.widen(recordSchema, declared, needed);
+        }
+    }
+
+    private static Schema widen(Schema recordSchema,
+                                Map<String, LogicalTypes.Decimal> declared,
+                                Map<String, Integer> needed) {
         Map<String, Integer> widened = null;
         for (Map.Entry<String, LogicalTypes.Decimal> column : declared.entrySet()) {
             LogicalTypes.Decimal decimal = column.getValue();

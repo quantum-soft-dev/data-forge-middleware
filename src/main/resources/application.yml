@@ -431,6 +431,33 @@ delta:
     # PEAK estimate at DEBUG, and WARNs once a site passes 75% of this. One night at DEBUG on
     # CheckpointService is how to size this key before lowering it.
     max-fold-bytes: ${DELTA_CHECKPOINT_MAX_FOLD_BYTES:0}
+    # The fold above is the ceiling a growing site reaches first — and for a site's FIRST
+    # checkpoint it is a ceiling paid for nothing (issue #292). A FULL_SNAPSHOT session declares
+    # every record an INSERT, so folding it detects collapses the wire contract says cannot happen:
+    # the frame is the input re-emitted. A build with no seed frame whose whole history is such a
+    # session therefore streams the segments straight into the local frame and writes each table's
+    # snapshot by re-reading that file, with no fold and no fold budget consulted at all.
+    # Automatic, and it falls back to the fold on its own when the contract turns out not to hold
+    # (a repeated key, a record that is not an INSERT) — nothing has been uploaded at that point.
+    # This key is the ROLLBACK, not the safety: set it false to go back to folding without shipping
+    # code, and expect large first checkpoints to be refused with fold_too_large again.
+    streaming-bootstrap: ${DELTA_CHECKPOINT_STREAMING_BOOTSTRAP:true}
+    # How many table snapshots that path keeps open at once, which is also what decides how many
+    # passes it makes over the local frame: 1 + ceil(tables / W), a number that does not grow with
+    # the site's row count. The trade is bounded on both sides. Every open writer holds a
+    # delta.parquet.row-group-bytes buffer, so one writer per table would put ~1.3 GiB of heap on a
+    # site with 86 tables at the shipped 16 MiB — the ceiling this path exists to remove, arriving
+    # from the other direction — while W=1 would cost one pass over the whole local frame per
+    # table. Must be >= 1; 0 is refused at startup (#251) rather than silently writing nothing.
+    # SCRATCH NOTE: unlike the folded path, this one holds the frame open across the snapshot
+    # passes (they read it), so its peak is the frame plus up to W snapshot files rather than one
+    # file at a time. What the #193 reserve guarantees is PROGRESS, not that peak: batch writers now
+    # stop at max-scratch-bytes minus (max-frame-temp-bytes + max-temp-bytes), so the streamed build
+    # can always write its frame and ONE snapshot whatever a completed-batch backlog is doing. The
+    # writers after the first take whatever the directory has free; a refusal ends the build and the
+    # next tick retries, and raising W past what the directory can hold buys retries rather than
+    # speed. See docs/delta-client-v2-guide.md ("Sizing note").
+    snapshot-writers: ${DELTA_CHECKPOINT_SNAPSHOT_WRITERS:8}
     # How long a build waits for the process's fold budget before it is DEFERRED (issue #178).
     # max-fold-bytes above bounds one fold, and one JVM can hold two — the nightly sweep and a
     # forced rebuild on deltaRebuildExecutor — so two folds at 45% of the budget each crossed

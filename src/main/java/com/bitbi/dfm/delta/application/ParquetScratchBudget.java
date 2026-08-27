@@ -54,15 +54,35 @@ import java.util.concurrent.atomic.AtomicLong;
  * follows the writers whether or not a budget is set, which is the only way an operator can size the
  * key before turning it on.</p>
  *
- * <p><b>A reserved share for the checkpoint path</b> (issue #193). Batch writers' own holdings may
- * use at most {@code max-scratch-bytes} minus {@code delta.checkpoint.max-frame-temp-bytes} — the
- * declared size of the largest scratch file the checkpoint path holds, and it holds only one at a
- * time (#178). Compared against batch live bytes, not the directory total: a frame in flight already
- * occupies the reserve and must not shrink the batch share a second time. That is a floor for the
- * nightly sweep, not a ceiling: a checkpoint writer can still use the whole budget when the
- * directory is idle. Batch cannot consume into the reserved bytes even after the frame is deleted,
- * which is the gap before the table snapshot opens. Unbounded (the shipped default) has nothing to
- * reserve a share of, so a leftover frame-ceiling value is ignored.</p>
+ * <p><b>A reserved share for the checkpoint path</b> (issue #193, widened by #292). Batch writers'
+ * own holdings may use at most {@code max-scratch-bytes} minus the largest set of scratch files the
+ * checkpoint path holds <em>at one time</em>. Until #292 that was a single file, so the reserve was
+ * {@code delta.checkpoint.max-frame-temp-bytes} alone: the frame was written, uploaded and deleted
+ * before the first table's file was created, and the build held one at a time (#178). The streamed
+ * bootstrap build cannot do that — its snapshot passes <em>read</em> the frame, so the frame stays
+ * on the volume beside the table files. The reserve is therefore
+ * {@code max-frame-temp-bytes + max-temp-bytes}: the frame <b>and one snapshot</b>.</p>
+ *
+ * <p><b>One snapshot, not {@code delta.checkpoint.snapshot-writers} of them</b>, and the asymmetry
+ * is deliberate — it is the same shape the batch side already has. Nothing here reserves
+ * {@code delta.batch-parquet.max-concurrent x max-temp-bytes} either: the per-file keys are safety
+ * ceilings, not size estimates (the deployed ones are gigabytes against artifacts in the low
+ * hundreds of MiB), the directory is charged by <em>bytes actually written</em>, and reserving at
+ * the ceilings would refuse writers that fit many times over — the trade #150 settled when it chose
+ * incremental charging over pessimistic reservation. So what is guaranteed is <b>progress</b>: the
+ * streamed path can always write its frame and one snapshot, whatever a completed-batch backlog is
+ * doing. Writers beyond the first take whatever the directory has free, and a refusal ends that
+ * build with the next tick retrying — the ordinary transient outcome, never a verdict on an
+ * artifact.</p>
+ *
+ * <p>Compared against batch live bytes, not the directory total: a frame in flight already occupies
+ * the reserve and must not shrink the batch share a second time. That is a floor for the nightly
+ * sweep, not a ceiling: a checkpoint writer can still use the whole budget when the directory is
+ * idle — which since #292 means it can hold rather more of it at once, so a completed-batch artifact
+ * may take extra backoff attempts while a large first checkpoint is being built. Batch cannot
+ * consume into the reserved bytes even after the frame is deleted, which is the gap before the table
+ * snapshot opens. Unbounded (the shipped default) has nothing to reserve a share of, so leftover
+ * ceiling values are ignored.</p>
  *
  * <p><b>Per JVM</b>, so it is a true bound only where the directory is pod-private
  * ({@code delta.parquet.scratch-private-to-pod}, #141); on a shared volume it is a per-replica
@@ -108,13 +128,18 @@ public class ParquetScratchBudget {
      * Tests that do not exercise the checkpoint reserved share (issue #193).
      */
     public ParquetScratchBudget(MeterRegistry registry, long budgetBytes) {
-        this(registry, budgetBytes, 0L);
+        this(registry, budgetBytes, 0L, 0L);
     }
 
     @Autowired
     public ParquetScratchBudget(MeterRegistry registry,
                                 @Value("${delta.parquet.max-scratch-bytes:0}") long budgetBytes,
-                                @Value("${delta.checkpoint.max-frame-temp-bytes:0}") long checkpointReserveBytes) {
+                                @Value("${delta.checkpoint.max-frame-temp-bytes:0}") long frameCeilingBytes,
+                                // The second half of the reserve since #292: the streamed bootstrap
+                                // build keeps the frame open while it writes snapshots from it, so
+                                // "the largest set of files the checkpoint path holds at once" is
+                                // the frame plus one snapshot rather than the frame alone.
+                                @Value("${delta.checkpoint.max-temp-bytes:0}") long snapshotCeilingBytes) {
         // A negative value is read as unbounded rather than as "refuse everything": an operator who
         // typed one meant to relax the guard, and the failure mode of the other reading is every
         // checkpoint table skipped and every batch artifact retried to abandonment.
@@ -122,9 +147,16 @@ public class ParquetScratchBudget {
         // Unbounded has nothing to reserve a share of. A negative reserve is none. A reserve larger
         // than the budget leaves batch writers with zero — the nightly frame still gets the whole
         // directory, which is the point of the share.
+        // Saturating, because two configured ceilings can be large enough to overflow together and
+        // a negative reserve would hand batch writers the whole directory — the opposite of what
+        // this share is for.
+        long declaredReserve = Math.max(0L, frameCeilingBytes) + Math.max(0L, snapshotCeilingBytes);
+        if (declaredReserve < 0L) {
+            declaredReserve = Long.MAX_VALUE;
+        }
         this.checkpointReserveBytes = this.budgetBytes == 0L
                 ? 0L
-                : Math.min(this.budgetBytes, Math.max(0L, checkpointReserveBytes));
+                : Math.min(this.budgetBytes, declaredReserve);
         Gauge.builder("delta.parquet.scratch.bytes", liveBytes, AtomicLong::doubleValue)
                 .description("Bytes of file-backed Parquet scratch reserved by live writers")
                 .tag("application", "data-forge-middleware")
@@ -145,7 +177,8 @@ public class ParquetScratchBudget {
         } else {
             log.info("The Parquet scratch directory is bounded at {} bytes "
                     + "(delta.parquet.max-scratch-bytes), of which {} bytes are reserved for a "
-                    + "checkpoint frame (delta.checkpoint.max-frame-temp-bytes)",
+                    + "checkpoint frame and one snapshot beside it "
+                    + "(delta.checkpoint.max-frame-temp-bytes + delta.checkpoint.max-temp-bytes)",
                     this.budgetBytes, this.checkpointReserveBytes);
         }
     }

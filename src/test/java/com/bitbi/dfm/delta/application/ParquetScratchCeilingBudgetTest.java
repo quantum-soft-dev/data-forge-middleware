@@ -43,9 +43,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * bounds the sum directly, so the per-file ceilings drop out of the inequality and keep only their
  * per-artifact job; what remains outside it is scratch a dead process left behind (#127, #141),
  * which no lease covers, and that is what the reserve below is for. Since issue #193 the last
- * {@code DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES} of the directory budget is reserved for the
- * checkpoint path — a different reserve — so the remainder must still fit at least one
- * completed-batch artifact.</p>
+ * {@code DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES} of the directory
+ * budget is reserved for the checkpoint path — a different reserve — so the remainder must still
+ * fit at least one completed-batch artifact. That sum is what the checkpoint path holds at one
+ * time: the frame alone until #292, and since then the frame beside one snapshot, because the
+ * streamed bootstrap build's snapshot passes read the frame rather than replacing it.</p>
  */
 class ParquetScratchCeilingBudgetTest {
 
@@ -132,10 +134,28 @@ class ParquetScratchCeilingBudgetTest {
                             + "can ever speak and its documented failure mode never happens");
         }
 
-        // Issue #193: batch writers stop at directory minus the frame ceiling, so a completed-batch
-        // backlog cannot fill the bytes the nightly frame needs. That share has to fit at least one
-        // batch artifact, or the batch ceiling is dead configuration the same way.
-        long batchShare = directoryBudget - frameCeiling;
+        // Issue #193, widened by #292: batch writers stop at the directory minus what the
+        // checkpoint path holds AT ONE TIME, so a completed-batch backlog cannot fill the bytes the
+        // nightly build needs. That used to be the frame alone — it was written, uploaded and
+        // deleted before the first table's file existed. The streamed bootstrap build's snapshot
+        // passes READ the frame, so it stays on the volume beside a snapshot file, and the reserve
+        // is the two together.
+        long checkpointReserve = frameCeiling + snapshotCeiling;
+        assertTrue(checkpointReserve <= directoryBudget,
+                "the checkpoint path holds its frame (" + FRAME_CEILING_KEY + "=" + frameCeiling
+                        + " B) and a snapshot (" + SNAPSHOT_CEILING_KEY + "=" + snapshotCeiling
+                        + " B) at once since issue #292, which is " + checkpointReserve + " B "
+                        + "against " + DIRECTORY_BUDGET_KEY + "=" + directoryBudget + " B — so the "
+                        + "directory can refuse a first checkpoint that is inside both per-file "
+                        + "ceilings, every night, with the pointer frozen");
+
+        // Only ONE snapshot, not delta.checkpoint.snapshot-writers of them, and for the same reason
+        // this test does not multiply the batch ceiling by delta.batch-parquet.max-concurrent: the
+        // per-file keys are safety ceilings, not size estimates, and the directory is charged by
+        // bytes actually written (#150). What the arithmetic guarantees is PROGRESS — the streamed
+        // build can always write its frame and one snapshot — while the writers after the first take
+        // whatever is free and a refusal ends that build with the next tick retrying.
+        long batchShare = directoryBudget - checkpointReserve;
         assertTrue(batchShare >= batchCeiling,
                 "the reserved checkpoint share leaves " + batchShare + " B for batch writers, below "
                         + BATCH_CEILING_KEY + "=" + batchCeiling + " B, so a single completed-batch "

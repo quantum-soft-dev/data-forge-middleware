@@ -1,5 +1,7 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.delta.application.ChangelogCodec;
+import com.bitbi.dfm.delta.application.ChangelogFold;
 import com.bitbi.dfm.delta.application.ChangelogFold.FoldedRow;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
@@ -79,8 +81,9 @@ class DeltaRebaselineIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 10L, List.of(
                 rec("customers", Op.INSERT, 10L, key("id", intVal(1)), data("id", intVal(1), "name", strVal("Ann")))));
 
-        Map<String, Map<String, FoldedRow>> state = checkpointService.buildCheckpoint(SITE);
+        checkpointService.buildCheckpoint(SITE);
 
+        Map<String, Map<String, FoldedRow>> state = publishedFrame();
         assertEquals(1, state.get("customers").size(), "id=2 must not survive the re-baseline");
         FoldedRow only = state.get("customers").values().iterator().next();
         assertEquals(1L, ValueMapper.toJava(only.key().get("id")), "the surviving row is the snapshot's id=1");
@@ -146,9 +149,9 @@ class DeltaRebaselineIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 10L, List.of(
                 rec("customers", Op.INSERT, 10L, key("id", intVal(1)), data("id", intVal(1), "name", strVal("Ann")))));
 
-        Map<String, Map<String, FoldedRow>> folded = checkpointService.buildCheckpoint(SITE);
+        checkpointService.buildCheckpoint(SITE);
 
-        assertEquals(1, folded.get("customers").size(),
+        assertEquals(1, publishedFrame().get("customers").size(),
                 "the discarded baseline's frame must not seed the new baseline's fold");
         assertEquals(10L, checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow().getSeq());
     }
@@ -212,5 +215,25 @@ class DeltaRebaselineIntegrationTest extends BaseIntegrationTest {
 
     private static Value strVal(String v) {
         return Value.newBuilder().setStringValue(v).build();
+    }
+
+    /**
+     * The state this build published, read back from the reload frame rather than from the value
+     * {@code buildCheckpoint} returns (issue #292).
+     *
+     * <p>A bootstrap or re-baseline build whose whole history is one {@code FULL_SNAPSHOT} session
+     * streams straight into the frame and never builds a fold, so there is no in-memory state to
+     * return — and the frame is the better subject anyway: it is what the next build seeds from and
+     * what a re-baseline is asserted to have replaced.</p>
+     */
+    private Map<String, Map<String, FoldedRow>> publishedFrame() {
+        long seq = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow().getSeq();
+        Map<String, Map<String, FoldedRow>> state = new java.util.LinkedHashMap<>();
+        try (java.io.InputStream frame = checkpointStorage.openFrame(SITE, seq)) {
+            ChangelogCodec.forEach(frame, record -> ChangelogFold.apply(state, record));
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException("could not read the published frame", e);
+        }
+        return state;
     }
 }

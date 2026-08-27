@@ -32,7 +32,7 @@ class ParquetScratchBudgetTest {
     }
 
     private ParquetScratchBudget budget(long maxBytes, long checkpointReserveBytes) {
-        return new ParquetScratchBudget(registry, maxBytes, checkpointReserveBytes);
+        return new ParquetScratchBudget(registry, maxBytes, checkpointReserveBytes, 0L);
     }
 
     @Test
