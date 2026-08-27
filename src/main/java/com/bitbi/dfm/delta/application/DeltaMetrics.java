@@ -30,11 +30,25 @@ import java.util.function.Supplier;
  *   <li>{@code delta.checkpoint.builds.deferred} — builds that did not run because another build
  *       held the process's fold budget (issue #178). Untagged, and deliberately <b>not</b> a value
  *       on {@code builds.aborted}: this one repairs itself as soon as the neighbour finishes</li>
+ *   <li>{@code delta.checkpoint.builds.partitioned} — builds whose delta did not fit
+ *       {@code delta.checkpoint.max-fold-bytes} and were re-run in hash partitions (issue #293).
+ *       Untagged, and not a value on {@code builds.aborted}: the build <b>succeeds</b>, at the cost
+ *       of one extra read of the frame and of every segment per partition. A non-zero rate says the
+ *       nightly delta has outgrown the budget — raise the key, or find out why a site's period is
+ *       that large — and a build that reaches {@code delta.checkpoint.max-merge-partitions} without
+ *       fitting still ends on {@code builds.aborted{reason=fold_too_large}}</li>
  *   <li>{@code delta.checkpoint.fold.wait} — how long a build waited for the process's fold budget
  *       (issue #178). The band below {@code delta.checkpoint.fold-wait-seconds}, and the only
  *       series that shows contention short of a deferral</li>
- *   <li>{@code delta.checkpoint.fold.bytes} — peak estimated heap of one build's folded state,
- *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152)</li>
+ *   <li>{@code delta.checkpoint.fold.bytes} — peak estimated heap of one build's folded rows,
+ *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152). <b>What is folded
+ *       changed with issue #293 and the meter's name deliberately did not</b>: an incremental build
+ *       seeded from a frame now folds the period's delta and streams the site past it, so the
+ *       sample is the delta rather than the site. It is still "the heap this build held as folded
+ *       rows against the key that bounds it", which is what the series is read for and what an
+ *       alert on it means; renaming it would have moved every dashboard reading it to say the same
+ *       thing in a different unit. A build with no seed frame — a bootstrap that is not one whole
+ *       {@code FULL_SNAPSHOT} session — still folds the site, and still reports it here</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
  *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
  *   <li>{@code delta.parquet.scratch.bytes} — gauge: bytes of file-backed Parquet scratch reserved
@@ -134,6 +148,7 @@ public class DeltaMetrics {
     private final Counter checkpointHistoryGone;
     private final Counter checkpointFoldTooLarge;
     private final Counter checkpointBuildsDeferred;
+    private final Counter checkpointBuildsPartitioned;
     private final Timer checkpointFoldWait;
     private final DistributionSummary checkpointFoldBytes;
     private final Counter batchParquetReady;
@@ -193,6 +208,10 @@ public class DeltaMetrics {
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
         this.checkpointFoldTooLarge = checkpointBuildAborted(registry, "fold_too_large");
+        this.checkpointBuildsPartitioned = Counter.builder("delta.checkpoint.builds.partitioned")
+                .description("Checkpoint builds whose delta did not fit the fold budget and were "
+                        + "re-run in hash partitions")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointBuildsDeferred = Counter.builder("delta.checkpoint.builds.deferred")
                 .description("Checkpoint builds that did not run because another build held the "
                         + "process's fold budget")
@@ -409,6 +428,24 @@ public class DeltaMetrics {
      */
     public void checkpointBuildDeferred() {
         checkpointBuildsDeferred.increment();
+    }
+
+    /**
+     * A build whose delta outgrew {@code delta.checkpoint.max-fold-bytes} and was re-run in hash
+     * partitions (issue #293).
+     *
+     * <p>Deliberately not a value on {@code delta.checkpoint.builds.aborted}: the build finishes,
+     * the pointer moves and retention runs. What it costs is one extra read of the seed frame and
+     * of every segment of the period <em>per partition</em>, so the series is a warning and not an
+     * alarm — the nightly delta has outgrown the budget, which the same key raises. It counts once
+     * per build, not once per partition, and only when the fallback was actually taken.</p>
+     *
+     * <p>A build that partitions to {@code delta.checkpoint.max-merge-partitions} and still does
+     * not fit ends on {@code builds.aborted{reason=fold_too_large}} as it did before, so the
+     * permanent-abort meter keeps its promise.</p>
+     */
+    public void checkpointBuildPartitioned() {
+        checkpointBuildsPartitioned.increment();
     }
 
     /**

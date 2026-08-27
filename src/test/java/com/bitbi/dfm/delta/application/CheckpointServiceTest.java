@@ -111,6 +111,12 @@ class CheckpointServiceTest {
      */
     private boolean streamingBootstrap = true;
 
+    /** Issue #293 — an incremental build joins the streamed frame against the delta. */
+    private boolean streamingMerge = true;
+
+    /** Issue #293 — how far a delta that does not fit may be hash-partitioned. */
+    private int maxMergePartitions = 64;
+
     /**
      * Deliberately below the shipped 8, so a fixture with three tables is written in two group
      * passes rather than one: the grouping is where the streaming path differs from the folded one.
@@ -184,9 +190,14 @@ class CheckpointServiceTest {
      * <p>This class's default fixture is a bootstrap {@code FULL_SNAPSHOT}, so it takes the streamed
      * path unless a test says otherwise — which is what makes the rest of the suite a statement that
      * the two paths agree. A test whose subject <em>is</em> the fold says so here.</p>
+     *
+     * <p>Since issue #293 it turns off the incremental inversion too: a build seeded from a frame
+     * joins that frame against the delta rather than folding the site, so a test about the fold's
+     * own budget has to ask for the fold on both paths.</p>
      */
     private void useFoldPath() {
         streamingBootstrap = false;
+        streamingMerge = false;
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE);
     }
 
@@ -216,7 +227,7 @@ class CheckpointServiceTest {
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, foldBudget,
                 scratchBudget, scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes,
-                streamingBootstrap, SNAPSHOT_WRITERS);
+                streamingBootstrap, SNAPSHOT_WRITERS, streamingMerge, maxMergePartitions);
     }
 
     /**
@@ -486,10 +497,13 @@ class CheckpointServiceTest {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
 
-        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
 
-        assertEquals(1, state.get("customers").size(), "the streamed frame must seed the fold");
+        // What the frame seeds changed with issue #293 — the delta is folded and the frame is
+        // streamed past it — so the observable is the snapshot the streamed frame produced rather
+        // than a returned fold, which an incremental build no longer builds at all.
         verify(checkpointStorage).openFrame(SITE, 2L);
+        assertEquals(1, uploaded.size(), "the streamed frame must produce the table's snapshot");
     }
 
     @Test
@@ -607,7 +621,8 @@ class CheckpointServiceTest {
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
                 waitingBudget, TestScratchLeases.unboundedBudget(), tempDirectory.toString(),
-                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, streamingBootstrap, SNAPSHOT_WRITERS);
+                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, streamingBootstrap, SNAPSHOT_WRITERS,
+                streamingMerge, maxMergePartitions);
 
         java.util.concurrent.CountDownLatch heldBySomeoneElse = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch letGo = new java.util.concurrent.CountDownLatch(1);
@@ -712,10 +727,15 @@ class CheckpointServiceTest {
     }
 
     @Test
-    void countsTheFoldOfTheSeedFrameAgainstTheSameBudget() {
+    void countsTheFoldOfTheSeedFrameAgainstTheSameBudgetOnTheFoldPath() {
         // A site that is quiet still folds its whole history from the frame, so the budget has to
         // cover the seed as well — otherwise the one build that reloads everything at once is the
         // one build the guard does not watch.
+        //
+        // Since issue #293 that is the FOLD path's rule and no longer the shipped one: with the
+        // merge on, a build seeded from a frame does not fold the frame at all, which is what
+        // theSeedFrameNoLongerCountsAgainstTheFoldBudget asserts. The rollback keeps this.
+        streamingMerge = false;
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
@@ -733,7 +753,9 @@ class CheckpointServiceTest {
     void stillAttributesTheFrameTransferWhenTheFoldAbortsWhileReadingIt() {
         // The phases are recorded in a finally so an aborted build can be read at all; recording
         // download_frame=0 and charging the whole transfer to fold would make that reading wrong
-        // on the one build worth reading.
+        // on the one build worth reading. On the fold path, since issue #293 — the merge does not
+        // fold the frame, so it cannot abort while reading it.
+        streamingMerge = false;
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
@@ -895,6 +917,9 @@ class CheckpointServiceTest {
         service.buildCheckpoint(SITE);
         verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
 
+        // The aborted half is stated on the fold path: the merge does not fold the frame, so a
+        // frame this size no longer aborts anything (issue #293).
+        streamingMerge = false;
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
         stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
@@ -2475,6 +2500,178 @@ class CheckpointServiceTest {
                 .map(r -> r.getTable() + "|" + r.getOp() + "|" + r.getKeyMap() + "|" + r.getDataMap())
                 .sorted()
                 .toList();
+    }
+
+    // --- issue #293: the delta is in heap and the site streams past it -------------------------
+
+    /**
+     * A site far larger than its night's work, and a budget far smaller than the site.
+     *
+     * <p>{@code SITE_ROWS} rows at the ~310 estimated bytes {@link ChangelogFold} charges for a row
+     * of this shape is about {@code 15 MB} of fold, against a budget of {@code 64 KiB} — so the
+     * folded path is refused by two orders of magnitude while the delta, three rows, fits with room
+     * to spare. The proportion is the statement; the production case it stands for is a site of five
+     * million rows whose fold needs ~11 GiB, which is linear in the same constant and is why the
+     * scale here is chosen to keep the per-commit gate fast rather than to be literal.</p>
+     */
+    private static final int SITE_ROWS = 50_000;
+
+    private static final long DELTA_ONLY_BUDGET = 64L * 1024L;
+
+    /** A site with a seed frame at {@code seq}, so a build takes the merge rather than a bootstrap. */
+    private void stubIncrementalSite(long checkpointSeq, long appliedSeq, int frameRows) {
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(appliedSeq, checkpointSeq, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, checkpointSeq)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(checkpointSeq, frameOf(frameRows));
+    }
+
+    /** A frame of {@code rows} customers, serialized exactly as a build would have written it. */
+    private static byte[] frameOf(int rows) {
+        List<ChangeRecord> records = new java.util.ArrayList<>(rows);
+        for (int at = 1; at <= rows; at++) {
+            records.add(record("customers", at, at, "name-" + at));
+        }
+        return ChangelogCodec.serialize(records);
+    }
+
+    private ChangelogSegment deltaSegment(long firstSeq, long lastSeq, List<ChangeRecord> records) {
+        ChangelogSegment segment = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), firstSeq, lastSeq, lastSeq - firstSeq + 1,
+                "hash", "s3/delta", "DELTA", Map.of());
+        stubSiteSegments(List.of(segment));
+        stubSegmentRecords("s3/delta", records);
+        return segment;
+    }
+
+    @Test
+    void anIncrementalBuildHoldsTheDeltaInHeapAndStreamsTheSitePastIt() {
+        // The ticket in one assertion: a budget the whole site could never fit, and a build that
+        // finishes anyway because what it folds is the night's work.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubIncrementalSite(SITE_ROWS, SITE_ROWS + 3, SITE_ROWS);
+        deltaSegment(SITE_ROWS + 1, SITE_ROWS + 3, List.of(
+                record("customers", SITE_ROWS + 1, 1, "Ann-again"),
+                record("customers", SITE_ROWS + 2, SITE_ROWS + 1, "brand new"),
+                record("customers", SITE_ROWS + 3, 2, "Bob-again")));
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq((long) SITE_ROWS + 3), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, SITE_ROWS + 3L);
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+        verify(metrics, never()).checkpointBuildPartitioned();
+
+        // Every row of the site is in the new frame, plus the one the delta added.
+        assertEquals(SITE_ROWS + 1, ChangelogCodec.parse(lastFrameBytes).size(),
+                "the streamed site plus the delta's new row");
+    }
+
+    @Test
+    void theSeedFrameNoLongerCountsAgainstTheFoldBudget() {
+        // The mutation partner of countsTheFoldOfTheSeedFrameAgainstTheSameBudgetOnTheFoldPath:
+        // the same fixture, the same budget, and the opposite outcome, because the site is no
+        // longer what the budget is spent on. Turning delta.checkpoint.streaming-merge off puts the
+        // abort back, which is what makes this an assertion about the merge and not about the size
+        // of the fixture.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubIncrementalSite(SITE_ROWS, SITE_ROWS + 1, SITE_ROWS);
+        deltaSegment(SITE_ROWS + 1, SITE_ROWS + 1, List.of(
+                record("customers", SITE_ROWS + 1, 1, "Ann-again")));
+
+        service.buildCheckpoint(SITE);
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+
+        streamingMerge = false;
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+    }
+
+    @Test
+    void reportsTheDeltaSizeOnTheFoldMeterRatherThanTheSiteS() {
+        // delta.checkpoint.fold.bytes keeps its name and changes what it samples, which is the
+        // ticket's decision rather than a side effect: it is still "the heap this build held as
+        // folded rows", and on this path that is the delta.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubIncrementalSite(SITE_ROWS, SITE_ROWS + 1, SITE_ROWS);
+        deltaSegment(SITE_ROWS + 1, SITE_ROWS + 1, List.of(
+                record("customers", SITE_ROWS + 1, 1, "Ann-again")));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Long> foldBytes = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointFoldBytes(foldBytes.capture());
+        assertTrue(foldBytes.getValue() < DELTA_ONLY_BUDGET,
+                "the sample must be the delta, not the site: " + foldBytes.getValue());
+    }
+
+    @Test
+    void anIdleRematerializeRewritesItsSnapshotsWithoutFoldingTheSite() {
+        // A visit with nothing new above the pointer — the nightly retry of a table whose snapshot
+        // is missing (issues #128, #137, #149). It used to fold the whole site purely to re-emit
+        // it, so the ceiling applied to a build with no changes at all.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubIncrementalSite(SITE_ROWS, SITE_ROWS, SITE_ROWS);
+        stubSiteSegments(List.of());
+        when(checkpointRepository.findBySiteId(SITE))
+                .thenReturn(List.of(Checkpoint.create(SITE, "customers", SITE_ROWS, 1L)));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1, uploaded.size(), "the missing snapshot is rewritten from the streamed frame");
+        verify(checkpointStorage, never()).uploadFrame(eq(SITE), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(eq(SITE), anyLong());
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+    }
+
+    @Test
+    void aDeltaTooLargeForTheBudgetIsMergedInHashPartitionsBeforeAnythingIsWritten() {
+        // The fallback, and the half of the acceptance criterion that says WHEN it is taken: the
+        // refusal happens while the delta is being folded, which is before the frame is uploaded
+        // and before a single checkpoints row moves.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubIncrementalSite(10L, 10L + 2_000L, 5);
+        List<ChangeRecord> delta = new java.util.ArrayList<>();
+        for (int at = 1; at <= 2_000; at++) {
+            delta.add(record("customers", 10L + at, 1_000_000L + at, "wide-" + at));
+        }
+        deltaSegment(11L, 10L + 2_000L, delta);
+
+        service.buildCheckpoint(SITE);
+
+        verify(metrics).checkpointBuildPartitioned();
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+        // Once, and only after the partitioned attempt succeeded: an attempt that refuses throws
+        // its local scratch file away and nothing durable has happened.
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2_010L), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, 2_010L);
+        assertEquals(2_005, ChangelogCodec.parse(lastFrameBytes).size(),
+                "every partition's rows must reach the one frame: 5 from the site, 2000 new");
+    }
+
+    @Test
+    void aDeltaThatDoesNotFitEvenAtTheMaxPartitionCountStillAbortsTheBuild() {
+        // delta.checkpoint.max-merge-partitions = 1 is the fallback switched off, and the outcome
+        // is the one this ticket did not change: builds.aborted{reason=fold_too_large}, nothing
+        // uploaded, the pointer where it was.
+        maxMergePartitions = 1;
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubIncrementalSite(10L, 10L + 2_000L, 5);
+        List<ChangeRecord> delta = new java.util.ArrayList<>();
+        for (int at = 1; at <= 2_000; at++) {
+            delta.add(record("customers", 10L + at, 1_000_000L + at, "wide-" + at));
+        }
+        deltaSegment(11L, 10L + 2_000L, delta);
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+        verify(metrics, never()).checkpointBuildPartitioned();
+        verify(checkpointStorage, never()).uploadFrame(eq(SITE), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(eq(SITE), anyLong());
     }
 
     private void recordUploads(String s3Key) {
