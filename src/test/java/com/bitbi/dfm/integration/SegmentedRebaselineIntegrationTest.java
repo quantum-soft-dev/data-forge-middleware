@@ -1,5 +1,8 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.delta.application.ChangelogCodec;
+import com.bitbi.dfm.delta.application.ChangelogFold;
 import com.bitbi.dfm.delta.application.ChangelogFold.FoldedRow;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
@@ -113,8 +116,8 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
                 "three contiguous segments: two silent seals at 100 records plus the tail");
 
         // The fold sees only the snapshot — the pre-existing row is gone, not merged.
-        Map<String, Map<String, FoldedRow>> state = checkpointService.buildCheckpoint(SITE);
-        assertEquals(SNAPSHOT_RECORDS, state.get("customers").size(),
+        checkpointService.buildCheckpoint(SITE);
+        assertEquals(SNAPSHOT_RECORDS, publishedFrame().get("customers").size(),
                 "the checkpoint contains the snapshot's rows and nothing from the old baseline");
     }
 
@@ -197,7 +200,8 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         assertTrue(events.get(events.size() - 1).hasCommitted());
         assertFalse(syncStateService.findSyncState(SITE).orElseThrow().isRebaselineRequested());
         assertTrue(segmentRepository.findProvisionalBySiteId(SITE).isEmpty());
-        assertEquals(SNAPSHOT_RECORDS, checkpointService.buildCheckpoint(SITE).get("customers").size());
+        checkpointService.buildCheckpoint(SITE);
+        assertEquals(SNAPSHOT_RECORDS, publishedFrame().get("customers").size());
     }
 
     @Test
@@ -226,7 +230,8 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
                 "a snapshot may reuse sequences the baseline it replaces still occupies");
         assertTrue(events.get(events.size() - 1).hasCommitted());
         assertTrue(segmentRepository.findProvisionalBySiteId(SITE).isEmpty());
-        assertEquals(SNAPSHOT_RECORDS, checkpointService.buildCheckpoint(SITE).get("customers").size());
+        checkpointService.buildCheckpoint(SITE);
+        assertEquals(SNAPSHOT_RECORDS, publishedFrame().get("customers").size());
     }
 
     @Test
@@ -419,5 +424,28 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
                         + "VALUES (?, ?, ?::jsonb, 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')",
                 UUID.randomUUID(), SITE, schemaJson);
+    }
+
+    /**
+     * The state this build published, read back from the reload frame rather than from the value
+     * {@code buildCheckpoint} returns (issue #292).
+     *
+     * <p>A bootstrap or re-baseline build whose whole history is one {@code FULL_SNAPSHOT} session
+     * streams straight into the frame and never builds a fold, so there is no in-memory state to
+     * return — and the frame is the better subject anyway: it is what the next build seeds from and
+     * what a re-baseline is asserted to have replaced.</p>
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private S3CheckpointStorage checkpointStorage;
+
+    private Map<String, Map<String, FoldedRow>> publishedFrame() {
+        long seq = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow().getSeq();
+        Map<String, Map<String, FoldedRow>> state = new java.util.LinkedHashMap<>();
+        try (java.io.InputStream frame = checkpointStorage.openFrame(SITE, seq)) {
+            ChangelogCodec.forEach(frame, record -> ChangelogFold.apply(state, record));
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException("could not read the published frame", e);
+        }
+        return state;
     }
 }

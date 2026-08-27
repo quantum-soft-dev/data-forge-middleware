@@ -621,6 +621,79 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- bootstrap-streams-full-snapshot: A site's first checkpoint is built without folding the site into
+  heap, because for that build there is nothing to fold (issue #292). `delta-ingestion.proto`
+  declares `FULL_SNAPSHOT = 1; // bootstrap or re-baseline; all records are INSERTs` — a guarantee of
+  the wire contract, not an observation — so a snapshot of the source repeats no key and the fold is
+  the identity map: every record already **is** the row that survives, and a checkpoint frame is by
+  definition an all-`INSERT` changelog. The general path nevertheless built a hash map of every row
+  in the site to detect collapses the contract says cannot happen, and since #152 that map is the one
+  full-site copy left in heap — so a bootstrap large enough was refused `fold_too_large` for a fold it
+  never needed, permanently: pointer at zero, retention frozen, no snapshots, `wipe_pending` never
+  cleared. Two production sites sat in that state; #290's ×2.1 rescued the smaller one and leaves
+  `fyt-new` (4 992 131 rows, 86 tables, ~11 GiB of fold against a 1.2 GB budget) exactly where it was,
+  which is what this ticket is for.
+  **The shape.** A build with **no seed frame** whose whole history is `FULL_SNAPSHOT` segments
+  streams them straight into the reload frame on local disk (`BootstrapFrameWriter`) and then writes
+  each table's Parquet by re-reading that **local** file — one pass closing the decimal envelopes of
+  every table that declares one, then `ceil(tables / W)` passes writing `W` tables at once, where
+  `W = delta.checkpoint.snapshot-writers` (new key, default 8, `< 1` refused at startup naming the
+  value, the #185/#251 rule). Passes are `1 + ceil(tables / W)` — **12** for 86 tables at W=8 — and
+  that number is a function of the table count and W alone, never of the row count, which is the
+  whole property. Heap is one record, `W` row-group buffers (8 × 16 MiB) and the repeated-key hash
+  set, the only term that grows with rows and at eight bytes each (~80 MB for five million).
+  **Measured rather than estimated, as the DoD asks**: `CheckpointBootstrapStreamingIntegrationTest`
+  builds a synthetic 40-table × 250-row site and the build logs `10000 record(s) across 40 table(s),
+  6 pass(es) over the local frame with 8 snapshot writer(s), no fold`, with
+  `delta.checkpoint.max-fold-bytes` pinned at **65 536 B**; the identical fixture with the flag off is
+  refused at an estimated **65 778 B** with `fold_too_large` before consuming a fraction of the
+  records. The two together are the mutation as well as the measurement.
+  **Why W is a trade and not a free parameter, which is the open design question the ticket posed.**
+  One writer per table would put `86 × delta.parquet.row-group-bytes` ≈ 1.3 GiB of buffer on the heap
+  — the ceiling this path removes, arriving from the other direction — while W=1 costs one pass over
+  the whole local frame per table. The bounded-W answer costs `W ×` buffer and a pass count that does
+  not grow with the site. **One consequence is stated rather than hidden**: unlike the folded path,
+  this one holds the frame open **across** the snapshot passes, because they read it, so its scratch
+  peak is `frame + W × table` rather than one file at a time. Charged as bytes are written, not at the
+  ceilings; a directory with no room ends the build and the next tick retries.
+  **The contract guard, and where it fails safe.** A record that is not an `INSERT`, or a key already
+  seen in its table, is the one input on which the two paths would *disagree* — the fold collapses
+  the pair into one row, this path would emit two rows sharing a key. It is refused, logged naming
+  the site, and the build falls back to the general fold, which is correct whatever the data does;
+  nothing has been uploaded, because the frame is local until the guard has passed. The guard is a
+  set of 64-bit FNV-1a hashes of `ChangelogFold.identityOf` — the fold's own identity function, so
+  the two paths agree on what "the same row" is — and a hash collision reads as a repeat and does the
+  same harmless thing (~10⁻⁶ at five million keys). `delta.checkpoint.streaming-bootstrap` (new key,
+  default **true**) is the rollback without a code deploy, not the safety.
+  **The frame it writes is the frame the fold would have written, as a set of records** — not
+  byte-for-byte, and the difference is deliberate: the fold groups rows by table so `CheckpointFrame`
+  emits table by table, while this writer emits them interleaved as they arrive and renumbers the
+  frame-local `seq`, neither of which survives a re-fold. The relative order *within* a table is
+  identical, since the fold keeps rows in insertion order, so each table's snapshot rows come out in
+  the same order too. Pinned by `BootstrapFrameWriterTest` against a real fold of the same input and
+  by `CheckpointServiceTest.theStreamedFrameCarriesTheRecordsTheFoldWouldHaveEmitted`.
+  **Snapshots are identical because they go through the same renderer, not a second one.**
+  `writeParquet` was split into the two pieces it is composed of — an incremental `DecimalEnvelope`
+  and an `OpenTable` fed row by row — and `writeParquet` is now their composition, so schema mapping,
+  coercion and the degradation tally of #215/#237/#240 are literally shared;
+  `anOpenTableFedRowByRowProducesTheSameFileAsWriteParquet` requires the two forms to produce the
+  **same bytes**. The per-table `checkpoints` bookkeeping was extracted the same way
+  (`prepareTable`/`publishTable`/`failTable`), so the retry cap (#149), the no-schema hole, the
+  scratch-refusal-ends-the-build rule (#150) and the shutdown classification (#162) are one
+  implementation for both paths.
+  **The strongest statement about equivalence is not a test that was written for it**: this class's
+  default unit fixture is a bootstrap `FULL_SNAPSHOT`, so ~90 of `CheckpointServiceTest`'s cases now
+  run through the streamed path unchanged, and the whole integration suite is green. Six tests were
+  re-pinned rather than weakened, each because its subject really is the fold or the folded path's
+  one-file-at-a-time scratch invariant, and the streaming path's own counterparts were added beside
+  them.
+  **One contract moved and is documented**: `buildCheckpoint` returns an empty map for a successful
+  streamed build, since there is no fold to return. Production callers ignore the value; five
+  re-baseline integration assertions that read it now fold the **published frame** instead, which is
+  the better subject anyway — it is what the next build seeds from.
+  No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric-name, S3-key or
+  frontend change; two new configuration keys, both with the shipped behaviour as their default.
+  See `docs/delta-client-v2-guide.md` ("The first bound is heap", "Sizing note").
 - fold-row-footprint: A folded row carries its column names once per table instead of once per row,
   and its key once instead of twice (issue #290). The fold is the checkpoint build's real ceiling
   (#152) — the one full-site copy left in heap, everything around it already streaming (#112, #126)

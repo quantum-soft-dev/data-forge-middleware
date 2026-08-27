@@ -925,6 +925,47 @@ Two things now stand between a large site and that:
   multiplies the ceiling; it does not remove it — spilling the fold to disk with an external sort is
   separate work, still not done.
 
+**A site's first checkpoint does not pay for a fold at all (issue #292).** The ceiling above is
+real for an incremental build and was a ceiling paid for nothing on a bootstrap. `FULL_SNAPSHOT` is
+declared in `delta-ingestion.proto` as *"bootstrap or re-baseline; all records are INSERTs"* — a
+guarantee of the wire contract, not an observation — so a snapshot of the source repeats no key and
+folding it is the identity map: every record already **is** the row that survives. A checkpoint
+frame is by definition an all-`INSERT` changelog, so for a build with **no seed frame whose whole
+history is one such session** the frame is the input, re-emitted. Such a build now:
+
+1. streams the segments straight into the reload frame on local disk, one record at a time, keeping
+   a 64-bit hash of each row's identity per table (~8 bytes a row, plus the set's load factor) so a
+   repeated key is *caught* rather than silently emitted twice;
+2. writes each table's Parquet by re-reading that **local** file —
+   `DELTA_CHECKPOINT_SNAPSHOT_WRITERS` (`delta.checkpoint.snapshot-writers`, default **8**) tables
+   at a time, after one pass that closes the decimal envelopes of every table that declares one.
+
+So the passes over the local frame are `1 + ceil(tables / W)` — **twelve** for a site with 86
+tables at the shipped W=8, and that number does not move when the site's row count does, which is
+the property being bought. Measured on a synthetic site of 40 tables × 250 rows in
+`CheckpointBootstrapStreamingIntegrationTest`: `10000 record(s) across 40 table(s), 6 pass(es) over
+the local frame with 8 snapshot writer(s), no fold`, with `delta.checkpoint.max-fold-bytes` pinned
+at **65 536 B** — a budget the same fixture crosses on the folded path, which is refused at an
+estimated 65 778 B with `fold_too_large` before it has consumed a fraction of the records.
+
+Three things bound the choice of W, and it is a trade rather than a free parameter. Every open
+writer holds a `delta.parquet.row-group-bytes` buffer, so one writer per table would put ~1.3 GiB of
+heap on an 86-table site at the shipped 16 MiB — this ceiling arriving from the other direction —
+while W=1 would cost a pass over the whole local frame per table. And unlike the folded path, this
+one keeps the **frame open across the snapshot passes** (they read it), so its scratch peak is the
+frame plus up to W snapshot files rather than one file at a time; a directory too small for that
+ends the build and the next tick retries.
+
+**When it does not hold.** A record that is not an `INSERT`, or a key already seen in its table,
+means the contract is false for this input — and it is the one case where the two paths would
+*disagree*, since the fold collapses the two records into one row and this path would emit two rows
+sharing a key. The build logs a WARN naming the site and falls back to the general fold, which is
+correct whatever the data does; nothing has been uploaded at that point, because the frame is
+written locally first. A hash collision reads as a repeat and does the same thing: harmless, and at
+~10⁻⁶ for five million keys, rare. `DELTA_CHECKPOINT_STREAMING_BOOTSTRAP`
+(`delta.checkpoint.streaming-bootstrap`, default **true**) turns the whole path off without shipping
+code — it is the rollback, not the safety.
+
 Three things to know before tuning it. The unit is an **estimate** — a coarse per-row object-graph
 figure (the row's array of values, the values themselves, the row's identity string, plus the
 table's column names counted once — issue #290), not the records'
@@ -1052,6 +1093,15 @@ and the default (node-disk) medium is deliberate too, since `medium: Memory` wou
 be a tmpfs charged against the container's *memory* limit. Request equals limit so the reserved
 amount is the enforced amount; GKE Autopilot caps a pod's ephemeral storage at 10 GiB, so the total
 has to stay under that.
+
+**One exception to "one checkpoint scratch file at a time" (issue #292).** The folded path writes
+the frame, uploads it, deletes it, and only then creates the first table's file — so the checkpoint
+term of the arithmetic below is one file. The streamed bootstrap path cannot: the snapshot passes
+read the frame, so it stays on the volume until the last table is written, beside up to
+`DELTA_CHECKPOINT_SNAPSHOT_WRITERS` snapshot files. Its peak is therefore
+`frame + W x table`, charged as bytes are actually written rather than at the ceilings, and a
+directory with no room for it ends the build gracefully (the next tick retries) rather than filling
+the volume.
 
 **The guards fail differently, and the deployed one is the harshest.** Crossing an application
 ceiling is graceful and observable: a checkpoint table is skipped as

@@ -1002,7 +1002,14 @@ public class CheckpointService {
                     metrics.timeCheckpointPhase("upload", () ->
                             checkpointStorage.uploadFrame(siteId, seq, frame)));
 
-            writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch);
+            int passes = writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch);
+            // The measurement the operator needs and the one this path is judged by: the pass count
+            // is a function of the table count and delta.checkpoint.snapshot-writers alone, never of
+            // the site's rows. A number that grows with the site is this path having gone wrong.
+            log.info("Streamed the first checkpoint of site {} at seq {}: {} record(s) across {} "
+                    + "table(s), {} pass(es) over the local frame with {} snapshot writer(s), "
+                    + "no fold", siteId, seq, manifest.records(), manifest.tables().size(), passes,
+                    snapshotWriters);
 
             epochGuard.inEpoch(siteId, epoch, () -> syncStateService.recordCheckpoint(siteId, seq));
             publishCheckpointRecorded(siteId, seq, epoch);
@@ -1066,11 +1073,11 @@ public class CheckpointService {
      * classifies a failure. What differs is only that the rows arrive interleaved, so a table cannot
      * be rendered by iterating a collection of its own.</p>
      */
-    private void writeSnapshotsFromFrame(UUID siteId,
-                                         Path frame,
-                                         BootstrapFrameWriter.FrameManifest manifest,
-                                         long seq,
-                                         SiteEpoch epoch) {
+    private int writeSnapshotsFromFrame(UUID siteId,
+                                        Path frame,
+                                        BootstrapFrameWriter.FrameManifest manifest,
+                                        long seq,
+                                        SiteEpoch epoch) {
         stopIfShuttingDown(siteId);
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
@@ -1085,13 +1092,18 @@ public class CheckpointService {
             }
         }
 
-        Map<String, Schema> avroSchemas = closeDecimalEnvelopes(frame, pending.keySet(), schemas);
+        int passes = 0;
+        Map<String, Schema> avroSchemas = new LinkedHashMap<>();
+        if (closeDecimalEnvelopes(frame, pending.keySet(), schemas, avroSchemas)) {
+            passes++;
+        }
 
         List<String> tables = List.copyOf(pending.keySet());
         for (int from = 0; from < tables.size(); from += snapshotWriters) {
             stopIfShuttingDown(siteId);
             writeSnapshotGroup(siteId, frame, seq, epoch, schemas, avroSchemas, pending,
                     tables.subList(from, Math.min(from + snapshotWriters, tables.size())));
+            passes++;
         }
 
         stopIfShuttingDown(siteId);
@@ -1100,9 +1112,10 @@ public class CheckpointService {
             // lives inside the loop above, so a site whose snapshot carried no record at all would
             // otherwise be revisited nightly forever without ever spending an attempt.
             settleSiteWide(siteId, epoch, SnapshotPass.INCREMENTAL);
-            return;
+            return passes;
         }
         reapTablesAbsentFrom(siteId, Set.copyOf(manifest.tables()), epoch);
+        return passes;
     }
 
     /**
@@ -1112,11 +1125,14 @@ public class CheckpointService {
      * holds them; here the second traversal would be a second set of passes over the frame, so every
      * table is measured together in this one. Tables that declare no decimal column need no
      * measuring at all, and when none of them does the pass is skipped outright.</p>
+     *
+     * @param avroSchemas filled with each table's record schema, widened where it was measured
+     * @return whether a pass over the frame was actually made
      */
-    private Map<String, Schema> closeDecimalEnvelopes(Path frame,
-                                                      Set<String> tables,
-                                                      Map<String, TableSchema> schemas) {
-        Map<String, Schema> avroSchemas = new LinkedHashMap<>();
+    private boolean closeDecimalEnvelopes(Path frame,
+                                          Set<String> tables,
+                                          Map<String, TableSchema> schemas,
+                                          Map<String, Schema> avroSchemas) {
         Map<String, ParquetCheckpointWriter.DecimalEnvelope> envelopes = new LinkedHashMap<>();
         for (String tableName : tables) {
             Schema declared = ParquetSchemaMapper.toAvroSchema(tableName, schemas.get(tableName));
@@ -1128,7 +1144,7 @@ public class CheckpointService {
             }
         }
         if (envelopes.isEmpty()) {
-            return avroSchemas;
+            return false;
         }
         readFrame(frame, record -> {
             ParquetCheckpointWriter.DecimalEnvelope envelope = envelopes.get(record.getTable());
@@ -1137,7 +1153,7 @@ public class CheckpointService {
             }
         });
         envelopes.forEach((tableName, envelope) -> avroSchemas.put(tableName, envelope.widened()));
-        return avroSchemas;
+        return true;
     }
 
     /**
