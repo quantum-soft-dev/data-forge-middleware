@@ -1072,50 +1072,12 @@ public class CheckpointService {
             // remaining table would fail identically, and each failure is another opportunity to
             // mistake "this process is ending" for "this table cannot be materialized".
             stopIfShuttingDown(siteId);
-            if (pass == SnapshotPass.RETRY_MISSING) {
-                Optional<Checkpoint> existing =
-                        checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
-                if (existing.isPresent() && existing.get().getS3KeyParquet() != null) {
-                    return;
-                }
-                // The bound on the retry (issue #149). A row that has spent its attempts is not
-                // going to materialize tonight either: the causes that survive this many nights —
-                // a schema the client never submits, a value Parquet cannot render — are not the
-                // kind that pass with time. Only the *dedicated* retry stops; an incremental build
-                // below still writes this table with the rest of its fold.
-                if (existing.isPresent()
-                        && existing.get().hasGivenUpMaterializing(
-                                retryProperties.maxMaterializeAttempts())) {
-                    return;
-                }
-            }
-            Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
-            if (pass == SnapshotPass.FORCE) {
-                // The operator's exit from the cap, and the reason giving up is not a dead end:
-                // asking for a rebuild says the cause has been dealt with, so the row goes back
-                // into the nightly population whether this attempt succeeds or not.
-                checkpoint.rearmMaterialization();
-            }
-
-            TableSchema tableSchema = schemas.get(tableName);
-            if (tableSchema == null) {
-                // Parquet needs the declared schema, and there is no CSV left to fall back on: this
-                // table simply has nothing to download until a schema arrives. The client is
-                // required to SubmitSchema before its first session, so this means the site is
-                // misconfigured — count it so the hole is visible rather than silent.
-                // Write first, then report — the reverse of the catch below, and deliberately so:
-                // there is no cause to preserve here, and an epoch refusal must leave the meter
-                // alone. A discarded build has no tables to report a hole for.
-                if (abandonStaleSnapshot(checkpoint, pass)) {
-                    checkpoint.recordFailedMaterialization();
-                    epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-                }
-                metrics.checkpointTableUnmaterialized("no_schema");
-                log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
-                        + "without a downloadable artifact (the client must SubmitSchema)",
-                        tableName, siteId);
+            Checkpoint checkpoint =
+                    prepareTable(siteId, tableName, rows.size(), seq, pass, epoch, schemas.get(tableName));
+            if (checkpoint == null) {
                 return;
             }
+            TableSchema tableSchema = schemas.get(tableName);
 
             // One table at a time: write this table's rows to disk, hand the file to S3, drop
             // it. Materialization therefore costs one row-group buffer and one scratch file at
@@ -1139,75 +1101,9 @@ public class CheckpointService {
                                 dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
                                 lease)));
 
-                metrics.timeCheckpointPhase("upload", () ->
-                        checkpoint.attachParquet(checkpointStorage.uploadParquet(
-                                siteId, tableName, seq, snapshot)));
-                epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-                // After the epoch guard, not merely after the upload (review round 3): a wipe or
-                // re-baseline landing mid-build makes the guard throw and discards everything the
-                // build produced, so counting earlier credited cells to an artifact that was never
-                // published -- and the next build re-renders and counts them again.
-                metrics.unrepresentableDecimalsDegraded(nonFinite.get().nonFiniteCount(), false);
-                metrics.unrepresentableDecimalsDegraded(nonFinite.get().malformedCount(), true);
-            } catch (CheckpointEpochGuard.EpochChangedException e) {
-                // A replaced baseline is not a fact about this table: nothing this build produced
-                // may be published, so it must escape the per-table skip below and end the build.
-                throw e;
-            } catch (BuildEndedByShutdownException e) {
-                throw e;
+                publishTable(siteId, checkpoint, tableName, seq, snapshot, nonFinite.get(), epoch);
             } catch (RuntimeException e) {
-                // A full scratch directory is a SYSTEMIC scratch failure, so it ends the build —
-                // the same answer prepareScratchDirectory() gives an unusable directory, for the
-                // reason stated there: skipping would detach every last-good snapshot while the
-                // pointer advanced. Skipping this one table looks gentler and is not (issue #150,
-                // review round 2). The pointer would move to the new seq with this table's row left
-                // at the old one, and nothing would mark it as owing a rewrite: the nightly
-                // rematerialize keys on a NULL s3_key_parquet, so a site that then goes quiet
-                // serves a snapshot silently missing every change in between, indefinitely, while
-                // retention has already pruned the segments below the new pointer. Detaching
-                // instead would fix the retry and 404 a healthy artifact for a neighbour's disk
-                // use. And on a site's FIRST build, findOrCreate's row is not saved either, so a
-                // refusal across every table leaves `checkpoints` empty with the pointer advanced —
-                // which CheckpointFileQueryService reads as "not a Delta site yet" and answers with
-                // the historical uploaded CSVs as if they were the current baseline.
-                //
-                // Ending the build has none of those: no object, no row, no pointer, no attempt
-                // spent, retention frozen for one night and the whole seq redone on the next tick.
-                // Deliberately NOT on delta.checkpoint.builds.aborted (#153's tag values never
-                // repair themselves); delta.parquet.scratch.refused{writer=checkpoint_table}
-                // counted it inside the budget, and issue #193 tracks the asymmetry with the
-                // completed-batch side, which degrades one artifact at a time.
-                if (isScratchBudgetRefusal(e)) {
-                    throw scratchDirectoryFull(siteId, tableName, e);
-                }
-                // A failure seen while the context is closing is a fact about the process, not
-                // about this table (issue #162). The S3Client and the DataSource are destroyed
-                // right after ContextClosedEvent is published, so every call from here on fails
-                // with an exception that reads exactly like a broken table. Recording it would
-                // detach a healthy snapshot on an advancing seq, and the row would 404 for Bit BI
-                // and Parquet Export until the next nightly rematerialize.
-                if (shutdownSignal.isShuttingDown()) {
-                    throw new BuildEndedByShutdownException(siteId, tableName, e);
-                }
-                // Report the cause first: the detach below goes through the epoch guard, which
-                // throws rather than returns when the site was wiped mid-build, and this table's
-                // actual failure (schema drift, an oversized table) would leave no trace at all.
-                metrics.checkpointTableUnmaterialized("parquet_failed");
-                log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                        + "artifact this build (check the declared schema against the data, or "
-                        + "delta.checkpoint.max-temp-bytes against the table's size)",
-                        tableName, siteId, e);
-                // When seq advanced, the previous key would sit beside a newer seq and be served
-                // as its snapshot — detach it. On a same-seq rematerialize the last-good object
-                // is still at that key; keep the row pointing at it.
-                if (abandonStaleSnapshot(checkpoint, pass)) {
-                    // The row ends this build owing a snapshot, so the attempt is spent (issue
-                    // #149). A failure that leaves a still-valid last-good key is deliberately not
-                    // counted: the retry exists for rows with nothing to serve, and charging one
-                    // to a healthy row would eventually retire a table nobody is waiting on.
-                    checkpoint.recordFailedMaterialization();
-                    epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-                }
+                failTable(siteId, checkpoint, tableName, pass, epoch, e);
             } finally {
                 // The scratch file is this build's litter whichever way the table ended: kept,
                 // it would fill the node one checkpoint cycle at a time.
@@ -1234,6 +1130,153 @@ public class CheckpointService {
             return;
         }
         reapTablesAbsentFromTheFold(siteId, state, epoch);
+    }
+
+    /**
+     * The {@code checkpoints} row bookkeeping that precedes a table's Parquet, shared by the folded
+     * and the streaming path (issue #292).
+     *
+     * <p>The order matters and is the one {@code writeSnapshots} has always had: the dedicated-retry
+     * skips first, then the row (created or advanced to this seq and row count), then a forced
+     * rebuild's re-arm, and only then the declared schema — a table with no schema still gets its
+     * row, so the hole is visible rather than absent.</p>
+     *
+     * @return the row to write this table into, or {@code null} when the table must be skipped —
+     *         already materialized on a dedicated retry, past the retry cap, or missing its schema
+     *         (which is reported and charged here, since there is nothing left to attempt)
+     */
+    private Checkpoint prepareTable(UUID siteId, String tableName, long rowCount, long seq,
+                                    SnapshotPass pass, SiteEpoch epoch, TableSchema tableSchema) {
+        if (pass == SnapshotPass.RETRY_MISSING) {
+            Optional<Checkpoint> existing =
+                    checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
+            if (existing.isPresent() && existing.get().getS3KeyParquet() != null) {
+                return null;
+            }
+            // The bound on the retry (issue #149). A row that has spent its attempts is not
+            // going to materialize tonight either: the causes that survive this many nights —
+            // a schema the client never submits, a value Parquet cannot render — are not the
+            // kind that pass with time. Only the *dedicated* retry stops; an incremental build
+            // below still writes this table with the rest of its fold.
+            if (existing.isPresent()
+                    && existing.get().hasGivenUpMaterializing(
+                            retryProperties.maxMaterializeAttempts())) {
+                return null;
+            }
+        }
+        Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rowCount);
+        if (pass == SnapshotPass.FORCE) {
+            // The operator's exit from the cap, and the reason giving up is not a dead end:
+            // asking for a rebuild says the cause has been dealt with, so the row goes back
+            // into the nightly population whether this attempt succeeds or not.
+            checkpoint.rearmMaterialization();
+        }
+
+        if (tableSchema == null) {
+            // Parquet needs the declared schema, and there is no CSV left to fall back on: this
+            // table simply has nothing to download until a schema arrives. The client is
+            // required to SubmitSchema before its first session, so this means the site is
+            // misconfigured — count it so the hole is visible rather than silent.
+            // Write first, then report — the reverse of failTable, and deliberately so: there is
+            // no cause to preserve here, and an epoch refusal must leave the meter alone. A
+            // discarded build has no tables to report a hole for.
+            if (abandonStaleSnapshot(checkpoint, pass)) {
+                checkpoint.recordFailedMaterialization();
+                epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
+            }
+            metrics.checkpointTableUnmaterialized("no_schema");
+            log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
+                    + "without a downloadable artifact (the client must SubmitSchema)",
+                    tableName, siteId);
+            return null;
+        }
+        return checkpoint;
+    }
+
+    /**
+     * Publish one written snapshot: upload it, save the row through the epoch guard, then count the
+     * cells that had to be degraded (issue #292 — shared by both snapshot paths).
+     */
+    private void publishTable(UUID siteId, Checkpoint checkpoint, String tableName, long seq,
+                              Path snapshot, DecimalDegradeTally nonFinite, SiteEpoch epoch) {
+        metrics.timeCheckpointPhase("upload", () ->
+                checkpoint.attachParquet(checkpointStorage.uploadParquet(
+                        siteId, tableName, seq, snapshot)));
+        epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
+        // After the epoch guard, not merely after the upload (review round 3): a wipe or
+        // re-baseline landing mid-build makes the guard throw and discards everything the
+        // build produced, so counting earlier credited cells to an artifact that was never
+        // published -- and the next build re-renders and counts them again.
+        metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
+        metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
+    }
+
+    /**
+     * Classify one table's failure: end the build, or record it against the table and carry on
+     * (issue #292 — shared by both snapshot paths).
+     */
+    private void failTable(UUID siteId, Checkpoint checkpoint, String tableName, SnapshotPass pass,
+                           SiteEpoch epoch, RuntimeException e) {
+        if (e instanceof CheckpointEpochGuard.EpochChangedException) {
+            // A replaced baseline is not a fact about this table: nothing this build produced
+            // may be published, so it must escape the per-table skip below and end the build.
+            throw e;
+        }
+        if (e instanceof BuildEndedByShutdownException) {
+            throw e;
+        }
+        // A full scratch directory is a SYSTEMIC scratch failure, so it ends the build —
+        // the same answer prepareScratchDirectory() gives an unusable directory, for the
+        // reason stated there: skipping would detach every last-good snapshot while the
+        // pointer advanced. Skipping this one table looks gentler and is not (issue #150,
+        // review round 2). The pointer would move to the new seq with this table's row left
+        // at the old one, and nothing would mark it as owing a rewrite: the nightly
+        // rematerialize keys on a NULL s3_key_parquet, so a site that then goes quiet
+        // serves a snapshot silently missing every change in between, indefinitely, while
+        // retention has already pruned the segments below the new pointer. Detaching
+        // instead would fix the retry and 404 a healthy artifact for a neighbour's disk
+        // use. And on a site's FIRST build, findOrCreate's row is not saved either, so a
+        // refusal across every table leaves `checkpoints` empty with the pointer advanced —
+        // which CheckpointFileQueryService reads as "not a Delta site yet" and answers with
+        // the historical uploaded CSVs as if they were the current baseline.
+        //
+        // Ending the build has none of those: no object, no row, no pointer, no attempt
+        // spent, retention frozen for one night and the whole seq redone on the next tick.
+        // Deliberately NOT on delta.checkpoint.builds.aborted (#153's tag values never
+        // repair themselves); delta.parquet.scratch.refused{writer=checkpoint_table}
+        // counted it inside the budget, and issue #193 tracks the asymmetry with the
+        // completed-batch side, which degrades one artifact at a time.
+        if (isScratchBudgetRefusal(e)) {
+            throw scratchDirectoryFull(siteId, tableName, e);
+        }
+        // A failure seen while the context is closing is a fact about the process, not
+        // about this table (issue #162). The S3Client and the DataSource are destroyed
+        // right after ContextClosedEvent is published, so every call from here on fails
+        // with an exception that reads exactly like a broken table. Recording it would
+        // detach a healthy snapshot on an advancing seq, and the row would 404 for Bit BI
+        // and Parquet Export until the next nightly rematerialize.
+        if (shutdownSignal.isShuttingDown()) {
+            throw new BuildEndedByShutdownException(siteId, tableName, e);
+        }
+        // Report the cause first: the detach below goes through the epoch guard, which
+        // throws rather than returns when the site was wiped mid-build, and this table's
+        // actual failure (schema drift, an oversized table) would leave no trace at all.
+        metrics.checkpointTableUnmaterialized("parquet_failed");
+        log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
+                + "artifact this build (check the declared schema against the data, or "
+                + "delta.checkpoint.max-temp-bytes against the table's size)",
+                tableName, siteId, e);
+        // When seq advanced, the previous key would sit beside a newer seq and be served
+        // as its snapshot — detach it. On a same-seq rematerialize the last-good object
+        // is still at that key; keep the row pointing at it.
+        if (abandonStaleSnapshot(checkpoint, pass)) {
+            // The row ends this build owing a snapshot, so the attempt is spent (issue
+            // #149). A failure that leaves a still-valid last-good key is deliberately not
+            // counted: the retry exists for rows with nothing to serve, and charging one
+            // to a healthy row would eventually retire a table nobody is waiting on.
+            checkpoint.recordFailedMaterialization();
+            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
+        }
     }
 
     /**
