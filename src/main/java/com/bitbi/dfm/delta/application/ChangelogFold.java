@@ -79,20 +79,22 @@ public final class ChangelogFold {
         @Serial
         private static final long serialVersionUID = 1L;
 
+        // Not transient: nothing on this path serializes a fold, but a layout silently lost to
+        // serialization would read every column as absent, so the fields travel if it ever is.
         /** Column names in first-seen order — the array indexes a row's values are aligned with. */
-        private final transient List<String> columns = new ArrayList<>();
+        private final List<String> columns = new ArrayList<>();
 
-        private final transient Map<String, Integer> index = new HashMap<>();
+        private final Map<String, Integer> index = new HashMap<>();
 
         /**
          * The table's key column names, as the first record named them. A record whose key names
          * differ gets an array of its own rather than being forced onto this one, so a table whose
          * key set is not constant still emits each row's own key.
          */
-        private transient String[] keyNames = NO_NAMES;
+        private String[] keyNames = NO_NAMES;
 
         /** Estimated retained bytes of the shared layout — charged once, never per row. */
-        private transient long sharedBytes;
+        private long sharedBytes;
 
         private int indexOf(String column) {
             Integer position = index.get(column);
@@ -694,6 +696,13 @@ public final class ChangelogFold {
             if (rows instanceof FoldedTable folded) {
                 folded.columns.forEach(copiedTable::declare);
                 copiedTable.keyNames = folded.keyNames;
+            } else if (!rows.isEmpty()) {
+                // Guarded exactly as apply() guards its own lookup, and for the same reason: rows
+                // are positional against the layout that laid them out, so copying them onto a
+                // layout nobody built would read every column as absent — silently, which is worse
+                // than the refusal.
+                throw new IllegalArgumentException(
+                        "Fold state for table " + table + " was not built by ChangelogFold");
             }
             rows.forEach((identity, row) -> copiedTable.put(identity,
                     new FoldedRow(copiedTable, row.keyNames, row.values, row.keyOnly)));

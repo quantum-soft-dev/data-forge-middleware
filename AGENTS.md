@@ -310,7 +310,11 @@ pages/{feature}/            # Route pages
   the two cannot drift apart. Mutation: charging the column name per row instead of per table
   (`declare` returning its cost unconditionally) fails the footprint test's per-row and
   once-per-table assertions; dropping the key-only side array fails
-  `foldsARowWhoseDecimalKeyIsNonFinite`'s frame round trip.
+  `CheckpointFrameTest.aRowWhoseKeyColumnIsNotInItsDataStillEmitsThatKey`. That second mutation
+  **survived the first run**: no test covered a row whose key column is absent from its data, so
+  the key was lost silently â the frame is the next build's seed, and an INSERT with an empty key
+  re-folds under a different identity, collapsing every such row onto one. The test was written
+  from that finding rather than the other way round.
   No migration (**V58 stays free**), no `specs/NNN-*`, no REST, gRPC, proto, DTO, configuration-key,
   metric-**name**, cache, S3-key or frontend change — only the internal representation of the fold
   and, as intended, the *values* of `delta.checkpoint.fold.bytes`. See `docs/delta-client-v2-guide.md`
