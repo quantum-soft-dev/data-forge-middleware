@@ -126,8 +126,12 @@ class ChangelogFoldTest {
     void applyChargesAnInsertAndRefundsItsDelete() {
         // The fold is the checkpoint build's real heap bound (issue #152), so applying a record has
         // to say how much heap the state gained or lost by it — a row put in and taken out again
-        // must leave the running total exactly where it started.
+        // must leave the running total exactly where it started. Since #290 a table's column names
+        // are shared by its rows, so they are charged once — on the record that introduces them —
+        // and a delete does not give them back: a name outlives every row that used it. The table
+        // is warmed first so this measures the row alone.
         Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        ChangelogFold.apply(state, rec("u", Op.INSERT, key("id", 0L), data("id", 0L, "city", "SF")));
 
         long inserted = ChangelogFold.apply(state,
                 rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")));
@@ -135,7 +139,7 @@ class ChangelogFoldTest {
 
         assertTrue(inserted > 0, "an inserted row must weigh something: " + inserted);
         assertEquals(-inserted, deleted, "deleting the row must give back exactly what it cost");
-        assertTrue(state.get("u").isEmpty(), "the row itself is gone");
+        assertEquals(1, state.get("u").size(), "the row itself is gone; the warm-up row is not");
     }
 
     @Test
@@ -177,6 +181,9 @@ class ChangelogFoldTest {
         // keeps the same key map object — a shortcut that is only safe if the total still returns to
         // where it started when the row goes.
         Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        // Warmed so the table's shared column names — charged once since #290, never refunded — are
+        // not part of what this row's own arithmetic has to bring back to zero.
+        ChangelogFold.apply(state, rec("u", Op.INSERT, key("id", 0L), data("id", 0L, "city", "SF")));
 
         long total = ChangelogFold.apply(state,
                 rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")));
@@ -194,6 +201,8 @@ class ChangelogFoldTest {
         // An UPDATE whose row is absent materializes a new row (key columns included), so it is an
         // arrival and must be charged as one — the difference-only shortcut applies to the other case.
         Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        // Warmed for the same reason as above: the shared column names are the table's, not the row's.
+        ChangelogFold.apply(state, rec("u", Op.UPDATE, key("id", 6L), data("city", "Berlin")));
 
         long charged = ChangelogFold.apply(state,
                 rec("u", Op.UPDATE, key("id", 7L), data("city", "Berlin")));

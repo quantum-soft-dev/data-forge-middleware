@@ -728,13 +728,16 @@ class CheckpointServiceTest {
                 record("customers", 3L, 3, "Cara"),
                 deletion("customers", 4L, 2),
                 deletion("customers", 5L, 3));
-        // A budget the fold's peak fills past 75% and its final size does not.
+        // A budget the fold's peak fills past 75% without crossing, and its final size does not.
+        // Both figures carry the table's shared column names once since #290, so they sit closer
+        // together than their row counts suggest; the budget is set just above the peak so the 75%
+        // line falls between the two whatever the estimate's constants are.
         long peak = foldedBytes(records.subList(0, 3));
         long ending = foldedBytes(List.of(records.get(0)));
-        long budget = peak + ending;
-        assertTrue(peak * 100 >= budget * 75 && ending * 100 < budget * 75,
-                "fixture: peak " + peak + " must be over and the ending " + ending
-                        + " under 75% of " + budget);
+        long budget = peak * 8 / 7;
+        assertTrue(peak < budget && peak * 100 >= budget * 75 && ending * 100 < budget * 75,
+                "fixture: peak " + peak + " must be under " + budget + " and over, and the ending "
+                        + ending + " under, 75% of it");
 
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, budget);
         ChangelogSegment segment = ChangelogSegment.create(

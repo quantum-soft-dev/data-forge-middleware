@@ -621,6 +621,59 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- fold-row-footprint: A folded row carries its column names once per table instead of once per row,
+  and its key once instead of twice (issue #290). The fold is the checkpoint build's real ceiling
+  (#152) — the one full-site copy left in heap, everything around it already streaming (#112, #126)
+  — so the row's *representation* is the ceiling multiplied by whatever redundancy it carries, and
+  it carried three kinds. Every row held its own `LinkedHashMap` of column **names**, and protobuf
+  mints a fresh `String` per record, so five million rows retained five million copies of the same
+  twenty names at a map entry plus a string header each. The **key columns** were held twice, in
+  `key` and again in `data` — a duplication the UPDATE branch already treated as given ("an existing
+  row already carries its key columns in data from the original INSERT"). And the **identity**
+  string is a third copy of the key. The first two are gone: a table owns one canonical set of names
+  (`FoldedTable`, an append-only layout) and a row is a `Value[]` aligned with it — one reference per
+  column instead of an entry and a name — with `key()` and `data()` as read-only views that retain
+  nothing, so `CheckpointFrame` and the snapshot writers are unchanged. The key is read back out of
+  the values by the table's key column names, and the row whose key column never appears in its data
+  (a client may send it in `key` only — `foldsARowWhoseDecimalKeyIsNonFinite` is exactly that shape)
+  keeps a small side array for those columns alone, `null` otherwise. **The identity string is
+  deliberately not shortened to a hash**, which the ticket named as the third candidate: a collision
+  folds two distinct rows into one, i.e. silent data loss, and verifying the full key on a hit means
+  keeping the full key anyway.
+  **Measured rather than argued, because the estimate is what the ceiling is enforced against.**
+  `ChangelogFoldFootprintTest` folds a synthetic wide site and compares the new estimate against the
+  pre-#290 formula written out verbatim beside it, so the saving is stated by the test rather than by
+  a comment that goes stale: a twenty-column row with eight-character string values goes
+  **4747 → 2216 bytes, a factor of 2.1**, and the factor is ~3.5 on narrow numeric rows, where the
+  names were most of the weight. Against the observed production budget (1 207 959 552 B, half of
+  `-Xmx` 2.25 GiB) that moves the ceiling from ~254 k such rows to ~545 k. **The honest answer to the
+  ticket's last question is therefore split**: `demo site iii` (439 693 applied) now fits where it
+  did not, and `fyt-new` (4 992 131) still does **not** — it needs roughly 11 GiB of fold and no
+  constant factor reaches it. Removing the ceiling means spilling the fold to disk with an external
+  sort, deferred at #152 and still deferred; raising the pod's heap or setting
+  `DELTA_CHECKPOINT_MAX_FOLD_BYTES` explicitly is the operational answer in the meantime.
+  **The estimate is recalculated, not left to drift**, which is the half that would otherwise make the
+  budget and `delta.checkpoint.fold.bytes` lie in the other direction: a row is now its header, its
+  identity string, one array slot per column it spans and its values, while the column **names** are
+  charged once to the table (`sharedEstimatedRetainedBytes`) on the record that introduces them —
+  and never refunded, because a name outlives every row that used it. That is the one behavioural
+  change in the accounting and it is what three `ChangelogFoldTest` size assertions had to be
+  restated for (`applyChargesAnInsertAndRefundsItsDelete`, `applyNetsToZeroAcrossInsertUpdateAndDelete`,
+  `applyChargesAnUpdateOfARowItHasNotSeen` now warm the table first, so each measures the row alone —
+  expectations about *sizes*, not about data). `CheckpointServiceTest`'s 75 % WARN fixture derives its
+  budget from the peak rather than from a row-count proportion for the same reason.
+  Folding semantics are untouched and pinned by the unchanged data assertions: INSERT replaces,
+  UPDATE merges, DELETE removes, an absent row's UPDATE still materialises its key columns, and
+  `everySpellingValueMapperCallsNonFiniteFoldsUnderItsCanonicalIdentity` /
+  `CheckpointFrameTest`'s round trip pass with no change to what they expect. `theRunningTotalAgreesWithAWalkOverTheFold` pins that the running total the ceiling uses equals a walk over the fold, so
+  the two cannot drift apart. Mutation: charging the column name per row instead of per table
+  (`declare` returning its cost unconditionally) fails the footprint test's per-row and
+  once-per-table assertions; dropping the key-only side array fails
+  `foldsARowWhoseDecimalKeyIsNonFinite`'s frame round trip.
+  No migration (**V58 stays free**), no `specs/NNN-*`, no REST, gRPC, proto, DTO, configuration-key,
+  metric-**name**, cache, S3-key or frontend change — only the internal representation of the fold
+  and, as intended, the *values* of `delta.checkpoint.fold.bytes`. See `docs/delta-client-v2-guide.md`
+  ("The first bound is heap").
 - test-fixture-db-clock: The test fixtures are the fourth producer of a zone-independent
   `TIMESTAMP` column, and they say UTC out loud like the other three (issue #287, found working
   #286, which deliberately left them: about forty places, a sweep of its own size). A fixture
