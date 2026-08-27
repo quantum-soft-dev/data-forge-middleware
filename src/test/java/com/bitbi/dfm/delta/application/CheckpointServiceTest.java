@@ -2667,6 +2667,40 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void givesBackTheScratchOfEveryPartitionAttemptThatRefused() {
+        // The retry loop rewrites the frame from scratch, and CappedOutputStream charges the lease
+        // as it writes — a lease gives everything back only on close, so an attempt whose delta
+        // refused has to close its own before the next one opens. Held onto, the directory would
+        // shrink by a frame per attempt for the life of the pod, and the escalation would run out
+        // of room before it ran out of partitions.
+        //
+        // The budget is narrow enough that a leaked attempt cannot fit: one frame plus the
+        // snapshot writers, which is exactly what one *successful* build holds at a time.
+        ParquetScratchBudget narrow = TestScratchLeases.budgetOf(
+                ParquetScratchBudget.CHUNK_BYTES * (1 + SNAPSHOT_WRITERS));
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                DELTA_ONLY_BUDGET, narrow);
+        stubIncrementalSite(10L, 10L + 2_000L, 5);
+        List<ChangeRecord> delta = new java.util.ArrayList<>();
+        for (int at = 1; at <= 2_000; at++) {
+            delta.add(record("customers", 10L + at, 1_000_000L + at, "wide-" + at));
+        }
+        deltaSegment(11L, 10L + 2_000L, delta);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        // Three builds through the same narrow directory: a leaked lease from the first build's
+        // refused attempt would refuse the second, and the second's the third.
+        service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
+
+        verify(metrics, times(3)).checkpointBuildPartitioned();
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+    }
+
+    @Test
     void aDeltaThatDoesNotFitEvenAtTheMaxPartitionCountStillAbortsTheBuild() {
         // delta.checkpoint.max-merge-partitions = 1 is the fallback switched off, and the outcome
         // is the one this ticket did not change: builds.aborted{reason=fold_too_large}, nothing
