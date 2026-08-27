@@ -2504,6 +2504,20 @@ class CheckpointServiceTest {
 
     // --- issue #293: the delta is in heap and the site streams past it -------------------------
 
+    @Test
+    void refusesAMergePartitionCeilingBelowOneByName() {
+        // #251's rule: a value that cannot work is refused at startup, quoting the key and the
+        // value, rather than producing a build that silently writes nothing.
+        maxMergePartitions = 0;
+
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE));
+
+        assertTrue(refused.getMessage().contains("delta.checkpoint.max-merge-partitions")
+                        && refused.getMessage().contains("0"),
+                "the refusal must name the key and the value: " + refused.getMessage());
+    }
+
     /**
      * A site far larger than its night's work, and a budget far smaller than the site.
      *
