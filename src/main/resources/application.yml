@@ -449,7 +449,7 @@ delta:
     # site with 86 tables at the shipped 16 MiB — the ceiling this path exists to remove, arriving
     # from the other direction — while W=1 would cost one pass over the whole local frame per
     # table. Must be >= 1; 0 is refused at startup (#251) rather than silently writing nothing.
-    # SCRATCH NOTE: unlike the folded path, this one holds the frame open across the snapshot
+    # SCRATCH NOTE: unlike the folded path, every streamed build holds the frame open across the snapshot
     # passes (they read it), so its peak is the frame plus up to W snapshot files rather than one
     # file at a time. What the #193 reserve guarantees is PROGRESS, not that peak: batch writers now
     # stop at max-scratch-bytes minus (max-frame-temp-bytes + max-temp-bytes), so the streamed build
