@@ -104,6 +104,20 @@ class CheckpointServiceTest {
     private volatile boolean shuttingDown;
 
     /**
+     * The bootstrap fast path of issue #292 is on by default, so this class's default fixture — a
+     * site with no frame whose only segment is a {@code FULL_SNAPSHOT} — exercises it throughout,
+     * which is the strongest available statement that the two paths agree. A test flips this to
+     * pin the flag's other position, or to reach the fold with an all-INSERT history.
+     */
+    private boolean streamingBootstrap = true;
+
+    /**
+     * Deliberately below the shipped 8, so a fixture with three tables is written in two group
+     * passes rather than one: the grouping is where the streaming path differs from the folded one.
+     */
+    private static final int SNAPSHOT_WRITERS = 2;
+
+    /**
      * One list drives both segment reads (issue #212 review): the seq-range projection the build
      * decides from, and the entity load the fold takes — everything above the seed, which with
      * {@code afterSeq} 0 is the whole committed set. Stubbed together so a fixture cannot
@@ -165,6 +179,18 @@ class CheckpointServiceTest {
     }
 
     /**
+     * Rebuild the service with the bootstrap fast path off (issue #292).
+     *
+     * <p>This class's default fixture is a bootstrap {@code FULL_SNAPSHOT}, so it takes the streamed
+     * path unless a test says otherwise — which is what makes the rest of the suite a statement that
+     * the two paths agree. A test whose subject <em>is</em> the fold says so here.</p>
+     */
+    private void useFoldPath() {
+        streamingBootstrap = false;
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE);
+    }
+
+    /**
      * The two scratch ceilings are separate keys because they fail differently (issue #138):
      * {@code maxTempBytes} bounds one table's snapshot and skips that table, while
      * {@code maxFrameTempBytes} bounds the all-tables reload frame and aborts the build.
@@ -189,7 +215,8 @@ class CheckpointServiceTest {
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, foldBudget,
-                scratchBudget, scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes);
+                scratchBudget, scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes,
+                streamingBootstrap, SNAPSHOT_WRITERS);
     }
 
     /**
@@ -470,6 +497,10 @@ class CheckpointServiceTest {
         // The other list this ticket removes: every new segment's records used to be added to one
         // ArrayList before a single fold call, so a re-baseline (whose whole snapshot sits above the
         // pointer) held the entire site as records *and* as the fold it was about to become.
+        // Pinned on the fold, which is the subject: this class's default fixture is a bootstrap
+        // FULL_SNAPSHOT, and since issue #292 such a build streams straight into the frame and
+        // never folds at all.
+        useFoldPath();
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
 
@@ -484,6 +515,10 @@ class CheckpointServiceTest {
         // The refusal this ticket exists for (issue #152): on a pod with a 2-3Gi limit the fold is
         // what runs out first, and an OOMKill takes the whole process with it — in-flight ingest
         // included — where an abort costs one site's build and says why.
+        // On the fold path deliberately: the bootstrap fixture would stream past this ceiling
+        // since issue #292, which is exactly what
+        // aBootstrapSnapshotBuildsUnderAFoldBudgetTheFoldWouldRefuse asserts below.
+        streamingBootstrap = false;
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
 
@@ -572,7 +607,7 @@ class CheckpointServiceTest {
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
                 waitingBudget, TestScratchLeases.unboundedBudget(), tempDirectory.toString(),
-                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE);
+                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, streamingBootstrap, SNAPSHOT_WRITERS);
 
         java.util.concurrent.CountDownLatch heldBySomeoneElse = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch letGo = new java.util.concurrent.CountDownLatch(1);
@@ -834,6 +869,9 @@ class CheckpointServiceTest {
     void recordsTheFoldsPeakSizeOnAMeterSoTheBandBelowTheCeilingIsAlertable() {
         // The 75% WARN precedes a permanent abort, and no alert can be written on a log line — the
         // same reasoning that put the abort itself on a counter (#153).
+        // A streamed bootstrap build has no fold and therefore no size to report (issue #292);
+        // the meter is about the fold, so the fixture is put on it.
+        useFoldPath();
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
 
@@ -1001,6 +1039,10 @@ class CheckpointServiceTest {
         // deployed scratch budget (#131/#138) is `2 x max(table, frame)`, one file per build path,
         // not `frame + table`. So the frame is written, uploaded and deleted before the first
         // table's file is created.
+        // The fold path's invariant. The streamed bootstrap path of issue #292 deliberately keeps
+        // the frame open across the snapshot passes -- it is what those passes read -- and states
+        // its own bound in streamsWithTheFrameAndAtMostOneWriterGroupOnDisk below.
+        useFoldPath();
         stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
@@ -1050,6 +1092,9 @@ class CheckpointServiceTest {
     void keepsOnlyOneTableSnapshotOnDiskAtATime() {
         // Table by table: fold rows -> file -> upload -> drop the file. Holding every table's
         // snapshot at once would put the peak back in proportion to the table count.
+        // The fold path's invariant; the streaming path's is one frame plus one group of writers
+        // (issue #292), asserted separately.
+        useFoldPath();
         stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
@@ -1212,6 +1257,9 @@ class CheckpointServiceTest {
         // pod restarted — the one way this budget could become the outage it prevents. The frame
         // and each snapshot are written one at a time, so a directory of exactly one reservation
         // chunk is enough for any number of builds; it is not enough for two if either leaks.
+        // One chunk is enough for the fold path, which holds one file at a time; the streaming
+        // path's own no-leak statement is releasesEveryReservationOfAStreamedBootstrapBuild.
+        streamingBootstrap = false;
         ParquetScratchBudget narrow =
                 TestScratchLeases.budgetOf(ParquetScratchBudget.CHUNK_BYTES);
         service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
@@ -2264,6 +2312,171 @@ class CheckpointServiceTest {
     }
 
     /** Stub the upload, recording what each call saw on disk before the file is cleaned up. */
+    // ------------------------------------------------------------------ issue #292: the bootstrap
+    // build of a site whose whole history is one FULL_SNAPSHOT session streams instead of folding.
+
+    /**
+     * The claim the ticket is about, stated so it fails if the fast path is not taken.
+     *
+     * <p>Sixty-four bytes of fold budget is a ceiling no real fold clears, and the fold path is
+     * refused by it — {@code abortsTheBuildWhenTheFoldOutgrowsItsHeapBudget} above pins exactly
+     * that, on the same fixture. The streamed path never builds a fold, so the same site under the
+     * same ceiling produces a frame, a snapshot and a pointer. The two tests together are the
+     * mutation: remove the fast path's eligibility test and this one goes red with
+     * {@code fold_too_large}.</p>
+     */
+    @Test
+    void aBootstrapSnapshotBuildsUnderAFoldBudgetTheFoldWouldRefuse() {
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+        verify(metrics, never()).checkpointBuildAborted(any());
+        // No fold happened, so there is no fold size to report — the meter must stay silent rather
+        // than record a zero an operator would read as "this site has plenty of room".
+        verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
+    }
+
+    /**
+     * The frame is the next build's seed, so a frame written the fast way has to hold what the fold
+     * would have re-emitted. Not byte-for-byte: the streamed frame carries the records in arrival
+     * order rather than grouped by table, and the frame-local seq is renumbered — neither of which
+     * survives a re-fold. As a set of table/key/data it must be identical.
+     */
+    @Test
+    void theStreamedFrameCarriesTheRecordsTheFoldWouldHaveEmitted() {
+        stubSegmentRecords("s3/segment", List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob"),
+                record("customers", 3L, 3, "Cleo")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+
+        service.buildCheckpoint(SITE);
+        List<String> streamed = frameContents();
+
+        useFoldPath();
+        service.buildCheckpoint(SITE);
+
+        assertEquals(frameContents(), streamed,
+                "the streamed frame must carry exactly the records the fold would have re-emitted");
+    }
+
+    /**
+     * What the streaming path holds on the scratch volume, said out loud because it differs from the
+     * fold path's "one file at a time": the frame stays open, since the snapshot passes read it, and
+     * a pass writes up to {@code delta.checkpoint.snapshot-writers} tables at once. So the bound is
+     * {@code 1 + W} rather than 1, and it does not grow with the table count.
+     */
+    @Test
+    void streamsWithTheFrameAndAtMostOneWriterGroupOnDisk() {
+        stubSegmentRecords("s3/segment", List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob"),
+                record("invoices", 3L, 3, "Cleo")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema(),
+                "invoices", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        recordFrameUploads();
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1, uploadedFrames.size());
+        assertEquals(1, uploadedFrames.get(0).snapshotsOnDisk(),
+                "the frame is uploaded before any snapshot file exists");
+        assertEquals(3, uploaded.size(), "all three tables uploaded");
+        assertTrue(uploaded.stream().allMatch(snapshot -> snapshot.snapshotsOnDisk() <= 1 + SNAPSHOT_WRITERS),
+                "at most the frame plus one group of writers may be on disk at once");
+        assertTrue(uploaded.stream().anyMatch(snapshot -> snapshot.snapshotsOnDisk() > 1),
+                "the frame is deliberately still there: the snapshot passes read it");
+    }
+
+    /**
+     * The one input on which the two paths would disagree, and therefore the one that must not be
+     * streamed: a repeated key is one row through the fold and would be two rows in a streamed
+     * frame. The build falls back and produces the folded answer — and it can, because nothing has
+     * been uploaded when the repeat is found.
+     */
+    @Test
+    void fallsBackToTheFoldWhenTheSnapshotSessionRepeatsAKey() {
+        stubSegmentRecords("s3/segment", List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("customers", 2L, 1, "Ann again")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(1, state.get("customers").size(),
+                "the fold collapses the repeat into one row, and the returned state proves it folded");
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
+    /** A history that is not all {@code FULL_SNAPSHOT} is not the degenerate case and is folded. */
+    @Test
+    void foldsABootstrapWhoseHistoryIsNotAllFullSnapshot() {
+        stubSiteSegments(List.of(ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "CONTINUOUS", Map.of())));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(2, state.get("customers").size(), "a CONTINUOUS history must still be folded");
+        verify(metrics).recordCheckpointFoldBytes(anyLong());
+    }
+
+    /** The flag is the rollback: with it off, the same fixture folds. */
+    @Test
+    void theFlagSendsTheBootstrapBuildBackToTheFold() {
+        useFoldPath();
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(2, state.get("customers").size(), "with the flag off the build folds");
+        verify(metrics).recordCheckpointFoldBytes(anyLong());
+    }
+
+    /**
+     * The streaming path's no-leak statement, the counterpart of
+     * {@code releasesTheDirectoryItReservedWhenEachFileIsDone}: it needs room for the frame and one
+     * group of writers, and it must give every one of those reservations back — a leaked lease would
+     * shrink the shared directory for every later writer until the pod restarted.
+     */
+    @Test
+    void releasesEveryReservationOfAStreamedBootstrapBuild() {
+        ParquetScratchBudget narrow = TestScratchLeases.budgetOf(
+                ParquetScratchBudget.CHUNK_BYTES * (1 + SNAPSHOT_WRITERS));
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE,
+                Long.MAX_VALUE, narrow);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
+        service.buildCheckpoint(SITE);
+
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    /** The last uploaded frame's records as table/key/data, order-insensitive. */
+    private List<String> frameContents() {
+        return ChangelogCodec.parse(lastFrameBytes).stream()
+                .map(r -> r.getTable() + "|" + r.getOp() + "|" + r.getKeyMap() + "|" + r.getDataMap())
+                .sorted()
+                .toList();
+    }
+
     private void recordUploads(String s3Key) {
         when(checkpointStorage.uploadParquet(eq(SITE), any(), anyLong(), any(Path.class)))
                 .thenAnswer(invocation -> {
