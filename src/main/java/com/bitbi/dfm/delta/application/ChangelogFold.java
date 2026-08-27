@@ -390,7 +390,7 @@ public final class ChangelogFold {
      */
     public static long apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record) {
         FoldedTable table = table(state, record.getTable());
-        String identity = identity(record.getKeyMap());
+        String identity = identityOf(record.getKeyMap());
         Map<String, Value> recordData = record.getDataMap();
         Map<String, Value> recordKey = record.getKeyMap();
         switch (record.getOp()) {
@@ -612,11 +612,15 @@ public final class ChangelogFold {
      * every other scalar (its {@code toString()}). The tag keeps a NULL key distinct from the literal
      * string {@code "null"} and a bytes key distinct from a same-looking string.</p>
      *
+     * <p>Package-private rather than private because {@link BootstrapFrameWriter} keys its
+     * repeated-key guard by the same function (issue #292): the two paths have to agree on what
+     * "the same row" means, or the guard would pass an input the fold would have collapsed.</p>
+     *
      * <p>It is retained per row and it is the third copy of the key — issue #290 weighed shortening
      * it to a hash and declined: a hash collision folds two distinct rows into one, which is silent
      * data loss, and verifying the full key on a hit means keeping the full key anyway.</p>
      */
-    private static String identity(Map<String, Value> keyMap) {
+    static String identityOf(Map<String, Value> keyMap) {
         StringBuilder sb = new StringBuilder();
         keyMap.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
