@@ -43,9 +43,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * bounds the sum directly, so the per-file ceilings drop out of the inequality and keep only their
  * per-artifact job; what remains outside it is scratch a dead process left behind (#127, #141),
  * which no lease covers, and that is what the reserve below is for. Since issue #193 the last
- * {@code DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES} of the directory budget is reserved for the
- * checkpoint path — a different reserve — so the remainder must still fit at least one
- * completed-batch artifact.</p>
+ * {@code DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES} of the directory
+ * budget is reserved for the checkpoint path — a different reserve — so the remainder must still
+ * fit at least one completed-batch artifact. That sum is what the checkpoint path holds at one
+ * time: the frame alone until #292, and since then the frame beside one snapshot, because the
+ * streamed bootstrap build's snapshot passes read the frame rather than replacing it.</p>
  */
 class ParquetScratchCeilingBudgetTest {
 

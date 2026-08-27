@@ -1201,9 +1201,10 @@ volume was busy, so:
   produces, and `CheckpointScheduler` walks sites serially — so a directory held full for the length
   of the 02:00 sweep aborts *every* site's build at its first write, and retention is frozen
   fleet-wide for that night. Since #193 a completed-batch backlog cannot do that: batch writers
-  may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`
-  (the declared size of the largest scratch file the checkpoint path holds, and it holds only
-  one at a time), so the nightly frame always has somewhere to land. Checkpoint writers still
+  may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus
+  `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES` — what the checkpoint
+  path holds at one time, which was the frame alone until #292 made the streamed bootstrap build
+  keep it open beside a snapshot file — so the nightly build always has somewhere to land. Checkpoint writers still
   see the whole budget when the directory is idle. Unbounded (the shipped default) ignores the
   reserve — there is nothing to reserve a share of. A refusal here is still absent from
   `delta.checkpoint.builds.aborted`. `delta.parquet.scratch.refused{writer=checkpoint_frame}`
