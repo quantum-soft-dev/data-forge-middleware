@@ -39,7 +39,7 @@ class BootstrapFrameWriterTest {
                 insert("orders", 3, "gamma"));
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        BootstrapFrameWriter.FrameManifest manifest;
+        CheckpointFrameWriter.FrameManifest manifest;
         try (BootstrapFrameWriter writer = BootstrapFrameWriter.open(out)) {
             input.forEach(writer::accept);
             manifest = writer.manifest();

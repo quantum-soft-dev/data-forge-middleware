@@ -1,6 +1,6 @@
 package com.bitbi.dfm.integration;
 
-import com.bitbi.dfm.delta.application.ChangelogFold;
+import com.bitbi.dfm.delta.application.ChangelogCodec;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
 import com.bitbi.dfm.delta.domain.Checkpoint;
@@ -8,10 +8,13 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +46,9 @@ class CheckpointIncrementalIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private S3CheckpointStorage checkpointStorage;
+
     @Test
     void seedsFromCheckpointFrameWhenPreCheckpointSegmentsArePruned() {
         // Segment 1 (FULL_SNAPSHOT, seq 1..2): Ann + Bob.
@@ -64,21 +70,33 @@ class CheckpointIncrementalIntegrationTest extends BaseIntegrationTest {
                 rec("customers", Op.DELETE, 3L, key("id", 2L), Map.of()),
                 rec("customers", Op.INSERT, 4L, key("id", 3L), data("id", 3L, "name", "Cleo"))));
 
-        Map<String, Map<String, ChangelogFold.FoldedRow>> state = checkpointService.buildCheckpoint(SITE);
+        checkpointService.buildCheckpoint(SITE);
 
         Checkpoint cp2 = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertEquals(4L, cp2.getSeq(), "advanced to the latest segment seq");
         assertEquals(2L, cp2.getRowCount(), "Ann (from frame) + Cleo (from delta); Bob deleted");
 
-        // Assert on the folded state itself rather than on a materialized file: since issue #113 the
-        // only artifact is Parquet, which this site has no declared schema for — and the claim under
-        // test is about the fold seeding from the frame, not about the file format.
-        List<String> names = state.get("customers").values().stream()
-                .map(row -> row.data().get("name").getStringValue())
-                .sorted()
-                .toList();
-        assertEquals(List.of("Ann", "Cleo"), names,
-                "Ann survives from the checkpoint frame, Cleo added and Bob deleted by the delta");
+        // Read back the frame the build actually wrote, rather than a state it returns: since issue
+        // #293 an incremental build does not fold the site at all, so there is no state to return —
+        // the frame IS the result, and it is what the next build seeds from. The one artifact
+        // besides it is Parquet, which this site has no declared schema for (issue #113).
+        assertEquals(List.of("Ann", "Cleo"), namesInFrame(4L),
+                "Ann survives from the previous frame, Cleo added and Bob deleted by the delta");
+    }
+
+    /** Every {@code customers} name in the reload frame at {@code seq}, sorted. */
+    private List<String> namesInFrame(long seq) {
+        List<String> names = new ArrayList<>();
+        try (InputStream frame = checkpointStorage.openFrame(SITE, seq)) {
+            ChangelogCodec.forEach(frame, record -> {
+                assertEquals(Op.INSERT, record.getOp(), "a frame is an all-INSERT changelog");
+                assertEquals("customers", record.getTable());
+                names.add(record.getDataMap().get("name").getStringValue());
+            });
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return names.stream().sorted().toList();
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {

@@ -157,9 +157,12 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         // A forced rebuild rather than the scheduled build, because since issue #149 an idle visit
         // with nothing to rematerialize answers without folding at all — the assertion here is
         // about what a fold *sees*, so it has to ask for one.
-        Map<String, Map<String, FoldedRow>> state = checkpointService.rebuildFromFrame(SITE);
-        assertEquals(1, state.get("customers").size(),
-                "the fold still returns the old baseline, not a half-replaced one");
+        // Read the row the rebuild wrote rather than a fold it returns: since issue #293 a build
+        // seeded from a frame streams the site past an in-heap delta and has no fold to hand back.
+        checkpointService.rebuildFromFrame(SITE);
+        assertEquals(1L,
+                checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow().getRowCount(),
+                "the rebuild still sees the old baseline, not a half-replaced one");
     }
 
     @Test

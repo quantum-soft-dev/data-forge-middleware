@@ -925,6 +925,80 @@ Two things now stand between a large site and that:
   multiplies the ceiling; it does not remove it — spilling the fold to disk with an external sort is
   separate work, still not done.
 
+### The delta is in heap, the site is on the wire (issue #293)
+
+The ceiling above bounded the **site**, not a night's work, and permanently — a fold seeded itself
+from the reload frame, which is the site's whole state, and a site does not shrink. Since #290 a
+20-column row costs ~2216 estimated bytes, so the deployed 1.2 GiB budget holds ~545 000 rows and a
+site of five million needs ~11 GiB: no constant factor reaches that. An incremental build seeded
+from a frame therefore inverts the two sides. The **delta** — the records above the pointer — is
+folded into heap, and the frame is streamed past it record by record:
+
+- the delta does not mention the row → emit it unchanged;
+- the delta deleted it → emit nothing;
+- the delta replaced it (an `INSERT`) → emit the delta's row, whole;
+- the delta only patched it (`UPDATE`s and no `INSERT`) → emit the frame's row with those columns
+  overwritten.
+
+Rows the frame never had — inserted this period, or updated with nothing behind them — follow once
+the frame is exhausted. The new frame is written to local scratch and each table's Parquet is then
+written by re-reading **that** file, which is the streaming bootstrap's machinery unchanged:
+`1 + ceil(tables / W)` passes over a local file with `delta.checkpoint.snapshot-writers` writers, a
+number that does not move when the site's row count does.
+
+**What this is identical to.** The rows, their values and the per-table row order are the fold's,
+and that is asserted against the fold itself rather than against a list of expectations — the merged
+frame is compared with `CheckpointFrame.records(ChangelogFold.fold(...))` table by table over
+scripted and generated histories covering all three operations and degraded values (`NaN`,
+`±Infinity`, bytes, NULL), and the two frames are required to re-fold to the same state. What
+differs is the interleaving *between* tables: rows the frame never had are appended after the whole
+frame rather than inside their own table's block, which is the same statement the bootstrap frame
+already carries, and for the same reason — nothing reads a frame's record order, since a snapshot is
+written against the declared schema and a re-fold looks every column up by name. Column order
+*within* a record follows the source record rather than the fold's per-table layout; for a table
+whose rows carry the same columns, the two are the same order.
+
+**A visit with nothing new takes the same path and folds nothing at all.** The nightly retry of a
+table whose snapshot is missing and a forced `POST .../delta/checkpoints/rebuild` used to fold the
+whole site purely to re-emit it, so the ceiling applied to a build with no changes whatsoever. Now
+the delta is empty, the frame streams to local scratch and the snapshots are written from it; no
+frame is uploaded, the pointer does not move and no checkpoint event is published, because the fold
+has not changed and retention stays monotonic.
+
+**A build with no seed frame is unchanged.** There is nothing to stream against, so a bootstrap
+whose history is not one whole `FULL_SNAPSHOT` session still folds its own records under the same
+key — and one that *is* still takes the streamed path above.
+
+**When the delta itself does not fit.** That happens when builds have not run for weeks, or when the
+client streams a very large incremental session: the DBF extractor opens `CONTINUOUS` at a million
+*changed* records, so it is a shape the wire contract produces rather than a hypothetical. Rather
+than abort, the merge re-runs in **K hash partitions** of the row identity, applied to both sides so
+a row and its changes always land in the same pass; K starts at 1 and multiplies by 4 up to
+`DELTA_CHECKPOINT_MAX_MERGE_PARTITIONS` (`delta.checkpoint.max-merge-partitions`, default **64**;
+`1` switches the fallback off). The refusal happens while the delta is being folded — before the
+frame is uploaded and before a single `checkpoints` row moves — so an attempt that refuses throws
+away a local scratch file and nothing else. It is counted **once per build** on
+`delta.checkpoint.builds.partitioned` with a WARN naming K, and deliberately *not* on
+`delta.checkpoint.builds.aborted`, whose values are refusals that never repair themselves: this
+build finishes. Past the ceiling it ends on `builds.aborted{reason=fold_too_large}` exactly as it
+did before.
+
+Read that series as a warning, not an alarm — the nightly delta has outgrown the budget, which is
+what raising the key fixes. The cost it reports is real: every partition re-reads the seed frame and
+every segment of the period, so a build that needs K passes does K times the I/O, and the rows of
+one table come out partition by partition rather than in the fold's order.
+
+**`delta.checkpoint.fold.bytes` keeps its name and changes what it samples**, deliberately. It is
+still "the peak heap this build held as folded rows, against the key that bounds it", which is what
+an alert on it means; on this path that is the delta, and on a build with no seed frame it is still
+the site. Renaming it would have moved every dashboard reading it to say the same thing in another
+unit.
+
+`DELTA_CHECKPOINT_STREAMING_MERGE` (`delta.checkpoint.streaming-merge`, default **true**) turns the
+whole path off without shipping code — the rollback, not the safety. Measured on a 500 000-row site
+with a 5 000-row delta, the same records both ways: the fold takes 286–397 ms and holds 0.5–0.9 GB,
+the merge takes 57–93 ms and holds **1.7 MB**.
+
 **A site's first checkpoint does not pay for a fold at all (issue #292).** The ceiling above is
 real for an incremental build and was a ceiling paid for nothing on a bootstrap. `FULL_SNAPSHOT` is
 declared in `delta-ingestion.proto` as *"bootstrap or re-baseline; all records are INSERTs"* — a
@@ -1094,11 +1168,12 @@ be a tmpfs charged against the container's *memory* limit. Request equals limit 
 amount is the enforced amount; GKE Autopilot caps a pod's ephemeral storage at 10 GiB, so the total
 has to stay under that.
 
-**One exception to "one checkpoint scratch file at a time" (issue #292).** The folded path writes
-the frame, uploads it, deletes it, and only then creates the first table's file — so the checkpoint
-term of the arithmetic below is one file. The streamed bootstrap path cannot: the snapshot passes
-read the frame, so it stays on the volume until the last table is written, beside up to
-`DELTA_CHECKPOINT_SNAPSHOT_WRITERS` snapshot files. Its peak is therefore
+**"One checkpoint scratch file at a time" is now the exception, not the rule (issues #292, #293).**
+The folded path writes the frame, uploads it, deletes it, and only then creates the first table's
+file — so its checkpoint term is one file, and since #293 that path is reached only by a build with
+no seed frame. Every streamed build — the bootstrap of #292 and the incremental merge of #293 —
+cannot: the snapshot passes read the frame, so it stays on the volume until the last table is
+written, beside up to `DELTA_CHECKPOINT_SNAPSHOT_WRITERS` snapshot files. Its peak is therefore
 `frame + W x table`, charged as bytes are actually written rather than at the ceilings, and a
 directory with no room for it ends the build gracefully (the next tick retries) rather than filling
 the volume.
@@ -2814,8 +2889,8 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
 `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone|fold_too_large}`,
-`delta.checkpoint.builds.deferred`, `delta.checkpoint.fold.wait`,
-`delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
+`delta.checkpoint.builds.deferred`, `delta.checkpoint.builds.partitioned`,
+`delta.checkpoint.fold.wait`, `delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.parquet.scratch.bytes`, `delta.parquet.scratch.refused{writer=...}`,
 `delta.s3-orphan.candidates{prefix=segments|checkpoints}`,
 `delta.s3-orphan.reclaimed{prefix=segments|checkpoints}`,
@@ -2875,6 +2950,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
 | `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
 | `delta.checkpoint.builds.deferred` | `delta_checkpoint_builds_deferred_total` |
+| `delta.checkpoint.builds.partitioned` | `delta_checkpoint_builds_partitioned_total` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
 | `delta.s3.read-denied` | `delta_s3_read_denied_total` |
 | `delta.s3-orphan.candidates{prefix=segments\|checkpoints}` | `delta_s3_orphan_candidates_total{prefix=...}` |

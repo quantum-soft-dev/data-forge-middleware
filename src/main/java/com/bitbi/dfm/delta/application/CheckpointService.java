@@ -104,6 +104,19 @@ public class CheckpointService {
      */
     private final int snapshotWriters;
 
+    /**
+     * Whether an incremental build seeded from a frame joins that frame against the period's delta
+     * instead of folding the site (issue #293). The rollback, not the safety — off, a large site
+     * goes back to being bounded by {@code delta.checkpoint.max-fold-bytes} in full.
+     */
+    private final boolean streamingMerge;
+
+    /**
+     * How far the merge may partition a delta that does not fit the fold budget before it gives up
+     * and aborts the build as it did before (issue #293). {@code 1} disables the fallback.
+     */
+    private final int maxMergePartitions;
+
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
                              CheckpointRepository checkpointRepository,
@@ -144,7 +157,11 @@ public class CheckpointService {
                                      "${delta.checkpoint.streaming-bootstrap:true}")
                              boolean streamingBootstrap,
                              @org.springframework.beans.factory.annotation.Value(
-                                     "${delta.checkpoint.snapshot-writers:8}") int snapshotWriters) {
+                                     "${delta.checkpoint.snapshot-writers:8}") int snapshotWriters,
+                             @org.springframework.beans.factory.annotation.Value(
+                                     "${delta.checkpoint.streaming-merge:true}") boolean streamingMerge,
+                             @org.springframework.beans.factory.annotation.Value(
+                                     "${delta.checkpoint.max-merge-partitions:64}") int maxMergePartitions) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
@@ -172,6 +189,13 @@ public class CheckpointService {
                     "delta.checkpoint.snapshot-writers must be at least 1, but was " + snapshotWriters);
         }
         this.snapshotWriters = snapshotWriters;
+        this.streamingMerge = streamingMerge;
+        if (maxMergePartitions < 1) {
+            throw new IllegalArgumentException(
+                    "delta.checkpoint.max-merge-partitions must be at least 1, but was "
+                            + maxMergePartitions);
+        }
+        this.maxMergePartitions = maxMergePartitions;
     }
 
     /**
@@ -729,6 +753,15 @@ public class CheckpointService {
                 }
             }
 
+            // The nightly steady state (issue #293): there is a seed frame, so the site does not
+            // have to be in heap to be re-emitted — the delta is folded and the frame is streamed
+            // past it. What is left below is the build that has no frame to stream: a bootstrap
+            // whose history is not one whole FULL_SNAPSHOT session, which has no base to join
+            // against and folds its own records, exactly as it always did.
+            if (streamingMerge && haveFrame) {
+                return buildByMerge(siteId, idlePass, checkpointSeq, epoch, newSegments);
+            }
+
             Map<String, Map<String, FoldedRow>> state =
                     foldSite(siteId, checkpointSeq, haveFrame, newSegments);
 
@@ -803,7 +836,11 @@ public class CheckpointService {
      * whose peak crosses the budget, which is precisely the warning this exists to give.</p>
      */
     private void reportFoldSize(UUID siteId, BudgetedFold fold) {
-        long bytes = fold.peakEstimatedBytes();
+        reportFoldSize(siteId, fold.peakEstimatedBytes());
+    }
+
+    /** As above, for the merge path, whose peak is the largest partition's delta (issue #293). */
+    private void reportFoldSize(UUID siteId, long bytes) {
         // On the meter as well as in the log, for the reason #153 put the abort on one: the band
         // below the ceiling is the only warning that precedes a permanent abort, and an alert
         // cannot be written on a log line. A build that aborted does not reach here — its size is
@@ -959,6 +996,282 @@ public class CheckpointService {
     }
 
     /**
+     * Build an incremental checkpoint by joining the seed frame against the period's delta
+     * (issue #293).
+     *
+     * <h2>Which side is in heap</h2>
+     *
+     * <p>{@link #foldSite} folds the frame and then the segments into one map of every surviving
+     * row — the site — so {@code delta.checkpoint.max-fold-bytes} bounds the <em>site</em>, and a
+     * site that outgrows it never shrinks back. Here the delta is folded and the frame is streamed
+     * past it ({@link ChangelogMerge}), which puts the night's work in heap and the site on the
+     * wire. The frame is written locally first and the snapshots are then written from that file,
+     * exactly as the streaming bootstrap does — {@code 1 + ceil(tables / W)} passes over a local
+     * file, none of which holds more than one record and {@code W} row-group buffers.</p>
+     *
+     * <h2>The idle visit is the same shape with an empty delta</h2>
+     *
+     * <p>A site with nothing new above the pointer is visited for its unmaterialized rows (issues
+     * #128, #137, #149) and a forced rebuild is visited unconditionally. Both used to fold the whole
+     * site purely to re-emit its snapshots, so the ceiling applied to a build with no changes at
+     * all. With no segments the merge is the identity and the local frame is the frame S3 already
+     * holds: nothing is uploaded, the pointer does not move, and no {@code CheckpointRecordedEvent}
+     * is published — the fold has not changed, so retention stays monotonic.</p>
+     *
+     * @return an empty map. There is no fold to return, which is the point; production callers
+     *         ignore the value, and since issue #292 an empty one no longer means "nothing was
+     *         done"
+     */
+    private Map<String, Map<String, FoldedRow>> buildByMerge(UUID siteId,
+                                                             SnapshotPass idlePass,
+                                                             long checkpointSeq,
+                                                             SiteEpoch epoch,
+                                                             List<ChangelogSegment> newSegments) {
+        boolean advancing = !newSegments.isEmpty();
+        long seq = advancing ? newSegments.get(newSegments.size() - 1).getLastSeq() : checkpointSeq;
+        SnapshotPass pass = advancing ? SnapshotPass.INCREMENTAL : idlePass;
+
+        prepareScratchDirectory();
+        Path frame = createScratchFile(siteId, ".pb.gz");
+        // One lease per attempt, and the successful attempt's is held for the whole build: the
+        // snapshots are written by re-reading this file, so its bytes are on the volume until the
+        // last table is done. A partitioned retry rewrites the file from scratch, and its lease has
+        // to go with the bytes it charged for — CappedOutputStream charges as it writes and a lease
+        // gives everything back only on close.
+        ScratchLease[] lease = {null};
+        try {
+            CheckpointFrameWriter.FrameManifest manifest =
+                    mergeIntoFrame(siteId, checkpointSeq, seq, newSegments, frame, lease);
+
+            // The same order the other two paths take, and for the same reasons (issue #153):
+            // notice a closing process before the longest single call of the build, and check the
+            // epoch with nothing uploaded so a wipe that has already committed is seen before the
+            // object is in the bucket rather than after.
+            stopIfShuttingDown(siteId);
+            epochGuard.requireEpoch(siteId, epoch);
+            if (advancing) {
+                withFrameCeilingReported(siteId, seq, () ->
+                        metrics.timeCheckpointPhase("upload", () ->
+                                checkpointStorage.uploadFrame(siteId, seq, frame)));
+            }
+
+            int passes = writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch, pass);
+            log.info("Merged the checkpoint of site {} at seq {}: {} record(s) across {} table(s) "
+                    + "from {} segment(s), {} pass(es) over the local frame with {} snapshot "
+                    + "writer(s), no site fold", siteId, seq, manifest.records(),
+                    manifest.tables().size(), newSegments.size(), passes, snapshotWriters);
+
+            if (advancing) {
+                epochGuard.inEpoch(siteId, epoch, () -> syncStateService.recordCheckpoint(siteId, seq));
+                publishCheckpointRecorded(siteId, seq, epoch);
+            }
+            return Map.of();
+        } finally {
+            deleteQuietly(frame, "_frame", siteId);
+            if (lease[0] != null) {
+                lease[0].close();
+            }
+        }
+    }
+
+    /**
+     * Write the new frame: the period's delta folded into heap, the old frame streamed past it.
+     *
+     * <h2>The fallback, when the delta itself does not fit</h2>
+     *
+     * <p>A delta outgrows the budget when a site's builds have not run for a long time, or when the
+     * client streams a very large incremental session — the DBF client opens {@code CONTINUOUS} for
+     * an incremental change set of a million records or more, so this is a shape the wire contract
+     * produces rather than a hypothetical. Rather than abort, the merge is re-run in {@code K} hash
+     * partitions of the row identity, applied to both sides so a row and its changes always land in
+     * the same pass; each pass then holds about {@code 1/K} of the delta. {@code K} is found by
+     * catching the refusal and multiplying, because the delta's size is not known before it is
+     * folded and a configured constant would be wrong in both directions.</p>
+     *
+     * <p><b>It is the fallback and not the design</b>, and the cost says why: every partition
+     * re-reads the seed frame and every segment of the period, so the work is {@code K} times the
+     * work and {@code K} grows with the delta. It is here so that a build that would have been
+     * refused finishes; a rate on {@code delta.checkpoint.builds.partitioned} says the budget wants
+     * raising. Two properties are given up with it, both deliberately: the rows of one table come
+     * out partition by partition rather than in the fold's order, and the frame is written once per
+     * attempt, so an attempt that refuses is thrown away whole. Nothing durable exists at that
+     * point — the frame is a local scratch file that has not been uploaded — which is what makes
+     * the retry safe, and is the same property the streaming bootstrap leans on.</p>
+     *
+     * <p>{@code delta.checkpoint.max-merge-partitions} bounds the escalation. Past it the build
+     * ends on {@code FoldTooLargeException} exactly as it did before this ticket, so
+     * {@code builds.aborted{reason=fold_too_large}} keeps meaning "this site cannot be built at
+     * this budget".</p>
+     */
+    private CheckpointFrameWriter.FrameManifest mergeIntoFrame(UUID siteId,
+                                                               long checkpointSeq,
+                                                               long seq,
+                                                               List<ChangelogSegment> newSegments,
+                                                               Path frame,
+                                                               ScratchLease[] lease) {
+        long startedAt = System.nanoTime();
+        // Written by every attempt: phase=download_frame is the transfer, and a partitioned build
+        // pays for it once per partition, which is exactly what an operator needs to see.
+        long[] frameReadNanos = {0L};
+        int partitions = 1;
+        try {
+            while (true) {
+                lease[0] = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
+                try {
+                    return mergeAttempt(siteId, checkpointSeq, newSegments, frame, lease[0],
+                            partitions, frameReadNanos);
+                } catch (FoldTooLargeException e) {
+                    lease[0].close();
+                    lease[0] = null;
+                    if (partitions >= maxMergePartitions) {
+                        throw e;
+                    }
+                    if (partitions == 1) {
+                        // Once per build, not once per partition: the series counts builds that
+                        // needed the fallback, and an escalation is one build still.
+                        metrics.checkpointBuildPartitioned();
+                    }
+                    partitions = (int) Math.min(
+                            (long) partitions * PARTITION_GROWTH, maxMergePartitions);
+                    log.warn("The delta of site {} did not fit delta.checkpoint.max-fold-bytes "
+                            + "(an estimated {} bytes against {}), so its checkpoint is merged in "
+                            + "{} hash partitions instead — the build finishes, at the cost of "
+                            + "re-reading the seed frame and all {} segment(s) once per partition. "
+                            + "Raise the key (and the pod's heap with it) if this is not a one-off",
+                            siteId, e.estimatedBytes(), e.budgetBytes(), partitions,
+                            newSegments.size());
+                }
+            }
+        } catch (ArtifactSizeLimitExceededException | ScratchBudgetExceededException e) {
+            throw reportFrameCeiling(siteId, seq, e);
+        } finally {
+            metrics.recordCheckpointPhase("download_frame", frameReadNanos[0]);
+            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos[0]);
+        }
+    }
+
+    /** How fast the merge escalates once a delta has refused to fit: the ticket's {@code K x 4}. */
+    private static final int PARTITION_GROWTH = 4;
+
+    /** One attempt at the merged frame, in {@code partitions} passes over both sides. */
+    private CheckpointFrameWriter.FrameManifest mergeAttempt(UUID siteId,
+                                                              long checkpointSeq,
+                                                              List<ChangelogSegment> newSegments,
+                                                              Path frame,
+                                                              ScratchLease lease,
+                                                              int partitions,
+                                                              long[] frameReadNanos) {
+        try (OutputStream out = new CappedOutputStream(
+                        Files.newOutputStream(frame), maxFrameTempBytes, lease);
+                CheckpointFrameWriter writer = CheckpointFrameWriter.open(out)) {
+            long peakBytes = 0L;
+            for (int partition = 0; partition < partitions; partition++) {
+                stopIfShuttingDown(siteId);
+                BudgetedMerge merge = new BudgetedMerge(siteId, maxFoldBytes, partitions, partition);
+                for (ChangelogSegment segment : newSegments) {
+                    foldSegment(siteId, segment, merge::apply);
+                }
+                streamFrameThrough(siteId, checkpointSeq, merge, writer::accept, frameReadNanos);
+                merge.drain(writer::accept);
+                peakBytes = Math.max(peakBytes, merge.peakEstimatedBytes());
+            }
+            // The band below the ceiling, on the same meter the fold reports (issue #152). The
+            // largest partition is the one that decides whether this build fits, so it is the
+            // sample; on the unpartitioned path there is only one.
+            reportFoldSize(siteId, peakBytes);
+            return writer.manifest();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
+        }
+    }
+
+    /**
+     * Stream the seed frame through the merge and into the new frame.
+     *
+     * <p>{@code frameReadNanos} is filled in whichever way this ends, and is added to rather than
+     * assigned: a partitioned build streams the frame once per partition and the samples belong
+     * together. The {@code GetObject} itself is timed even when it throws, for the reason
+     * {@link #foldFrame} states — during a read outage every site of the tick would otherwise
+     * contribute a zero-nanosecond sample.</p>
+     *
+     * <p>The consumer <em>writes</em> here, unlike the fold's, so its own refusals — the frame's
+     * two ceilings — travel out untouched. Renaming them would report a full scratch directory as
+     * an unreadable object and send an operator to S3 for a local problem.</p>
+     */
+    private void streamFrameThrough(UUID siteId, long checkpointSeq, BudgetedMerge merge,
+                                    java.util.function.Consumer<ChangeRecord> out,
+                                    long[] frameReadNanos) {
+        long openedAt = System.nanoTime();
+        InputStream opened;
+        try {
+            opened = checkpointStorage.openFrame(siteId, checkpointSeq);
+        } finally {
+            frameReadNanos[0] += System.nanoTime() - openedAt;
+        }
+        try (InputStream frame = opened) {
+            TimingInputStream timed = new TimingInputStream(frame);
+            try {
+                ChangelogCodec.forEach(timed, record -> merge.accept(record, out));
+            } finally {
+                frameReadNanos[0] += timed.readNanos();
+            }
+        } catch (FoldTooLargeException | ArtifactSizeLimitExceededException
+                | ScratchBudgetExceededException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            throw new S3CheckpointStorage.CheckpointStorageException(
+                    "Failed to read the checkpoint frame of site " + siteId + " at seq " + checkpointSeq, e);
+        }
+    }
+
+    /**
+     * One partition's merge, with the same ceiling on heap the fold has (issue #152) and expressed
+     * in the same estimated bytes, so the key means one thing on both paths.
+     */
+    private static final class BudgetedMerge {
+
+        private final ChangelogMerge merge;
+        private final UUID siteId;
+        private final long maxBytes;
+        private long bytes;
+        private long peakBytes;
+
+        private BudgetedMerge(UUID siteId, long maxBytes, int partitions, int partition) {
+            this.siteId = siteId;
+            this.maxBytes = maxBytes;
+            this.merge = new ChangelogMerge(partitions, partition);
+        }
+
+        /**
+         * Fold one record of the period, then stop the build if the delta no longer fits.
+         *
+         * <p>Checked after applying rather than before, for the reason {@code BudgetedFold} states:
+         * the cost of one record is only known once it has been applied, and one record over the
+         * ceiling is not what runs a pod out of memory.</p>
+         */
+        private void apply(ChangeRecord record) {
+            bytes += merge.apply(record);
+            peakBytes = Math.max(peakBytes, bytes);
+            if (bytes > maxBytes) {
+                throw new FoldTooLargeException(siteId, bytes, maxBytes);
+            }
+        }
+
+        private void accept(ChangeRecord base, java.util.function.Consumer<ChangeRecord> out) {
+            merge.accept(base, out);
+        }
+
+        private void drain(java.util.function.Consumer<ChangeRecord> out) {
+            merge.drain(out);
+        }
+
+        /** The largest this partition's delta ever was. */
+        private long peakEstimatedBytes() {
+            return peakBytes;
+        }
+    }
+
+    /**
      * Build a site's first checkpoint without folding it into heap (issue #292).
      *
      * <p>Three passes' worth of shape, and the count is what makes this bounded. The segments are
@@ -986,7 +1299,7 @@ public class CheckpointService {
         // checkpoint reserve of issue #193 is what keeps a completed-batch backlog out of them.
         ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
         try {
-            BootstrapFrameWriter.FrameManifest manifest =
+            CheckpointFrameWriter.FrameManifest manifest =
                     streamSegmentsIntoFrame(siteId, segments, frame, lease);
             if (manifest == null) {
                 return null;
@@ -1002,7 +1315,8 @@ public class CheckpointService {
                     metrics.timeCheckpointPhase("upload", () ->
                             checkpointStorage.uploadFrame(siteId, seq, frame)));
 
-            int passes = writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch);
+            int passes = writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch,
+                    SnapshotPass.INCREMENTAL);
             // The measurement the operator needs and the one this path is judged by: the pass count
             // is a function of the table count and delta.checkpoint.snapshot-writers alone, never of
             // the site's rows. A number that grows with the site is this path having gone wrong.
@@ -1028,7 +1342,7 @@ public class CheckpointService {
      * @return what the frame holds, or {@code null} when the session broke the all-{@code INSERT}
      *         contract and the build must fold instead
      */
-    private BootstrapFrameWriter.FrameManifest streamSegmentsIntoFrame(UUID siteId,
+    private CheckpointFrameWriter.FrameManifest streamSegmentsIntoFrame(UUID siteId,
                                                                        List<ChangelogSegment> segments,
                                                                        Path frame,
                                                                        ScratchLease lease) {
@@ -1037,7 +1351,7 @@ public class CheckpointService {
             // phase=fold, because this is what replaces it: the segment downloads it always
             // covered, and the writing of the frame that the fold would otherwise have paid for
             // later. phase=download_frame stays absent, as it is on any build with no seed frame.
-            BootstrapFrameWriter.FrameManifest manifest;
+            CheckpointFrameWriter.FrameManifest manifest;
             try (OutputStream out = new CappedOutputStream(
                             Files.newOutputStream(frame), maxFrameTempBytes, lease);
                     BootstrapFrameWriter writer = BootstrapFrameWriter.open(out)) {
@@ -1075,9 +1389,10 @@ public class CheckpointService {
      */
     private int writeSnapshotsFromFrame(UUID siteId,
                                         Path frame,
-                                        BootstrapFrameWriter.FrameManifest manifest,
+                                        CheckpointFrameWriter.FrameManifest manifest,
                                         long seq,
-                                        SiteEpoch epoch) {
+                                        SiteEpoch epoch,
+                                        SnapshotPass pass) {
         stopIfShuttingDown(siteId);
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
@@ -1086,7 +1401,7 @@ public class CheckpointService {
             stopIfShuttingDown(siteId);
             Checkpoint checkpoint = prepareTable(siteId, tableName,
                     manifest.rowCounts().getOrDefault(tableName, 0L), seq,
-                    SnapshotPass.INCREMENTAL, epoch, schemas.get(tableName));
+                    pass, epoch, schemas.get(tableName));
             if (checkpoint != null) {
                 pending.put(tableName, checkpoint);
             }
@@ -1102,7 +1417,7 @@ public class CheckpointService {
         for (int from = 0; from < tables.size(); from += snapshotWriters) {
             stopIfShuttingDown(siteId);
             writeSnapshotGroup(siteId, frame, seq, epoch, schemas, avroSchemas, pending,
-                    tables.subList(from, Math.min(from + snapshotWriters, tables.size())));
+                    tables.subList(from, Math.min(from + snapshotWriters, tables.size())), pass);
             passes++;
         }
 
@@ -1111,7 +1426,7 @@ public class CheckpointService {
             // The empty-fold answer of the general path, for the same reason: the per-table settle
             // lives inside the loop above, so a site whose snapshot carried no record at all would
             // otherwise be revisited nightly forever without ever spending an attempt.
-            settleSiteWide(siteId, epoch, SnapshotPass.INCREMENTAL);
+            settleSiteWide(siteId, epoch, pass);
             return passes;
         }
         reapTablesAbsentFrom(siteId, Set.copyOf(manifest.tables()), epoch);
@@ -1172,7 +1487,8 @@ public class CheckpointService {
                                     Map<String, TableSchema> schemas,
                                     Map<String, Schema> avroSchemas,
                                     Map<String, Checkpoint> pending,
-                                    List<String> group) {
+                                    List<String> group,
+                                    SnapshotPass pass) {
         Map<String, OpenSnapshot> open = new LinkedHashMap<>();
         try {
             for (String tableName : group) {
@@ -1226,7 +1542,7 @@ public class CheckpointService {
                     publishTable(siteId, checkpoint, tableName, seq, snapshot.file,
                             snapshot.writer.tally(), epoch);
                 } catch (RuntimeException e) {
-                    failTable(siteId, checkpoint, tableName, SnapshotPass.INCREMENTAL, epoch, e);
+                    failTable(siteId, checkpoint, tableName, pass, epoch, e);
                 }
             }
         } finally {

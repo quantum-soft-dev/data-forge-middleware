@@ -3,15 +3,10 @@ package com.bitbi.dfm.delta.application;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 
-import java.io.IOException;
 import java.io.OutputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.function.ToLongFunction;
-import java.util.zip.GZIPOutputStream;
 
 /**
  * Writes a checkpoint reload frame straight from a {@code FULL_SNAPSHOT} record stream, without
@@ -60,22 +55,6 @@ import java.util.zip.GZIPOutputStream;
  */
 final class BootstrapFrameWriter implements AutoCloseable {
 
-    /**
-     * What this build learned about the frame while writing it: which tables it holds, in first-seen
-     * order, and how many rows each one has.
-     *
-     * <p>The general path reads both off the fold ({@code state.keySet()},
-     * {@code rows.size()}); there is no fold here, so they are counted as the records go past. The
-     * row count is what the {@code checkpoints} row records, and the table list is what the snapshot
-     * passes iterate and what the reap of issue #149 compares against.</p>
-     *
-     * @param tables    table names in first-seen order
-     * @param rowCounts rows written per table
-     * @param records   total records written
-     */
-    record FrameManifest(List<String> tables, Map<String, Long> rowCounts, long records) {
-    }
-
     /** The wire contract's promise was false for this input — fall back to the general fold path. */
     static final class NotAFullSnapshotException extends RuntimeException {
 
@@ -86,15 +65,13 @@ final class BootstrapFrameWriter implements AutoCloseable {
         }
     }
 
-    private final GZIPOutputStream gz;
+    private final CheckpointFrameWriter frame;
     private final ToLongFunction<String> hash;
     private final Map<String, LongHashSet> seen = new LinkedHashMap<>();
-    private final Map<String, Long> rowCounts = new LinkedHashMap<>();
-    private long records;
 
     /** Open a frame over {@code out}; the stream is closed with this writer. */
     static BootstrapFrameWriter open(OutputStream out) {
-        return open(out, BootstrapFrameWriter::hash64);
+        return open(out, ChangelogFold::identityHash64);
     }
 
     /** Testing seam: the identity hash, so a collision can be driven deliberately. */
@@ -104,11 +81,7 @@ final class BootstrapFrameWriter implements AutoCloseable {
 
     private BootstrapFrameWriter(OutputStream out, ToLongFunction<String> hash) {
         this.hash = hash;
-        try {
-            this.gz = new GZIPOutputStream(out);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to open the checkpoint frame", e);
-        }
+        this.frame = CheckpointFrameWriter.open(out);
     }
 
     /**
@@ -131,28 +104,12 @@ final class BootstrapFrameWriter implements AutoCloseable {
                             + "already seen in this FULL_SNAPSHOT session (or its identity hash "
                             + "collided with one)");
         }
-        try {
-            // Re-emitted rather than passed through: the frame is an all-INSERT changelog whose
-            // seq is frame-local, and CheckpointFrame numbers it 1..N. Keeping the session's own
-            // seq would work equally well on re-fold, but making the two producers agree on the
-            // shape means a frame cannot be told apart by which path wrote it.
-            ChangeRecord.newBuilder()
-                    .setTable(record.getTable())
-                    .setOp(Op.INSERT)
-                    .setSeq(++records)
-                    .putAllKey(record.getKeyMap())
-                    .putAllData(record.getDataMap())
-                    .build()
-                    .writeDelimitedTo(gz);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to write the checkpoint frame", e);
-        }
-        rowCounts.merge(record.getTable(), 1L, Long::sum);
+        frame.accept(record);
     }
 
     /** What was written so far; complete once every segment has been streamed through. */
-    FrameManifest manifest() {
-        return new FrameManifest(List.copyOf(rowCounts.keySet()), Map.copyOf(rowCounts), records);
+    CheckpointFrameWriter.FrameManifest manifest() {
+        return frame.manifest();
     }
 
     /**
@@ -163,28 +120,7 @@ final class BootstrapFrameWriter implements AutoCloseable {
      */
     @Override
     public void close() {
-        try {
-            gz.close();
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to close the checkpoint frame", e);
-        }
-    }
-
-    /**
-     * 64-bit FNV-1a over the identity's UTF-8 bytes.
-     *
-     * <p>Not a cryptographic hash and it does not need to be: nothing adversarial reaches here, and
-     * a collision is a false positive that costs a fallback to the correct path. What it does need
-     * is to spread well over the shapes real keys take — short ASCII strings differing in a few
-     * characters — which is what FNV-1a is for.</p>
-     */
-    private static long hash64(String identity) {
-        long h = 0xcbf29ce484222325L;
-        for (byte b : identity.getBytes(StandardCharsets.UTF_8)) {
-            h ^= (b & 0xffL);
-            h *= 0x100000001b3L;
-        }
-        return h;
+        frame.close();
     }
 
     /**

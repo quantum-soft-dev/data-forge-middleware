@@ -621,6 +621,83 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- delta-in-heap-site-streamed: An incremental checkpoint build holds the period's changes in heap
+  and streams the site past them, so `delta.checkpoint.max-fold-bytes` bounds a night's work rather
+  than the site (issue #293, the ceiling #292 left standing for every build after the first). The
+  fold seeded itself from the reload frame — the site's **whole state** — so the ceiling was a
+  ceiling on the site, permanently: a site that outgrew it was refused every night thereafter and
+  never shrank back. Since #290 the arithmetic is ~2216 bytes for a 20-column row, so the shipped
+  1.2 GiB budget holds ~545k rows and `fyt-new` (4 992 131 rows, ~11 GiB) is out of reach of any
+  constant factor.
+  **The two sides are inverted, and nothing else moves.** `ChangelogMerge` folds the segments above
+  the pointer and joins the streamed frame against them record by record — absent from the delta,
+  emit unchanged; deleted, emit nothing; replaced by an `INSERT`, emit the delta's row whole; patched
+  by `UPDATE`s alone, emit the frame's row with those columns overwritten — then `drain` emits the
+  rows the frame never had. The new frame is written to local scratch and the snapshots are written
+  from **that file**, which is #292's `writeSnapshotsFromFrame` verbatim, parameterized by
+  `SnapshotPass`; `CheckpointFrameWriter` is the frame file and manifest both producers now share,
+  leaving `BootstrapFrameWriter` only its all-`INSERT` contract check.
+  **The idle visit is the same shape with an empty delta, and that is where a second ceiling went.**
+  A nightly rematerialize of a missing table (#128/#137/#149) and a forced `rebuildFromFrame` folded
+  the whole site purely to re-emit it, so the budget applied to a build with **no changes at all**;
+  now they stream, fold nothing, upload no frame and leave the pointer alone. A build with **no seed
+  frame** is deliberately untouched — there is nothing to stream against, so a bootstrap that is not
+  one whole `FULL_SNAPSHOT` session still folds its own records (and #292 still handles the one that
+  is).
+  **What "identical" means is stated rather than assumed, and asserted against the code being
+  replaced.** `ChangelogMergeEquivalenceTest` compares the merged frame with
+  `CheckpointFrame.records(ChangelogFold.fold(...))` over scripted and generated histories — all
+  three operations, degraded and exotic values (`NaN`, `±Infinity`, bytes, NULL) included — table by
+  table and in order, and separately requires the two frames to re-fold to the same state. The rows,
+  their values and the per-table order are the fold's; what differs is the interleaving *between*
+  tables, since rows the frame never had are appended after it rather than inside their own table's
+  block — the statement #292 already makes about the bootstrap frame, and for the same reason:
+  nothing reads a frame's record order (a snapshot is written against the declared schema, a re-fold
+  looks columns up by name). Column order **within** a record follows the source record rather than
+  the table's first-seen layout, which for a table whose rows carry the same columns is the same
+  order.
+  **Two rules exist only to keep that equality exact and are worth naming, because both are
+  invisible until a test compares the two paths.** A row the delta deleted and then created again
+  is emitted at the **end** of its table, not where the frame had it, because a fold removes and
+  re-appends it (`recreated`). And an `UPDATE` with no prior `INSERT` keeps **only the columns it
+  names** — new `ChangelogFold.applyPatch`, the existing-row branch with no row — so the merge can
+  tell "these columns changed" from "this is the whole row"; `apply` seeds such a row with its key
+  columns, which is right when there is no base and wrong when there is one. The classification
+  lives in two sets beside the fold (`patched`, `tombstoned`) rather than as a field on `FoldedRow`,
+  whose per-row footprint #290 had just spent a ticket shrinking; both are bounded by the delta and
+  both are charged to the same byte budget, so the key means one thing on both paths.
+  **The fallback is hash partitioning, taken before anything is written.** A delta outgrows the
+  budget when builds have not run for weeks, or when the client streams a very large incremental
+  session — the answer to this ticket's prerequisite question is that `dbf-data-extractor` opens
+  `CONTINUOUS` for an **incremental** change set of a million records (`SelectMode`,
+  `ContinuousThreshold`), and that its steady state is `DELTA` rather than periodic `FULL_SNAPSHOT`,
+  which is what made this ticket worth doing for DBF sites and not only for CDC ones. On
+  `FoldTooLargeException` the merge re-runs in K partitions of `identityHash64(identity)` applied to
+  **both** sides, K starting at 1 and multiplying by 4 up to `delta.checkpoint.max-merge-partitions`
+  (64). The refusal happens while the delta is being folded, so nothing durable exists: the frame is
+  a local scratch file that has not been uploaded, which is what makes the retry safe — the same
+  property #292 leans on. Counted **once per build** on new `delta.checkpoint.builds.partitioned`
+  (registered at zero) with a WARN naming K, and deliberately **not** a value on
+  `delta.checkpoint.builds.aborted`, whose contract is refusals that never repair themselves: this
+  build succeeds. Past the ceiling it ends on `builds.aborted{reason=fold_too_large}` exactly as
+  before. The cost is stated rather than hidden: every partition re-reads the frame and every
+  segment, so K passes do K times the I/O, and the rows of one table come out partition by partition
+  rather than in the fold's order.
+  **`delta.checkpoint.fold.bytes` keeps its name and changes what it samples — a decision, not a
+  side effect.** It is still "the peak heap this build held as folded rows against the key that
+  bounds it", which is what an alert on it means; on the merge path that is the delta, and on a
+  build with no seed frame it is still the site. Renaming it would have moved every dashboard
+  reading it to say the same thing in another unit.
+  **Measured rather than promised** (the DoD's last item): a 500 000-row site with a 5 000-row delta,
+  same records both ways — fold 286–397 ms holding 0.5–0.9 GB, merge 57–93 ms holding **1.7 MB**. Not
+  slower, about four times faster, and three orders of magnitude less heap.
+  New keys `delta.checkpoint.streaming-merge` (the rollback, as `streaming-bootstrap` is) and
+  `delta.checkpoint.max-merge-partitions` (refused below 1 by name, #251's rule). No REST, gRPC,
+  proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, existing configuration-key, existing
+  metric-**name**, S3-key or frontend change. `CheckpointService.buildCheckpoint` now returns an
+  empty map for a successful incremental build as well as for a streamed bootstrap — production
+  callers ignore it, and the tests that read it were rewritten to read the artifact instead. See
+  `docs/delta-client-v2-guide.md` ("The delta is in heap, the site is on the wire").
 - bootstrap-streams-full-snapshot: A site's first checkpoint is built without folding the site into
   heap, because for that build there is nothing to fold (issue #292). `delta-ingestion.proto`
   declares `FULL_SNAPSHOT = 1; // bootstrap or re-baseline; all records are INSERTs` — a guarantee of

@@ -449,7 +449,7 @@ delta:
     # site with 86 tables at the shipped 16 MiB — the ceiling this path exists to remove, arriving
     # from the other direction — while W=1 would cost one pass over the whole local frame per
     # table. Must be >= 1; 0 is refused at startup (#251) rather than silently writing nothing.
-    # SCRATCH NOTE: unlike the folded path, this one holds the frame open across the snapshot
+    # SCRATCH NOTE: unlike the folded path, every streamed build holds the frame open across the snapshot
     # passes (they read it), so its peak is the frame plus up to W snapshot files rather than one
     # file at a time. What the #193 reserve guarantees is PROGRESS, not that peak: batch writers now
     # stop at max-scratch-bytes minus (max-frame-temp-bytes + max-temp-bytes), so the streamed build
@@ -458,6 +458,31 @@ delta:
     # next tick retries, and raising W past what the directory can hold buys retries rather than
     # speed. See docs/delta-client-v2-guide.md ("Sizing note").
     snapshot-writers: ${DELTA_CHECKPOINT_SNAPSHOT_WRITERS:8}
+    # The same inversion for every OTHER build — the nightly, incremental one (issue #293). A build
+    # seeded from a frame used to fold the frame and then the period's segments into one map of
+    # every surviving row, so max-fold-bytes bounded the SITE and not the night's work: a site that
+    # outgrew it was refused for ever, since a site does not shrink. With this on, the DELTA is
+    # folded and the frame is streamed past it record by record; heap is the changes of the period,
+    # and the snapshots are written from the new frame on local disk exactly as the bootstrap path
+    # writes them. The same shape covers a visit with nothing new — the nightly rematerialize of a
+    # missing table and a forced rebuild — where the delta is empty and no fold happens at all.
+    # A build with NO seed frame is untouched: there is nothing to stream, so it folds its own
+    # records as it always did (bounded by the same key, and by streaming-bootstrap above when its
+    # history is one FULL_SNAPSHOT session).
+    # This key is the ROLLBACK, not the safety: false goes back to folding the site.
+    streaming-merge: ${DELTA_CHECKPOINT_STREAMING_MERGE:true}
+    # How far the merge may partition a delta that does not fit max-fold-bytes before it gives up
+    # (issue #293). The delta outgrows the budget when builds have not run for a long time, or when
+    # a client streams a very large incremental session — the DBF extractor opens CONTINUOUS at a
+    # million changed records. Rather than abort, the merge re-runs in K hash partitions of the row
+    # identity applied to BOTH sides, so each pass holds about 1/K of the delta; K starts at 1 and
+    # multiplies by 4 until it fits or reaches this key. It is the fallback and not the design: every
+    # partition re-reads the seed frame and every segment of the period, so a build that needs K
+    # passes does K times the I/O, and delta.checkpoint.builds.partitioned is the series that says
+    # the budget wants raising. Past this ceiling the build ends on
+    # delta.checkpoint.builds.aborted{reason=fold_too_large}, exactly as it did before the fallback
+    # existed. 1 disables the fallback entirely. Must be >= 1; 0 is refused at startup (#251).
+    max-merge-partitions: ${DELTA_CHECKPOINT_MAX_MERGE_PARTITIONS:64}
     # How long a build waits for the process's fold budget before it is DEFERRED (issue #178).
     # max-fold-bytes above bounds one fold, and one JVM can hold two — the nightly sweep and a
     # forced rebuild on deltaRebuildExecutor — so two folds at 45% of the budget each crossed
