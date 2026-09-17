@@ -263,6 +263,58 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- protobuf-4-35-from-bom: protobuf 3.25.9 → **4.35.1**, taken from the Spring Boot 4.1 BOM rather
+  than declared (issue #304). #302 had held it at 3.25.9 through the BOM property so that the
+  framework change and the transport change did not land together; gRPC had already moved to
+  **1.83.1** on Boot 3.5 (#313), which is what Boot 4.1.1 sets, so what was left is protobuf alone.
+  The Boot 4.1.1 BOM imports **both** families' BOMs — `protobuf-bom 4.35.1` and `grpc-bom 1.83.1` —
+  so neither needs a version of its own here.
+  **Removing the explicit version is what fixes the codegen, which is the opposite of what the
+  previous comment predicted.** #302 recorded that Boot's version-less `protoc` and
+  `protoc-gen-grpc-java` coordinates "resolve to no version (`Could not find
+  com.google.protobuf:protoc:.`)" and pinned both in the `protobuf` block. That failure was a
+  consequence of `protobuf-java` carrying a **direct** version, not of Boot's integration: a direct
+  version sits outside dependency management, so there is nothing for the version-less coordinate to
+  align to. With `protobuf-java` left to the BOM, both resolve, and the `protobuf` block shrinks to
+  `plugins { create("grpc") }` — the codegen now follows the runtime artifacts instead of a second
+  set of properties somebody has to keep in step. Pinning `protobuf-java` back to 3.25.9 pulls
+  `protoc` down to 3.25.9 **with** it and the build stays green, which is that alignment observed
+  rather than asserted.
+  **A gencode/runtime mismatch cannot be shipped silently, and that is worth knowing before the next
+  BOM bump.** Forced apart — `protoc` pinned at 4.35.1 against a 3.25.9 runtime — gencode 4.x calls
+  `com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion`, which 3.25.9 does not have, so
+  **`:compileJava`** fails with "cannot find symbol" across every generated message. It is a compile
+  error, not a runtime one.
+  **What the regenerated code actually is**, since "only the header moves" would be wrong: 4.35.1
+  gencode extends `GeneratedMessage` instead of `GeneratedMessageV3`, carries
+  `@com.google.protobuf.Generated` and the `RuntimeVersion` guard, and drops the builder overrides
+  (`setField`, `clearField`, `setUnknownFields`, …) the 4.x base class now handles. None of it
+  reaches our own code, which imports exactly two protobuf types — `ByteString` and `Timestamp`,
+  both unchanged. `src/main/proto/delta-ingestion.proto` is untouched and its **diff is empty**.
+  **Wire compatibility is measured, not inferred, and the gap in it is named.** A server built from
+  this branch ran a real TCP session driven by **grpcurl** — a Go protobuf runtime, independent of
+  our Java one exactly as the shipped C# client is: `GetSyncState` → `SubmitSchema` → a bidirectional
+  `StreamChanges` (`SessionStart` `FULL_SNAPSHOT`, three `ChangeRecord`s covering `int_value`,
+  `decimal_value`, `is_null` and a non-ASCII `string_value`, then `SessionEnd` with per-table
+  reconciliation) → `SessionCommitted` naming a real segment key, with the watermark advancing 0 → 3.
+  The changelog segment that session wrote — gzipped length-delimited protobuf produced by
+  protobuf-java 4.35.1 — was then pulled out of S3 and **decoded record by record with protoc
+  3.25.9**, so the durable journal already in production buckets stays readable by the old toolchain
+  in both directions. **What was not done:** the shipped `dbf-data-extractor` itself was not run —
+  this machine has neither a .NET toolchain nor the client's sources — so the DoD item asking for a
+  session of that client stands open for both transport changes, this one and #313's, exactly as
+  #313 left it.
+  **`protoc` 4.35.1 for `osx-aarch_64` is a pure arm64 Mach-O** (3.25.9 was a universal binary), so
+  the Apple Silicon property #313 exists for holds and improves; `protoc-gen-grpc-java` 1.83.1 stays
+  the universal binary #313 measured.
+  **Guards.** `GrpcArtifactVersionConsistencyTest` (#301) is green at 1.83.1 / 4.35.1 — one version
+  per family on `runtimeClasspath`, with `grpc-protobuf`'s own declared `protobuf-java 3.25.9`
+  resolved up to 4.35.1 rather than left beside it; mutation-proven by putting
+  `protobuf-java-util 3.25.9` on the classpath, which reddens it. `./gradlew test -PexcludeIntegration`
+  (2633 tests) and `./gradlew integrationTest` (307 tests) both green.
+  The Gradle protobuf plugin moves 0.9.4 → **0.9.6**. No REST, gRPC contract, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, cache, S3-key or frontend change;
+  no `docs/` page names a gRPC or protobuf version, so none needed rewriting.
 - spring-boot-4-1: Spring Boot 3.5.16 → **4.1.1** — Framework 7.0.9, Security 7.1.1, Hibernate 7.4.5,
   Jackson 3.1.5, Flyway 12.4, Micrometer 1.17.1, JUnit 6.0.3, HikariCP 7.0.2, Testcontainers 2.0.5
   (issue #302, the atomic step of the migration, merged into `migration/spring-boot-4.1`; prepared by
