@@ -239,6 +239,11 @@ tasks.named<Test>("test") {
     // only k8s/ leaves `test` UP-TO-DATE and the guard never runs.
     inputs.dir("k8s")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // IssueBaseBranchScriptTest runs scripts/issue-base.sh, the one reading of an issue's
+    // `Base branch:` line (#298). A script is not on the test classpath, so without this input a
+    // commit touching only the script leaves `test` UP-TO-DATE and the resolver goes unchecked.
+    inputs.files("scripts/issue-base.sh")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
