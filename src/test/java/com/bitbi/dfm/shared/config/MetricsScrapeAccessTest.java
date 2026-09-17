@@ -27,7 +27,7 @@ class MetricsScrapeAccessTest {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/actuator/prometheus");
         request.setRemoteAddr(remoteAddr);
         return MetricsScrapeAccess.authorizationManager(allowedCidrs)
-                .check(() -> (Authentication) null, new RequestAuthorizationContext(request))
+                .authorize(() -> (Authentication) null, new RequestAuthorizationContext(request))
                 .isGranted();
     }
 

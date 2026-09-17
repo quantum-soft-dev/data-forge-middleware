@@ -1,8 +1,8 @@
 package com.bitbi.dfm.integration;
 
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.localstack.LocalStackContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.localstack.LocalStackContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
@@ -10,7 +10,6 @@ import java.net.Socket;
 import java.net.URI;
 import java.time.Duration;
 
-import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
 /**
  * Singleton manager for Testcontainers to prevent race conditions during parallel test execution.
@@ -77,7 +76,7 @@ public class TestContainersManager {
      * PostgreSQL 16 container - singleton shared across ALL tests.
      * May be null if using external services.
      */
-    private final PostgreSQLContainer<?> postgresContainer;
+    private final PostgreSQLContainer postgresContainer;
     /**
      * Redis 7 container - singleton shared across ALL tests.
      * May be null if using external services.
@@ -113,7 +112,7 @@ public class TestContainersManager {
         System.out.println("[TestContainersManager] No external services detected - starting Testcontainers");
 
         // Initialize PostgreSQL container
-        postgresContainer = new PostgreSQLContainer<>(
+        postgresContainer = new PostgreSQLContainer(
                 DockerImageName.parse("postgres:16-alpine")
         )
                 .withDatabaseName("dataforge_test")
@@ -132,7 +131,7 @@ public class TestContainersManager {
         localStackContainer = new LocalStackContainer(
                 DockerImageName.parse("localstack/localstack:3.8")
         )
-                .withServices(LocalStackContainer.Service.S3)
+                .withServices("s3")
                 .withStartupTimeout(Duration.ofMinutes(3));
 
         try {
@@ -220,7 +219,7 @@ public class TestContainersManager {
         // Start LocalStack
         if (!localStackContainer.isRunning()) {
             localStackContainer.start();
-            System.out.println("[TestContainersManager] LocalStack started: " + localStackContainer.getEndpointOverride(S3));
+            System.out.println("[TestContainersManager] LocalStack started: " + localStackContainer.getEndpoint());
 
             // Create S3 bucket for tests (required for LocalStack)
             createS3TestBucket();
@@ -255,7 +254,7 @@ public class TestContainersManager {
 
                 software.amazon.awssdk.services.s3.S3Client s3Client = software.amazon.awssdk.services.s3.S3Client.builder()
                         .region(software.amazon.awssdk.regions.Region.of(localStackContainer.getRegion()))
-                        .endpointOverride(localStackContainer.getEndpointOverride(S3))
+                        .endpointOverride(localStackContainer.getEndpoint())
                         .credentialsProvider(software.amazon.awssdk.auth.credentials.StaticCredentialsProvider.create(credentials))
                         .forcePathStyle(true) // Required for LocalStack
                         .build();
@@ -299,7 +298,7 @@ public class TestContainersManager {
      *
      * @return the running PostgreSQL container, or null if using external services
      */
-    public PostgreSQLContainer<?> getPostgresContainer() {
+    public PostgreSQLContainer getPostgresContainer() {
         return postgresContainer;
     }
 
@@ -370,6 +369,6 @@ public class TestContainersManager {
         if (useExternalServices) {
             return "http://localhost:4566";
         }
-        return localStackContainer.getEndpointOverride(S3).toString();
+        return localStackContainer.getEndpoint().toString();
     }
 }

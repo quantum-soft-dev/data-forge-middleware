@@ -421,7 +421,7 @@ public class BatchHistoryController {
      */
     @Schema(description = "Request body for ZIP download")
     public record DownloadZipRequestDto(
-            @Schema(description = "List of file IDs to include in ZIP", required = true)
+            @Schema(description = "List of file IDs to include in ZIP", requiredMode = Schema.RequiredMode.REQUIRED)
             List<UUID> fileIds
     ) {
     }
@@ -431,7 +431,7 @@ public class BatchHistoryController {
      */
     @Schema(description = "Request body for Excel export")
     public record ExportExcelRequestDto(
-            @Schema(description = "List of file IDs to export as Excel sheets (must belong to batch)", required = true)
+            @Schema(description = "List of file IDs to export as Excel sheets (must belong to batch)", requiredMode = Schema.RequiredMode.REQUIRED)
             List<UUID> fileIds
     ) {
     }
