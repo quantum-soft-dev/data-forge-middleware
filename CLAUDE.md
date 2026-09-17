@@ -195,7 +195,7 @@ alone: PRs resolve by `--head <branch>`, and the issue number lives in the PR ti
 **A ticket's base branch.** Everything above says `develop` for the ticket that declares nothing,
 which is almost every ticket. A migration ticket (Rule 1's exception) declares
 `` Base branch: `migration/<name>` `` and then every place where the commands say `develop` about
-branching, syncing, the PR base or the merge target means that branch instead. Four rules carry it:
+branching, syncing, the PR base or the merge target means that branch instead. Five rules carry it:
 
 - **The line is read by one script, not four paraphrases.** `scripts/issue-base.sh <n>` prints
   the base — `develop`, or the branch from a line of exactly that form in column 0, before the first
@@ -208,6 +208,15 @@ branching, syncing, the PR base or the merge target means that branch instead. F
   the gap the script exists for. It is the same reasoning as the board identifiers kept in one
   section: a copy of the rule in each command would drift silently. `IssueBaseBranchScriptTest`
   holds it, including over #298's real body.
+- **A ticket filed from an issue form writes the line by hand, after creation** (#310). GitHub
+  renders every form field as `### <label>` with its value beneath, so a form-filed body *begins*
+  with a heading and the region the resolver reads is empty — a `Base branch` field would be
+  written, displayed and silently unread, which is the gap itself. `task.yml` and `bug.yml`
+  therefore carry a hint: open the body and add the declaration as its **first line**, above every
+  section. `Blocked by #N` needs none of this — `scripts/board.sh unblock` and the commands read it
+  from the whole body, so a line inside «Что происходит» works, and the two must not be written in
+  the same place. `IssueBaseBranchScriptTest.IssueForms` takes the declaration out of the forms and
+  requires the script to accept it, so the hint and the resolver cannot drift apart.
 - **`/task`, `/github-issue` and `/github-issue-runner` resolve it before they take the ticket.**
   `/task` branches its worktree from `origin/<base>`, rebases on it and opens `gh pr create --base
   <base>`; `/github-issue` does the same, moves a clean Conductor workspace onto the base with
@@ -695,6 +704,48 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- form-base-branch-hint: An issue form cannot carry a ticket's base, so the forms say so and the
+  resolver is left alone (issue #310, filed by #298 when the forms of #309 reached `develop` after
+  that ticket was taken). GitHub renders every form field as `### <label>` with its value beneath,
+  so a form-filed body **begins** with a heading — and `scripts/issue-base.sh` reads only what is
+  above the first one, which for such a ticket is nothing. A `Base branch` field would therefore be
+  written, displayed, and silently unread: a migration ticket filed from the web UI would open its
+  PR into `develop`, which is the one gap #298 exists to close.
+  **Option (b) of the ticket, and the two premises that decided it were both corrections to the
+  ticket's own statement of them.** First, **`Blocked by` is not affected at all**: `board.sh
+  unblock` greps the whole body with newlines squashed to spaces (`scripts/board.sh`), and `/task`
+  and `/github-issue` read it the same way, so the line works inside the form's «Что происходит»
+  section — which is exactly where `task.yml` already tells a filer to put it. The ticket's "same
+  story for `Blocked by`" is false, and a rule written on it would have added a second field for a
+  problem that does not exist. Second, **option (a)'s real cost is not "a second reading rule" but a
+  coupling to how GitHub renders an empty optional field** (`_No response_`): ignoring a section it
+  cannot read restores the very silence the field was added for, and refusing it makes a change in
+  GitHub's wording block every form-filed ticket at once — the resolver is called *before* a ticket
+  is taken, so that failure lands on all of them. A required field defaulting to `develop` removes
+  the coupling and puts a machine-read field with an always-identical answer in front of everyone
+  filing any ticket. Against a path used zero times — the migration tickets #298–#305 were all filed
+  with `gh issue create --body` — that is not worth the verified rule.
+  **What ships**: a paragraph in the top `markdown` block of `task.yml` and `bug.yml` naming the
+  mechanism, the exact line, and the instruction to add it as the **first line of the body** right
+  after creation. It is deliberately **not** placed beside the `Blocked by` instruction in the
+  «Что происходит» field description, which would be a trap: that line works inside a section and
+  this one only above every heading, and a person reading the two together writes both in one
+  place. `decision.yml` gets nothing — a design decision is not implemented on a branch and has no
+  base. `markdown` blocks are display-only and never reach the body, so no ticket grows a section.
+  **The hint and the resolver are held as one fact, not two.** `IssueBaseBranchScriptTest.IssueForms`
+  takes the declaration **out of each form** (exactly one per file; a second copy is a second chance
+  to disagree), resolves the `<name>` placeholder and requires the script to accept it above a
+  form-shaped body — so a hint teaching a line the script refuses is red, and so is a deleted hint.
+  From the other side, two cases pin the premise: a `### Base branch` section and a declaration
+  written inside a form section both resolve to `develop`. Mutation-proven in both directions —
+  lowercase the hint's declaration and the form case is red; implement option (a) in the resolver
+  (scan the whole body for the section) and all three premise cases are red, the pre-existing
+  below-heading case among them. `.github/ISSUE_TEMPLATE` is a declared input of the `test` task and
+  a branch of the pre-commit hook, because a forms-only commit would otherwise leave `test`
+  UP-TO-DATE and the guard would never run — the trap #298 and #311 both fell into.
+  Documentation, forms and tests only: no production code, REST, gRPC, proto, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+||||||| 91b14924
 - gauge-weak-target-held: A gauge test holds the object its gauge reads, so the value stops turning
   into `NaN` when the collector runs (issue #316). `Gauge.builder(name, target, fn)` keeps `target`
   behind a **weak reference** — the registry never keeps alive the thing it reads — and six call
