@@ -10,11 +10,20 @@ on:
       - 'bugfix/**'
       - 'hotfix/**'
       - '[0-9]*/**'
+      # A migration too large for one PR lives in a long-lived migration/<name> branch, and its
+      # tickets merge there instead of into develop (#298). It gets the same tests-only pipeline as
+      # a feature branch: run_full_pipeline below stays false for it, since only main, release and
+      # develop turn it on.
+      - 'migration/**'
   pull_request:
     branches:
       - main
       - release
       - develop
+      # Without this a PR into the migration branch gets no backend-test / frontend-test at all.
+      # For pull_request the workflow is read from the merge ref, so the branch must already contain
+      # this line — develop is merged into it once this lands.
+      - 'migration/**'
 
 env:
   JAVA_VERSION: '25'

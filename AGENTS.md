@@ -115,6 +115,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 - Every feature is developed on its own branch `feature/NNN-name`, **branched off `develop`**.
 - A feature lands via a **Pull Request into `develop`**, merged with **squash** (one feature = one squashed commit on `develop`).
 - A feature **must be documented** in `docs/` (a `docs/cr-*.md` change request and/or feature guide). Undocumented features are not merge-ready.
+- **Exception — a migration too large for one PR** (#298): it lives in a long-lived `migration/<name>` branch off `develop`. Its tickets carry `` Base branch: `migration/<name>` `` at the top of the body (before the first heading, outside code), branch from, sync with, open their PR against and squash-merge into that branch, and are **closed explicitly** after the merge — `Closes #N` fires only on the default branch, and `scripts/board.sh unblock` frees only tickets whose blockers are closed. `scripts/issue-base.sh <n>` is the one reading of the line; `/task`, `/github-issue` and `/github-issue-runner` call it and **stop** on a refusal instead of assuming `develop`, and `/merge` takes the base from `baseRefName` and requires it to match. The branch lands in `develop` through its own ticket, which decides the merge method. Flyway numbers are one namespace across both branches. The full rule lives in **`CLAUDE.md`** → Rule 1 and "A ticket's base branch"; this is the condensed mirror.
 
 ### Rule 2 — Test-first (TDD), task-by-task, serial
 - A feature is split into ordered tasks in **`specs/NNN-name/tasks.md`** (use `/tasks`).
@@ -136,11 +137,11 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 |---|---|---|
 | **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit` and `vitest` if touched) |
 | **Before PR** | before opening the PR | `./gradlew integrationTest` (Testcontainers) |
-| **Merge** (PR → develop) | before merge | full CI (`backend-test`) green + automated review |
+| **Merge** (PR → develop, or → `migration/<name>` for a migration ticket) | before merge | full CI (`backend-test`) green + automated review |
 
 ### Enforcement
 - **git pre-commit hook** (`.githooks/pre-commit`) runs the per-task gate and blocks red commits. Enable once per clone: `git config core.hooksPath .githooks`. Bypassing (`--no-verify`) is against policy.
-- **CI required checks**: the `backend-test` job (`.github/workflows/ci-cd.yml`, runs `./gradlew test`) must be a **required status check** on PRs to `develop` (configure in GitHub branch protection).
+- **CI required checks**: the `backend-test` job (`.github/workflows/ci-cd.yml`, runs `./gradlew test`) must be a **required status check** on PRs to `develop` (configure in GitHub branch protection) — and on PRs to `migration/**`, whose CI triggers exist since #298; branch protection is a human's setting.
 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
@@ -262,6 +263,26 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- migration-base-branch: A ticket can land somewhere other than `develop` (issue #298). The Spring
+  Boot 4.1 migration runs in `migration/spring-boot-4.1` (#299–#304 merge into it, #305 lands it),
+  and three gaps would have stopped that chain: `Closes #N` fires only on the default branch, so a
+  ticket merged into the branch stayed open and `board.sh unblock` freed nothing; `ci-cd.yml` ran
+  no checks on PRs into it; and the commands hardcoded `develop`. A migration ticket now declares
+  `` Base branch: `migration/<name>` `` at the top of its body; new `scripts/issue-base.sh` is the
+  one reading of it (column 0, exact form, before the first ATX heading, outside code) and refuses a
+  malformed or second declaration or any other branch with exit 2 — every command stops on that
+  instead of assuming `develop`, and resolves the base before taking the ticket. `/task` and
+  `/github-issue` branch, sync and open the PR against the base; `/merge` reads `baseRefName`,
+  requires it to match the ticket's, closes the issue explicitly when the base is not `develop`
+  (single-quoted comment — double quotes would execute the backticks), then runs `unblock`, and does
+  not squash a PR whose head is the migration branch. `ci-cd.yml` triggers on `migration/**` for push
+  and pull_request (`run_full_pipeline` stays false). Flyway numbers are one namespace across both
+  branches. Rejected: base in prose only, and migration tickets straight into `develop`.
+  `IssueBaseBranchScriptTest` (29 cases, #298's real body among them) is mutation-proven, and the
+  script is a declared `test` input plus a pre-commit trigger, since the first mutation run showed
+  the test was otherwise never re-run. Branch protection on `migration/**` is a human's setting. No
+  production code, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - review-command-issue-templates: `/review [pr#] [issue#] [--comment]` runs `/task`'s three review lenses on their own and reports one table (verdict, SERIOUS in full, MINOR by count) — no fixes, no merge, no board move. It fills the "`review` skill" that `CLAUDE.md`, `/github-issue` step 8 and `/merge` named for later review rounds and that did not exist. A lens without a `VERDICT:` line is *no verdict*, never READY; READY covers the lenses only, not CI, review threads or Conductor diff comments; `--comment` posts the table as one PR comment. Issue forms in `.github/ISSUE_TEMPLATE/` (`task`, `bug`, `decision`; blank issues off) carry the follow-up rule's three lines as fields and add the card to project 16; `gh issue create --body` gets no form, so an agent writes the same sections by hand. `scripts/board.sh` never set a `status:*` label from #277 on — `strip_status_labels` read into a non-`local` `label` and emptied `set_status`'s — so `board.sh unblock`, which selects by `status: blocked`, never unblocked anything; one `local` fixes it (found filing the Spring Boot 4.1 migration tickets #298–#305). No production code, REST, gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change.
 - delta-in-heap-site-streamed: An incremental checkpoint build holds the period's changes in heap
   and streams the site past them, so `delta.checkpoint.max-fold-bytes` bounds a night's work rather
