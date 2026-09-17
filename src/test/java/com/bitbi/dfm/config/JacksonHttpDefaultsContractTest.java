@@ -44,14 +44,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * This test is the record of all eighteen, so a later Boot or Jackson release that flips one of them
  * fails here instead of on a client — the five Boot pins itself included, since "Boot pins it" is an
- * observation about this Boot version rather than a guarantee. It asserts three things:
+ * observation about this Boot version rather than a guarantee. It asserts four things:
  * <ol>
  *   <li>the compatibility flag is gone and stays gone — a re-added flag would silently restore all
  *       eighteen Jackson 2 defaults and make the eleven accepted decisions untrue again;</li>
  *   <li>the mapper Boot builds from this application's own {@code spring.jackson.*} configuration
  *       carries exactly the decided value of every feature, pinned and accepted alike;</li>
  *   <li>no enum overrides {@code toString()} — the one fact the two accepted enum decisions rest on,
- *       and the one that would otherwise break silently.</li>
+ *       and the one that would otherwise break silently;</li>
+ *   <li>every default is still <em>in</em> the table — one that differs between the two modes must
+ *       carry a verdict, and the five Boot pins itself are named in {@link #BOOT_PINNED}, since a
+ *       difference-based check is by construction blind to a row that never differs.</li>
  * </ol>
  * The behavioural half of the two pinned decisions lives in {@code JsonRequestAcceptanceContractTest}
  * (#300), which drives real requests through MockMvc; this class holds the configuration that makes
@@ -79,10 +82,11 @@ class JacksonHttpDefaultsContractTest {
      * <p>
      * The first two are pinned because accepting them turns a request that answers 201/404 today into
      * a 500 from the catch-all handler — a client-side malformation reported as a server error. The
-     * eleven accepted ones were each measured to be invisible on this surface. The last three never
+     * eleven accepted ones were each measured to be invisible on this surface. The last five never
      * differed on the HTTP mapper at all, because Boot pins them regardless of the flag; they are
      * asserted so that a Boot release which stops pinning them is caught here rather than by a client
-     * reading a date as a number.
+     * reading a date as a number, and they are named in {@link #BOOT_PINNED} so that a verdict cannot
+     * be deleted without a test noticing.
      */
     private static final List<JsonMapperDecision> DECISIONS = List.of(
             new JsonMapperDecision(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, false, "PINNED",
@@ -133,6 +137,25 @@ class JacksonHttpDefaultsContractTest {
             new JsonMapperDecision(StreamReadFeature.USE_FAST_BIG_NUMBER_PARSER, true, "UNCHANGED",
                     "Boot enables it with or without the flag, and it decides how a very long number "
                             + "literal in a free-form Map<String, Object> is parsed"));
+
+    /**
+     * The five defaults Boot pins to the same value in both modes, named rather than derived.
+     * <p>
+     * These cannot be discovered by diffing the two mappers — that is what "Boot pins it" means — so
+     * without this list a verdict for one of them could be deleted with nothing failing, which is
+     * exactly the gap review round 2 found in the diff-based completeness check below. They are the
+     * contract-relevant ones: dates and durations as ISO strings rather than numbers, an unknown
+     * property ignored rather than refused, and the two number parsers.
+     */
+    private static final List<String> BOOT_PINNED = List.of(
+            "DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS",
+            "DateTimeFeature.WRITE_DURATIONS_AS_TIMESTAMPS",
+            "DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES",
+            "StreamReadFeature.USE_FAST_DOUBLE_PARSER",
+            "StreamReadFeature.USE_FAST_BIG_NUMBER_PARSER");
+
+    /** The verdicts #303 took: thirteen that differ between the two modes plus {@link #BOOT_PINNED}. */
+    private static final int EXPECTED_VERDICTS = 13 + 5;
 
     /**
      * Every Jackson feature namespace the HTTP mapper carries, so the completeness check sees a default
@@ -207,6 +230,21 @@ class JacksonHttpDefaultsContractTest {
                 .toList();
         assertThat(recorded).as("a feature recorded twice would hide one of its two verdicts")
                 .doesNotHaveDuplicates();
+
+        // The diff below cannot see these: they hold the same value in both modes by definition, so
+        // deleting one of their verdicts would fail nothing (review round 2). Named, therefore.
+        assertThat(recorded)
+                .withFailMessage(() -> "These defaults are pinned by Boot rather than by this "
+                        + "application, and their verdicts have gone missing from DECISIONS: "
+                        + BOOT_PINNED.stream().filter(f -> !recorded.contains(f)).toList()
+                        + ". They hold the same value in both modes, so the difference-based check "
+                        + "below is blind to their removal — that is why they are named here. A Boot "
+                        + "release that stops pinning one of them changes what clients read (a date as "
+                        + "a number, a rejected unknown property), and this class claims to be the "
+                        + "record of all " + EXPECTED_VERDICTS + ".")
+                .containsAll(BOOT_PINNED);
+        assertThat(recorded).as("the verdict count #303 settled on, pinned so a row cannot go missing")
+                .hasSize(EXPECTED_VERDICTS);
 
         List<String> undecided = new ArrayList<>();
         for (Class<?> featureEnum : FEATURE_ENUMS) {

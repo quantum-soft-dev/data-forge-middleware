@@ -144,9 +144,10 @@ both on the request side.
 included, since "Boot pins it" is an observation about this Boot version and not a guarantee. It fails
 if the flag comes back in any configuration file (including the `SPRING_JACKSON_USE_JACKSON2_DEFAULTS`
 spelling), if the mapper Boot builds from the shipped `application.yml` stops carrying a decided value,
-if any enum gains a `toString()`, or if a default differs between the two modes and has **no** verdict
-at all — the last one so a Jackson release that adds a default cannot pass unnoticed, which is how such
-a table stops describing the API it claims to describe.
+if any enum gains a `toString()`, or if a default is missing from the table — a default that differs
+between the two modes must carry a verdict, and the five Boot pins itself are named explicitly, because
+a difference-based check is by construction blind to a row that never differs. Both halves exist for the
+same reason: that is how such a table stops describing the API it claims to describe.
 
 Rejected: mapping an unreadable request body to 400 instead of 500. It is the precondition for ever
 accepting `FAIL_ON_TRAILING_TOKENS`, but #300 pins the current 500 as characterized behaviour and

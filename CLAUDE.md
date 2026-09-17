@@ -750,9 +750,15 @@ pages/{feature}/            # Route pages
   defaults Boot pins itself while `DECISIONS` held three, and both fast number parsers lived only in
   the prose — a guard promising a guarantee it did not deliver. Red first on the first two; the enum
   guard and the completeness guard were each proven by mutation (a `toString()` on `SiteType`; a
-  verdict deleted from the table, which the value check by construction cannot catch). The behavioural
-  half of the two pins is #300's `JsonRequestAcceptanceContractTest`, which goes red on the real 500s
-  without them.
+  verdict deleted from the table, which the value check by construction cannot catch). **Round 2 then
+  found the same overclaim one layer in, and it is the more interesting half**: a difference-based
+  check is blind to a row that never differs, so the five Boot pins itself — the very population
+  round 1 had just added — could each be deleted with nothing failing, while the Javadoc claimed to
+  record all eighteen. They are named in `BOOT_PINNED` now, with the verdict count pinned beside them,
+  and the reviewer's own mutation (deleting `USE_FAST_DOUBLE_PARSER`, which passed before) is red.
+  The lesson worth keeping is that a guard derived from a diff can only ever hold what the diff can
+  see. The behavioural half of the two pins is #300's `JsonRequestAcceptanceContractTest`, which goes
+  red on the real 500s without them.
   No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key,
   cache-key or frontend change — no field name, type or Zod schema moves, and key order is not something
   a parser reads. See `docs/cr-spring-boot-4-1.md` ("Jackson 3 defaults").
