@@ -86,17 +86,68 @@ transaction of its own.
   `com.fasterxml.jackson.annotation.*` stays. `JsonProcessingException` → `JacksonException`
   (unchecked). Every production call site already caught `Exception` or its Jackson exception, so no
   `catch (IOException)` silently stopped catching a parse failure.
-- **HTTP API unchanged:** `spring.jackson.use-jackson2-defaults: true`. Every #300 wire-contract and
+- **HTTP API unchanged:** on #302 through `spring.jackson.use-jackson2-defaults: true`, and since #303
+  through two explicit keys instead (see "Jackson 3 defaults" below). Every #300 wire-contract and
   request-acceptance test is green **without a changed expectation** — including the derived `"empty"`
   member of the Bit BI list DTOs, `changePercentage` of `ComparisonSummaryDto`, explicit `null`s and
-  the `null`-for-primitive acceptance of `ManualSqlGenerationRequestDto.forceFullGeneration`. Dropping
-  the Jackson 2 defaults is #303.
+  the `null`-for-primitive acceptance of `ManualSqlGenerationRequestDto.forceFullGeneration`.
 - `JacksonConfiguration` no longer declares a Jackson 2 `ObjectMapper` (Boot 4 would not use it for
   HTTP); it contributes a `JsonMapperBuilderCustomizer` with the same `Include.ALWAYS`.
 - **`PluginDataValidator` stays on Jackson 2**, with a mapper of its own instead of an injected one:
   json-schema-validator 1.5.x validates Jackson 2 `JsonNode`s and there is no Jackson 2 mapper in the
   context any more. Jackson 2 stays on the classpath anyway (swagger-core, Avro, json-schema-validator,
   Auth0, jjwt).
+
+### Jackson 3 defaults (#303)
+
+`use-jackson2-defaults` is a compatibility mode, not a destination, so #303 removed it and took the
+differences one at a time. The population was measured rather than read off the release notes: a bare
+`JsonMapper` differs from `builderWithJackson2Defaults()` in **18** features, but the mapper Boot
+builds for HTTP differs in **13** — Boot pins `WRITE_DATES_AS_TIMESTAMPS`,
+`WRITE_DURATIONS_AS_TIMESTAMPS`, `FAIL_ON_UNKNOWN_PROPERTIES` and both fast number parsers itself,
+which is why dates, durations and unknown properties never moved and every #300 date assertion stayed
+green. With the flag off and nothing pinned, **2** of 2634 fast-gate and 2943 integration tests fail,
+both on the request side.
+
+**Pinned (2).** Both turn a request that works today into a **500** from the catch-all handler — not a
+400 — so accepting them would report a client-side malformation as a server error:
+
+| Key | Why |
+|---|---|
+| `spring.jackson.deserialization.fail-on-null-for-primitives: false` | `ManualSqlGenerationRequestDto.forceFullGeneration` is the only primitive in any `@RequestBody` (#300's reflective inventory). An explicit `null` reads as `false` today; refusing it answers 500 on the owner and admin generate-SQL routes. The frontend omits the field entirely, so the exposure is external clients and scripts. |
+| `spring.jackson.deserialization.fail-on-trailing-tokens: false` | Content after the JSON document is ignored today, including a second concatenated object. Refusing it is stricter and no serializer emits it, but the 500 makes it the wrong trade until an unreadable body answers 400. |
+
+**Accepted (11),** each measured to change nothing a client can observe:
+
+- `SORT_PROPERTIES_ALPHABETICALLY` — records keep their creator order, so every DTO is unmoved; all 22
+  `@RequestBody` types and all but two response bodies are records. The exceptions are the raw
+  `Page<>` returns of `AccountPluginsController#listBatches` and `PluginAdminController#listBatchesWithoutSql`,
+  whose `PageImpl` members **are** reordered — a change no JSON parser can see, since none reads members
+  by position, and their OpenAPI schemas never documented the envelope.
+- `WRITE_ENUMS_USING_TO_STRING`, `READ_ENUMS_USING_TO_STRING` — no enum in the repository overrides
+  `toString()`, so it is `name()`. `AdminActionType`, `ActionStatus` and `UserRole` carry a label that
+  differs from `name()` and are safe only for that reason, which is why the guard test holds it.
+- `ONE_BASED_MONTHS` — no `Month`, `YearMonth` or `MonthDay` in any body. It is a real change where it
+  applies: `Month.SEPTEMBER` writes as `8` under Jackson 2 defaults and `9` under Jackson 3.
+- `WRITE_UTC_AS_OFFSET` — no `ZonedDateTime` or `OffsetDateTime` in any body, and `Instant` renders
+  with a `Z` either way.
+- `STRIP_TRAILING_BIGDECIMAL_ZEROES` — no `BigDecimal` and no `JsonNode` on the surface; numbers in a
+  free-form `Map<String, Object>` bind as `Double`, so the error-log metadata round trip echoes `2.50`
+  as `2.5` in both modes.
+- `ALLOW_FINAL_FIELDS_AS_MUTATORS`, `USE_GETTERS_AS_SETTERS`, `DETECT_PARAMETER_NAMES` — inert on
+  records, which are bound through the canonical constructor.
+- `FIX_FIELD_NAME_UPPER_CASE_PREFIX` — measured to leave record component names alone, `s3Path`,
+  `sQty` and `URL` included.
+- `FAIL_ON_EMPTY_BEANS` — no property-less type is serialized, and the flip can only turn a 500 into `{}`.
+
+`JacksonHttpDefaultsContractTest` is the record: it fails if the flag comes back in any configuration
+file (including the `SPRING_JACKSON_USE_JACKSON2_DEFAULTS` spelling), if the mapper Boot builds from
+the shipped `application.yml` stops carrying a decided value, or if any enum gains a `toString()`.
+
+Rejected: mapping an unreadable request body to 400 instead of 500. It is the precondition for ever
+accepting `FAIL_ON_TRAILING_TOKENS`, but #300 pins the current 500 as characterized behaviour and
+changing it touches every malformed-body route, so it is a decision of its own rather than a
+consequence of dropping a Jackson flag.
 
 ### JSONB (hypersistence-utils 3.15 on Jackson 3)
 

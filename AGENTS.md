@@ -263,6 +263,60 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- jackson3-http-defaults: The HTTP API is on Jackson 3's own defaults, with two of them pinned back by
+  name instead of all eighteen deferred by a flag (issue #303). #302 shipped
+  `spring.jackson.use-jackson2-defaults: true`, which is a compatibility mode rather than a
+  destination: it restores every Jackson 2 default at once, so each difference was inherited silently
+  rather than accepted.
+  **The population was measured, and the measurement is the part worth keeping, because the ticket's
+  own list was both too long and too short.** Two probes: a bare `JsonMapper` differs from
+  `builderWithJackson2Defaults()` in **18** features, but the mapper Boot actually builds for HTTP
+  differs in **13** — Boot pins `WRITE_DATES_AS_TIMESTAMPS`, `WRITE_DURATIONS_AS_TIMESTAMPS`,
+  `FAIL_ON_UNKNOWN_PROPERTIES` and both fast number parsers itself, whatever the flag says. So three of
+  the six changes the ticket named (dates, durations, unknown properties) never reach this application
+  at all, and eight it did not name do. With the flag off and nothing pinned, **2** of 2634 fast-gate
+  and 2943 integration tests fail, both on the request side; all seven full-body `WireJson` templates
+  of #300 — key order, `Z` on `Instant`, enums by name — are green untouched.
+  **Pinned (2), and the deciding fact is the status code rather than the strictness.** Accepting
+  `FAIL_ON_NULL_FOR_PRIMITIVES` or `FAIL_ON_TRAILING_TOKENS` turns a request that answers 404/201 today
+  into a **500** — measured, not assumed: an unreadable body reaches the catch-all handler, so a
+  client-side malformation is reported as a server error, which is the misreporting class this
+  repository files tickets about. `ManualSqlGenerationRequestDto.forceFullGeneration` is the only
+  primitive in any of the 22 `@RequestBody` types (#300's reflective inventory), and the frontend omits
+  the field rather than sending `null`, so the exposure is external clients and scripts — the ticket's
+  own recommendation, and it costs one key. Trailing tokens are the sloppier of the two to keep, since
+  a second concatenated JSON document is silently truncated to the first; that is worth fixing **after**
+  an unreadable body answers 400, which is a decision about every malformed-body route and is filed
+  rather than taken here.
+  **Accepted (11), each with the evidence rather than an assurance.** `SORT_PROPERTIES_ALPHABETICALLY`
+  is the one that looks alarming and is not: records keep their creator order, so all 22 request
+  bodies and every response DTO are unmoved, and the only getter-ordered JSON on the surface is the raw
+  `Page<>` of `AccountPluginsController#listBatches` and `PluginAdminController#listBatchesWithoutSql`,
+  whose `PageImpl` members really are reordered — invisible, because no JSON parser reads members by
+  position, and their OpenAPI schemas never documented the envelope anyway. Both enum flags are
+  invisible because **no enum in the repository overrides `toString()`**, so it is `name()` —
+  `AdminActionType`, `ActionStatus` and `UserRole` carry a label that differs from `name()` and are safe
+  for that reason alone, which is why a guard now holds it. `ONE_BASED_MONTHS` is a genuine change where
+  it applies (`Month.SEPTEMBER` writes `8` under Jackson 2 and `9` under Jackson 3) and applies nowhere:
+  no `Month`, `YearMonth` or `MonthDay` in any body. `WRITE_UTC_AS_OFFSET` has no `ZonedDateTime` or
+  `OffsetDateTime` to act on, and `Instant` renders with a `Z` either way. `STRIP_TRAILING_BIGDECIMAL_ZEROES`
+  has no `BigDecimal` and no `JsonNode` on the surface, and numbers in a free-form `Map<String, Object>`
+  bind as `Double`, so the error-log metadata round trip echoes `2.50` as `2.5` in both modes.
+  `ALLOW_FINAL_FIELDS_AS_MUTATORS`, `USE_GETTERS_AS_SETTERS` and `DETECT_PARAMETER_NAMES` are inert on
+  records. `FIX_FIELD_NAME_UPPER_CASE_PREFIX` was measured to leave record component names alone,
+  `s3Path`, `sQty` and `URL` included. `FAIL_ON_EMPTY_BEANS` can only turn a 500 into `{}`.
+  **The decisions are a test rather than a paragraph.** `JacksonHttpDefaultsContractTest` carries all
+  sixteen verdicts (13 decided plus the 3 Boot pins itself) with the evidence in the failure message,
+  and asserts three things: the flag is absent from every configuration file — in the
+  `SPRING_JACKSON_USE_JACKSON2_DEFAULTS` spelling too, since relaxed binding reaches the same property,
+  and the #282 hazard is guarded, so the comment explaining the absence is not itself read as the flag;
+  the mapper Boot builds **from the shipped `application.yml`** rather than from a copy of it carries
+  every decided value; and no enum overrides `toString()`. Red first on the first two, and the enum
+  guard was proven by mutation (a `toString()` on `SiteType` reddens it). The behavioural half of the
+  two pins is #300's `JsonRequestAcceptanceContractTest`, which goes red on the real 500s without them.
+  No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key,
+  cache-key or frontend change — no field name, type or Zod schema moves, and key order is not something
+  a parser reads. See `docs/cr-spring-boot-4-1.md` ("Jackson 3 defaults").
 - protobuf-4-35-from-bom: protobuf 3.25.9 → **4.35.1**, taken from the Spring Boot 4.1 BOM rather
   than declared (issue #304). #302 had held it at 3.25.9 through the BOM property so that the
   framework change and the transport change did not land together; gRPC had already moved to
@@ -315,6 +369,7 @@ pages/{feature}/            # Route pages
   The Gradle protobuf plugin moves 0.9.4 → **0.9.6**. No REST, gRPC contract, DTO, migration
   (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, cache, S3-key or frontend change;
   no `docs/` page names a gRPC or protobuf version, so none needed rewriting.
+||||||| parent of 88cbbf6e (chore(api): take the Jackson 3 HTTP defaults, pinning the two that would answer 500 (#303))
 - spring-boot-4-1: Spring Boot 3.5.16 → **4.1.1** — Framework 7.0.9, Security 7.1.1, Hibernate 7.4.5,
   Jackson 3.1.5, Flyway 12.4, Micrometer 1.17.1, JUnit 6.0.3, HikariCP 7.0.2, Testcontainers 2.0.5
   (issue #302, the atomic step of the migration, merged into `migration/spring-boot-4.1`; prepared by

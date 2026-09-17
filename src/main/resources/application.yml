@@ -2,12 +2,24 @@ spring:
   application:
     name: data-forge-middleware
 
-  # Boot 4 serializes HTTP bodies with Jackson 3, whose defaults differ from Jackson 2's (dates as ISO
-  # strings, properties sorted alphabetically, null for a primitive refused). Kept on the Jackson 2
-  # defaults for the Boot 4.1 upgrade so the HTTP API does not change underneath its clients (#302);
-  # the characterization tests of #300 hold that. Moving to Jackson 3 defaults is #303.
+  # Boot 4 serializes HTTP bodies with Jackson 3. #302 deferred its changed defaults wholesale with
+  # use-jackson2-defaults; #303 removed that flag and took the differences one at a time, so there is
+  # deliberately no use-jackson2-defaults here — it would restore all eighteen at once and undo every
+  # decision below. Of the thirteen differences that reach the HTTP mapper (Boot pins dates, durations,
+  # unknown properties and both fast number parsers itself), eleven were measured to change nothing a
+  # client can observe and are accepted; the two named here are pinned back, because accepting them
+  # turns a request that works today into a 500 from the catch-all handler rather than a 400.
+  # JacksonHttpDefaultsContractTest carries the whole table with the evidence for each verdict.
   jackson:
-    use-jackson2-defaults: true
+    deserialization:
+      # An explicit null for a primitive reads as false. The only primitive in any @RequestBody is
+      # ManualSqlGenerationRequestDto.forceFullGeneration, so refusing it would answer 500 on the owner
+      # and admin generate-SQL routes to a body they accept today.
+      fail-on-null-for-primitives: false
+      # Content after the JSON document is ignored. Refusing it is stricter, but an unreadable body
+      # reaches the catch-all handler, so a client-side malformation would be reported as a server
+      # error; the 400-instead-of-500 question is the precondition for ever accepting this.
+      fail-on-trailing-tokens: false
 
   threads:
     virtual:

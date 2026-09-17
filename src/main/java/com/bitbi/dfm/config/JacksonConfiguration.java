@@ -12,10 +12,12 @@ import org.springframework.context.annotation.Configuration;
  * This is important for API contracts where clients expect explicit null values.
  * </p>
  * <p>
- * Since Boot 4 (issue #302) the mapper is Jackson 3's {@code JsonMapper}, built by Boot with
- * {@code spring.jackson.use-jackson2-defaults: true} so the HTTP API keeps its Jackson 2 shape (#303
- * decides when that goes); this class customizes Boot's builder rather than declaring a mapper of its
- * own, which Boot would no longer use for HTTP message conversion.
+ * Since Boot 4 (issue #302) the mapper is Jackson 3's {@code JsonMapper}; this class customizes Boot's
+ * builder rather than declaring a mapper of its own, which Boot would no longer use for HTTP message
+ * conversion. Issue #303 then removed the {@code spring.jackson.use-jackson2-defaults} compatibility
+ * flag and decided each changed default separately: two are pinned back in {@code application.yml} and
+ * the rest are Jackson 3's, with the whole table and its evidence in
+ * {@code JacksonHttpDefaultsContractTest}.
  * </p>
  *
  * Feature: 008-upload-history-user (Phase 3)
