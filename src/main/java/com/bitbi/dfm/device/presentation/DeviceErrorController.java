@@ -74,7 +74,7 @@ public class DeviceErrorController {
      * Logs an error that occurs outside of batch processing context.
      * </p>
      *
-     * @param request Error details (type, message, metadata)
+     * @param request Error details (type, message, severity, metadata)
      * @return 201 Created with ErrorLogResponseDto
      */
     @PostMapping
@@ -114,7 +114,8 @@ public class DeviceErrorController {
                     siteId,
                     request.type(),
                     request.message(),
-                    request.metadata()
+                    request.metadata(),
+                    request.effectiveSeverity()
             );
 
             ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
@@ -137,7 +138,7 @@ public class DeviceErrorController {
      * </p>
      *
      * @param batchId Batch identifier (path variable)
-     * @param request Error details (type, message, metadata)
+     * @param request Error details (type, message, severity, metadata)
      * @return 201 Created with ErrorLogResponseDto
      */
     @PostMapping("/batches/{batchId}")
@@ -188,7 +189,8 @@ public class DeviceErrorController {
                     batch.getSiteId(),
                     request.type(),
                     request.message(),
-                    request.metadata()
+                    request.metadata(),
+                    request.effectiveSeverity()
             );
 
             ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);

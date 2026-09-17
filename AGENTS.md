@@ -263,6 +263,39 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- device-error-severity: `POST /api/v1/device/errors` stores the severity the client sends instead of
+  stamping everything `ERROR` (issue #321, found working #300). `LogErrorRequestDto` has carried an
+  optional `severity` since 016 — documented in its `@Schema`, in the client guide and in the
+  response DTO — and both device POSTs called the `ErrorLoggingService` overload **without** it, the
+  one whose whole body is `… , ErrorSeverity.ERROR)`. A client reporting `"severity":"WARNING"` was
+  answered `"ERROR"` and the row carried `ERROR`, so the dashboard's Global Errors widget rendered
+  every client-reported error at one level and its severity filter could not separate a disk-space
+  warning from a fatal upload failure. The fix is that both endpoints pass
+  `request.effectiveSeverity()`, which until now had **no production caller at all** — the method
+  existed, and nothing reached it.
+  **Two facts the ticket did not name and the tests had to establish.** `DeviceErrorController` is
+  the only production caller of `ErrorLoggingService`, so the severity-less overloads are now
+  reached by tests alone; they are deliberately left (deleting them is the #165 shape, a decision of
+  its own) and recorded as **#326**. And the ERROR default is enforced **twice** — by
+  `effectiveSeverity()` and again by `ErrorLog.create`, which maps a null severity to ERROR — so the
+  two "no severity sent" tests stay green when the controller is put back to `severity()`, and that
+  is written in their Javadoc rather than left as an implied claim. The boundary still calls
+  `effectiveSeverity()`, so the default the request contract documents is the one applied where the
+  request arrives.
+  Tests assert both halves of the ticket's wording, because neither implies the other: the response
+  body is built from the entity the service returned and would show the right value even if the
+  column held another, while the column alone says nothing about what the client was told. The
+  stored value is read as a **raw column** through `JdbcTemplate` after an explicit flush — the
+  class is `@Transactional` and the entity carries an assigned UUID, so a JPA read would be served
+  from the persistence context and return the very instance the controller built (#245's reasoning,
+  one layer up). Mutation-proven in both directions: restoring the severity-less overload reddens
+  the two sent-severity tests, and changing `effectiveSeverity()`'s default to `INFO` reddens the
+  two default tests.
+  **Documentation: not needed on the client side and that is the point** —
+  `docs/postgres-delta-client-development-guide.md` already documents `severity?` with an ERROR
+  default, so the guide described the intention and the code contradicted it. No REST **route**,
+  gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric,
+  cache, S3-key or frontend change.
 - scratch-reserve-one-snapshot: The #193 scratch reserve stays at the frame plus **one** snapshot,
   and that is now a recorded decision rather than a gap (issue #296, raised by `review-architecture`
   as a MINOR on PR #295). The reserve is `max-frame-temp-bytes + max-temp-bytes` (deployed
