@@ -15,7 +15,7 @@ issue»); при расхождении по существу действует
    `Blocked by #N` → остановись и сообщи. Прогони `scripts/issue-find.sh "<ключевые слова>" <пути>`:
    задача уже решена смерженным PR или дублирует закрытую → сообщи и не начинай. Затем определи
    базу (абзац ниже), и только потом `gh issue edit $ARGUMENTS --add-assignee @me`, майлстоун текущего спринта,
-   `scripts/board.sh status $ARGUMENTS "In Progress"`. Если `gh project` отвечает
+   `scripts/board.sh status $ARGUMENTS "In Progress"`. Если `board.sh` (или `gh`) отвечает
    `INSUFFICIENT_SCOPES` — остановись и скажи выполнить `gh auth refresh -s project`; молча обновить
    одну метку нельзя, человек смотрит на доску.
 
@@ -85,7 +85,7 @@ issue»); при расхождении по существу действует
    «Удалённые/изменённые тесты» (если были) и названной мутацией из шага 3. При `<base>` ≠ `develop`
    `Closes` issue **не закроет** (GitHub закрывает по ключевому слову только при merge в ветку по
    умолчанию), но строку всё равно пиши: по ней `/merge` и диспетчер находят тикет, а закрытие
-   делает шаг 6. Дождись CI: `gh pr checks --watch`. На фиче-ветке CI — это
+   делает шаг 6. Дождись CI: `gh pr checks --watch --interval 60` (не чаще — опрос тратит общий GraphQL-бюджет). На фиче-ветке CI — это
    `backend-test` и `frontend-test` (и на PR в `migration/**` тоже); `code-quality` и `dependency-analysis` гейтятся на
    `run_full_pipeline` (только `develop`/`release`/`main`), их отсутствие — не провал. Красный CI →
    чини, лимит 3 попытки; смотри, какой именно тест упал, а не списывай проверку.

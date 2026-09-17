@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Stand-in for the GitHub CLI in BoardScriptTest (issue #311). It records every call, one line per
+# call with its arguments tab-separated, and answers from fixture files in $FAKE_GH_DIR. Anything it
+# does not recognise fails loudly: a `gh project item-list` or `field-list` creeping back into
+# scripts/board.sh must turn the test red, not quietly succeed against a permissive fake.
+set -euo pipefail
+log=${FAKE_GH_LOG:?}
+dir=${FAKE_GH_DIR:?}
+
+printf '%s\t' "$@" | tr '\n' ' ' >> "$log"
+printf '\n' >> "$log"
+
+refuse() { printf 'fake-gh: %s: %s\n' "$1" "$*" >&2; exit 97; }
+fixture() { [[ -f "$dir/$1" ]] && cat "$dir/$1" || printf '%s' "${2-}"; }
+
+[[ "${1:-}" == api ]] || refuse "only 'gh api' is expected" "$@"
+shift
+
+method=GET endpoint="" query="" jq_expr="" cursor="" number=""
+while (($#)); do
+  case "$1" in
+    -X|--method) method=$2; shift 2 ;;
+    -f|-F|--raw-field|--field)
+      case "$2" in
+        query=*) query=${2#query=} ;;
+        cursor=*) cursor=${2#cursor=} ;;
+        n=*) number=${2#n=} ;;
+      esac
+      shift 2 ;;
+    --jq|-q) jq_expr=$2; shift 2 ;;
+    -H|--header) shift 2 ;;
+    --paginate|--silent) shift ;;
+    -*) refuse "unknown flag" "$1" ;;
+    *) [[ -z "$endpoint" ]] || refuse "second endpoint" "$1"; endpoint=$1; shift ;;
+  esac
+done
+
+answer() {
+  if [[ -n "$jq_expr" ]]; then jq -r "$jq_expr"; else cat; fi
+}
+
+if [[ "$endpoint" == graphql ]]; then
+  case "$query" in
+    *addProjectV2ItemById*) fixture add.json | answer ;;
+    *updateProjectV2ItemFieldValue*) printf '{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"x"}}}}' | answer ;;
+    *'items(first'*) fixture "list-${cursor:-first}.json" | answer ;;
+    *projectItems*) fixture "lookup-$number.json" | answer ;;
+    *'node(id'*) fixture verify.json | answer ;;
+    *) refuse "unexpected GraphQL query" "$query" ;;
+  esac
+  exit 0
+fi
+
+case "$method $endpoint" in
+  "DELETE repos/"*"/issues/"*"/labels/"*) printf '[]' | answer ;;
+  "POST repos/"*"/issues/"*"/labels") printf '[]' | answer ;;
+  "GET repos/"*"/issues/"*"/labels"*)
+    n=${endpoint#*/issues/}; n=${n%%/*}
+    fixture "labels-$n.json" '[]' | answer ;;
+  "GET repos/"*"/issues?"*) fixture blocked.json '[]' | answer ;;
+  "GET repos/"*"/issues/"*)
+    n=${endpoint#*/issues/}; n=${n%%[/?]*}
+    fixture "issue-$n.json" | answer ;;
+  *) refuse "unexpected REST call" "$method" "$endpoint" ;;
+esac

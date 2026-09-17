@@ -65,7 +65,8 @@ GitHub issue». Здесь детализируется механика ком�
 закрытия — squash с `Closes #<n>`, поглощение, дубль диспетчера, кнопка в UI, `gh issue close` —
 снимает **все** живые статусные метки, которые реально висят. Фиксированный список из двух имён
 (`ready to merge` + `in review`) как раз и оставлял `ready` / `in progress` / `blocked` на
-закрытых — это #257. Цикл (тот же, что в `CLAUDE.md` → «Status lives in two places»):
+закрытых — это #257. `scripts/board.sh status <n> Done` снимает их все; руками — тот же цикл, что в
+`CLAUDE.md` → «Status lives in two places»:
 
 ```bash
 while IFS= read -r label; do
@@ -79,24 +80,26 @@ done < <(gh issue view <n> --json labels --jq '.labels[].name | select(startswit
 
 ### Как двигать карточку
 
-Идентификаторы доски — проект, поле `Status`, option-id всех колонок и готовые команды —
-лежат **в `CLAUDE.md`, раздел «Board identifiers»**. Это единственный источник; сюда их не
-копируй. Дубль в каждой команде разъедется молча, и карточки начнут переезжать в колонку,
-которой больше нет.
+**Одной командой: `scripts/board.sh status <n> "<колонка>"`.** Она двигает карточку и метку вместе,
+сама добавляет issue на доску, если его там нет, снимает все чужие `status: *` и печатает колонку,
+**перечитанную** после перехода. id проекта, поля и колонок она резолвит по именам на каждом
+вызове, так что ни здесь, ни в скрипте их копий нет (справочно они лежат в `CLAUDE.md`, раздел
+«Board identifiers»).
 
-Карточка ищется по `content.number` == номер issue. Если её на доске нет — добавь
-(`gh project item-add`), а не пропускай шаг. Если `item-edit` падает — не выдумывай ID,
-перечитай их через `gh project field-list`, как описано там же.
+Руками через `gh project item-list` / `field-list` / `item-edit` не двигай: это ~200 и ~100 очков
+GraphQL-бюджета за вызов, общего на все сессии аккаунта, против 3 очков у `board.sh` (`CLAUDE.md` →
+«GraphQL budget»).
 
 > [!CAUTION]
-> **Требуется скоуп `project`.** Если `gh project` отвечает `INSUFFICIENT_SCOPES` — остановись
+> **Требуется скоуп `project`.** Если `board.sh` (или `gh`) отвечает `INSUFFICIENT_SCOPES` — остановись
 > и скажи человеку выполнить `gh auth refresh -s project`. Продолжать, обновляя одну метку,
 > нельзя: человек смотрит на доску и увидит, что работа не началась.
 
 > [!CAUTION]
-> **Проверяй результат, а не факт запуска команды.** После каждого перехода перечитай
-> `gh project item-list` и метки. Отработавшая без ошибки команда — не доказательство того,
-> что состояние изменилось.
+> **Проверяй результат, а не факт запуска команды.** `board.sh status` печатает колонку, заново
+> прочитанную после перехода, и метку — сверь их с тем, что просил. Отработавшая без ошибки
+> команда — не доказательство того, что состояние изменилось. Отдельно перечитать тикет можно
+> `scripts/board.sh show <n>` (REST, GraphQL не тратит).
 
 ## Шаги
 
@@ -124,16 +127,15 @@ gh issue view <n> --json number,title,body,labels,milestone,assignees,state,comm
 Два отдельных перехода, оба обязательны — «прыжок» из Backlog сразу в работу запрещён.
 
 **2a. Backlog → Ready.** Как только шаг 1 пройден и критерий готовности сформулирован:
-колонка `Ready`, метка `status: ready`. Это фиксирует, что тикет разобран и годен к взятию.
-Если по ходу разбора выяснилось, что задача заблокирована внешним решением — вместо этого
-`Blocked` + `status: blocked`, и остановись.
+`scripts/board.sh status <n> Ready` (колонка `Ready` и метка `status: ready`). Это фиксирует, что
+тикет разобран и годен к взятию. Если по ходу разбора выяснилось, что задача заблокирована
+внешним решением — вместо этого `scripts/board.sh status <n> Blocked`, и остановись.
 
 **2b. Ready → In Progress.** Непосредственно перед созданием ветки:
 
 ```bash
-gh project item-edit --project-id <project-id> --id <PVTI_...> \
-    --field-id <status-field-id> --single-select-option-id <option-id колонки In Progress>
-gh issue edit <n> --add-label "status: in progress" --remove-label "status: ready" --add-assignee @me
+scripts/board.sh status <n> "In Progress"
+gh issue edit <n> --add-assignee @me
 ```
 
 Если у issue нет milestone — поставь текущий спринт (milestone с ближайшей будущей `due_on`;
@@ -373,7 +375,7 @@ sha). Границу двигать нельзя: решил, что механ�
    сводку одним комментарием к PR, так что круг виден в PR. Его же используй, если плагин
    недоступен или нужно второе мнение по спорному месту. `READY` этой команды оценивает только
    линзы — остальные поверхности ниже проверяются всё равно.
-3. CI — джобы `backend-test` и `frontend-test`: `gh pr checks <pr> --watch --interval 20`.
+3. CI — джобы `backend-test` и `frontend-test`: `gh pr checks <pr> --watch --interval 60` — CI идёт минуты, опрос каждые 20 с только тратит общий GraphQL-бюджет.
    Это гейт сборки и тестов, а не ревью; на PR в `migration/**` они идут так же, как на PR в
    `develop`. На PR из фичевой ветки джобы `code-quality` и
    `dependency-analysis` **не запускаются** (`run_full_pipeline` включается только для
