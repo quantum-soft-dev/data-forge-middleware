@@ -263,6 +263,51 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- boot41-characterization-net: The JSON surfaces Spring Boot 4.1 moves — HTTP bodies, request
+  acceptance, the seven JSONB columns and the Redis cache — are pinned on Boot 3.5 before the upgrade
+  (issue #300, the safety net for #302 in `migration/spring-boot-4.1`). Tests only; every one was
+  green on arrival, so each is backed by a named mutation listed in its PR.
+  **What is pinned and where.** `contract/JsonResponseWireContractTest` holds whole bodies through
+  new `contract/WireJson` (a template with `<uuid>`/`<instant>`/`<local-date-time>`/`<string>`
+  placeholders and everything else literal), because `jsonPath` cannot see key order, an explicit
+  `null` or `1` vs `1.0` — exactly what Jackson 3's `SORT_PROPERTIES_ALPHABETICALLY`, date handling
+  and a `JacksonConfiguration` that Boot 4 no longer uses as the HTTP mapper can change: the Device
+  API batch (a `null` `completedAt` written), error log (enum by name, `isRead`, free-form metadata
+  numbers), `DeviceTokenErrorDto` (`error_description`, `NON_NULL`), authorize, refresh, the
+  application `ErrorResponseDto` at 400/404 and the cursor page's `"nextCursor":null`. Bit BI's table
+  and site lists and Parquet Export's listing (`producedAt`/`linkExpiresAt` as offset-less
+  `LocalDateTime`) are pinned in their own contract classes, which already mock authentication.
+  `contract/JsonRequestAcceptanceContractTest` pins acceptance: an unknown property and trailing
+  content are ignored (201), an unreadable body and an unknown enum value reach the catch-all
+  handler (500 with the generic body — no `HttpMessageNotReadableException` handler exists), and a
+  scan of every registered `@RequestBody` type pins the **one** primitive in a request body,
+  `ManualSqlGenerationRequestDto.forceFullGeneration` (owner and admin routes), whose `null` reads as
+  `false` today and becomes an unreadable body under `FAIL_ON_NULL_FOR_PRIMITIVES`.
+  `integration/JsonbColumnCharacterizationIntegrationTest` covers all seven `JsonBinaryType` mappings
+  both ways — written through the repository and read back as `jsonb::text`, and a historical
+  document set by raw SQL read back with its Java value types (`Integer`/`Long`/`Double`, `null`
+  members, `ArrayList`/`LinkedHashMap`) — plus a guard that fails when a JSONB mapping is added
+  unpinned. `integration/RedisCacheSerializationIntegrationTest` pins the cache.
+  **Findings the pinning surfaced, recorded rather than fixed.** Bit BI's `TableListResponseDto` and
+  `SiteListResponseDto` write an `"empty"` member from `isEmpty()`, and `ComparisonSummaryDto` a
+  `changePercentage` from its getter — not record components, so their fate under Jackson 3 is a
+  wire question. An `Instant` placed in a free-form JSONB map is stored as epoch seconds
+  (`1768473000.123456000`), the plain-mapper `WRITE_DATES_AS_TIMESTAMPS` default hypersistence-utils
+  builds, which Jackson 3 turns off — mixed forms would follow on one column.
+  A `changelog_segments.stats` object with a member `TableChangeStats` does not declare fails the
+  entity load, and a missing or `null` member reads as `0`. **Both Redis caches are inert in
+  production**: `batch-details` declares
+  `condition = "#result ..."`, which is evaluated before the call where `#result` is undefined, and
+  `batch-first-page` is a self-invoked `protected` method; and the configured
+  `GenericJackson2JsonRedisSerializer` cannot write `BatchDetailDto` at all (no JSR-310), so making
+  either cache live — mutation-proven — turns the endpoint into a serialization failure. And
+  `POST /api/v1/device/errors` drops the request's `severity` (always `ERROR`). Filed as #319 (the
+  inert caches), #320 (an unreadable body answers 500) and #321 (the dropped `severity`); what bears
+  on the upgrade itself is recorded on #302.
+  **Time.** `TZ=Asia/Jerusalem ./gradlew integrationTest` on Boot 3.5 is the reference for #302:
+  green on 2026-09-17 against Boot 3.5.16 — 88 classes, 306 tests, 14 skipped by `@Disabled` that
+  predates this ticket, 0 failures. No production code, REST, gRPC, proto, DTO, migration (**V58
+  stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - boot-3-5-16-deprecations: Spring Boot 3.5.6 → **3.5.16** (Framework 6.2.19, Security 6.5.11,
   Jackson 2.21.4) and JaCoCo 0.8.13 → **0.8.14**, the first release that supports Java 25 officially,
   with the deprecated calls Boot 4 removes taken out first (issue #299, the first ticket of the Spring
