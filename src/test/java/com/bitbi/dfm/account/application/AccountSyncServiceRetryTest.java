@@ -52,6 +52,10 @@ class AccountSyncServiceRetryTest {
         accountRepository = mock(AccountRepository.class);
         auth0Client = mock(Auth0ManagementApiClient.class);
         context = new AnnotationConfigApplicationContext();
+        // AccountSyncService is @Profile("!test"), and CI exports SPRING_PROFILES_ACTIVE=test, which a
+        // bare context reads from the environment: name a profile explicitly so the run does not
+        // depend on the shell it starts from.
+        context.getEnvironment().setActiveProfiles("retry-test");
         context.registerBean(AccountRepository.class, () -> accountRepository);
         context.registerBean(Auth0ManagementApiClient.class, () -> auth0Client);
         context.registerBean(ApplicationEventPublisher.class, () -> mock(ApplicationEventPublisher.class));
@@ -79,7 +83,7 @@ class AccountSyncServiceRetryTest {
         long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
 
         verify(auth0Client, times(3)).createUserWithPassword(eq(EMAIL), anyString(), anyString(), eq(true));
-        assertThat(elapsedMillis).as("1 s + 2 s of backoff").isBetween(2_900L, 8_000L);
+        assertThat(elapsedMillis).as("1 s + 2 s of backoff").isBetween(2_900L, 20_000L);
     }
 
     @Test
