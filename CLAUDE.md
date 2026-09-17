@@ -116,6 +116,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 - Every feature is developed on its own branch `feature/NNN-name`, **branched off `develop`**.
 - A feature lands via a **Pull Request into `develop`**, merged with **squash** (one feature = one squashed commit on `develop`).
 - A feature **must be documented** in `docs/` (a `docs/cr-*.md` change request and/or feature guide). Undocumented features are not merge-ready.
+- **Exception — a migration too large for one PR** (issue #298). It lives in a long-lived `migration/<name>` branch off `develop`, and its tickets land there instead: each carries `` Base branch: `migration/<name>` `` as a line of its own at the top of the body, beside `Blocked by`, **before the first heading and outside code**. Such a ticket branches from, syncs with, opens its PR against and squash-merges into that branch, and is **closed explicitly** after the merge, because `Closes #N` fires only on a merge into the default branch — without that close the ticket chain stops at its first link, since `scripts/board.sh unblock` frees only tickets whose blockers are closed. The branch lands in `develop` through a ticket of its own, which decides its merge method (a squash would erase the tickets' history, `--delete-branch` the branch). No line means `develop`, exactly as before. Details under "A ticket's base branch" below.
 
 ### Rule 2 — Test-first (TDD), task-by-task, serial
 - A feature is split into ordered tasks in **`specs/NNN-name/tasks.md`** (use `/tasks`).
@@ -137,13 +138,13 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 |---|---|---|
 | **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`, `npm run lint` and `vitest` if touched) |
 | **Before PR** | before opening the PR | `./gradlew integrationTest` (Testcontainers) |
-| **Merge** (PR → develop) | before merge | full CI (`backend-test`, `frontend-test`) green + automated review |
+| **Merge** (PR → develop, or → `migration/<name>` for a migration ticket) | before merge | full CI (`backend-test`, `frontend-test`) green + automated review |
 
 Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with a `deploy-dev/*` tag; stage/prod deploy on push to `stage`/`main` (see `docs/cr-tag-driven-dev-deploy.md`).
 
 ### Enforcement
 - **git pre-commit hook** (`.githooks/pre-commit`) runs the per-task gate and blocks red commits. Enable once per clone: `git config core.hooksPath .githooks`. Bypassing (`--no-verify`) is against policy.
-- **CI required checks**: the `backend-test` job (`.github/workflows/ci-cd.yml`, runs `./gradlew test`) must be a **required status check** on PRs to `develop` (configure in GitHub branch protection).
+- **CI required checks**: the `backend-test` job (`.github/workflows/ci-cd.yml`, runs `./gradlew test`) must be a **required status check** on PRs to `develop` (configure in GitHub branch protection) — and on PRs to `migration/**`, whose CI triggers exist since #298. Branch protection is a repository setting a human changes; an agent does not.
 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
@@ -190,6 +191,43 @@ outside Conductor (a bare clone) does the command create `.worktrees/<n>-<slug>`
 keeps `feature/NNN-name`). The Conductor-generated branch name (`plissb/<workspace>`) is left
 alone: PRs resolve by `--head <branch>`, and the issue number lives in the PR title and
 `Closes #<n>`.
+
+**A ticket's base branch.** Everything above says `develop` for the ticket that declares nothing,
+which is almost every ticket. A migration ticket (Rule 1's exception) declares
+`` Base branch: `migration/<name>` `` and then every place where the commands say `develop` about
+branching, syncing, the PR base or the merge target means that branch instead. Four rules carry it:
+
+- **The line is read by one script, not four paraphrases.** `scripts/issue-base.sh <n>` prints
+  the base — `develop`, or the branch from a line of exactly that form in column 0, before the first
+  ATX heading and outside fenced or indented code, so an example quoted in a ticket's prose (#298's
+  own body quotes it after its first heading) does not retarget the ticket. The failure that matters
+  is silence in the other direction too: a line that *looks* like a declaration but is not the exact
+  form, a second declaration, or a branch that is neither `develop` nor `migration/<name>` is
+  refused with exit 2 and empty stdout, and every command **stops** on a refusal rather than reading
+  it as `develop` — a migration ticket whose line nobody read opens its PR into `develop`, which is
+  the gap the script exists for. It is the same reasoning as the board identifiers kept in one
+  section: a copy of the rule in each command would drift silently. `IssueBaseBranchScriptTest`
+  holds it, including over #298's real body.
+- **`/task`, `/github-issue` and `/github-issue-runner` resolve it before they take the ticket.**
+  `/task` branches its worktree from `origin/<base>`, rebases on it and opens `gh pr create --base
+  <base>`; `/github-issue` does the same, moves a clean Conductor workspace onto the base with
+  `git reset --keep origin/<base>` instead of nesting a worktree, and syncs only with the base
+  (`develop` is merged into the migration branch separately, never through one ticket's diff). The
+  dispatcher reads every candidate's base, drops a refused one from the pool, and stops on red CI on
+  the base of the ticket it merged.
+- **`/merge` takes the base from the PR's `baseRefName` and requires it to match the ticket's.** A
+  migration ticket whose PR was opened into `develop` is reported, not retargeted silently. When the
+  base is not `develop` the issue is closed explicitly (`Merged into <base> by #<pr>`), before
+  `scripts/board.sh unblock`, which frees only tickets whose blockers are all closed. A PR whose
+  *head* is the migration branch — the final merge into `develop` — is not squashed by default: its
+  own ticket decides. `Closes #<n>` is still written in every PR body, because the commands find the
+  ticket by it.
+- **CI and the invisible collisions.** `ci-cd.yml` runs `backend-test` and `frontend-test` on push to
+  and PRs into `migration/**` (`run_full_pipeline` stays false there); since a `pull_request` run
+  reads the workflow from the merge ref, the migration branch must contain the trigger, so `develop`
+  is merged into it once #298 lands. Required status checks on `migration/**` are a human's setting.
+  Flyway numbers are **one namespace across `develop` and the migration branch**: `V58` taken on
+  each side merges cleanly everywhere and breaks startup only when the migration lands.
 
 **Finding and fixing are separate for behaviour, and may be joined for mechanics.** A reviewer
 offering `--fix` may be run with it, confined to the **mechanical** class — findings whose correct
@@ -411,7 +449,7 @@ next **Flyway migration number** (two branches both taking `V{N}` merge cleanly 
 files (`CLAUDE.md`, `specs/**/tasks.md`, `docs/`) are not overlap — both sides get merged.
 
 The run stops for the human on an agent reporting blocked, a second dispatcher touching an issue
-in this run's window, an unclear conflict, red CI on `develop`, a missing `project` scope, an issue
+in this run's window, an unclear conflict, red CI on the base branch of the ticket it merged (`develop` or the migration branch), a missing `project` scope, an issue
 that turned out wider than written, or the same issue coming back blocked twice. Findings mid-run
 follow the follow-ups rule above (enrich an existing ticket, else file the theme), and the
 dispatcher merges duplicates and same-root-cause smalls into one run-sized ticket — findings are
@@ -621,6 +659,46 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- migration-base-branch: A ticket can land somewhere other than `develop`, and the process says so
+  instead of every command assuming it (issue #298). The Spring Boot 4.1 migration is run in a
+  long-lived `migration/spring-boot-4.1` branch, tickets #299–#304 merge into it and #305 lands it —
+  and three gaps would have stopped that chain at its first link. `Closes #N` fires only on a merge
+  into the default branch, so a ticket merged into the migration branch stayed open and
+  `scripts/board.sh unblock`, which frees only tickets whose blockers are closed, freed nothing;
+  `ci-cd.yml` listed only `main`/`release`/`develop` under `pull_request`, so a PR into the branch
+  got no `backend-test` at all; and `/task`, `/github-issue` and `/merge` hardcoded `develop` as the
+  place to branch from, sync with, open the PR against and merge into.
+  **The ticket declares its base, one script reads it, every command asks the script.** A migration
+  ticket carries `` Base branch: `migration/<name>` `` at the top of its body beside `Blocked by`.
+  The rule for reading it — only a column-0 line of exactly that form, before the first ATX heading
+  and outside fenced or indented code — is subtle enough to be paraphrased four different ways, so it
+  lives in new `scripts/issue-base.sh <n>` (or `-` for a body on stdin) rather than in the four
+  commands, the board-identifiers reasoning applied to a rule. It fails loudly in both directions:
+  prose quoting the line after a heading (this ticket's own body) stays on `develop`, and a line
+  that looks like a declaration but is not the exact form, a second one, or a branch that is neither
+  `develop` nor `migration/<name>` exits 2 with empty stdout — a command stops on that rather than
+  reading it as `develop`, since a migration ticket silently based on `develop` is exactly the gap.
+  The commands resolve the base **before** taking the ticket, so a refusal leaves the card where it
+  was. `/merge` reads the base from `baseRefName`, requires it to equal the ticket's, closes the
+  issue explicitly when the base is not `develop` (before `unblock`, which the command now calls) and
+  refuses to squash a PR whose *head* is the migration branch — the final merge decides its own
+  method. `ci-cd.yml` gains `migration/**` on push and pull_request, with `run_full_pipeline`
+  untouched and therefore false for it. Two things the ticket did not name and the change had to
+  state: a double-quoted `--comment` would execute the backticks around the branch name as a command,
+  so the explicit close is single-quoted; and
+  Flyway numbers are one namespace across both branches, invisible to git until the migration lands.
+  **Rejected, as recorded on the ticket**: base in prose only, without command support (an executor
+  follows the command's steps, and the unclosed-issue gap stops the chain anyway), and merging the
+  migration tickets straight into `develop` (contradicts running the migration in its own branch).
+  **Tests**: `IssueBaseBranchScriptTest` drives the script over 29 cases, #298's real body among
+  them. Mutation-proven — ignoring the first heading fails the below-heading case, dropping fence
+  tracking fails four fence cases, skipping a malformed line fails all seven malformed cases. That
+  last run also caught the test **not running at all**: a script is not on the test classpath, so
+  `scripts/issue-base.sh` is now a declared input of the `test` task, and the pre-commit hook runs
+  `com.bitbi.dfm.documentation.*` when it changes. Not done by an agent: branch protection with
+  required `backend-test` on `migration/**`. `.github/ISSUE_TEMPLATE/` is not in `develop` yet, so
+  no template field. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**),
+  `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - delta-in-heap-site-streamed: An incremental checkpoint build holds the period's changes in heap
   and streams the site past them, so `delta.checkpoint.max-fold-bytes` bounds a night's work rather
   than the site (issue #293, the ceiling #292 left standing for every build after the first). The
