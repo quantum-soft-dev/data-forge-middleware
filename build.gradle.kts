@@ -29,8 +29,8 @@ repositories {
 }
 
 extra["awsSdkVersion"] = "2.28.11"
-extra["grpcVersion"] = "1.68.1"
-extra["protobufVersion"] = "3.25.5"
+extra["grpcVersion"] = "1.83.1"
+extra["protobufVersion"] = "3.25.9"
 extra["parquetVersion"] = "1.15.2"
 extra["hadoopVersion"] = "3.4.1"
 
