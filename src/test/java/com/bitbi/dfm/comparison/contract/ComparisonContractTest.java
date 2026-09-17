@@ -350,6 +350,9 @@ class ComparisonContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.comparisonTimestamp").exists())
                 .andExpect(jsonPath("$.currentBatchId").exists())
                 .andExpect(jsonPath("$.targetBatchId").exists())
+                // #300: getChangePercentage() is not a record component; Jackson 2 writes it as a
+                // property. Pinned so the move to Jackson 3 (#302) shows whether it survives.
+                .andExpect(jsonPath("$.changePercentage").isNumber())
 
                 // Verify non-negative counts
                 .andExpect(jsonPath("$.totalFilesCompared").value(greaterThanOrEqualTo(0)))
