@@ -304,6 +304,86 @@ pages/{feature}/            # Route pages
   UP-TO-DATE and the guard would never run — the trap #298 and #311 both fell into.
   Documentation, forms and tests only: no production code, REST, gRPC, proto, DTO, migration
   (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+||||||| 91b14924
+- gauge-weak-target-held: A gauge test holds the object its gauge reads, so the value stops turning
+  into `NaN` when the collector runs (issue #316). `Gauge.builder(name, target, fn)` keeps `target`
+  behind a **weak reference** — the registry never keeps alive the thing it reads — and six call
+  sites in three classes wrote `new SomeMetrics(...).bindTo(registry)`, dropping the only strong
+  reference on the same line. Alone each class passed; inside `./gradlew integrationTest`, one JVM
+  with some 2900 tests and plenty of collections, `BatchParquetQueueMetricsTest` failed as
+  `expected: <42.0> but was: <NaN>` on a branch whose diff had touched none of it — the #207/#226
+  class, where the gate names an innocent test and costs a full investigation.
+  **The fix is a field, not a local, and the difference is the point.** The binder lives on the test
+  instance, which is reachable from the running frame for the whole method; a local the method never
+  reads again is dead, and HotSpot is free to collect it where it stands although it is still in
+  scope. `.strongReference(true)` was rejected as the ticket proposed it: it changes production code
+  to hold a reference only the tests need.
+  **The ticket's second half — are there more of this shape — found one the list did not name and
+  cleared three.** `ParquetScratchBudgetTest` is the same hazard through a different registration:
+  `delta.parquet.scratch.bytes` is built on the budget's own `liveBytes` field, the `budget` local is
+  dead before most methods' closing `assertEquals(0.0, liveBytes())`, and that read would answer
+  `NaN`. It gets the same field. **Review round 1 found the claim about a third file too broad and
+  the hole real**, which is the part worth keeping: the first draft wrote that
+  `SqlGenerationConcurrencyTest` and `SqlGenerationStreamingTest` are safe because the service whose
+  semaphore the gauge reads is still in use after the read. That is true of
+  `awaitSemaphoreQueueSize`, which polls while other threads hold the service, and of
+  `SqlGenerationStreamingTest`, which only asserts the gauge *exists* and never reads its value —
+  and false of `shouldShowZeroQueueSizeWhenNoWaiters`, whose service is created and never touched
+  again, so `isEqualTo(0.0)` would meet `NaN`. The shape is #316 exactly, one registration form over
+  (`meterRegistry.gauge(name, target, fn)` rather than a binder), and it is **fixed** rather than
+  written down as accepted — the wording that no longer matched the code was how a permanent
+  document would have started lying. It is also outside what the scan can see, since nothing is
+  chained there. Cleared for real: `ComparisonMetrics` has no test at all, and in production its
+  weak target is a repository bean the context holds.
+  **The guard bans the shape that is wrong unconditionally and says what it cannot see.**
+  `MeterBinderReachabilityConventionTest` scans `src/main/java` and `src/test/java` for a `.bindTo(`
+  whose receiver is a **call rather than a name**: `bindTo` returns `void`, so such a binder is
+  unreachable the instant the call returns and no liveness argument is needed. The wider property —
+  the weak target strongly reachable at the *last* gauge read — is not statically decidable, so it is
+  held by hand at the four sites above and each says so; the scan is honest about the gap rather than
+  pretending to close it. It reuses `AsyncExecutorQualifierTest.strip` (literal mask included: this
+  class's own fixtures are Java sources inside text blocks, which would otherwise report themselves).
+  **The wired half is what keeps the ban from being a rule nobody can check**: one registry, one
+  binder held and one dropped, a full GC proven to have run by a witness `WeakReference` rather than
+  assumed from a bare `System.gc()` — the unheld gauge must read `NaN` and the held one its value.
+  That test holds its own binder with `Reference.reachabilityFence`, because it never reads the local
+  again and would otherwise be the defect it documents. Mutation-proven in the ordinary direction
+  too: the scan was red on exactly the six sites before the fix and names file and line.
+  Test and documentation only: no production code, REST, gRPC, proto, DTO, migration (**V58 stays
+  free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- device-error-severity: `POST /api/v1/device/errors` stores the severity the client sends instead of
+  stamping everything `ERROR` (issue #321, found working #300). `LogErrorRequestDto` has carried an
+  optional `severity` since 016 — documented in its `@Schema`, in the client guide and in the
+  response DTO — and both device POSTs called the `ErrorLoggingService` overload **without** it, the
+  one whose whole body is `… , ErrorSeverity.ERROR)`. A client reporting `"severity":"WARNING"` was
+  answered `"ERROR"` and the row carried `ERROR`, so the dashboard's Global Errors widget rendered
+  every client-reported error at one level and its severity filter could not separate a disk-space
+  warning from a fatal upload failure. The fix is that both endpoints pass
+  `request.effectiveSeverity()`, which until now had **no production caller at all** — the method
+  existed, and nothing reached it.
+  **Two facts the ticket did not name and the tests had to establish.** `DeviceErrorController` is
+  the only production caller of `ErrorLoggingService`, so the severity-less overloads are now
+  reached by tests alone; they are deliberately left (deleting them is the #165 shape, a decision of
+  its own) and recorded as **#326**. And the ERROR default is enforced **twice** — by
+  `effectiveSeverity()` and again by `ErrorLog.create`, which maps a null severity to ERROR — so the
+  two "no severity sent" tests stay green when the controller is put back to `severity()`, and that
+  is written in their Javadoc rather than left as an implied claim. The boundary still calls
+  `effectiveSeverity()`, so the default the request contract documents is the one applied where the
+  request arrives.
+  Tests assert both halves of the ticket's wording, because neither implies the other: the response
+  body is built from the entity the service returned and would show the right value even if the
+  column held another, while the column alone says nothing about what the client was told. The
+  stored value is read as a **raw column** through `JdbcTemplate` after an explicit flush — the
+  class is `@Transactional` and the entity carries an assigned UUID, so a JPA read would be served
+  from the persistence context and return the very instance the controller built (#245's reasoning,
+  one layer up). Mutation-proven in both directions: restoring the severity-less overload reddens
+  the two sent-severity tests, and changing `effectiveSeverity()`'s default to `INFO` reddens the
+  two default tests.
+  **Documentation: not needed on the client side and that is the point** —
+  `docs/postgres-delta-client-development-guide.md` already documents `severity?` with an ERROR
+  default, so the guide described the intention and the code contradicted it. No REST **route**,
+  gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric,
+  cache, S3-key or frontend change.
 - scratch-reserve-one-snapshot: The #193 scratch reserve stays at the frame plus **one** snapshot,
   and that is now a recorded decision rather than a gap (issue #296, raised by `review-architecture`
   as a MINOR on PR #295). The reserve is `max-frame-temp-bytes + max-temp-bytes` (deployed

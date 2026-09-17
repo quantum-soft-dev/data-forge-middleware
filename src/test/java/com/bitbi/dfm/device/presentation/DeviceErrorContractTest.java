@@ -2,12 +2,18 @@ package com.bitbi.dfm.device.presentation;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -27,6 +33,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Transactional
 @DisplayName("Device API - Error Management Contract Tests")
 class DeviceErrorContractTest extends BaseIntegrationTest {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private EntityManager entityManager;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private String jwtToken;
 
@@ -232,5 +246,149 @@ class DeviceErrorContractTest extends BaseIntegrationTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
                 .andExpect(jsonPath("$.error").value("Forbidden"));
+    }
+
+    /**
+     * The severity the client sends is the severity that is stored (issue #321).
+     * <p>
+     * Both assertions matter and neither implies the other: the response body is built from the
+     * entity the service returned, so it would show the right value even if the column held
+     * another one, while the column alone says nothing about what the client was told.
+     * </p>
+     */
+    @Test
+    @DisplayName("Should store and return the severity the client sends on a standalone error")
+    void shouldStoreTheSeveritySentForAStandaloneError() throws Exception {
+        String errorPayload = """
+                {
+                    "type": "DiskAlmostFull",
+                    "message": "Free space below 10%",
+                    "severity": "WARNING"
+                }
+                """;
+
+        String body = mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG)
+                        .header("Authorization", jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(errorPayload))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.severity").value("WARNING"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(persistedSeverity(idOf(body)))
+                .as("severity stored for a standalone error")
+                .isEqualTo("WARNING");
+    }
+
+    /**
+     * A standalone error that names no severity keeps the documented ERROR default.
+     * <p>
+     * This property already held before the fix, so it cannot start red; it is here so that the
+     * fix cannot turn an optional field into a required one, and it pins the default value
+     * itself — it is red when {@link com.bitbi.dfm.error.presentation.dto.LogErrorRequestDto
+     * #effectiveSeverity()} returns anything but ERROR. Note that the default is enforced twice:
+     * {@code ErrorLog.create} also maps a null severity to ERROR, so swapping
+     * {@code effectiveSeverity()} back to {@code severity()} in the controller leaves these two
+     * tests green. The controller calls {@code effectiveSeverity()} anyway, so the default the
+     * request contract documents is the one applied at the boundary.
+     * </p>
+     */
+    @Test
+    @DisplayName("Should default a standalone error to ERROR when no severity is sent")
+    void shouldDefaultToErrorWhenNoSeveritySentForAStandaloneError() throws Exception {
+        String errorPayload = """
+                {
+                    "type": "ValidationError",
+                    "message": "Invalid data format in row 42"
+                }
+                """;
+
+        String body = mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG)
+                        .header("Authorization", jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(errorPayload))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.severity").value("ERROR"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(persistedSeverity(idOf(body)))
+                .as("severity stored for a standalone error with no severity sent")
+                .isEqualTo("ERROR");
+    }
+
+    /**
+     * The batch endpoint honours the sent severity as well (issue #321, second half).
+     */
+    @Test
+    @DisplayName("Should store and return the severity the client sends on a batch error")
+    void shouldStoreTheSeveritySentForABatchError() throws Exception {
+        String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch for store-01
+
+        String errorPayload = """
+                {
+                    "type": "FileProcessingError",
+                    "message": "Failed to parse CSV file",
+                    "severity": "CRITICAL"
+                }
+                """;
+
+        String body = mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, batchId)
+                        .header("Authorization", jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(errorPayload))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.severity").value("CRITICAL"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(persistedSeverity(idOf(body)))
+                .as("severity stored for a batch error")
+                .isEqualTo("CRITICAL");
+    }
+
+    /**
+     * A batch error that names no severity keeps the documented ERROR default.
+     */
+    @Test
+    @DisplayName("Should default a batch error to ERROR when no severity is sent")
+    void shouldDefaultToErrorWhenNoSeveritySentForABatchError() throws Exception {
+        String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903";
+
+        String errorPayload = """
+                {
+                    "type": "FileProcessingError",
+                    "message": "Failed to parse CSV file"
+                }
+                """;
+
+        String body = mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, batchId)
+                        .header("Authorization", jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(errorPayload))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.severity").value("ERROR"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(persistedSeverity(idOf(body)))
+                .as("severity stored for a batch error with no severity sent")
+                .isEqualTo("ERROR");
+    }
+
+    private String idOf(String responseBody) throws Exception {
+        JsonNode id = objectMapper.readTree(responseBody).get("id");
+        assertThat(id).as("id in the response body").isNotNull();
+        return id.asText();
+    }
+
+    /**
+     * Read the stored severity as a raw column rather than through the repository: this class is
+     * {@code @Transactional}, so a JPA read would be served from the persistence context and would
+     * return the very instance the controller built, proving nothing about what was written.
+     * The insert is flushed first because the entity carries an assigned UUID, so nothing forces
+     * it out on its own.
+     */
+    private String persistedSeverity(String errorId) {
+        entityManager.flush();
+        return jdbcTemplate.queryForObject(
+                "SELECT severity FROM error_logs WHERE id = ?::uuid", String.class, errorId);
     }
 }

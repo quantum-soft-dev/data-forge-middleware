@@ -22,17 +22,33 @@ class ParquetScratchBudgetTest {
 
     private MeterRegistry registry;
 
+    /**
+     * The budget under test, held past the last {@link #liveBytes()} read (#316).
+     *
+     * <p>{@code delta.parquet.scratch.bytes} is built with {@code Gauge.builder(name, liveBytes,
+     * …)}, and that {@code AtomicLong} is a field of the budget — so once the budget is collected
+     * the gauge answers {@code NaN} and an assertion expecting {@code 0.0} fails for a reason that
+     * is not its own. A field rather than a local: the test instance is reachable from the running
+     * frame for the whole method, while the {@code budget} local is dead after its last use, which
+     * in most methods here is before the final read. See
+     * {@code MeterBinderReachabilityConventionTest}.</p>
+     */
+    @SuppressWarnings("unused")
+    private ParquetScratchBudget budgetUnderTest;
+
     @BeforeEach
     void setUp() {
         registry = new SimpleMeterRegistry();
     }
 
     private ParquetScratchBudget budget(long maxBytes) {
-        return new ParquetScratchBudget(registry, maxBytes);
+        budgetUnderTest = new ParquetScratchBudget(registry, maxBytes);
+        return budgetUnderTest;
     }
 
     private ParquetScratchBudget budget(long maxBytes, long checkpointReserveBytes) {
-        return new ParquetScratchBudget(registry, maxBytes, checkpointReserveBytes, 0L);
+        budgetUnderTest = new ParquetScratchBudget(registry, maxBytes, checkpointReserveBytes, 0L);
+        return budgetUnderTest;
     }
 
     @Test
