@@ -306,14 +306,21 @@ pages/{feature}/            # Route pages
   records. `FIX_FIELD_NAME_UPPER_CASE_PREFIX` was measured to leave record component names alone,
   `s3Path`, `sQty` and `URL` included. `FAIL_ON_EMPTY_BEANS` can only turn a 500 into `{}`.
   **The decisions are a test rather than a paragraph.** `JacksonHttpDefaultsContractTest` carries all
-  sixteen verdicts (13 decided plus the 3 Boot pins itself) with the evidence in the failure message,
-  and asserts three things: the flag is absent from every configuration file — in the
+  eighteen verdicts (13 decided plus the 5 Boot pins itself) with the evidence in the failure
+  message, and asserts four things: the flag is absent from every configuration file — in the
   `SPRING_JACKSON_USE_JACKSON2_DEFAULTS` spelling too, since relaxed binding reaches the same property,
   and the #282 hazard is guarded, so the comment explaining the absence is not itself read as the flag;
   the mapper Boot builds **from the shipped `application.yml`** rather than from a copy of it carries
-  every decided value; and no enum overrides `toString()`. Red first on the first two, and the enum
-  guard was proven by mutation (a `toString()` on `SiteType` reddens it). The behavioural half of the
-  two pins is #300's `JsonRequestAcceptanceContractTest`, which goes red on the real 500s without them.
+  every decided value; no enum overrides `toString()`; and — the assertion review round 1 asked for —
+  **every default that actually differs between the two modes has a verdict at all**, so the table
+  cannot quietly stop describing the API when a later Jackson adds a default. That last one was the
+  round's finding turned into code rather than prose: the class Javadoc claimed to record all five
+  defaults Boot pins itself while `DECISIONS` held three, and both fast number parsers lived only in
+  the prose — a guard promising a guarantee it did not deliver. Red first on the first two; the enum
+  guard and the completeness guard were each proven by mutation (a `toString()` on `SiteType`; a
+  verdict deleted from the table, which the value check by construction cannot catch). The behavioural
+  half of the two pins is #300's `JsonRequestAcceptanceContractTest`, which goes red on the real 500s
+  without them.
   No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key,
   cache-key or frontend change — no field name, type or Zod schema moves, and key order is not something
   a parser reads. See `docs/cr-spring-boot-4-1.md` ("Jackson 3 defaults").

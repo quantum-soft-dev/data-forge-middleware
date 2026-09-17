@@ -140,9 +140,13 @@ both on the request side.
   `sQty` and `URL` included.
 - `FAIL_ON_EMPTY_BEANS` — no property-less type is serialized, and the flip can only turn a 500 into `{}`.
 
-`JacksonHttpDefaultsContractTest` is the record: it fails if the flag comes back in any configuration
-file (including the `SPRING_JACKSON_USE_JACKSON2_DEFAULTS` spelling), if the mapper Boot builds from
-the shipped `application.yml` stops carrying a decided value, or if any enum gains a `toString()`.
+`JacksonHttpDefaultsContractTest` is the record — all eighteen verdicts, the five Boot pins itself
+included, since "Boot pins it" is an observation about this Boot version and not a guarantee. It fails
+if the flag comes back in any configuration file (including the `SPRING_JACKSON_USE_JACKSON2_DEFAULTS`
+spelling), if the mapper Boot builds from the shipped `application.yml` stops carrying a decided value,
+if any enum gains a `toString()`, or if a default differs between the two modes and has **no** verdict
+at all — the last one so a Jackson release that adds a default cannot pass unnoticed, which is how such
+a table stops describing the API it claims to describe.
 
 Rejected: mapping an unreadable request body to 400 instead of 500. It is the precondition for ever
 accepting `FAIL_ON_TRAILING_TOKENS`, but #300 pins the current 500 as characterized behaviour and

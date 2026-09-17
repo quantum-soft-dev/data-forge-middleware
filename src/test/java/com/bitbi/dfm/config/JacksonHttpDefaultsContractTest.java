@@ -9,6 +9,7 @@ import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AssignableTypeFilter;
+import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.MapperFeature;
 import tools.jackson.databind.ObjectMapper;
@@ -41,8 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * thirteen that did, eleven were measured to change nothing a client can observe and were accepted,
  * while two change a request that works today into a 500 and were pinned.
  * <p>
- * This test is the record of those decisions, so a later Boot or Jackson release that flips one of
- * them fails here instead of on a client. It asserts three things:
+ * This test is the record of all eighteen, so a later Boot or Jackson release that flips one of them
+ * fails here instead of on a client — the five Boot pins itself included, since "Boot pins it" is an
+ * observation about this Boot version rather than a guarantee. It asserts three things:
  * <ol>
  *   <li>the compatibility flag is gone and stays gone — a re-added flag would silently restore all
  *       eighteen Jackson 2 defaults and make the eleven accepted decisions untrue again;</li>
@@ -124,7 +126,28 @@ class JacksonHttpDefaultsContractTest {
             new JsonMapperDecision(DateTimeFeature.WRITE_DURATIONS_AS_TIMESTAMPS, false, "UNCHANGED",
                     "Boot disables it with or without the flag"),
             new JsonMapperDecision(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false, "UNCHANGED",
-                    "Boot disables it with or without the flag, so an unknown property is still ignored"));
+                    "Boot disables it with or without the flag, so an unknown property is still ignored"),
+            new JsonMapperDecision(StreamReadFeature.USE_FAST_DOUBLE_PARSER, true, "UNCHANGED",
+                    "Boot enables it with or without the flag; it is a parsing-speed choice, but one that "
+                            + "has had precision bugs of its own, so it is tracked rather than assumed"),
+            new JsonMapperDecision(StreamReadFeature.USE_FAST_BIG_NUMBER_PARSER, true, "UNCHANGED",
+                    "Boot enables it with or without the flag, and it decides how a very long number "
+                            + "literal in a free-form Map<String, Object> is parsed"));
+
+    /**
+     * Every Jackson feature namespace the HTTP mapper carries, so the completeness check sees a default
+     * added to any of them rather than only to the ones #303 happened to touch.
+     */
+    private static final Class<?>[] FEATURE_ENUMS = {
+            DeserializationFeature.class,
+            SerializationFeature.class,
+            MapperFeature.class,
+            EnumFeature.class,
+            DateTimeFeature.class,
+            JsonNodeFeature.class,
+            StreamReadFeature.class,
+            tools.jackson.core.StreamWriteFeature.class
+    };
 
     /**
      * The compatibility flag, in every spelling a configuration file or an environment override could
@@ -170,6 +193,41 @@ class JacksonHttpDefaultsContractTest {
                         + "\nEach of these is a change to what clients read or what the API accepts. "
                         + "Either restore the value through spring.jackson.*, or take the new one "
                         + "deliberately and update this table with the evidence.")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("every default that actually differs between the two modes has a verdict")
+    void theDecisionTableCoversEveryDifference() {
+        ObjectMapper jackson2 = mapperWith("spring.jackson.use-jackson2-defaults=true");
+        ObjectMapper jackson3 = mapperWith("spring.jackson.use-jackson2-defaults=false");
+
+        List<String> recorded = DECISIONS.stream()
+                .map(d -> d.feature().getClass().getSimpleName() + "." + d.feature())
+                .toList();
+        assertThat(recorded).as("a feature recorded twice would hide one of its two verdicts")
+                .doesNotHaveDuplicates();
+
+        List<String> undecided = new ArrayList<>();
+        for (Class<?> featureEnum : FEATURE_ENUMS) {
+            for (Object feature : featureEnum.getEnumConstants()) {
+                if (isEnabled(jackson2, feature) == isEnabled(jackson3, feature)) {
+                    continue;
+                }
+                String name = featureEnum.getSimpleName() + "." + feature;
+                if (!recorded.contains(name)) {
+                    undecided.add(name);
+                }
+            }
+        }
+        assertThat(undecided)
+                .withFailMessage(() -> "These Jackson defaults differ between the Jackson 2 compatibility "
+                        + "mode and Jackson 3, and #303 has no verdict for them:\n  "
+                        + String.join("\n  ", undecided)
+                        + "\nThat is how this table silently stops describing the HTTP API: a Jackson or "
+                        + "Boot upgrade adds a default, nobody notices, and the change reaches a client. "
+                        + "Decide each one — accept it with the evidence, or pin it in application.yml — "
+                        + "and add it to DECISIONS.")
                 .isEmpty();
     }
 
@@ -250,10 +308,13 @@ class JacksonHttpDefaultsContractTest {
      */
     private ObjectMapper httpMapper() {
         Map<String, Object> jackson = applicationJacksonProperties();
-        String[] properties = jackson.entrySet().stream()
+        return mapperWith(jackson.entrySet().stream()
                 .map(e -> e.getKey() + "=" + e.getValue())
-                .toArray(String[]::new);
+                .toArray(String[]::new));
+    }
 
+    /** The mapper Boot's Jackson auto-configuration builds under {@code properties}. */
+    private ObjectMapper mapperWith(String... properties) {
         ObjectMapper[] holder = new ObjectMapper[1];
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
@@ -298,7 +359,16 @@ class JacksonHttpDefaultsContractTest {
         if (feature instanceof JsonNodeFeature f) {
             return mapper.serializationConfig().isEnabled(f);
         }
-        throw new IllegalArgumentException("Unhandled feature type: " + feature.getClass());
+        if (feature instanceof StreamReadFeature f) {
+            return mapper.tokenStreamFactory().isEnabled(f);
+        }
+        if (feature instanceof tools.jackson.core.StreamWriteFeature f) {
+            return mapper.tokenStreamFactory().isEnabled(f);
+        }
+        throw new IllegalArgumentException("Unhandled feature type: " + feature.getClass()
+                + ". It is listed in FEATURE_ENUMS, so the completeness check cannot read it — add a "
+                + "branch here rather than dropping it from the list, which would make the check blind "
+                + "to that whole namespace.");
     }
 
     private static List<Class<?>> applicationClasses() {
