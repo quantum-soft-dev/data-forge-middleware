@@ -2108,6 +2108,44 @@ class CheckpointServiceTest {
         order.verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
     }
 
+    /**
+     * The ordering every advancing build owes, held on each of the three frame producers rather
+     * than only on this class's default fixture (issue #297).
+     *
+     * <p>Issues #153 and #136/#142 each rest on the order of statements inside one method: the epoch
+     * is checked with nothing in the bucket, the frame goes up before any snapshot exists at the new
+     * seq, and the pointer and its event follow the snapshots. Splitting the orchestration from the
+     * production of the frame and the materialization of the snapshots moves those statements
+     * across classes, so the order is asserted per path — the fold, the streamed bootstrap and the
+     * merge — instead of being left to whichever path the default fixture happens to take.</p>
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"fold", "snapshot-stream", "merge"})
+    void checksTheEpochThenWritesTheFrameThenTheSnapshotsThenThePointerOnEveryPath(String path) {
+        long seq = 2L;
+        switch (path) {
+            case "fold" -> useFoldPath();
+            case "snapshot-stream" -> { /* the default fixture: a bootstrap FULL_SNAPSHOT */ }
+            case "merge" -> {
+                stubIncrementalSite(2L, 5L, 3);
+                deltaSegment(3L, 5L, List.of(record("customers", 3L, 4, "Dan")));
+                seq = 5L;
+            }
+            default -> throw new IllegalArgumentException(path);
+        }
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        InOrder order = inOrder(syncStateRepository, checkpointStorage, syncStateService, eventPublisher);
+        order.verify(syncStateRepository).findBySiteIdForUpdate(SITE);
+        order.verify(checkpointStorage).uploadFrame(eq(SITE), eq(seq), any(Path.class));
+        order.verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(seq), any(Path.class));
+        order.verify(syncStateService).recordCheckpoint(SITE, seq);
+        order.verify(eventPublisher).publishEvent(any(Object.class));
+    }
+
     @Test
     void leavesAnOrphanFrameWhenTheWipeCommitsAfterThePreCheck() {
         // The residual window the pre-check cannot close, kept honest rather than claimed away: a

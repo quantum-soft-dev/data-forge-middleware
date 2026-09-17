@@ -400,7 +400,7 @@ class ParquetScratchOrphanSweeperTest {
         // The on-disk contract is the prefix symbol. A writer that goes back to a string
         // literal can drift from the sweeper with no compile failure.
         String checkpoint = Files.readString(
-                Path.of("src/main/java/com/bitbi/dfm/delta/application/CheckpointService.java"));
+                Path.of("src/main/java/com/bitbi/dfm/delta/application/CheckpointScratch.java"));
         String batch = Files.readString(
                 Path.of("src/main/java/com/bitbi/dfm/delta/application/BatchParquetFinalizationService.java"));
         assertTrue(checkpoint.contains("ParquetScratch.CHECKPOINT_PREFIX"));

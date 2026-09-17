@@ -165,7 +165,9 @@ class IssueFindScriptTest {
     private void git(String... args) throws Exception {
         List<String> command = new ArrayList<>(List.of("git"));
         command.addAll(List.of(args));
-        Process process = new ProcessBuilder(command).directory(repo.toFile()).redirectErrorStream(true).start();
+        ProcessBuilder builder = new ProcessBuilder(command).directory(repo.toFile()).redirectErrorStream(true);
+        withoutInheritedGitEnvironment(builder);
+        Process process = builder.start();
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         assertThat(process.waitFor(30, TimeUnit.SECONDS)).isTrue();
         assertThat(process.exitValue()).as("git %s: %s", String.join(" ", args), output).isZero();
@@ -180,6 +182,7 @@ class IssueFindScriptTest {
                 .directory(repo.toFile())
                 .redirectOutput(stdout.toFile())
                 .redirectError(stderr.toFile());
+        withoutInheritedGitEnvironment(builder);
         Map<String, String> env = builder.environment();
         env.put("PATH", bin + File.pathSeparator + env.getOrDefault("PATH", "/usr/bin:/bin"));
         env.put("FAKE_GH_DIR", fixtures.toString());
@@ -193,6 +196,17 @@ class IssueFindScriptTest {
         List<String> calls = Files.exists(log) ? Files.readAllLines(log, StandardCharsets.UTF_8) : List.of();
         return new Result(process.exitValue(), Files.readString(stdout, StandardCharsets.UTF_8),
                 Files.readString(stderr, StandardCharsets.UTF_8), calls);
+    }
+
+    /**
+     * The fixture repository must be the only one git sees. Run from the pre-commit hook, this JVM
+     * inherits {@code GIT_DIR}, {@code GIT_INDEX_FILE} and friends from the {@code git commit} that
+     * started Gradle, and they outrank the working directory — so {@code git add} in the temporary
+     * repository was aimed at the real one and failed, blocking every commit while the same test
+     * stayed green when run by hand.
+     */
+    private static void withoutInheritedGitEnvironment(ProcessBuilder builder) {
+        builder.environment().keySet().removeIf(name -> name.startsWith("GIT_"));
     }
 
     private record Result(int exitCode, String stdout, String stderr, List<String> calls) {
