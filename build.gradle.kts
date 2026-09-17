@@ -248,6 +248,10 @@ tasks.named<Test>("test") {
     // the same reasoning — a script-only commit must not leave `test` UP-TO-DATE.
     inputs.files("scripts/board.sh")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // IssueFindScriptTest runs scripts/issue-find.sh against a stand-in gh and a local git repository
+    // (#308): an escaped path must not break a section silently. Same reasoning as the two above.
+    inputs.files("scripts/issue-find.sh")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
