@@ -2,7 +2,7 @@ package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.ParquetExportCredentialsService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

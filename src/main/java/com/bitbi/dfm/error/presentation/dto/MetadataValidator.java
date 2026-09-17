@@ -1,7 +1,7 @@
 package com.bitbi.dfm.error.presentation.dto;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.validation.ConstraintValidator;
 import jakarta.validation.ConstraintValidatorContext;
 import org.slf4j.Logger;
@@ -89,7 +89,7 @@ public class MetadataValidator implements ConstraintValidator<ValidMetadata, Map
                 ).addConstraintViolation();
                 return false;
             }
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             logger.warn("Failed to serialize metadata for size validation: {}", e.getMessage());
             context.disableDefaultConstraintViolation();
             context.buildConstraintViolationWithTemplate(

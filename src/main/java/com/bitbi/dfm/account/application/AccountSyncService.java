@@ -15,8 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
-import org.springframework.retry.annotation.Backoff;
-import org.springframework.retry.annotation.Retryable;
+import org.springframework.resilience.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -91,10 +90,13 @@ public class AccountSyncService {
      * @throws AccountService.AccountAlreadyExistsException if account exists
      */
     @Transactional
+    // Spring Framework's retry (Spring Retry left with Boot 4.1): maxRetries counts the retries after
+    // the first call, so 2 is the former maxAttempts = 3 — pinned by AccountSyncServiceRetryTest.
     @Retryable(
-        retryFor = {Auth0ServiceUnavailableException.class},
-        maxAttempts = 3,
-        backoff = @Backoff(delay = 1000, multiplier = 2.0)
+        includes = {Auth0ServiceUnavailableException.class},
+        maxRetries = 2,
+        delay = 1000,
+        multiplier = 2.0
     )
     public AccountCreationResult createAccount(
         String email,

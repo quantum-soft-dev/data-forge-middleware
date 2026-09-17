@@ -3,13 +3,13 @@
 ## Tech Stack
 
 ### Backend
-- **Java 25** (LTS) + **Spring Boot 3.5.16** + **Spring Security 6** (Auth0 OAuth2)
-- **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 11**
+- **Java 25** (LTS) + **Spring Boot 4.1.1** (Spring Framework 7) + **Spring Security 7** (Auth0 OAuth2)
+- **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 12**
 - **AWS SDK v2** (S3) + **HikariCP** + **Micrometer** + **SpringDoc OpenAPI 3**
 - **Auth0 2.26.0** (Management API) + **Hypersistence Utils** (JSONB)
-- **Redis + Caffeine** (Spring Cache) + **Bucket4j** (rate limiting) + **Spring Retry**
+- **Redis + Caffeine** (Spring Cache) + **Bucket4j** (rate limiting) + **Spring Framework retry** (`@Retryable`, `@EnableResilientMethods`)
 - **Apache POI / commons-csv / commons-compress** + **java-diff-utils** (file diff) + **json-schema-validator**
-- **JUnit 5 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
+- **JUnit 6 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
 
 ### Frontend
 - **React 19.2** + **TypeScript 5.6** + **Vite 7**
@@ -688,13 +688,50 @@ pages/{feature}/            # Route pages
 - OpenAPI spec: `/v3/api-docs`
 
 ## Active Technologies
-- Java 25 (LTS) + Spring Boot 3.5.16, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)
+- Java 25 (LTS) + Spring Boot 4.1.1, Spring Security 7 (Auth0 OAuth2), Spring Data JPA (Hibernate 7.4), Jackson 3, AWS SDK v2 (S3)
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
-- PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
+- PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- spring-boot-4-1: Spring Boot 3.5.16 → **4.1.1** — Framework 7.0.9, Security 7.1.1, Hibernate 7.4.5,
+  Jackson 3.1.5, Flyway 12.4, Micrometer 1.17.1, JUnit 6.0.3, HikariCP 7.0.2, Testcontainers 2.0.5
+  (issue #302, the atomic step of the migration, merged into `migration/spring-boot-4.1`; prepared by
+  #299/#300/#301/#313). **Build**: technology starters (`-webmvc`, `-security-oauth2-resource-server`,
+  `-flyway` — without it Boot 4 runs no migrations — and the per-technology test starters); caffeine,
+  Testcontainers and Awaitility versions from the BOM; springdoc 3.1.1; `hypersistence-utils-hibernate-73`
+  3.15.5; `spring-retry` and `annotations-api` gone. **protobuf held at 3.25.9** through the BOM property
+  `protobuf-java.version` (Boot 4.1 manages 4.35.1; #304). **Boot's Gradle plugin now configures the
+  protobuf plugin**: it adds a declared `grpc` plugin to every generate task itself, so our
+  `generateProtoTasks` registration had to go ("a PluginOptions with that name already exists"), while
+  its version-less `protoc`/`protoc-gen-grpc-java` resolved to no version, so both stay pinned.
+  `spring-boot-properties-migrator` was read for `default`/`dev`/`prod`/`test` (positive control
+  reported) — no renamed key — and removed.
+  **Retry** is Spring Framework's `@Retryable(maxRetries = 2, delay = 1000, multiplier = 2.0)` +
+  `@EnableResilientMethods`, pinned by behaviour in `AccountSyncServiceRetryTest` (three calls, 1 s then
+  2 s apart; mutations: no enabler, `maxRetries = 1`), advisor order unchanged (`LOWEST_PRECEDENCE - 1`).
+  **Jackson 3** in 10 main and 18 test files; `spring.jackson.use-jackson2-defaults: true` keeps the HTTP
+  API — every #300 wire and acceptance test green **without a changed expectation** (#303 drops it).
+  `JacksonConfiguration` is a `JsonMapperBuilderCustomizer`; `PluginDataValidator` keeps a Jackson 2 mapper
+  of its own, json-schema-validator 1.5 being Jackson 2.
+  **JSONB needed two library defaults set back**: `HypersistenceJsonMapperSupplier`
+  (`hypersistence-utils.properties`) builds the mapper with Jackson 2 defaults — removing it reddens seven
+  #300 JSONB characterizations — and `TableChangeStats` is `Serializable`, because hypersistence 3.15
+  snapshots a JSON attribute by Java serialization and refuses anything else, which failed every load of a
+  segment with stats. **Redis**: `GenericJacksonJsonRedisSerializer` with typing limited to
+  `com.bitbi.dfm.*`/`java.*`, keys prefixed `jackson3:` so pods of both versions never read each other's
+  entries during a rollout (mutation: dropping the prefix reddens four tests); two #300 expectations
+  moved deliberately (the prefix; `BatchDetailDto` now round-trips), and the reads wait for the value,
+  since Spring Data Redis 4 `Cache#put` can return before it is readable elsewhere. Both caches stay inert
+  (#319). **Security 7** adds a `FACTOR_BEARER` authority to bearer tokens; nothing reads the set, and
+  `TestSecurityConfigTest` pins `{ROLE_x, FACTOR_BEARER}`. **springdoc 3**: new `OpenApiDocsContractTest`;
+  the document dumped on 3.5.16 and 4.1.1 has identical paths, operations and schema names, with more
+  precise schemas only (nullable types, typed examples, Bean Validation constraints).
+  Guard tests named by the ticket stayed green unchanged. `test -PexcludeIntegration` 2633/0 failed;
+  `integrationTest` 307 tests, 14 skipped, 0 failed in `TZ=UTC` and `TZ=Asia/Jerusalem`. No REST route,
+  gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric-name, S3-key
+  or frontend change. See `docs/cr-spring-boot-4-1.md`.
 - boot41-characterization-net: The JSON surfaces Spring Boot 4.1 moves — HTTP bodies, request
   acceptance, the seven JSONB columns and the Redis cache — are pinned on Boot 3.5 before the upgrade
   (issue #300, the safety net for #302 in `migration/spring-boot-4.1`). Tests only; every one was
@@ -807,7 +844,6 @@ pages/{feature}/            # Route pages
   is #302; the protobuf 4 upgrade is #304. Test and documentation only: no production code,
   `build.gradle.kts`, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
   configuration-key, metric, S3-key or frontend change.
-||||||| parent of d7493afb (chore(build): Spring Boot 3.5.16 and no deprecated APIs Boot 4 removes (#299))
 - grpc-1-83-native-codegen: gRPC 1.68.1 → **1.83.1** and protobuf 3.25.5 → **3.25.9** (`protoc` and
   `protobuf-java`, one property), still on Spring Boot 3.5 (issue #313). The reason is the build, not
   the runtime: `protoc-gen-grpc-java` for `osx-aarch_64` is an **x86_64** Mach-O up to 1.75.0 and a

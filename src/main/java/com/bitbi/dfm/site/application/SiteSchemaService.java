@@ -4,7 +4,7 @@ import com.bitbi.dfm.site.domain.SiteSchema;
 import com.bitbi.dfm.site.domain.SiteSchemaRepository;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.upload.presentation.dto.SchemaUploadRequestDto;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

@@ -32,13 +32,18 @@ public class PluginDataValidator {
     private static final Logger logger = LoggerFactory.getLogger(PluginDataValidator.class);
 
     private final PluginRegistry pluginRegistry;
-    private final ObjectMapper objectMapper;
+    /**
+     * A Jackson 2 mapper of this class's own, deliberately (issue #302). json-schema-validator 1.5.x
+     * validates Jackson 2 {@code JsonNode}s, while the application's mapper is Jackson 3 since Boot 4,
+     * so there is no Jackson 2 mapper in the context to inject. It only turns plugin data (plain maps of
+     * strings, numbers and booleans) and schema text into trees, for which the defaults are enough.
+     */
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final JsonSchemaFactory schemaFactory;
     private final Map<String, JsonSchema> schemaCache;
 
-    public PluginDataValidator(PluginRegistry pluginRegistry, ObjectMapper objectMapper) {
+    public PluginDataValidator(PluginRegistry pluginRegistry) {
         this.pluginRegistry = pluginRegistry;
-        this.objectMapper = objectMapper;
         this.schemaFactory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V7);
         this.schemaCache = new ConcurrentHashMap<>();
     }

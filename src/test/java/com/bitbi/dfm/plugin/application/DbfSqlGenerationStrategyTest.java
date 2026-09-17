@@ -4,7 +4,7 @@ import com.bitbi.dfm.comparison.domain.DiffService;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.upload.domain.UploadedFile;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

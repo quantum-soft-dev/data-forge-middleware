@@ -93,7 +93,7 @@ class GlobalExceptionHandlerTest {
     @Test
     @DisplayName("Should handle NoResourceFoundException with the shared 404 handler")
     void shouldHandleNoResourceFoundException() {
-        NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "/api/v1/test");
+        NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "/api/v1/test", "/api/v1/test");
 
         ResponseEntity<ErrorResponseDto> response = handler.handleNotFound(ex, request);
 

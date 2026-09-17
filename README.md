@@ -1,6 +1,6 @@
 # Data Forge Middleware
 
-A Spring Boot 3.5.16 middleware service for secure batch file uploads with AWS S3 integration, designed for multi-tenant environments.
+A Spring Boot 4.1.1 middleware service for secure batch file uploads with AWS S3 integration, designed for multi-tenant environments.
 
 ## Overview
 

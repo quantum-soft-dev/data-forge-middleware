@@ -6,7 +6,7 @@ import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;

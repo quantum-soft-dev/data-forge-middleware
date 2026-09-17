@@ -454,7 +454,7 @@ s3://dataforge-uploads/
 
 | Layer | Technology | Coverage | Purpose |
 |-------|------------|----------|---------|
-| Unit | JUnit 5 + Mockito | 80%+ | Business logic, validation |
+| Unit | JUnit 6 + Mockito | 80%+ | Business logic, validation |
 | Contract | MockMvc + @WebMvcTest | All endpoints | API contracts |
 | Integration | Testcontainers (PostgreSQL, LocalStack S3) | Critical paths | E2E flows |
 

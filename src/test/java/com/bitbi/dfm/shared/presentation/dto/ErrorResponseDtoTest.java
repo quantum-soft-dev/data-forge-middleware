@@ -1,8 +1,7 @@
 package com.bitbi.dfm.shared.presentation.dto;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -11,9 +10,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ErrorResponseDtoTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper()
-        .registerModule(new JavaTimeModule())
-        .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS); // Use ISO-8601 format
+    // Jackson 3 has java.time built in and writes dates as ISO-8601 by default
+    private final ObjectMapper objectMapper = JsonMapper.builder().build();
 
     @Test
     void shouldCreateErrorResponseDtoWithAllFields() {

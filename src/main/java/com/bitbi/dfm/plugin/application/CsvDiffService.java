@@ -2,7 +2,7 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.comparison.domain.DiffService;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
