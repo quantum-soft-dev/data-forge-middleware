@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.contract;
 
+import com.bitbi.dfm.contract.WireJson;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.plugin.application.PluginApiKeyService;
 import com.bitbi.dfm.plugin.application.SqlChangesQueryService;
@@ -287,6 +288,31 @@ class BitBiPluginApiContractTest extends BaseIntegrationTest {
             verify(pluginApiKeyService).validateApiKey(VALID_API_KEY);
         }
 
+        /**
+         * Wire form pinned on Boot 3.5 / Jackson 2 (issue #300): each site in declared key order with an
+         * explicit {@code null}, and the trailing {@code "empty"} member Jackson 2 derives from
+         * {@code SiteListResponseDto.isEmpty()}.
+         */
+        @Test
+        @DisplayName("#300: site list body keeps declared keys and the derived empty member")
+        void shouldKeepTheSiteListWireForm() throws Exception {
+            when(pluginApiKeyService.validateApiKey(VALID_API_KEY))
+                .thenReturn(Optional.of(mockAccountPlugin));
+            Site site = mock(Site.class);
+            when(site.getId()).thenReturn(TEST_SITE_ID);
+            when(site.getSiteName()).thenReturn("warehouse-01");
+            when(site.getDisplayName()).thenReturn(null);
+            when(sqlChangesQueryService.listSites(TEST_ACCOUNT_ID)).thenReturn(List.of(site));
+
+            String body = mockMvc.perform(get(ApiRoutes.BITBI_SITES)
+                    .header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+            WireJson.assertMatches("{\"sites\":[{\"id\":\"" + TEST_SITE_ID + "\",\"siteName\":\"warehouse-01\","
+                + "\"displayName\":null}],\"empty\":false}", body);
+        }
+
         @Test
         @DisplayName("TC11: Should return 200 OK with empty array when no sites")
         void shouldReturn200WithEmptyArrayWhenNoSites() throws Exception {
@@ -365,6 +391,35 @@ class BitBiPluginApiContractTest extends BaseIntegrationTest {
 
             verify(pluginApiKeyService).validateApiKey(VALID_API_KEY);
             verify(sqlChangesQueryService).listTables(TEST_ACCOUNT_ID);
+        }
+
+        /**
+         * Wire form pinned whole on Boot 3.5 / Jackson 2 before the move to Jackson 3 (issue #300):
+         * the Bit BI client reads {@code lastUpdatedAt} as an ISO {@code Instant} with {@code Z} and
+         * {@code fileSize} as a JSON integer, in the declared key order. The
+         * trailing {@code "empty"} member is not a record component: Jackson 2 writes the
+         * {@code isEmpty()} helper of {@code TableListResponseDto} as a property, and a client may
+         * already read it.
+         */
+        @Test
+        @DisplayName("#300: table list body is pinned whole, Instant with Z")
+        void shouldKeepTheTableListWireForm() throws Exception {
+            when(pluginApiKeyService.validateApiKey(VALID_API_KEY))
+                .thenReturn(Optional.of(mockAccountPlugin));
+            when(sqlChangesQueryService.listTables(TEST_ACCOUNT_ID))
+                .thenReturn(List.of(
+                    TableDto.of("customers", 1048576L, Instant.parse("2025-01-15T10:30:00Z")),
+                    TableDto.of("orders", 2097152L, Instant.parse("2025-01-15T11:45:00.120Z"))));
+
+            String body = mockMvc.perform(get(ApiRoutes.BITBI_TABLES)
+                    .header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+            WireJson.assertMatches("{\"tables\":["
+                + "{\"tableName\":\"customers\",\"fileSize\":1048576,\"lastUpdatedAt\":\"2025-01-15T10:30:00Z\"},"
+                + "{\"tableName\":\"orders\",\"fileSize\":2097152,\"lastUpdatedAt\":\"2025-01-15T11:45:00.120Z\"}],\"empty\":false}",
+                body);
         }
 
         @Test
