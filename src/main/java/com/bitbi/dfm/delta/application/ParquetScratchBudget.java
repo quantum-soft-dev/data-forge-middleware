@@ -58,10 +58,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * own holdings may use at most {@code max-scratch-bytes} minus the largest set of scratch files the
  * checkpoint path holds <em>at one time</em>. Until #292 that was a single file, so the reserve was
  * {@code delta.checkpoint.max-frame-temp-bytes} alone: the frame was written, uploaded and deleted
- * before the first table's file was created, and the build held one at a time (#178). The streamed
- * bootstrap build cannot do that — its snapshot passes <em>read</em> the frame, so the frame stays
- * on the volume beside the table files. The reserve is therefore
- * {@code max-frame-temp-bytes + max-temp-bytes}: the frame <b>and one snapshot</b>.</p>
+ * before the first table's file was created, and the build held one at a time (#178). A streamed
+ * build — the bootstrap of #292 and, since #293, every nightly incremental one — cannot do that: its
+ * snapshot passes <em>read</em> the frame, so the frame stays on the volume beside the table files.
+ * The reserve is therefore {@code max-frame-temp-bytes + max-temp-bytes}: the frame <b>and one
+ * snapshot</b>.</p>
  *
  * <p><b>One snapshot, not {@code delta.checkpoint.snapshot-writers} of them</b>, and the asymmetry
  * is deliberate — it is the same shape the batch side already has. Nothing here reserves
@@ -73,7 +74,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * streamed path can always write its frame and one snapshot, whatever a completed-batch backlog is
  * doing. Writers beyond the first take whatever the directory has free, and a refusal ends that
  * build with the next tick retrying — the ordinary transient outcome, never a verdict on an
- * artifact.</p>
+ * artifact. That this stayed the answer once the streamed shape became the nightly path is a
+ * measured decision (#296): real snapshot files are one to two orders of magnitude below the
+ * ceilings, and {@code delta.parquet.scratch.refused{writer=checkpoint_table}} moving is the signal
+ * to lower {@code snapshot-writers} or raise the directory — see the guide's "Sizing note".</p>
  *
  * <p>Compared against batch live bytes, not the directory total: a frame in flight already occupies
  * the reserve and must not shrink the batch share a second time. That is a floor for the nightly
@@ -135,9 +139,9 @@ public class ParquetScratchBudget {
     public ParquetScratchBudget(MeterRegistry registry,
                                 @Value("${delta.parquet.max-scratch-bytes:0}") long budgetBytes,
                                 @Value("${delta.checkpoint.max-frame-temp-bytes:0}") long frameCeilingBytes,
-                                // The second half of the reserve since #292: the streamed bootstrap
-                                // build keeps the frame open while it writes snapshots from it, so
-                                // "the largest set of files the checkpoint path holds at once" is
+                                // The second half of the reserve since #292: a streamed build
+                                // (every nightly incremental one since #293) keeps the frame open
+                                // while it writes snapshots from it, so "the largest set of files the checkpoint path holds at once" is
                                 // the frame plus one snapshot rather than the frame alone.
                                 @Value("${delta.checkpoint.max-temp-bytes:0}") long snapshotCeilingBytes) {
         // A negative value is read as unbounded rather than as "refuse everything": an operator who

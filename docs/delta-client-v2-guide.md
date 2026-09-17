@@ -1198,6 +1198,50 @@ reciprocal is worth knowing too: with `W > 1` the checkpoint path can hold rathe
 directory at once than it used to, so a completed-batch artifact may spend extra backoff attempts
 while a large first checkpoint is being built.
 
+**Frame plus one snapshot is a decision, not an oversight (issue #296).** Since #293 the streamed
+shape is every nightly incremental build rather than a site's one bootstrap, so "the writers after
+the first take whatever is free" is the normal path, and the gap between the reserve
+(`frame + 1 x table`) and the peak (`frame + W x table`) was reopened as a question about the
+number.
+It was settled on measurement rather than on the ceilings. On the dev deployment, right after a
+wipe and a `FULL_SNAPSHOT` of a site the size of the largest known one (~5 million records,
+87 tables, 2.3 GiB of uncompressed wire bytes), the completed-batch Parquet of that snapshot — the
+same rows, one file per table — came to **95 MiB in total, 15 MiB for the largest table**, `max_over_time` of
+`delta.parquet.scratch.bytes` over the day was **87 MiB**, and `delta.parquet.scratch.refused` was
+zero for every writer. Eight of those tables at once is about 120 MiB beside the frame, against a
+reserve of 2.5 GiB that a batch backlog cannot touch. The ceilings are one to two orders of
+magnitude above the files, which is exactly why reserving at them was the wrong measure.
+
+Three other shapes were weighed and not taken:
+
+- **Reserve `frame + W x table`** — 9.5 GiB against a 5 GiB directory at the shipped `W = 8`: a
+  larger volume and a smaller batch share, to protect against a peak the data does not produce.
+- **Reserve `frame + N x table` and cap the snapshot group at the same `N`** — the guarantee and the
+  behaviour would match, but at `N = 2` an 87-table site makes `1 + ceil(87 / 2) = 45` passes over
+  its local frame every night instead of 12, a cost paid whether or not the directory is busy.
+- **Lower `DELTA_CHECKPOINT_MAX_TEMP_BYTES`** (to ~256 MiB, so `1.5 + 8 x 0.25 = 3.5 GiB` fits and
+  the reserve is honest by arithmetic alone) — it changes the failure for the worse: a busy
+  directory is a transient refusal that clears on its own, while a table over its per-file ceiling
+  is refused on every build and gives up after `delta.checkpoint.max-materialize-attempts` nights
+  (#149) until the key is raised.
+
+**What to watch, and what to do.** The signal that this trade has stopped holding is
+`delta.parquet.scratch.refused{writer=checkpoint_table}` moving at all: before #296 it was expected
+to stay at zero, and it still is. Remember what one refusal costs — the build ends and the *next
+tick* is the next scheduled night, not a minute later — so a directory held busy every night at
+the cron hour can keep a large site from advancing its pointer (and with it retention) night after
+night, even though nothing is lost. The remedies, cheapest first: lower
+`DELTA_CHECKPOINT_SNAPSHOT_WRITERS` (fewer snapshot files at once, more passes), then raise
+`DELTA_PARQUET_MAX_SCRATCH_BYTES` together with the volume's `sizeLimit`
+(`ParquetScratchCeilingBudgetTest` keeps the two in step). Revisit the decision itself when
+`max_over_time(delta_parquet_scratch_bytes[7d])` climbs past about half of the reserve. The next
+step already has a shape: a table refused for scratch *inside* a snapshot group rewrites the rest of
+that group with one writer in the same build, instead of ending it, which would turn the reserve's
+"one snapshot always fits" into "the build always finishes". It is not built yet because at these
+sizes it would never run; and it is not free — the frame is already uploaded by then and some of
+the group's tables may be published at the new seq, so what a retry inside the build may assume is
+that change's first question.
+
 **The guards fail differently, and the deployed one is the harshest.** Crossing an application
 ceiling is graceful and observable: a checkpoint table is skipped as
 `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, a completed-batch artifact is
@@ -1232,13 +1276,16 @@ equality would make the budget itself an eviction.
 gigabyte is not this. Batch writers may use at most `DELTA_PARQUET_MAX_SCRATCH_BYTES` minus what the
 checkpoint path holds *at one time*. Until #292 that was one file — the folded build wrote the frame,
 uploaded it and deleted it before the first table's file existed (#178) — so the reserve was
-`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` alone. The streamed bootstrap build's snapshot passes read
-the frame, so it stays on the volume beside a snapshot file, and the reserve is
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` alone. Every streamed build's snapshot passes (the bootstrap
+of #292, the incremental merge of #293) read the frame, so it stays on the volume beside a snapshot
+file, and the reserve is
 `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES` — 1.5 GiB + 1 GiB on this
 deployment, leaving **2.5 GiB** for completed-batch artifacts, which still clears their own 1 GiB
-ceiling. Why one snapshot rather than `W` of them is worked through in "One exception to 'one
-checkpoint scratch file at a time'" above. Checkpoint writers still see the whole directory budget
-when it is idle. Unbounded (the shipped default) ignores the reserve. A refusal is still a transient
+ceiling. Why one snapshot rather than `W` of them is worked through in "'One checkpoint scratch
+file at a time' is now the exception, not the rule" above, and why that stayed the answer once it
+became the nightly path in "Frame plus one snapshot is a decision, not an oversight". Checkpoint
+writers still see the whole directory budget when it is idle. Unbounded (the shipped default)
+ignores the reserve. A refusal is still a transient
 `delta.parquet.scratch.refused`, never a tag on `delta.checkpoint.builds.aborted`.
 
 It is **charged as bytes are written**, by the same two counting streams that already enforce the

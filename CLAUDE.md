@@ -695,6 +695,40 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- scratch-reserve-one-snapshot: The #193 scratch reserve stays at the frame plus **one** snapshot,
+  and that is now a recorded decision rather than a gap (issue #296, raised by `review-architecture`
+  as a MINOR on PR #295). The reserve is `max-frame-temp-bytes + max-temp-bytes` (deployed
+  1.5 GiB + 1 GiB of the 5 GiB directory), while a streamed build holds the frame open beside up to
+  `delta.checkpoint.snapshot-writers` (8) snapshot files — a gap that dates from #292 but mattered
+  more after #293, which made the streamed shape every nightly incremental build instead of a
+  site's one bootstrap. **Decided on measurement, not on the ceilings.** On the dev deployment,
+  after a wipe and a `FULL_SNAPSHOT` of a ~5-million-record, 87-table site, the completed-batch
+  Parquet of the same rows came to 95 MiB in total with a 15 MiB largest table, the day's
+  `max_over_time(delta_parquet_scratch_bytes)` was 87 MiB and `delta.parquet.scratch.refused` was
+  zero for every writer — so eight snapshots at once is about 120 MiB beside the frame, against a
+  2.5 GiB reserve batch cannot touch. The on-disk size of the frame itself was not yet measured when
+  this was decided; the first streamed build on that site is where it will be. **Rejected, with
+  their costs:** reserving `frame + W x table` (9.5 GiB of a 5 GiB directory); reserving
+  `frame + N x table` and capping the snapshot group at `N` (at `N = 2`, 45 passes over the local
+  frame every night instead of 12 for 87 tables, paid whether or not the directory is busy);
+  lowering `DELTA_CHECKPOINT_MAX_TEMP_BYTES` so the arithmetic fits (it trades a transient disk
+  refusal for a deterministic per-table one that gives up after
+  `delta.checkpoint.max-materialize-attempts` nights, #149); and retrying a scratch-refused
+  snapshot group with one writer inside the same build — the right shape if refusals ever appear,
+  not built because at these sizes it would never run, and not free, since the frame is already
+  uploaded and part of the group may be published by then. **The operating rule** is written where
+  an operator looks: `delta.parquet.scratch.refused{writer=checkpoint_table}` moving at all is the
+  signal, one refusal costs a night (the next tick is the next cron occurrence), and the remedies
+  are lowering `DELTA_CHECKPOINT_SNAPSHOT_WRITERS` first and then raising
+  `DELTA_PARQUET_MAX_SCRATCH_BYTES` together with the volume's `sizeLimit`; the decision itself is
+  to be revisited when the seven-day peak of `delta.parquet.scratch.bytes` passes about half the
+  reserve. Stale wording that still called the streamed build "the bootstrap" is corrected in
+  `ParquetScratchBudget`, `application.yml` and `k8s/base/configmap.yaml`, and a guide
+  cross-reference that named a heading which no longer exists now names the real one.
+  Documentation and comments only: no production behaviour, REST, gRPC, proto, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, configuration-value, metric, S3-key or
+  frontend change. See `docs/delta-client-v2-guide.md` ("Frame plus one snapshot is a decision,
+  not an oversight").
 - checkpoint-service-split: `CheckpointService` is split along its three roles, with no change in
   behaviour (issue #297, raised by `review-architecture` on PR #294 and again on PR #295). Two tickets
   running had moved **algorithms** out of the class (`BootstrapFrameWriter`, `ChangelogMerge`,
