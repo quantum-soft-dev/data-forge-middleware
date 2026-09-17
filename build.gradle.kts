@@ -244,6 +244,10 @@ tasks.named<Test>("test") {
     // commit touching only the script leaves `test` UP-TO-DATE and the resolver goes unchecked.
     inputs.files("scripts/issue-base.sh")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // BoardScriptTest runs scripts/board.sh against a stand-in gh and pins its GraphQL spend (#311);
+    // the same reasoning — a script-only commit must not leave `test` UP-TO-DATE.
+    inputs.files("scripts/board.sh")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
