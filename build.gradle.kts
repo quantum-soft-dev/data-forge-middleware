@@ -6,7 +6,7 @@ plugins {
     id("org.springframework.boot") version "4.1.1"
     id("io.spring.dependency-management") version "1.1.7"
     jacoco
-    id("com.google.protobuf") version "0.9.4"
+    id("com.google.protobuf") version "0.9.6"
 }
 
 group = "com.bitbi"
@@ -30,11 +30,6 @@ repositories {
 
 extra["awsSdkVersion"] = "2.28.11"
 extra["grpcVersion"] = "1.83.1"
-extra["protobufVersion"] = "3.25.9"
-// Boot 4.1 manages protobuf (protobuf-bom 4.35.1 through Spring gRPC). Held at 3.25.9 through the BOM
-// property rather than a direct version, so transitive protobuf-java* artifacts follow as well;
-// grpc-protobuf 1.83.1 needs protobuf-java 3.25.x. The protobuf 4 upgrade is #304.
-extra["protobuf-java.version"] = "3.25.9"
 extra["parquetVersion"] = "1.15.2"
 extra["hadoopVersion"] = "3.4.1"
 
@@ -108,7 +103,7 @@ dependencies {
     implementation("io.grpc:grpc-stub:${property("grpcVersion")}")
     implementation("io.grpc:grpc-protobuf:${property("grpcVersion")}")
     runtimeOnly("io.grpc:grpc-netty-shaded:${property("grpcVersion")}")
-    implementation("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
+    implementation("com.google.protobuf:protobuf-java")
 
     // Parquet egress for Power BI (Delta Client v2 — 022, Task 4).
     // We write/read via Parquet's OutputFile/InputFile + PlainParquetConfiguration (no Hadoop FS), but
@@ -291,19 +286,12 @@ tasks.jacocoTestCoverageVerification {
 // protoc-gen-grpc-java and adds it to every generate task itself (with @generated=omit). So the
 // generateProtoTasks { all() { plugins { create("grpc") } } } this block used to carry is gone — a
 // second registration fails configuration ("a PluginOptions with that name already exists").
-// The version-less coordinates are meant to align with protobuf-java and grpc-util, but with
-// protobuf-java a direct dependency they resolve to no version ("Could not find
-// com.google.protobuf:protoc:."), so both stay pinned to the properties the runtime artifacts use.
-// The configureEach is registered after Boot's, so it runs after it and its artifact wins.
+// The version-less coordinates align with protobuf-java and grpc-util, which the Boot BOM manages
+// (protobuf-bom 4.35.1, grpc-bom 1.83.1), so protoc and protoc-gen-grpc-java follow the runtime
+// artifacts instead of a second place that has to be kept in step (#304).
 protobuf {
-    protoc {
-        artifact = "com.google.protobuf:protoc:${property("protobufVersion")}"
-    }
     plugins {
         create("grpc")
-        matching { it.name == "grpc" }.configureEach {
-            artifact = "io.grpc:protoc-gen-grpc-java:${property("grpcVersion")}"
-        }
     }
 }
 
