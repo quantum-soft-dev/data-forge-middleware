@@ -263,6 +263,20 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- graphql-budget: `scripts/board.sh` moves a card for 3 GraphQL points instead of ~500 (issue #311).
+  The GraphQL limit is 5000 points an hour per account, shared by every session, subagent and
+  script. Measured: `gh project item-list --limit 500` ~200, `field-list` ~100, `item-list --limit
+  100` ~40, `gh pr checks`/`issue view` ~1 — and the old `board.sh status` used two `item-list 500`
+  and a `field-list` per transition. It now reaches GitHub only through `gh api`: one 1-point query
+  for the card and the `Status` field resolved by name (no copy of "Board identifiers"), direct
+  mutations, a one-card re-read, and REST for labels, issue state and `show`. New `board.sh list
+  <column>…` reads the board at 1 point per 100 cards. `/github-issue`, `/merge` and the dispatcher
+  use `board.sh` instead of `item-list`/`field-list`/`item-edit`, and CI is polled `--interval 60`.
+  `CLAUDE.md` gains a "GraphQL budget" subsection with the table and rules. `BoardScriptTest` runs
+  the script against a stand-in `gh` that refuses anything but `gh api` (mutation: `item-list` back
+  in the lookup fails five scenarios); the script is a declared `test` input and a pre-commit
+  trigger. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - migration-base-branch: A ticket can land somewhere other than `develop` (issue #298). The Spring
   Boot 4.1 migration runs in `migration/spring-boot-4.1` (#299–#304 merge into it, #305 lands it),
   and three gaps would have stopped that chain: `Closes #N` fires only on the default branch, so a

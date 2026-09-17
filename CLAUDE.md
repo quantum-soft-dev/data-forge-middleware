@@ -480,17 +480,45 @@ Project id `PVT_kwDOB7LEnM4BeGrE`, `Status` field id `PVTSSF_lADOB7LEnM4BeGrEzhY
 | Done | `98236657` |
 
 ```bash
-gh project item-list 16 --owner quantum-soft-dev --format json --limit 100   # find by content.number
-gh project item-add  16 --owner quantum-soft-dev --url <issue-url>           # if not on the board
-gh project item-edit --project-id <project-id> --id <PVTI_...> \
-    --field-id <status-field-id> --single-select-option-id <option-id>
+scripts/board.sh status <n> "<column>"     # card + status label, adds to the board if missing, prints the re-read column
+scripts/board.sh list <column> [<column>…] # open issues in those columns, 1 GraphQL point per 100 cards
+scripts/board.sh unblock <closed-n>        # Ready for tickets whose every "Blocked by" is closed
+scripts/board.sh show <n>                  # REST, no GraphQL
 ```
 
-If `item-edit` fails, never invent ids — re-read them with
-`gh project field-list 16 --owner quantum-soft-dev --format json`; the board may have changed.
-`/github-issue`, `/github-issue-runner` and `/merge` all read these ids from here, so they stay in
-one place: a copy in each command would drift silently and start moving cards into a column that
-no longer exists.
+`board.sh` resolves the project, the `Status` field and the option ids **by name on every call**,
+in the same one-point query that finds the card, so it carries no copy of the table above and a
+renamed or re-created column is picked up rather than written into. The table stays as the human
+reference and as what a hand-written query uses; never invent ids — if a hand-written mutation
+fails, re-read them with one cheap query (see "GraphQL budget"), not by guessing. A copy of these
+ids in each command would drift silently and start moving cards into a column that no longer exists.
+
+#### GraphQL budget
+
+GitHub's GraphQL limit is **5000 points an hour per account**, shared by every session, subagent and
+script running as that account — a second token of the same user does not add to it. It ran out twice
+in one afternoon of #298, and a `/github-issue-runner` window of three would do it alone. Measured on
+the live limit (issue #311):
+
+| Call | Points |
+|---|---|
+| `gh project item-list 16 --limit 500` | ~200 |
+| `gh project field-list 16` | ~100 |
+| `gh project item-list 16 --limit 100` | ~40 |
+| `gh pr checks`, `gh issue view`, `gh issue list --json body` | ~1 |
+| `scripts/board.sh status` (lookup + mutation + re-read) | **3** |
+| `scripts/board.sh list` | 1 per 100 cards |
+| `scripts/board.sh show`, any `gh api repos/…` | 0 (REST has its own pool) |
+
+The `board.sh` before #311 spent **~500 points on one transition** — `item-list --limit 500` to find
+the card, `field-list`, and `item-list` again to verify — and `unblock` repeats a transition per
+ticket, so closing #298 and unblocking #299–#301 cost ~2000. The rules that follow from the table:
+move cards only with `board.sh`; read columns with `board.sh list`, never `gh project item-list`;
+prefer REST (`gh api repos/…`) for labels, comments, assignees and closing; poll CI with
+`gh pr checks --watch --interval 60`, not 10–20 s; and read `gh api rate_limit` (free) before a burst
+instead of retrying into an exhausted limit. `BoardScriptTest` holds `board.sh` to it: the script is
+run against a stand-in `gh` that refuses anything but `gh api`, and a transition is pinned at three
+GraphQL calls.
 
 **Status lives in two places and both must be moved on every transition:** the Kanban board
 (Projects v2 `Status`, project **16**) and the repo `status: *` labels. The ticket walks the
@@ -532,9 +560,9 @@ journal guard on #205, where a missing `AGENTS.md` entry needs a judgement. The 
 reason for a command to skip the loop: a just-closed ticket still wearing a live label poisons
 the next `gh issue list` in that same session.
 
-Moving the board needs the `project` token scope — if `gh project` fails with
+Moving the board needs the `project` token scope — if `scripts/board.sh` (or `gh`) fails with
 `INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
-only the label. Always re-read the board after a transition: a command that exited 0 is not proof
+only the label. Always re-read the board after a transition (`board.sh status` prints the re-read column): a command that exited 0 is not proof
 the state moved.
 
 > `.specify/memory/constitution.md` is an **unfilled spec-kit template** (`[PRINCIPLE_1_NAME]`
@@ -667,6 +695,39 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- graphql-budget: `scripts/board.sh` moves a card for 3 GraphQL points instead of ~500, and the
+  commands stop recommending the calls that cost the rest (issue #311). The GraphQL limit is 5000
+  points an hour **per account**, shared by every session, subagent and script, and it ran out twice
+  while #298 was worked. Measuring it on the live limit found where it went: `gh project item-list
+  --limit 500` is ~200 points, `field-list` ~100, `item-list --limit 100` ~40, while `gh pr checks`,
+  `gh issue view` and `gh issue list --json body` are ~1. `board.sh status` called `item-list 500` to
+  find the card, `field-list` for the ids and `item-list 500` again to verify — ~500 points for one
+  transition — and `unblock` repeats a transition per freed ticket, so closing #298 and unblocking
+  #299–#301 cost ~2000.
+  **The script now reaches GitHub only through `gh api`.** One query (1 point) returns the issue's
+  node id, its cards and project 16's `Status` field with every option, resolved **by name** — so the
+  script carries no copy of "Board identifiers" and a renamed column is found rather than written
+  into. Adding to the board and changing the column are direct mutations, the re-read is a query of
+  the one card, and labels, issue state and `show` go through REST, whose pool is separate. The
+  status-label fix of #309 (`local … label`) is kept. New `board.sh list <column>…` reads the board by
+  `fieldValueByName` at 1 point per 100 cards, for the dispatcher's pool and its monitoring, which
+  repeated `item-list --limit 100` on every poll. Live on the real board: `status` 3 points, `list
+  Backlog Ready` 2, `show` 0.
+  **Commands**: `/github-issue` moves cards with `board.sh` (2a, 2b, "Как двигать карточку"),
+  `/merge` checks `Done` with it, the dispatcher reads its pool and its monitoring with `board.sh
+  list`, and CI is polled `--interval 60` in `/task`, `/github-issue` and `/merge` instead of 10–20 s.
+  "Board identifiers" gains the `board.sh` commands and a **GraphQL budget** subsection with the
+  measured table and the rules that follow from it.
+  **Tests**: `BoardScriptTest` runs the script against a stand-in `gh` first on `PATH` that records
+  every call, answers from fixtures and refuses anything but `gh api`; seven scenarios pin a
+  transition at three GraphQL calls, adding a card that is not on the board, refusing an unknown
+  column before any mutation, `Done` stripping every status label, `unblock` freeing only tickets
+  whose blockers are all closed (a PR in the labelled list is ignored), `list` across pages and
+  `show` spending no GraphQL. Mutation: putting `gh project item-list` back into the lookup fails the
+  five scenarios that move a card. The first mutation run passed — `scripts/board.sh` was not a
+  declared input of `test`, the #298 trap again — so it is one now, and the pre-commit hook runs
+  `com.bitbi.dfm.documentation.*` when it changes. No production code, REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - migration-base-branch: A ticket can land somewhere other than `develop`, and the process says so
   instead of every command assuming it (issue #298). The Spring Boot 4.1 migration is run in a
   long-lived `migration/spring-boot-4.1` branch, tickets #299–#304 merge into it and #305 lands it —

@@ -184,7 +184,7 @@ src/main/resources/db/migration/`, а при `develop` — с веткой ми�
    `npx tsc --noEmit`, `npm --prefix frontend run lint`, `npm --prefix frontend test`.
    В свежем worktree сначала `npm --prefix frontend ci` — `node_modules` гитом не носятся.
 2. Закоммить merge и запушь.
-3. Дождись, пока CI на PR снова позеленеет: `gh pr checks <pr> --watch --interval 20`.
+3. Дождись, пока CI на PR снова позеленеет: `gh pr checks <pr> --watch --interval 60` (реже опрос — меньше GraphQL, `CLAUDE.md` → «GraphQL budget»).
    Актуальные гейты — `backend-test` и `frontend-test`.
 4. **Если разрешение конфликта поменяло логику, а не просто склеило соседние строки** —
    прогони ревью заново (`/code-review <pr>` или `/review <pr> --comment`, если плагин уже отработал по
@@ -242,15 +242,10 @@ gh pr merge <pr> --squash --delete-branch
      `` gh issue close <n> --comment 'Merged into `<base>` by #<pr>.' `` — в одинарных кавычках, в
      двойных bash исполнит обратные кавычки как команду. Без этого шага цепочка миграции встаёт:
      следующий тикет остаётся заблокированным открытым блокером.
-2. **Карточка в `Done`?** Встроенный workflow проекта переносит её при закрытии issue, но
-   проверь и подвинь руками, если не переехала. Идентификаторы доски — в `CLAUDE.md`, раздел
-   «Board identifiers»; сюда их не копируй:
-
-   ```bash
-   gh project item-list 16 --owner quantum-soft-dev --format json --limit 100
-   gh project item-edit --project-id <project-id> --id <PVTI_...> \
-       --field-id <status-field-id> --single-select-option-id <option-id колонки Done>
-   ```
+2. **Карточка в `Done`?** Встроенный workflow проекта переносит её при закрытии issue, но на это
+   не полагаемся: `scripts/board.sh status <n> Done` ставит колонку (повторно — безвредно), снимает
+   все `status: *` и печатает перечитанную колонку. Это 3 очка GraphQL; `gh project item-list`
+   ради той же проверки стоил ~40–200 (`CLAUDE.md` → «GraphQL budget»).
 
 3. **Снять статусные метки.** Закрытый тикет не носит ни одной `status: *` — не только
    `ready to merge`. Снимай **все, что реально висит**, а не фиксированный список из двух
@@ -301,8 +296,9 @@ gh pr merge <pr> --squash --delete-branch
    её пригодной — закрывающий не обязан угадывать будущее поглотителя. Что именно случилось,
    говорит комментарий; здесь он говорит «смержено». Карточку **не двигай в другую колонку** —
    отдельной колонки под этот исход нет намеренно, её перезаписал бы тот же встроенный workflow;
-   но проверь по `gh project item-list`, что она в `Done`, и подвинь туда руками, если workflow не
-   сработал. Это тот же пункт 2 выше, просто для поглощённого тикета.
+   но проверь, что она в `Done` (`scripts/board.sh status <NNN> Done` — ставит и печатает
+   перечитанную колонку), если workflow не сработал. Это тот же пункт 2 выше, просто для
+   поглощённого тикета.
 
 ### 6. Убрать за собой
 

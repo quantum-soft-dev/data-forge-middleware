@@ -85,11 +85,12 @@ $ARGUMENTS
 
 ### 1. Собрать пул задач
 
-Источник — доска проекта 16 (идентификаторы в `CLAUDE.md`, раздел «Board identifiers»;
-сюда их не копируй). Берём колонки **`Backlog` и `Ready`**, любой milestone.
+Источник — доска проекта 16. Берём колонки **`Backlog` и `Ready`**, любой milestone.
+`scripts/board.sh list` читает доску постранично по одному полю — 1 очко GraphQL на 100 карточек,
+против ~40 у `gh project item-list --limit 100` (`CLAUDE.md` → «GraphQL budget»):
 
 ```bash
-gh project item-list 16 --owner quantum-soft-dev --format json --limit 100
+scripts/board.sh list Backlog Ready   # «#n<TAB>колонка<TAB>заголовок», только открытые issues
 gh issue list --state open --limit 100 --json number,title,labels,milestone,assignees,body
 gh pr list --state open --json number,title,headRefName,body
 git worktree list                     # какие ветки уже где-то выложены
@@ -277,10 +278,12 @@ Agent(subagent_type: "general-purpose", run_in_background: true, description: "i
 ```bash
 gh pr list --state open --json number,title,headRefName,statusCheckRollup,mergeStateStatus
 gh issue list --label "status: ready to merge" --state open --json number,title
-gh project item-list 16 --owner quantum-soft-dev --format json --limit 100
+scripts/board.sh list "In Progress" "In Review" Blocked
 ```
 
-Проверяй по событию, а не непрерывно: человек говорит «проверь», либо он же ставит регулярный
+Колонки читай через `board.sh list`, а не `gh project item-list`: этот опрос повторяется весь
+прогон, и на каждом шаге ~40 очков против 1 — ровно та разница, которая выбирает общий на все
+сессии GraphQL-бюджет. Проверяй по событию, а не непрерывно: человек говорит «проверь», либо он же ставит регулярный
 опрос — `/loop 20m /github-issue-runner <номера>`. Сам себя в бесконечный цикл не загоняй.
 
 **Отчёт исполнителя — это заявка, а не факт.** Прежде чем мержить, перечитай состояние по GitHub
