@@ -695,6 +695,52 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- gauge-weak-target-held: A gauge test holds the object its gauge reads, so the value stops turning
+  into `NaN` when the collector runs (issue #316). `Gauge.builder(name, target, fn)` keeps `target`
+  behind a **weak reference** — the registry never keeps alive the thing it reads — and six call
+  sites in three classes wrote `new SomeMetrics(...).bindTo(registry)`, dropping the only strong
+  reference on the same line. Alone each class passed; inside `./gradlew integrationTest`, one JVM
+  with some 2900 tests and plenty of collections, `BatchParquetQueueMetricsTest` failed as
+  `expected: <42.0> but was: <NaN>` on a branch whose diff had touched none of it — the #207/#226
+  class, where the gate names an innocent test and costs a full investigation.
+  **The fix is a field, not a local, and the difference is the point.** The binder lives on the test
+  instance, which is reachable from the running frame for the whole method; a local the method never
+  reads again is dead, and HotSpot is free to collect it where it stands although it is still in
+  scope. `.strongReference(true)` was rejected as the ticket proposed it: it changes production code
+  to hold a reference only the tests need.
+  **The ticket's second half — are there more of this shape — found one the list did not name and
+  cleared three.** `ParquetScratchBudgetTest` is the same hazard through a different registration:
+  `delta.parquet.scratch.bytes` is built on the budget's own `liveBytes` field, the `budget` local is
+  dead before most methods' closing `assertEquals(0.0, liveBytes())`, and that read would answer
+  `NaN`. It gets the same field. **Review round 1 found the claim about a third file too broad and
+  the hole real**, which is the part worth keeping: the first draft wrote that
+  `SqlGenerationConcurrencyTest` and `SqlGenerationStreamingTest` are safe because the service whose
+  semaphore the gauge reads is still in use after the read. That is true of
+  `awaitSemaphoreQueueSize`, which polls while other threads hold the service, and of
+  `SqlGenerationStreamingTest`, which only asserts the gauge *exists* and never reads its value —
+  and false of `shouldShowZeroQueueSizeWhenNoWaiters`, whose service is created and never touched
+  again, so `isEqualTo(0.0)` would meet `NaN`. The shape is #316 exactly, one registration form over
+  (`meterRegistry.gauge(name, target, fn)` rather than a binder), and it is **fixed** rather than
+  written down as accepted — the wording that no longer matched the code was how a permanent
+  document would have started lying. It is also outside what the scan can see, since nothing is
+  chained there. Cleared for real: `ComparisonMetrics` has no test at all, and in production its
+  weak target is a repository bean the context holds.
+  **The guard bans the shape that is wrong unconditionally and says what it cannot see.**
+  `MeterBinderReachabilityConventionTest` scans `src/main/java` and `src/test/java` for a `.bindTo(`
+  whose receiver is a **call rather than a name**: `bindTo` returns `void`, so such a binder is
+  unreachable the instant the call returns and no liveness argument is needed. The wider property —
+  the weak target strongly reachable at the *last* gauge read — is not statically decidable, so it is
+  held by hand at the four sites above and each says so; the scan is honest about the gap rather than
+  pretending to close it. It reuses `AsyncExecutorQualifierTest.strip` (literal mask included: this
+  class's own fixtures are Java sources inside text blocks, which would otherwise report themselves).
+  **The wired half is what keeps the ban from being a rule nobody can check**: one registry, one
+  binder held and one dropped, a full GC proven to have run by a witness `WeakReference` rather than
+  assumed from a bare `System.gc()` — the unheld gauge must read `NaN` and the held one its value.
+  That test holds its own binder with `Reference.reachabilityFence`, because it never reads the local
+  again and would otherwise be the defect it documents. Mutation-proven in the ordinary direction
+  too: the scan was red on exactly the six sites before the fix and names file and line.
+  Test and documentation only: no production code, REST, gRPC, proto, DTO, migration (**V58 stays
+  free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - device-error-severity: `POST /api/v1/device/errors` stores the severity the client sends instead of
   stamping everything `ERROR` (issue #321, found working #300). `LogErrorRequestDto` has carried an
   optional `severity` since 016 — documented in its `@Schema`, in the client guide and in the

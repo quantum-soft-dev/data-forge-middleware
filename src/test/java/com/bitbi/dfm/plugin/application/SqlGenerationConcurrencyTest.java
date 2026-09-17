@@ -590,11 +590,25 @@ class SqlGenerationConcurrencyTest {
     @DisplayName("Semaphore Metrics")
     class SemaphoreMetrics {
 
+        /**
+         * The service whose semaphore the gauge reads, held past that read (#316).
+         *
+         * <p>{@code sql.generation.semaphore.queue.size} is registered with
+         * {@code meterRegistry.gauge(name, sqlGenerationSemaphore, …)}, and Micrometer keeps that
+         * semaphore weakly. Everywhere else in this class the service is still in use while the
+         * gauge is polled — {@code awaitSemaphoreQueueSize} runs against threads that hold it — but
+         * these two methods do nothing with it after creating it, so a local would be dead at the
+         * read and the value would come back {@code NaN}. See
+         * {@code MeterBinderReachabilityConventionTest}.</p>
+         */
+        @SuppressWarnings("unused")
+        private SqlGenerationService gaugedService;
+
         @Test
         @DisplayName("should register queue size gauge")
         void shouldRegisterQueueSizeGauge() {
             // Given / When
-            SqlGenerationService service = createService(2, 120);
+            gaugedService = createService(2, 120);
 
             // Then - gauge should be registered
             assertThat(meterRegistry.find("sql.generation.semaphore.queue.size").gauge())
@@ -605,7 +619,7 @@ class SqlGenerationConcurrencyTest {
         @DisplayName("should show zero queue size when no waiters")
         void shouldShowZeroQueueSizeWhenNoWaiters() {
             // Given
-            SqlGenerationService service = createService(2, 120);
+            gaugedService = createService(2, 120);
 
             // Then
             assertThat(meterRegistry.get("sql.generation.semaphore.queue.size").gauge().value())
