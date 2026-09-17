@@ -17,7 +17,9 @@ import java.util.regex.Pattern;
  *   <li>{@code <uuid>} — a canonical lower-case UUID;</li>
  *   <li>{@code <instant>} — an {@code Instant} as {@code Instant.toString()} writes it: UTC with a
  *       {@code Z} and 0, 3, 6 or 9 fraction digits;</li>
- *   <li>{@code <local-date-time>} — a {@code LocalDateTime} as ISO-8601 without an offset;</li>
+ *   <li>{@code <local-date-time>} — a {@code LocalDateTime} as {@code ISO_LOCAL_DATE_TIME} writes it:
+ *       seconds always, no offset, and 0 to 9 fraction digits with trailing zeros dropped (unlike
+ *       {@code Instant}, whose fraction comes in groups of 3);</li>
  *   <li>{@code <string>} — any JSON string content (no quotes of its own).</li>
  * </ul>
  * Everything else is matched literally, so the template also pins whitespace (none) and the order
@@ -32,7 +34,7 @@ public final class WireJson {
             "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
     private static final String FRACTION = "(\\.\\d{3}|\\.\\d{6}|\\.\\d{9})?";
     private static final String INSTANT = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}" + FRACTION + "Z";
-    private static final String LOCAL_DATE_TIME = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}" + FRACTION + ")?";
+    private static final String LOCAL_DATE_TIME = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?";
     private static final String STRING = "[^\"\\\\]*";
 
     private WireJson() {

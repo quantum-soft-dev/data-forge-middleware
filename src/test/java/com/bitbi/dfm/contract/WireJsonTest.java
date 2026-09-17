@@ -36,12 +36,14 @@ class WireJsonTest {
     }
 
     @Test
-    @DisplayName("a LocalDateTime carries no offset")
+    @DisplayName("a LocalDateTime carries seconds, no offset, and a fraction with trailing zeros dropped")
     void localDateTimeForms() {
         String t = "\"<local-date-time>\"";
-        assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40.5\"")).isFalse();
-        assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40.500\"")).isTrue();
-        assertThat(WireJson.matches(t, "\"2026-09-17T14:06\"")).isTrue();
+        assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40\"")).isTrue();
+        assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40.12\"")).isTrue();
+        assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40.123456789\"")).isTrue();
+        assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40.1234567890\"")).isFalse();
+        assertThat(WireJson.matches(t, "\"2026-09-17T14:06\"")).isFalse();
         assertThat(WireJson.matches(t, "\"2026-09-17T14:06:40Z\"")).isFalse();
         assertThat(WireJson.matches(t, "[2026,9,17,14,6,40]")).isFalse();
     }
