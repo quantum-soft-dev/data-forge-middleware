@@ -263,6 +263,31 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- grpc-classpath-single-version: Every `io.grpc:*` artifact on the runtime classpath is one version,
+  and so is every `com.google.protobuf:protobuf-java*` artifact — held by a fast-gate test instead of
+  by luck (issue #301, a guard for the Spring Boot 4.1 migration, landed in
+  `migration/spring-boot-4.1`). Boot 3.5 manages neither family; Boot 4.1 manages both (`grpc-bom`
+  1.83.1, `protobuf-bom` 4.35.1, through Spring gRPC), and `io.spring.dependency-management` lets an
+  explicit version win only on a **direct** dependency, so `grpc-api`/`grpc-core`/`grpc-util`/
+  `grpc-protobuf-lite` follow the BOM while `build.gradle.kts`'s direct declarations keep theirs.
+  Compilation passes on such a mix; the failure arrives at run time inside the Delta ingestion server
+  on :9090, which nothing else in the suite would notice first. `GrpcArtifactVersionConsistencyTest`
+  (`src/test/java/com/bitbi/dfm/config/`, no Spring context) scans the class loader's
+  `META-INF/MANIFEST.MF` resources and fails naming every member of a diverging family with its
+  version. **Where the version comes from was measured, not assumed**: neither gRPC 1.83.1 nor
+  protobuf 3.25.9 ships `pom.properties`, so the artifact name is the jar's file name and the version
+  its manifest (`Implementation-Version` for gRPC, `Bundle-Version` for protobuf; `pom.properties` is
+  preferred when a jar has its own). Membership also requires the family's package inside the jar,
+  so `com.google.api.grpc:*` (`grpc-google-*`, its own version line) is not read as gRPC, and a member
+  with no version in its metadata is a divergence rather than a skip. Two fail-closed properties: the
+  scan must find `grpc-api`, `grpc-core`, `grpc-stub`, `grpc-protobuf`, `grpc-netty-shaded` and
+  `protobuf-java`, so a blind scan cannot read as a consistent classpath; and the reader
+  (`GrpcArtifactVersions`) is pinned over synthetic jars in `GrpcArtifactVersionsTest`.
+  Mutation-proven: `runtimeOnly("io.grpc:grpc-util") { version { strictly("1.82.0") } }` turns the
+  guard red naming `grpc-util 1.82.0` beside seven 1.83.1 artifacts. Pinning the family on Boot 4.1
+  is #302; the protobuf 4 upgrade is #304. Test and documentation only: no production code,
+  `build.gradle.kts`, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - grpc-1-83-native-codegen: gRPC 1.68.1 → **1.83.1** and protobuf 3.25.5 → **3.25.9** (`protoc` and
   `protobuf-java`, one property), still on Spring Boot 3.5 (issue #313). The reason is the build, not
   the runtime: `protoc-gen-grpc-java` for `osx-aarch_64` is an **x86_64** Mach-O up to 1.75.0 and a
