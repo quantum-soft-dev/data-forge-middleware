@@ -695,6 +695,48 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-service-split: `CheckpointService` is split along its three roles, with no change in
+  behaviour (issue #297, raised by `review-architecture` on PR #294 and again on PR #295). Two tickets
+  running had moved **algorithms** out of the class (`BootstrapFrameWriter`, `ChangelogMerge`,
+  `CheckpointFrameWriter`, `DecimalEnvelope`/`OpenTable`) and the file still grew to ~2300 lines,
+  because the orchestration stayed. **What stays in `CheckpointService`** is what it is as an
+  application service: choosing the build's path (fold, streamed bootstrap, merge; idle, refused,
+  discarded — `run`, `runWithBudgetHeld`, `refuseRefold`, `build`) and the three orchestrators
+  (`buildByMerge`, `buildFromSnapshotStream`, `materialize`) that own the **order** every advancing
+  build follows. **`CheckpointFrameProducer`** produces the frame: the fold (`foldSite`,
+  `BudgetedFold`, the frame written from it), the streamed bootstrap and the merge (`mergeIntoFrame`,
+  `BudgetedMerge`), with the shared segment reader, fold-size report and frame-ceiling report.
+  **`CheckpointSnapshotMaterializer`** writes the snapshots — the folded pass, the frame passes,
+  writer groups, decimal envelopes — and keeps every `checkpoints` row (`prepareTable`,
+  `publishTable`, `failTable`, `settleSiteWide`, `reapTablesAbsentFrom`, the idle probe's
+  `hasRetryableUnmaterializedTables`). `CheckpointScratch`, `CheckpointShutdownCheck` and
+  `SnapshotPass` are what they share. ~1030 lines stay in the service.
+  **One boundary of the ticket's suggested set was not taken**: no single "give me frame(M) and a
+  manifest" interface over the three producers. The fold hands back a heap state that the snapshots
+  are written from one scratch file at a time, the frame uploaded and deleted first
+  (`stillKeepsOneCheckpointScratchFileOnDiskAtATime`, #126/#153); forcing it into "a local file and
+  a manifest" would change its scratch peak, which is behaviour, not structure.
+  **Behaviour is held by construction and by test.** The bean, its constructor and every
+  configuration key are unchanged — the collaborators are built inside the constructor, not injected
+  — so `CheckpointServiceTest` (the ~100 cases over all three paths) runs **untouched**. Every moved
+  log line keeps its text **and its logger category**: the collaborators log under
+  `CheckpointService`, which is what an operator sets to DEBUG to size the fold and what three tests
+  attach `LogCapture` to. The public exception types stay nested in `CheckpointService`;
+  `BuildEndedByShutdownException` goes from private to package-private only so the collaborators
+  can raise it. **The invariant the ticket asked to pin**: the epoch checked before the first object
+  is in the bucket (#136/#142), the frame before any snapshot (#153), then the pointer and its event —
+  asserted before this change only on the default fixture's streamed bootstrap. New
+  `checksTheEpochThenWritesTheFrameThenTheSnapshotsThenThePointerOnEveryPath` holds it on the fold,
+  the streamed bootstrap and the merge; mutation-proven before and after the split (the epoch check
+  moved after the merge path's frame upload, and the fold path's snapshots moved ahead of its frame,
+  are each caught by that test **alone**). One test changed: `ParquetScratchOrphanSweeperTest`'s
+  textual prefix guard reads `CheckpointScratch.java`, where scratch files are now created.
+  **Found on the way and fixed in the same PR**: `IssueFindScriptTest` (#308) inherited `GIT_DIR`
+  and `GIT_INDEX_FILE` when run from the pre-commit hook, so its fixture `git init` reinitialized the
+  **real** repository and set `core.bare=true` in its shared config — every checkout and worktree
+  then refused `git add` — while the test stayed green by hand; its subprocesses now drop every
+  `GIT_*` variable. No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key, log-message or frontend change.
 - issue-find-path-roles: `scripts/issue-find.sh` no longer goes silently empty on a correctly escaped
   path, and has a test (issue #308, found working #298). Its path argument plays three roles that want
   different spellings, and the script used one spelling for all of them: a **regular expression** over
