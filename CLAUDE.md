@@ -195,7 +195,7 @@ alone: PRs resolve by `--head <branch>`, and the issue number lives in the PR ti
 **A ticket's base branch.** Everything above says `develop` for the ticket that declares nothing,
 which is almost every ticket. A migration ticket (Rule 1's exception) declares
 `` Base branch: `migration/<name>` `` and then every place where the commands say `develop` about
-branching, syncing, the PR base or the merge target means that branch instead. Four rules carry it:
+branching, syncing, the PR base or the merge target means that branch instead. Five rules carry it:
 
 - **The line is read by one script, not four paraphrases.** `scripts/issue-base.sh <n>` prints
   the base — `develop`, or the branch from a line of exactly that form in column 0, before the first
