@@ -3,7 +3,7 @@
 ## Tech Stack
 
 ### Backend
-- **Java 25** (LTS) + **Spring Boot 3.5.6** + **Spring Security 6** (Auth0 OAuth2)
+- **Java 25** (LTS) + **Spring Boot 3.5.16** + **Spring Security 6** (Auth0 OAuth2)
 - **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 11**
 - **AWS SDK v2** (S3) + **HikariCP** + **Micrometer** + **SpringDoc OpenAPI 3**
 - **Auth0 2.26.0** (Management API) + **Hypersistence Utils** (JSONB)
@@ -688,13 +688,55 @@ pages/{feature}/            # Route pages
 - OpenAPI spec: `/v3/api-docs`
 
 ## Active Technologies
-- Java 25 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)
+- Java 25 (LTS) + Spring Boot 3.5.16, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- boot-3-5-16-deprecations: Spring Boot 3.5.6 → **3.5.16** (Framework 6.2.19, Security 6.5.11,
+  Jackson 2.21.4) and JaCoCo 0.8.13 → **0.8.14**, the first release that supports Java 25 officially,
+  with the deprecated calls Boot 4 removes taken out first (issue #299, the first ticket of the Spring
+  Boot 4.1 migration, merged into `migration/spring-boot-4.1`). Boot 4's own migration guide starts
+  from the latest 3.5.x with no deprecated API in use, since everything deprecated in 3.x is gone in
+  4.0. Compiled with `-Xlint:deprecation,removal`, the Spring, Spring Security, Testcontainers and
+  swagger-annotations warnings are now **zero**: `AuthorizationManager#check` → `authorize` in
+  `MetricsScrapeAccessTest`/`MetricsScrapeBindingTest`; the Testcontainers 2 container classes
+  (`org.testcontainers.postgresql.PostgreSQLContainer`, no longer generic, and
+  `org.testcontainers.localstack.LocalStackContainer`, whose single edge endpoint `getEndpoint()`
+  replaces `getEndpointOverride(S3)` and whose services are named by string) in
+  `TestContainersManager`/`AbstractIntegrationTest`; and `@Schema(required = true)` →
+  `requiredMode = REQUIRED` in `BatchHistoryController` and `CreateComparisonRequestDto` — the
+  deprecated attribute is `Schema#required` only, `@Parameter(required = …)` is not deprecated and is
+  untouched. **Proven by comparison, not asserted**: the OpenAPI document (`/api-docs`, which is where
+  springdoc serves it outside the `dev` profile) was dumped before and after and is identical after
+  key sorting, all 180 `required` entries included.
+  **`ActuatorConfiguration` is deleted.** It hand-declared `WebMvcEndpointHandlerMapping` — a
+  springfox-era workaround — which Boot's `WebMvcEndpointManagementContextConfiguration` declares
+  `@ConditionalOnMissingBean` with the same links-mapping rule, so the manual bean only shadowed it;
+  in Boot 4 the class also moves to `org.springframework.boot.webmvc.actuate.endpoint.web`. The
+  status and content type of `/actuator`, `/actuator/health`, `/health/liveness`, `/health/readiness`,
+  `/actuator/info`, `/actuator/prometheus`, `/actuator/metrics` and `/actuator/env` were recorded
+  before and after and did not change, `MetricsScrapeContractTest` stays green, and
+  `ActuatorHealthContractTest` gains `/actuator/info` so it is held on the fast gate rather than only
+  by `Auth0JwtValidationIntegrationTest` (mutation: dropping `info` from the exposure list reddens
+  it). The dead `management.metrics.export.prometheus.enabled` key is removed — it was renamed in
+  Boot 3.0 and bound to nothing.
+  **One new Spring deprecation arrived with the bump and is fixed rather than carried**: Framework
+  6.2.x marks `ContentCachingRequestWrapper(HttpServletRequest)` for removal, because an unbounded
+  cache holds the whole request body in heap. `PluginAuditFilter` passes a limit of **1 MiB + 1 B** —
+  one byte past its own hashing limit, so an oversized body still reads as oversized instead of being
+  cached truncated and hashed as if it fitted, while the controller still receives the body whole.
+  The one observable change: for a body above 1 MiB, `plugin_audit_logs.request_body_size` records
+  the cached 1 048 577 rather than the full length (the hash stays `BODY_TOO_LARGE`). The filter had
+  no test; `PluginAuditFilterRequestBodyTest` now pins both sides, and bounding the cache at exactly
+  the hashing limit (the mutation) reddens the oversized case. **Left, deliberately**: Jackson 2.21's
+  `ObjectMapper#setSerializationInclusion` deprecation in `JacksonConfiguration` — not a Spring API,
+  and #302 rewrites that class for Jackson 3 — and the non-Boot deprecations the ticket lists as out of
+  scope (bucket4j `Refill`, commons-csv, POI, commons-compress, the project's own `@Deprecated`).
+  No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key or frontend
+  change; configuration loses one dead key.
 - grpc-classpath-single-version: Every `io.grpc:*` artifact on the runtime classpath is one version,
   and so is every `com.google.protobuf:protobuf-java*` artifact — held by a fast-gate test instead of
   by luck (issue #301, a guard for the Spring Boot 4.1 migration, landed in
@@ -720,6 +762,7 @@ pages/{feature}/            # Route pages
   is #302; the protobuf 4 upgrade is #304. Test and documentation only: no production code,
   `build.gradle.kts`, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
   configuration-key, metric, S3-key or frontend change.
+||||||| parent of d7493afb (chore(build): Spring Boot 3.5.16 and no deprecated APIs Boot 4 removes (#299))
 - grpc-1-83-native-codegen: gRPC 1.68.1 → **1.83.1** and protobuf 3.25.5 → **3.25.9** (`protoc` and
   `protobuf-java`, one property), still on Spring Boot 3.5 (issue #313). The reason is the build, not
   the runtime: `protoc-gen-grpc-java` for `osx-aarch_64` is an **x86_64** Mach-O up to 1.75.0 and a

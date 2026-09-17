@@ -19,11 +19,11 @@ import java.util.UUID;
 @Schema(description = "Request to create a file comparison between two upload sessions")
 public record CreateComparisonRequestDto(
     @NotNull(message = "Current batch ID is required")
-    @Schema(description = "ID of the current batch (source)", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
+    @Schema(description = "ID of the current batch (source)", example = "550e8400-e29b-41d4-a716-446655440000", requiredMode = Schema.RequiredMode.REQUIRED)
     UUID currentBatchId,
 
     @NotNull(message = "Target batch ID is required")
-    @Schema(description = "ID of the target batch (comparison baseline)", example = "550e8400-e29b-41d4-a716-446655440001", required = true)
+    @Schema(description = "ID of the target batch (comparison baseline)", example = "550e8400-e29b-41d4-a716-446655440001", requiredMode = Schema.RequiredMode.REQUIRED)
     UUID targetBatchId,
 
     @Schema(description = "Optional list of file IDs to compare. If null, all files will be compared.", example = "[\"550e8400-e29b-41d4-a716-446655440010\", \"550e8400-e29b-41d4-a716-446655440011\"]")

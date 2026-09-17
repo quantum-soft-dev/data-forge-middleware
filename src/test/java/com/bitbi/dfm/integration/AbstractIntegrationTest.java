@@ -10,12 +10,11 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.localstack.LocalStackContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.localstack.LocalStackContainer;
 
 import java.util.UUID;
 
-import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
 /**
  * Base class for integration tests with Testcontainers singleton pattern.
@@ -61,7 +60,7 @@ public abstract class AbstractIntegrationTest {
      * PostgreSQL container reference from singleton manager.
      * May be null if using external services (CI environment).
      */
-    protected static final PostgreSQLContainer<?> postgresContainer = containersManager.getPostgresContainer();
+    protected static final PostgreSQLContainer postgresContainer = containersManager.getPostgresContainer();
 
     /**
      * Redis container reference from singleton manager.
@@ -144,14 +143,14 @@ public abstract class AbstractIntegrationTest {
         registry.add("spring.data.redis.password", () -> "test_password");
 
         // S3 / LocalStack configuration
-        registry.add("s3.endpoint", () -> localStackContainer.getEndpointOverride(S3).toString());
+        registry.add("s3.endpoint", () -> localStackContainer.getEndpoint().toString());
         registry.add("s3.region", localStackContainer::getRegion);
         registry.add("s3.access-key", localStackContainer::getAccessKey);
         registry.add("s3.secret-key", localStackContainer::getSecretKey);
         registry.add("s3.bucket.name", () -> "data-forge-test-bucket");
 
         // AWS SDK configuration (alternative property names)
-        registry.add("aws.s3.endpoint", () -> localStackContainer.getEndpointOverride(S3).toString());
+        registry.add("aws.s3.endpoint", () -> localStackContainer.getEndpoint().toString());
         registry.add("aws.s3.region", localStackContainer::getRegion);
         registry.add("aws.accessKeyId", localStackContainer::getAccessKey);
         registry.add("aws.secretAccessKey", localStackContainer::getSecretKey);
