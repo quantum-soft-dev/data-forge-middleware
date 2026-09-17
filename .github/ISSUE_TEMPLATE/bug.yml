@@ -1,0 +1,110 @@
+name: Баг
+description: Поведение расходится с контрактом, документацией или данными источника
+title: "fix(scope): "
+labels: ["bug"]
+projects: ["quantum-soft-dev/16"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Без секретов:** никаких JWT и refresh-токенов, API-ключей плагинов (`plk_…`), паролей Parquet Export, device/user codes, содержимого `local-dev/auth0.env`.
+        Данные клиентов — только идентификаторы (`siteId`, `batchId`, `accountId`, seq).
+        Заголовок — `fix(scope): что сломано`; тип `test(...)` — для флака, `ops(...)` — для деплоя.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Где проявляется
+      multiple: true
+      options:
+        - Admin / Owner REST API (/api/v1/**)
+        - Device API (/api/v1/device/**)
+        - Delta gRPC ingestion (:9090, Windows-клиент)
+        - Bit BI plugin API
+        - Parquet Export plugin
+        - Фоновые задачи (чекпоинты, ретеншн, очереди SQL / egress / batch-parquet)
+        - Frontend (UI)
+        - Тестовый гейт / CI
+        - Деплой / инфраструктура (GKE, k8s)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Окружение
+      multiple: true
+      options:
+        - local
+        - dev (GKE, тег deploy-dev/*)
+        - stage
+        - prod
+        - CI
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: sha коммита, тег образа или `deploy-dev/*`.
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: Что происходит
+      description: Что видно — ответ API, строка лога, значение метрики, скриншот. Логи — блоком кода.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Как воспроизвести
+      description: Шаги, сайт/батч/сессия по идентификатору. Для флака — sha, джоба, как часто и воспроизводится ли на повторе.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+      description: Со ссылкой на контракт — `docs/…`, `delta-ingestion.proto`, запись «Recent Changes» в `CLAUDE.md`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: mechanism
+    attributes:
+      label: Механизм
+      description: Если причина уже понятна — `путь:строка` и почему. Не уверен — так и напиши, это решается в тикете.
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      value: |
+        - [ ] Регрессионный тест красный до исправления и зелёный после
+        - [ ]
+        - [ ] `./gradlew test -PexcludeIntegration` и `./gradlew integrationTest` зелёные; фронт, если трогался: `tsc --noEmit`, `lint`, `test`
+    validations:
+      required: true
+
+  - type: textarea
+    id: touches
+    attributes:
+      label: Что тронет
+      description: Обязательно, если тикет — follow-up из ревью или находка по ходу работы (`CLAUDE.md` → «Every follow-up says what it will touch»).
+      value: |
+        **Файлы:**
+        -
+
+        **Flyway-миграция:** нет / да
+        **Каталог `specs/NNN-*`:** нет / да
+        **`delta-ingestion.proto`:** нет / да — какие номера полей
+
+  - type: textarea
+    id: neighbours
+    attributes:
+      label: Открытые тикеты в тех же файлах
+      description: Метод поиска — в шаблоне «Задача» и в `CLAUDE.md`. Ничего не нашлось — «none found».

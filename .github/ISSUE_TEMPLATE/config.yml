@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Правила разработки (CLAUDE.md)
+    url: https://github.com/quantum-soft-dev/data-forge-middleware/blob/develop/CLAUDE.md
+    about: Жизненный цикл тикета, follow-ups, метки status и duplicate — прочитай до того, как заводить тикет
+  - name: Документация (docs/)
+    url: https://github.com/quantum-soft-dev/data-forge-middleware/tree/develop/docs
+    about: Change requests (cr-*.md), гайды Delta v2, Device Flow и плагинов

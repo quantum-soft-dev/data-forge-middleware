@@ -1,0 +1,92 @@
+name: Задача
+description: Доработка, рефакторинг, производительность или процесс — с разделами, обязательными для follow-up
+title: "type(scope): "
+labels: ["enhancement"]
+projects: ["quantum-soft-dev/16"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Заголовок — в стиле Conventional Commits: `perf(delta): …`, `chore(config): …`, `test: …`.
+        Формулируй **тему** (причину или подсистему), а не один симптом: следующим находкам должно быть куда прийти.
+        До создания поищи тот же тематический тикет среди **открытых и закрытых**: `scripts/issue-find.sh "<слова>" <пути>`.
+        Открытое совпадение — дополни его комментарием вместо нового тикета.
+        Метки `priority: *` и колонку `Backlog` ставит триаж. Метки `status: *` — только у взятой в работу задачи.
+
+  - type: input
+    id: milestone
+    attributes:
+      label: Предлагаемый майлстоун
+      description: Спринт и почему именно он. Назначает человек.
+      placeholder: "Sprint 5 — правит тот же файл, что #NNN"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Что происходит
+      description: |
+        Текущее поведение и чем оно плохо — со ссылками на код (`путь:строка`), `docs/cr-*.md`, записи «Recent Changes» в `CLAUDE.md`, метрики.
+        Зависимость — отдельной строкой `Blocked by #N`: `/task` и `/github-issue` её проверяют.
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: Что решить
+      description: Предлагаемая форма. Отвергнутые варианты — вместе с причинами; не удаляй их.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      description: Наблюдаемые и проверяемые пункты (HTTP, gRPC, строка в БД, метрика, экран). Каждый будет доказан тестом.
+      value: |
+        - [ ]
+        - [ ] `./gradlew test -PexcludeIntegration` и `./gradlew integrationTest` зелёные; фронт, если трогался: `tsc --noEmit`, `lint`, `test`
+        - [ ] Документация: «Recent Changes» в `CLAUDE.md` и `AGENTS.md`, `docs/` — по каждой поверхности «нужно» или «не нужно»
+    validations:
+      required: true
+
+  - type: textarea
+    id: touches
+    attributes:
+      label: Что тронет
+      description: |
+        Обязательно для любого follow-up (`CLAUDE.md` → «Every follow-up says what it will touch»).
+        Достаточно для проверки пересечений, это не план. «Нет» тоже стоит записать: миграцию и `specs/NNN-*` git не видит как конфликт.
+      value: |
+        **Файлы:**
+        -
+
+        **Flyway-миграция:** нет / да (номер берётся при взятии: `ls src/main/resources/db/migration/`)
+        **Каталог `specs/NNN-*`:** нет / да
+        **`delta-ingestion.proto`:** нет / да — какие номера полей
+    validations:
+      required: true
+
+  - type: textarea
+    id: neighbours
+    attributes:
+      label: Открытые тикеты в тех же файлах
+      description: |
+        Один запрос на каждое имя из «Что тронет» (аргумент `test()` — регулярное выражение, экранируй `.`, `(`, `[`):
+        `gh issue list --state open --limit 200 --json number,title,body --jq '.[] | select((.title + .body) | test("ИмяКласса";"i")) | "\(.number) \(.title)"'`
+        Ничего не нашлось — пиши «none found», а не «нет».
+      value: "none found"
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Смежное, сюда не входит
+      description: Что сознательно оставлено за рамками — с номерами тикетов, если они есть.
+
+  - type: textarea
+    id: questions
+    attributes:
+      label: Открытые вопросы
+      description: Пока здесь что-то есть, тикет не переводят в Ready; исполнитель остановится и спросит.
