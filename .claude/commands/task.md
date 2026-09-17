@@ -1,5 +1,5 @@
 ---
-description: Выполнить issue data-forge-middleware от взятия до squash-merge в develop
+description: Выполнить issue data-forge-middleware от взятия до squash-merge в его базовую ветку (develop, если тикет не объявил другую)
 argument-hint: <issue#>
 ---
 
@@ -13,11 +13,20 @@ issue»); при расхождении по существу действует
    комментариями**: здесь уточнение объёма регулярно живёт в комментарии, а не в теле, и тикет,
    прочитанный без них, решается не тот. Метка `status: blocked` или открытая зависимость
    `Blocked by #N` → остановись и сообщи. Прогони `scripts/issue-find.sh "<ключевые слова>" <пути>`:
-   задача уже решена смерженным PR или дублирует закрытую → сообщи и не начинай. Иначе
-   `gh issue edit $ARGUMENTS --add-assignee @me`, майлстоун текущего спринта,
+   задача уже решена смерженным PR или дублирует закрытую → сообщи и не начинай. Затем определи
+   базу (абзац ниже), и только потом `gh issue edit $ARGUMENTS --add-assignee @me`, майлстоун текущего спринта,
    `scripts/board.sh status $ARGUMENTS "In Progress"`. Если `gh project` отвечает
    `INSUFFICIENT_SCOPES` — остановись и скажи выполнить `gh auth refresh -s project`; молча обновить
    одну метку нельзя, человек смотрит на доску.
+
+   **База тикета — до назначения и доски.** `scripts/issue-base.sh $ARGUMENTS` печатает `<base>`:
+   `develop`, либо ветку миграции из строки `` Base branch: `migration/<name>` `` в начале тела
+   (`CLAUDE.md` → Rule 1). Правило чтения (только до первого заголовка и вне кода) живёт в скрипте —
+   не пересказывай и не читай строку глазами. Скрипт отказал (код ≠ 0) → стоп и сообщи его текст,
+   карточку не трогай: кривая строка не значит `develop`, а тикет миграции с PR в `develop` — ровно
+   то, что эта проверка ловит. `<base>` ≠ `develop` → ветка должна существовать
+   (`git ls-remote --exit-code --heads origin <base>`), иначе стоп. Ниже `<base>` стоит везде, где
+   речь о ветвлении, синхронизации, базе PR и цели merge.
 
 2. **Понять.** Прочитай `CLAUDE.md` — вместе с записями «Recent Changes» по затронутой подсистеме:
    там записаны не только принятые решения, но и отклонённые вместе с причинами, и это дешевле, чем
@@ -31,7 +40,9 @@ issue»); при расхождении по существу действует
 
 3. **Сделать.** Сначала worktree: если `git worktree list` уже содержит `.worktrees/$ARGUMENTS-*` —
    `EnterWorktree` с `path` к нему; иначе `EnterWorktree` с именем `$ARGUMENTS-<slug>` (создаётся от
-   `origin/develop`), затем внутри `git switch -c <type>/$ARGUMENTS-<slug>` (`bug` → `fix/`,
+   `origin/develop` при любой базе), затем внутри `git fetch origin <base>` и
+   `git switch -c <type>/$ARGUMENTS-<slug> origin/<base>` — ветка от **базы**, а не от того, на чём
+   стоит worktree (`bug` → `fix/`,
    `enhancement` → `feature/`, иначе `chore/`; полноценная спек-фича — `feature/NNN-name`). В свежем
    worktree подними то, что гитом не носится: `git config core.hooksPath .githooks`,
    `npm --prefix frontend ci`, `cp` гитигнорнутых `frontend/.env.local` и `local-dev/auth0.env`. Все
@@ -62,15 +73,18 @@ issue»); при расхождении по существу действует
    Одна проблема не решается с 3 попыток → стоп и вопрос. Работа по факту вдвое больше объёма issue →
    стоп, предложить разбиение.
 
-4. **Проверить.** `git pull --rebase origin develop`; `./gradlew integrationTest` (Testcontainers) +
+4. **Проверить.** `git pull --rebase origin <base>`; `./gradlew integrationTest` (Testcontainers) +
    фронтовые гейты, если фронт трогался. Каждый критерий приёмки → каким тестом доказан. Документация
    едет вместе с кодом (Rule 1): запись в «Recent Changes» `CLAUDE.md` и/или `docs/` (`cr-*.md` для
    изменения дизайна, клиентский гайд для видимого поведения) — по каждой поверхности скажи «нужно»
    или «не нужно», молча не пропускай; корневой `CHANGELOG.md` заморожен, не воскрешай.
 
-   Push, PR в `develop` с `Closes #$ARGUMENTS`, разделом «Удалённые/изменённые тесты» (если были) и
-   названной мутацией из шага 3. Дождись CI: `gh pr checks --watch`. На фиче-ветке CI — это
-   `backend-test` и `frontend-test`; `code-quality` и `dependency-analysis` гейтятся на
+   Push, PR в базу — `gh pr create --base <base>` — с `Closes #$ARGUMENTS`, разделом
+   «Удалённые/изменённые тесты» (если были) и названной мутацией из шага 3. При `<base>` ≠ `develop`
+   `Closes` issue **не закроет** (GitHub закрывает по ключевому слову только при merge в ветку по
+   умолчанию), но строку всё равно пиши: по ней `/merge` и диспетчер находят тикет, а закрытие
+   делает шаг 6. Дождись CI: `gh pr checks --watch`. На фиче-ветке CI — это
+   `backend-test` и `frontend-test` (и на PR в `migration/**` тоже); `code-quality` и `dependency-analysis` гейтятся на
    `run_full_pipeline` (только `develop`/`release`/`main`), их отсутствие — не провал. Красный CI →
    чини, лимит 3 попытки; смотри, какой именно тест упал, а не списывай проверку.
 
@@ -88,15 +102,25 @@ issue»); при расхождении по существу действует
    `resolveReviewThread`, с перечитыванием состояния после каждой мутации (готовый GraphQL — в
    `/github-issue`, шаг 8).
 
-6. **Смержить.** Три `VERDICT: READY`, зелёный CI и чистые поверхности ревью →
-   `gh pr merge --squash --delete-branch` (`deleteBranchOnMerge` в настройках репозитория выключен,
-   флаг обязателен), затем `ExitWorktree` с `remove` (вернуться в основную копию),
-   `scripts/board.sh status $ARGUMENTS Done`, `scripts/board.sh unblock $ARGUMENTS`, отметить пункт в
-   родительской issue, если есть.
+6. **Смержить.** Три `VERDICT: READY`, зелёный CI и чистые поверхности ревью, и `baseRefName` PR
+   совпадает с `<base>` из шага 1 → `gh pr merge --squash --delete-branch` (`deleteBranchOnMerge` в
+   настройках репозитория выключен, флаг обязателен), затем `ExitWorktree` с `remove` (вернуться в
+   основную копию). Дальше порядок важен — `unblock` переводит в `Ready` только тикеты, у которых
+   **все** блокеры уже закрыты:
+
+   - `<base>` = `develop`: issue закрыл `Closes #$ARGUMENTS` — проверь `gh issue view $ARGUMENTS
+     --json state`.
+   - `<base>` ≠ `develop`: `Closes` не сработал и не сработает — закрой явно:
+     `` gh issue close $ARGUMENTS --comment 'Merged into `<base>` by #<pr>.' `` — в **одинарных**
+     кавычках: в двойных bash исполнит обратные кавычки как команду.
+
+   Затем `scripts/board.sh status $ARGUMENTS Done` (он же снимает все `status: *`),
+   `scripts/board.sh unblock $ARGUMENTS`, перечитать тикет — закрыт, в `Done`, без `status: *` — и
+   отметить пункт в родительской issue, если есть.
 
    > **Второе исключение, объявленное явно.** Общее правило `CLAUDE.md` — «merge в `develop` делает только
-   > человек». Для `/task` разрешением служит сам вызов команды: запустив её, человек санкционировал
-   > merge этой задачи. Все проверки готовности при этом выполняются полностью — исключение снимает
+   > человек»; для тикета миграции то же относится к её ветке. Для `/task` разрешением служит сам
+   > вызов команды: запустив её, человек санкционировал merge этой задачи в её базу. Все проверки готовности при этом выполняются полностью — исключение снимает
    > вопрос, а не проверки. Соседние команды своё поведение не меняют, и они не одинаковы:
    > `/github-issue` разрешения **не** несёт — доходит до готовности и передаёт решение человеку;
    > `/github-issue-runner` несёт своё, на весь прогон; `/merge <pr>` и есть явная выдача разрешения
