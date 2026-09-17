@@ -1,0 +1,59 @@
+name: Решение по дизайну
+description: Вопрос, который нужно решить до реализации и зафиксировать в docs/cr-*.md
+title: "docs(cr): "
+labels: ["question", "documentation"]
+projects: ["quantum-soft-dev/16"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Решение фиксируется в `docs/cr-*.md` и в «Recent Changes» `CLAUDE.md` — вместе с отвергнутыми вариантами и причинами.
+        Решает человек. Тикеты, заблокированные этим решением, ссылаются на него строкой `Blocked by #N`.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Контекст и проблема
+      description: Что происходит и почему это нельзя решить по ходу реализации.
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Варианты
+      description: Для каждого — чего стоит и что ломает. Отвергнутые не удаляй.
+      value: |
+        1.
+        2.
+    validations:
+      required: true
+
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Рекомендация
+      description: Какой вариант и почему.
+
+  - type: checkboxes
+    id: contracts
+    attributes:
+      label: Какие контракты затрагивает
+      description: То, что компилятор и CI не поймают (`CLAUDE.md`, «Finding and fixing are separate»).
+      options:
+        - label: "`delta-ingestion.proto` и отгруженный Windows-клиент"
+        - label: Имена полей DTO / JSONB (Jackson связывает по имени)
+        - label: Поля JPA-сущностей (стратегия именования мапит их на колонки)
+        - label: Имена метрик Micrometer и их документированный смысл
+        - label: Ключи конфигурации, имена кэшей, заголовки
+        - label: S3-ключи
+        - label: Flyway (применённую миграцию не правят)
+        - label: "Frontend: ключи TanStack Query, пути маршрутов, поля Zod"
+
+  - type: textarea
+    id: blocked
+    attributes:
+      label: Что заблокировано до решения
+      description: Номера тикетов.
+    validations:
+      required: true

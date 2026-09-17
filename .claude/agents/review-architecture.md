@@ -1,6 +1,6 @@
 ---
 name: review-architecture
-description: Ревьюер PR, линза «архитектура, соглашения и бюджеты» — слои DDD, репозитории, именование, объём PR, документация, а также фоновая работа: планировщики, executor'ы, соединения, heap и scratch-бюджеты и их guard-тесты. Запускается командой /task на стадии In Review параллельно с review-correctness и review-contracts.
+description: Ревьюер PR, линза «архитектура, соглашения и бюджеты» — слои DDD, репозитории, именование, объём PR, документация, а также фоновая работа: планировщики, executor'ы, соединения, heap и scratch-бюджеты и их guard-тесты. Запускается командой /task на стадии In Review и командой /review — параллельно с review-correctness и review-contracts.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---

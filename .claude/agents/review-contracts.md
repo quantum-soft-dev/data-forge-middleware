@@ -1,6 +1,6 @@
 ---
 name: review-contracts
-description: Ревьюер PR, линза «контракты мимо CI» — proto и отгруженный Windows-клиент, имена полей DTO/JSONB/JPA, имена и смысл метрик, ключи конфигурации, S3-ключи, Flyway-миграции, ключи TanStack Query и поля Zod. Запускается командой /task на стадии In Review параллельно с review-correctness и review-architecture.
+description: Ревьюер PR, линза «контракты мимо CI» — proto и отгруженный Windows-клиент, имена полей DTO/JSONB/JPA, имена и смысл метрик, ключи конфигурации, S3-ключи, Flyway-миграции, ключи TanStack Query и поля Zod. Запускается командой /task на стадии In Review и командой /review — параллельно с review-correctness и review-architecture.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---

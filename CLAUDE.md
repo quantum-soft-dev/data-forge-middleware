@@ -154,8 +154,8 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 
 ### «The current PR» — one resolution rule for every command
 
-Whenever a command takes a PR number and none was given — `/merge`, `/code-review`, the `review`
-skill, anything else — it means **the PR of the current session**, resolved in this order:
+Whenever a command takes a PR number and none was given — `/merge`, `/code-review`, `/review`,
+anything else — it means **the PR of the current session**, resolved in this order:
 
 1. **From the branch you are on** — the normal case, since a session working an issue sits in its
    own worktree: `git rev-parse --abbrev-ref HEAD`, then
@@ -168,7 +168,7 @@ skill, anything else — it means **the PR of the current session**, resolved in
    to review or merge.
 
 Several open PRs on one branch is abnormal — show them and ask. And when *our* commands call
-`/code-review` or `review`, they resolve the number first and pass it **explicitly**, so the
+`/code-review` or `/review`, they resolve the number first and pass it **explicitly**, so the
 reviewer never has to guess.
 
 ### Working from a GitHub issue
@@ -251,8 +251,10 @@ runs is a human decision: an agent that thinks the mechanical class should move 
 fixing, post a reply comment answering every finding — fixed (sha + what changed), closed by the
 reviewer's own `--fix` (`outcome: fixed` + sha), not fixed (reasoning + the issue filed for it),
 or not applicable (why it was a false positive) — before the next round. `/code-review` is
-single-shot per PR (it stops if it already reviewed that PR), so later rounds use the `review`
-skill; silence is never "no findings". A fourth surface exists inside Conductor: the comments on
+single-shot per PR (it stops if it already reviewed that PR), so later rounds use
+`/review <pr> --comment` — the three lenses `/task` runs (`review-correctness`, `review-contracts`,
+`review-architecture`), posted as one PR comment, and a verdict on those lenses only, not on the
+other surfaces below; silence is never "no findings". A fourth surface exists inside Conductor: the comments on
 the workspace diff (`GetDiffComments`), which the human leaves in the Changes panel and which
 exist before any PR — they block readiness like an unresolved thread, and `gh` cannot see them.
 Findings *you* raise before the PR go to `DiffComment`, not GitHub. Review cleanliness is derived
@@ -323,6 +325,12 @@ states three things, in the body, before it is filed:
   worth writing down (a `delta-ingestion.proto` field-number clash is invisible to git too, but both
   tickets must name the same file, so the line above already has it);
 - **which open tickets live in those same files** — named, and "none found" is a valid answer.
+
+`.github/ISSUE_TEMPLATE/` carries the three lines as form fields — «Что тронет» and «Открытые тикеты
+в тех же файлах», required in `task.yml` — so a ticket filed from the web UI cannot skip them. A
+ticket filed with `gh issue create --body` gets no form, so an agent writes the same sections by
+hand; `decision.yml` is for a question that must be settled before implementation and recorded in a
+`docs/cr-*.md`.
 
 **The third line needs a method, and the method is not what the first draft of this rule claimed.**
 That draft said a keyword search cannot find these tickets; against this repository it can —
@@ -696,9 +704,40 @@ pages/{feature}/            # Route pages
   last run also caught the test **not running at all**: a script is not on the test classpath, so
   `scripts/issue-base.sh` is now a declared input of the `test` task, and the pre-commit hook runs
   `com.bitbi.dfm.documentation.*` when it changes. Not done by an agent: branch protection with
-  required `backend-test` on `migration/**`. `.github/ISSUE_TEMPLATE/` is not in `develop` yet, so
-  no template field. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**),
+  required `backend-test` on `migration/**`. **No issue-form field**: the forms reached `develop`
+  (#309) after this ticket was taken, which is the condition it set for one, and a form renders every
+  field under a `### ` heading — after the first heading, where the resolver deliberately reads
+  nothing — so a field would send a form-filed migration ticket silently to `develop`; how forms
+  should carry the base is #310. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**),
   `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- review-command-issue-templates: `/review` runs the three review lenses of `/task` on their own, the
+  repository has issue forms, and `scripts/board.sh` sets the status label it always meant to. The
+  first two are ported from pb-crm, which #277 had left behind when it ported `/task`.
+  **`/review [pr#] [issue#] [--comment]`** (`.claude/commands/review.md`) launches
+  `review-correctness`, `review-contracts` and `review-architecture` in parallel and reports one
+  table: each lens's verdict, SERIOUS findings in full, MINOR by count. It fixes nothing, merges
+  nothing and moves no card. **It closes a dangling reference rather than adding a reviewer**:
+  `CLAUDE.md`, `/github-issue` step 8 and `/merge` all named a "`review` skill" for the second and
+  later review rounds, and no such skill existed, so "later rounds use the `review` skill" pointed at
+  nothing; all three now name `/review <pr> --comment`. The PR number follows «The current PR», the
+  issue comes from `Closes #N`, and a lens that answers without a `VERDICT:` line counts as *no
+  verdict*, never READY — silence is not "no findings". READY covers the three lenses only: CI,
+  `reviewThreads`, `PENDING` reviews and Conductor diff comments stay the caller's readiness check.
+  `--comment` posts the table as one PR comment, which is what keeps a later round visible in the PR.
+  **Issue forms** in `.github/ISSUE_TEMPLATE/` — `task.yml`, `bug.yml`, `decision.yml` and a
+  `config.yml` that turns blank issues off — carry the follow-up rule's three lines as fields
+  («Что тронет», «Открытые тикеты в тех же файлах», required in `task.yml») and add the card to
+  project 16. They set no `priority:*` and no `status:*` label, both being triage's. A ticket filed
+  with `gh issue create --body` gets no form, so `/task` step 6 now says to write the same sections by
+  hand; step 4 gained pb-crm's screenshot for a changed UI screen.
+  **`board.sh` never set a status label, from #277 on.** `strip_status_labels` read into a `label` it
+  did not declare `local`; bash's dynamic scope made that `set_status`'s own `label`, and the final
+  `read` at EOF left it empty, so the column moved while `--add-label` was skipped. The consequence
+  was larger than a missing label: `board.sh unblock` selects candidates by
+  `--label "status: blocked"`, so no dependent ticket was ever unblocked automatically. One `local`
+  fixes it. Found while filing the Spring Boot 4.1 migration tickets (#298–#305), whose labels were
+  then set by hand. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**),
+  configuration-key, metric, S3-key or frontend change.
 - delta-in-heap-site-streamed: An incremental checkpoint build holds the period's changes in heap
   and streams the site past them, so `delta.checkpoint.max-fold-bytes` bounds a night's work rather
   than the site (issue #293, the ceiling #292 left standing for every build after the first). The

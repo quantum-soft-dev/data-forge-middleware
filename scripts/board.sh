@@ -40,7 +40,9 @@ label_for() {
 # Снять все реально висящие `status: *` — список не хардкодят: --remove-label отвечает 404,
 # если названной метки на тикете нет (это #257).
 strip_status_labels() {
-  local issue=$1 keep=${2:-}
+  # `label` обязательно local: без этого `read` пишет в `label` вызывающей set_status (динамическая
+  # область видимости bash) и на EOF оставляет её пустой — статусная метка молча не ставилась.
+  local issue=$1 keep=${2:-} label
   while IFS= read -r label; do
     [[ -n "$keep" && "$label" == "$keep" ]] && continue
     gh issue edit "$issue" -R "$REPO" --remove-label "$label" >/dev/null 2>&1 || true

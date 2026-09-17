@@ -1,6 +1,6 @@
 ---
 name: review-correctness
-description: Ревьюер PR, линза «корректность и тесты» — соответствие критериям приёмки issue, баги, отсутствующие или не способные упасть тесты, изоляция тестов в общей БД. Запускается командой /task на стадии In Review параллельно с review-contracts и review-architecture.
+description: Ревьюер PR, линза «корректность и тесты» — соответствие критериям приёмки issue, баги, отсутствующие или не способные упасть тесты, изоляция тестов в общей БД. Запускается командой /task на стадии In Review и командой /review — параллельно с review-contracts и review-architecture.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
