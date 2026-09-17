@@ -6,7 +6,6 @@ import com.bitbi.dfm.plugin.domain.Plugin;
 import com.bitbi.dfm.plugin.domain.PluginRegistry;
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -46,14 +45,12 @@ class PluginDataValidatorTest {
     private PluginRegistry pluginRegistry;
 
     private PluginDataValidator validator;
-    private ObjectMapper objectMapper;
     private Plugin bitBiPlugin;
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper();
         bitBiPlugin = new BitBiPlugin();
-        validator = new PluginDataValidator(pluginRegistry, objectMapper);
+        validator = new PluginDataValidator(pluginRegistry);
     }
 
     @Nested

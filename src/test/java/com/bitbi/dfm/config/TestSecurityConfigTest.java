@@ -29,8 +29,10 @@ class TestSecurityConfigTest {
                 .convert(jwt)
                 .getAuthorities();
 
-        assert authorities.size() == 1;
-        assert authorities.stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        // Spring Security 7 adds the FACTOR_BEARER authority to every bearer-token authentication
+        // (#302); the role mapping itself still yields exactly one role.
+        assert authorities.stream().map(GrantedAuthority::getAuthority).collect(java.util.stream.Collectors.toSet())
+                .equals(java.util.Set.of("ROLE_ADMIN", "FACTOR_BEARER"));
     }
 
     @Test
@@ -45,7 +47,9 @@ class TestSecurityConfigTest {
                 .convert(jwt)
                 .getAuthorities();
 
-        assert authorities.size() == 1;
-        assert authorities.stream().anyMatch(a -> a.getAuthority().equals("ROLE_USER"));
+        // Spring Security 7 adds the FACTOR_BEARER authority to every bearer-token authentication
+        // (#302); the role mapping itself still yields exactly one role.
+        assert authorities.stream().map(GrantedAuthority::getAuthority).collect(java.util.stream.Collectors.toSet())
+                .equals(java.util.Set.of("ROLE_USER", "FACTOR_BEARER"));
     }
 }

@@ -2,7 +2,7 @@ package com.bitbi.dfm.plugin.unit;
 
 import com.bitbi.dfm.plugin.application.JsonlParserService;
 import com.bitbi.dfm.plugin.domain.JsonlChangeRecord;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;

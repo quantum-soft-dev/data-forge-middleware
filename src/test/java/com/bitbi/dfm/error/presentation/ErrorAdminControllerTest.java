@@ -4,7 +4,7 @@ import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

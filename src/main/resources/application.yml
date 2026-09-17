@@ -2,6 +2,13 @@ spring:
   application:
     name: data-forge-middleware
 
+  # Boot 4 serializes HTTP bodies with Jackson 3, whose defaults differ from Jackson 2's (dates as ISO
+  # strings, properties sorted alphabetically, null for a primitive refused). Kept on the Jackson 2
+  # defaults for the Boot 4.1 upgrade so the HTTP API does not change underneath its clients (#302);
+  # the characterization tests of #300 hold that. Moving to Jackson 3 defaults is #303.
+  jackson:
+    use-jackson2-defaults: true
+
   threads:
     virtual:
       enabled: true

@@ -36,7 +36,7 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
     private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     @Autowired
-    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private tools.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * Build a refresh request for the given opaque token.
@@ -205,7 +205,7 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        com.fasterxml.jackson.databind.JsonNode json = objectMapper.readTree(responseBody);
+        tools.jackson.databind.JsonNode json = objectMapper.readTree(responseBody);
         java.time.Instant reported = java.time.Instant.parse(json.get("refreshTokenExpiresAt").asText());
 
         // Read as OffsetDateTime: java.sql.Timestamp would re-interpret timestamptz in the JVM zone

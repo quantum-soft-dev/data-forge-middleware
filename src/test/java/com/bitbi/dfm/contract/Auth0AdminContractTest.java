@@ -12,7 +12,7 @@ import com.bitbi.dfm.auth.domain.UserRole;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

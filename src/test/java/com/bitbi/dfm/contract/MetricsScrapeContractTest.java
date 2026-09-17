@@ -3,7 +3,7 @@ package com.bitbi.dfm.contract;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.test.context.TestPropertySource;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -25,7 +25,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Metrics Scrape Contract Tests")
 // Spring Boot disables metrics export under test, which would leave /actuator/prometheus absent
 // (404) and make this suite prove nothing about the endpoint the collector actually scrapes.
-@AutoConfigureObservability
+@AutoConfigureMetrics
 @TestPropertySource(properties = "dfm.observability.metrics-scrape.allowed-cidrs=127.0.0.1/32")
 class MetricsScrapeContractTest extends BaseIntegrationTest {
 

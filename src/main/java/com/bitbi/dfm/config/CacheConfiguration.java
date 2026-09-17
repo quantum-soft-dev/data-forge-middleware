@@ -7,8 +7,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
+import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -40,6 +41,16 @@ import java.util.Map;
 public class CacheConfiguration {
 
     /**
+     * Prefix of every cache key, in front of Spring's {@code cacheName::} (issue #302).
+     * <p>
+     * The value serializer moved from Jackson 2 to Jackson 3 with Boot 4, and nothing guarantees that
+     * one reads what the other wrote. During a rolling deployment old and new pods share this Redis,
+     * so the new pods write under a key space the old ones never read and vice versa: an old entry
+     * simply misses and expires. Change it whenever the stored form changes again.
+     */
+    public static final String KEY_PREFIX = "jackson3:";
+
+    /**
      * T027: Configure Redis cache manager with per-cache TTL settings.
      *
      * @param connectionFactory Redis connection factory
@@ -50,9 +61,10 @@ public class CacheConfiguration {
         // Default cache configuration (10-minute TTL)
         RedisCacheConfiguration defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
                 .entryTtl(Duration.ofMinutes(10))
+                .computePrefixWith(cacheName -> KEY_PREFIX + cacheName + "::")
                 .serializeValuesWith(
                         RedisSerializationContext.SerializationPair
-                                .fromSerializer(new GenericJackson2JsonRedisSerializer())
+                                .fromSerializer(valueSerializer())
                 );
 
         // Per-cache configurations
@@ -69,6 +81,23 @@ public class CacheConfiguration {
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaultConfig)
                 .withInitialCacheConfigurations(cacheConfigurations)
+                .build();
+    }
+
+    /**
+     * Jackson 3 twin of the former {@code new GenericJackson2JsonRedisSerializer()}: type metadata on
+     * every value so a cached object reads back as its own class, and Spring's cache null marker.
+     * Default typing admits this application's types and the JDK's rather than the Jackson 2
+     * serializer's accept-anything validator: a cache entry is data whoever can write to Redis
+     * controls, and nothing the application caches is of any other type.
+     */
+    private static GenericJacksonJsonRedisSerializer valueSerializer() {
+        return GenericJacksonJsonRedisSerializer.builder()
+                .enableDefaultTyping(BasicPolymorphicTypeValidator.builder()
+                        .allowIfSubType("com.bitbi.dfm.")
+                        .allowIfSubType("java.")
+                        .build())
+                .enableSpringCacheNullValueSupport()
                 .build();
     }
 }
