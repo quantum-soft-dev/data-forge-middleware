@@ -263,6 +263,26 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- grpc-1-83-native-codegen: gRPC 1.68.1 → **1.83.1** and protobuf 3.25.5 → **3.25.9** (`protoc` and
+  `protobuf-java`, one property), still on Spring Boot 3.5 (issue #313). The reason is the build, not
+  the runtime: `protoc-gen-grpc-java` for `osx-aarch_64` is an **x86_64** Mach-O up to 1.75.0 and a
+  universal binary from 1.76.0, and macOS 27 has no Rosetta, so `:generateProto` — and with it the
+  per-task gate and the pre-commit hook — failed in every **fresh** worktree ("program not found or is
+  not executable"); older checkouts passed only because the task was UP-TO-DATE. The per-worktree
+  workaround used in #298/#311 (copied generated sources, `generateProto` disabled in a temporary
+  `GRADLE_USER_HOME`) is retired. **Transport moves separately from the framework**, the migration's
+  own rule, only earlier: 1.83.1 is what the Spring Boot 4.1.1 BOM sets, so #302 now pins protobuf
+  3.25.9 alone and #304 narrows to protobuf 3.25 → 4.35. No protobuf 4 here — `grpc-protobuf` 1.83.1
+  depends on `protobuf-java` 3.25.x; `runtimeClasspath` resolves every `io.grpc:*` to 1.83.1 and
+  `protobuf-java` to a single 3.25.9 (the explicit 3.25.5 had been holding it below what gRPC asks
+  for). **Rejected**: running the x86_64 1.68.1 plugin through Docker — it works and its output is
+  byte-identical, but it is a temporary override in `build.gradle.kts` that #304 would delete, while
+  1.83.1 fixes the build for good. `delta-ingestion.proto` is untouched; the regenerated message
+  classes differ only in their `Protobuf Java Version` header, and the service stub drops
+  `@javax.annotation.Generated` and gains `newBlockingV2Stub`/`DeltaIngestionBlockingV2Stub` (unused).
+  Wire compatibility with the shipped Windows client is checked by a real session against a build of
+  the branch, not inferred. No REST, gRPC contract, DTO, migration (**V58 stays free**),
+  configuration-key, metric, S3-key or frontend change.
 - graphql-budget: `scripts/board.sh` moves a card for 3 GraphQL points instead of ~500 (issue #311).
   The GraphQL limit is 5000 points an hour per account, shared by every session, subagent and
   script. Measured: `gh project item-list --limit 500` ~200, `field-list` ~100, `item-list --limit
