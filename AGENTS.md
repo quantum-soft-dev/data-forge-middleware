@@ -280,11 +280,19 @@ pages/{feature}/            # Route pages
   cleared three.** `ParquetScratchBudgetTest` is the same hazard through a different registration:
   `delta.parquet.scratch.bytes` is built on the budget's own `liveBytes` field, the `budget` local is
   dead before most methods' closing `assertEquals(0.0, liveBytes())`, and that read would answer
-  `NaN`. It gets the same field. Cleared: `SqlGenerationConcurrencyTest` and
-  `SqlGenerationStreamingTest` read `sql.generation.semaphore.queue.size`, whose weak target is a
-  field of a service they go on using after the read, so it is reachable by construction;
-  `ComparisonMetrics` has no test at all and in production its weak target is a repository bean the
-  context holds.
+  `NaN`. It gets the same field. **Review round 1 found the claim about a third file too broad and
+  the hole real**, which is the part worth keeping: the first draft wrote that
+  `SqlGenerationConcurrencyTest` and `SqlGenerationStreamingTest` are safe because the service whose
+  semaphore the gauge reads is still in use after the read. That is true of
+  `awaitSemaphoreQueueSize`, which polls while other threads hold the service, and of
+  `SqlGenerationStreamingTest`, which only asserts the gauge *exists* and never reads its value —
+  and false of `shouldShowZeroQueueSizeWhenNoWaiters`, whose service is created and never touched
+  again, so `isEqualTo(0.0)` would meet `NaN`. The shape is #316 exactly, one registration form over
+  (`meterRegistry.gauge(name, target, fn)` rather than a binder), and it is **fixed** rather than
+  written down as accepted — the wording that no longer matched the code was how a permanent
+  document would have started lying. It is also outside what the scan can see, since nothing is
+  chained there. Cleared for real: `ComparisonMetrics` has no test at all, and in production its
+  weak target is a repository bean the context holds.
   **The guard bans the shape that is wrong unconditionally and says what it cannot see.**
   `MeterBinderReachabilityConventionTest` scans `src/main/java` and `src/test/java` for a `.bindTo(`
   whose receiver is a **call rather than a name**: `bindTo` returns `void`, so such a binder is

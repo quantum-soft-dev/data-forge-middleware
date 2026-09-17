@@ -49,9 +49,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>{@code ParquetScratchBudgetTest} is the same hazard through a different registration: its
  *       gauge's weak target is an {@code AtomicLong} field of the budget, and the budget is held in
  *       a field for the same reason.</li>
- *   <li>{@code SqlGenerationConcurrencyTest} and {@code SqlGenerationStreamingTest} read
- *       {@code sql.generation.semaphore.queue.size}, whose weak target is a field of a service the
- *       tests go on using after the read — reachable by construction, nothing to hold.</li>
+ *   <li>{@code SqlGenerationConcurrencyTest} reads {@code sql.generation.semaphore.queue.size},
+ *       registered through {@code meterRegistry.gauge(name, target, fn)} — the same weak hold, one
+ *       registration form over, and therefore invisible to the scan below, since nothing is
+ *       chained. {@code awaitSemaphoreQueueSize} polls while other threads still hold the service,
+ *       so it needs nothing; its {@code SemaphoreMetrics} methods do not, and hold the service in a
+ *       field. {@code SqlGenerationStreamingTest} asserts only that the gauge exists and never
+ *       reads its value, which the weak reference cannot affect.</li>
  *   <li>{@code ComparisonMetrics} has no test, and in production its weak target is a repository
  *       bean the application context holds.</li>
  * </ul>
