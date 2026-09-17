@@ -263,6 +263,27 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- issue-find-path-roles: `scripts/issue-find.sh` no longer goes silently empty on a correctly escaped
+  path, and has a test (issue #308, found working #298). Its path argument plays three roles that want
+  different spellings, and the script used one spelling for all of them: a **regular expression** over
+  issue bodies (where `.` must be escaped), a **literal** interpolated into the `--jq` string of the PR
+  section, and a **git pathspec**. So `ci-cd\.yml` made jq refuse the expression (`"\."` is an invalid
+  escape in a string literal) and matched no file as a pathspec, leaving two of the three path sections
+  empty with nothing to tell "found nothing" from "could not search" — on the search `/task` makes
+  mandatory before taking a ticket and before filing one. Now the argument is used as given only for
+  `test()`; its literal form (the escapes removed) goes to `gh pr list --search`, reaches jq only through
+  `--arg`, and becomes the pathspec `:(icase)*<literal>*` — the fnmatch `*` crosses directories, so a
+  bare file or class name finds `.github/workflows/ci-cd.yml` rather than needing the full path. A
+  failing `git log` (no `origin/develop`, say) now prints that it failed instead of `2>/dev/null`
+  hiding it, and a failed PR search says so rather than `|| true`. **Tests**: `IssueFindScriptTest`
+  runs the script in a throwaway git repository whose `origin/develop` is a local ref, against a
+  stand-in `gh` (`src/test/resources/process/fake-gh-issue-find`) that applies `--jq` with a real jq
+  and returns its failure as gh does — six scenarios, no network. Mutation: putting `$p` back into the
+  `--jq` string fails the escaped-path scenario. That mutation first **passed**, because the script was
+  not a declared input of `test` and the task stayed UP-TO-DATE — the #298 trap for the third time — so
+  `scripts/issue-find.sh` is an input of `test` now, and the pre-commit hook runs
+  `com.bitbi.dfm.documentation.*` when it changes. No production code, REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - grpc-1-83-native-codegen: gRPC 1.68.1 → **1.83.1** and protobuf 3.25.5 → **3.25.9** (`protoc` and
   `protobuf-java`, one property), still on Spring Boot 3.5 (issue #313). The reason is the build, not
   the runtime: `protoc-gen-grpc-java` for `osx-aarch_64` is an **x86_64** Mach-O up to 1.75.0 and a
