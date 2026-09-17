@@ -115,7 +115,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 - Every feature is developed on its own branch `feature/NNN-name`, **branched off `develop`**.
 - A feature lands via a **Pull Request into `develop`**, merged with **squash** (one feature = one squashed commit on `develop`).
 - A feature **must be documented** in `docs/` (a `docs/cr-*.md` change request and/or feature guide). Undocumented features are not merge-ready.
-- **Exception — a migration too large for one PR** (#298): it lives in a long-lived `migration/<name>` branch off `develop`. Its tickets carry `` Base branch: `migration/<name>` `` at the top of the body (before the first heading, outside code), branch from, sync with, open their PR against and squash-merge into that branch, and are **closed explicitly** after the merge — `Closes #N` fires only on the default branch, and `scripts/board.sh unblock` frees only tickets whose blockers are closed. `scripts/issue-base.sh <n>` is the one reading of the line; `/task`, `/github-issue` and `/github-issue-runner` call it and **stop** on a refusal instead of assuming `develop`, and `/merge` takes the base from `baseRefName` and requires it to match. The branch lands in `develop` through its own ticket, which decides the merge method. Flyway numbers are one namespace across both branches. The full rule lives in **`CLAUDE.md`** → Rule 1 and "A ticket's base branch"; this is the condensed mirror.
+- **Exception — a migration too large for one PR** (#298): it lives in a long-lived `migration/<name>` branch off `develop`. Its tickets carry `` Base branch: `migration/<name>` `` at the top of the body (before the first heading, outside code), branch from, sync with, open their PR against and squash-merge into that branch, and are **closed explicitly** after the merge — `Closes #N` fires only on the default branch, and `scripts/board.sh unblock` frees only tickets whose blockers are closed. `scripts/issue-base.sh <n>` is the one reading of the line; `/task`, `/github-issue` and `/github-issue-runner` call it and **stop** on a refusal instead of assuming `develop`, and `/merge` takes the base from `baseRefName` and requires it to match. The branch lands in `develop` through its own ticket, which decides the merge method. Flyway numbers are one namespace across both branches. A ticket filed from an issue form declares its base by hand after creation — a form body begins with a heading, so the resolver's region is empty and a form field would be silently unread (#310); `Blocked by #N` is read from the whole body and needs no such step. The full rule lives in **`CLAUDE.md`** → Rule 1 and "A ticket's base branch"; this is the condensed mirror.
 
 ### Rule 2 — Test-first (TDD), task-by-task, serial
 - A feature is split into ordered tasks in **`specs/NNN-name/tasks.md`** (use `/tasks`).
@@ -263,6 +263,47 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- form-base-branch-hint: An issue form cannot carry a ticket's base, so the forms say so and the
+  resolver is left alone (issue #310, filed by #298 when the forms of #309 reached `develop` after
+  that ticket was taken). GitHub renders every form field as `### <label>` with its value beneath,
+  so a form-filed body **begins** with a heading — and `scripts/issue-base.sh` reads only what is
+  above the first one, which for such a ticket is nothing. A `Base branch` field would therefore be
+  written, displayed, and silently unread: a migration ticket filed from the web UI would open its
+  PR into `develop`, which is the one gap #298 exists to close.
+  **Option (b) of the ticket, and the two premises that decided it were both corrections to the
+  ticket's own statement of them.** First, **`Blocked by` is not affected at all**: `board.sh
+  unblock` greps the whole body with newlines squashed to spaces (`scripts/board.sh`), and `/task`
+  and `/github-issue` read it the same way, so the line works inside the form's «Что происходит»
+  section — which is exactly where `task.yml` already tells a filer to put it. The ticket's "same
+  story for `Blocked by`" is false, and a rule written on it would have added a second field for a
+  problem that does not exist. Second, **option (a)'s real cost is not "a second reading rule" but a
+  coupling to how GitHub renders an empty optional field** (`_No response_`): ignoring a section it
+  cannot read restores the very silence the field was added for, and refusing it makes a change in
+  GitHub's wording block every form-filed ticket at once — the resolver is called *before* a ticket
+  is taken, so that failure lands on all of them. A required field defaulting to `develop` removes
+  the coupling and puts a machine-read field with an always-identical answer in front of everyone
+  filing any ticket. Against a path used zero times — the migration tickets #298–#305 were all filed
+  with `gh issue create --body` — that is not worth the verified rule.
+  **What ships**: a paragraph in the top `markdown` block of `task.yml` and `bug.yml` naming the
+  mechanism, the exact line, and the instruction to add it as the **first line of the body** right
+  after creation. It is deliberately **not** placed beside the `Blocked by` instruction in the
+  «Что происходит» field description, which would be a trap: that line works inside a section and
+  this one only above every heading, and a person reading the two together writes both in one
+  place. `decision.yml` gets nothing — a design decision is not implemented on a branch and has no
+  base. `markdown` blocks are display-only and never reach the body, so no ticket grows a section.
+  **The hint and the resolver are held as one fact, not two.** `IssueBaseBranchScriptTest.IssueForms`
+  takes the declaration **out of each form** (exactly one per file; a second copy is a second chance
+  to disagree), resolves the `<name>` placeholder and requires the script to accept it above a
+  form-shaped body — so a hint teaching a line the script refuses is red, and so is a deleted hint.
+  From the other side, two cases pin the premise: a `### Base branch` section and a declaration
+  written inside a form section both resolve to `develop`. Mutation-proven in both directions —
+  lowercase the hint's declaration and the form case is red; implement option (a) in the resolver
+  (scan the whole body for the section) and all three premise cases are red, the pre-existing
+  below-heading case among them. `.github/ISSUE_TEMPLATE` is a declared input of the `test` task and
+  a branch of the pre-commit hook, because a forms-only commit would otherwise leave `test`
+  UP-TO-DATE and the guard would never run — the trap #298 and #311 both fell into.
+  Documentation, forms and tests only: no production code, REST, gRPC, proto, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - scratch-reserve-one-snapshot: The #193 scratch reserve stays at the frame plus **one** snapshot,
   and that is now a recorded decision rather than a gap (issue #296, raised by `review-architecture`
   as a MINOR on PR #295). The reserve is `max-frame-temp-bytes + max-temp-bytes` (deployed

@@ -248,6 +248,10 @@ tasks.named<Test>("test") {
     // the same reasoning — a script-only commit must not leave `test` UP-TO-DATE.
     inputs.files("scripts/board.sh")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // IssueBaseBranchScriptTest also reads the issue forms, which teach a migration ticket the exact
+    // declaration the resolver accepts (#310) — the same reasoning again, for a forms-only commit.
+    inputs.dir(".github/ISSUE_TEMPLATE")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // IssueFindScriptTest runs scripts/issue-find.sh against a stand-in gh and a local git repository
     // (#308): an escaped path must not break a section silently. Same reasoning as the two above.
     inputs.files("scripts/issue-find.sh")
