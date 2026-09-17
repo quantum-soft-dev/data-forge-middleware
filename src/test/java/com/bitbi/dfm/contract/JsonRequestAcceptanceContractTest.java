@@ -96,7 +96,8 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
      * The inventory of primitives in {@code @RequestBody} types: these are the fields where Jackson 3's
      * {@code FAIL_ON_NULL_FOR_PRIMITIVES} turns an accepted {@code null} into an unreadable body. The
      * scan walks every handler method Spring MVC registered, and every record component or field of
-     * a body type that belongs to this application, recursively (enums excluded). A new primitive fails
+     * a body type that belongs to this application, recursively (enums excluded; a primitive array
+     * counts, since {@code null} elements in it fail the same way). A new primitive fails
      * here on purpose: whoever adds it pins what {@code null} for it answers, as
      * {@link #nullForAPrimitiveBooleanReadsAsFalse()} does for the one there is (one DTO, two routes).
      */
@@ -150,6 +151,27 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
         assertThat(unreadable).isEqualTo(500);
     }
 
+    record ScanProbeNested(long count, String name) {
+    }
+
+    enum ScanProbeKind { A }
+
+    record ScanProbe(int[] ids, Integer boxed, ScanProbeKind kind, List<ScanProbeNested> nested) {
+    }
+
+    /**
+     * The scan itself: a primitive array, a primitive inside a nested record reached through a
+     * {@code List}, and nothing for a boxed number or an enum — so the inventory above cannot pass
+     * because the walk has gone blind.
+     */
+    @Test
+    @DisplayName("the scan finds primitive arrays and primitives in nested records, not boxed values or enums")
+    void scanSeesArraysAndNestedRecords() {
+        List<String> found = new ArrayList<>();
+        collectPrimitives(ScanProbe.class, "probe", new HashSet<>(), found);
+        assertThat(found).containsExactlyInAnyOrder("probe.ids : int[]", "probe.nested.count : long");
+    }
+
     static void collectPrimitives(Type type, String path, Set<Class<?>> seen, List<String> out) {
         if (type instanceof ParameterizedType parameterized) {
             for (Type argument : parameterized.getActualTypeArguments()) {
@@ -178,8 +200,12 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
     }
 
     private static void check(Class<?> raw, Type generic, String path, Set<Class<?>> seen, List<String> out) {
-        if (raw.isPrimitive()) {
-            out.add(path + " : " + raw.getName());
+        Class<?> element = raw;
+        while (element.isArray()) {
+            element = element.getComponentType();
+        }
+        if (element.isPrimitive()) {
+            out.add(path + " : " + raw.getTypeName());
         } else {
             collectPrimitives(generic, path, seen, out);
         }
