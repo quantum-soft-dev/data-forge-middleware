@@ -135,7 +135,7 @@ gh issue view <n> --json number,title,body,labels,milestone,assignees,state,comm
 
 ```bash
 scripts/board.sh status <n> "In Progress"
-gh api -X POST repos/quantum-soft-dev/data-forge-middleware/issues/<n>/assignees -f 'assignees[]=<login>'
+gh issue edit <n> --add-assignee @me
 ```
 
 Если у issue нет milestone — поставь текущий спринт (milestone с ближайшей будущей `due_on`;

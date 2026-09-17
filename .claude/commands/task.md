@@ -15,7 +15,7 @@ issue»); при расхождении по существу действует
    `Blocked by #N` → остановись и сообщи. Прогони `scripts/issue-find.sh "<ключевые слова>" <пути>`:
    задача уже решена смерженным PR или дублирует закрытую → сообщи и не начинай. Затем определи
    базу (абзац ниже), и только потом `gh issue edit $ARGUMENTS --add-assignee @me`, майлстоун текущего спринта,
-   `scripts/board.sh status $ARGUMENTS "In Progress"`. Если `gh project` отвечает
+   `scripts/board.sh status $ARGUMENTS "In Progress"`. Если `board.sh` (или `gh`) отвечает
    `INSUFFICIENT_SCOPES` — остановись и скажи выполнить `gh auth refresh -s project`; молча обновить
    одну метку нельзя, человек смотрит на доску.
 

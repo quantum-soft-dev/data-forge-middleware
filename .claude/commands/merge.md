@@ -251,7 +251,9 @@ gh pr merge <pr> --squash --delete-branch
    `ready to merge`. Снимай **все, что реально висит**, а не фиксированный список из двух
    имён: `gh issue edit --remove-label` отвечает 404, если названной метки на тикете нет, и
    именно короткий список оставлял `status: ready` / `in progress` / `blocked` на закрытых
-   (это и был #257). Цикл тот же, что в `CLAUDE.md` → «Status lives in two places»:
+   (это и был #257). `board.sh status <n> Done` из пункта 2 уже сделал это через REST — перечитай
+   метки (`scripts/board.sh show <n>`) и, только если какая-то `status: *` всё же осталась, сними её
+   тем же циклом, что в `CLAUDE.md` → «Status lives in two places»:
 
    ```bash
    while IFS= read -r label; do

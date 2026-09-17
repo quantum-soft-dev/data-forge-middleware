@@ -506,7 +506,7 @@ the live limit (issue #311):
 | `gh project field-list 16` | ~100 |
 | `gh project item-list 16 --limit 100` | ~40 |
 | `gh pr checks`, `gh issue view`, `gh issue list --json body` | ~1 |
-| `scripts/board.sh status` (lookup + mutation + re-read) | **3** |
+| `scripts/board.sh status` (lookup + mutation + re-read) | **3**; **4** the one time an issue is added to the board |
 | `scripts/board.sh list` | 1 per 100 cards |
 | `scripts/board.sh show`, any `gh api repos/…` | 0 (REST has its own pool) |
 
