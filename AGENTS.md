@@ -263,6 +263,26 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- error-logging-full-signatures: `ErrorLoggingService` has one signature per kind of log, and both
+  take the severity (issue #326, recorded by #321 rather than folded into it). After #321 the four
+  overloads without an `ErrorSeverity` — `logError` with and without metadata,
+  `logStandaloneError` likewise — had **no production caller** (the only one, `DeviceErrorController`,
+  passes `request.effectiveSeverity()`), and `ErrorLoggingServiceTest` was their only caller, one
+  test each. Each one's whole body substituted `ErrorSeverity.ERROR`, and that overload **was** #321's
+  mechanism: the controller took the shorter signature, both compiled, and a client's `WARNING` was
+  stored as `ERROR` with nothing in the compiler or CI to notice. **Deleted rather than documented**
+  (the ticket's option 1, the #165 shape) because the convenience they offered is already in the
+  full signature: `null` is stored as `ERROR` by `ErrorLog.create`, so a caller with no severity to
+  pass says so at the call site instead of getting one substituted behind it. The four tests moved to
+  the full signatures, not deleted, and now assert the severity that reached the repository — with
+  `WARNING`, `CRITICAL` and `INFO`, since an `ERROR` expectation cannot tell a passed severity from a
+  substituted one — plus the `null` → `ERROR` case. A reflective guard,
+  `everyPublicLogMethodTakesTheSeverity`, fails on any public `log*` method of the service without an
+  `ErrorSeverity` parameter, so the overload cannot come back unnoticed. Mutation-proven both ways:
+  restoring one overload fails the guard, and the service passing `ERROR` instead of its argument
+  fails the three non-`ERROR` tests. `ErrorLog.create`'s own severity-less factory is deliberately
+  untouched — a domain factory is outside this ticket's file list. No REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - form-base-branch-hint: An issue form cannot carry a ticket's base, so the forms say so and the
   resolver is left alone (issue #310, filed by #298 when the forms of #309 reached `develop` after
   that ticket was taken). GitHub renders every form field as `### <label>` with its value beneath,
