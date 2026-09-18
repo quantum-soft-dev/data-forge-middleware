@@ -109,13 +109,14 @@ which is why dates, durations and unknown properties never moved and every #300 
 green. With the flag off and nothing pinned, **2** of 2634 fast-gate and 2943 integration tests fail,
 both on the request side.
 
-**Pinned (2).** Both turn a request that works today into a **500** from the catch-all handler — not a
-400 — so accepting them would report a client-side malformation as a server error:
+**Pinned by #303 (2), one of them since accepted by #320.** Both turned a request that worked into a
+**500** from the catch-all handler — not a 400 — so accepting them would have reported a client-side
+malformation as a server error:
 
 | Key | Why |
 |---|---|
-| `spring.jackson.deserialization.fail-on-null-for-primitives: false` | `ManualSqlGenerationRequestDto.forceFullGeneration` is the only primitive in any `@RequestBody` (#300's reflective inventory). An explicit `null` reads as `false` today; refusing it answers 500 on the owner and admin generate-SQL routes. The frontend omits the field entirely, so the exposure is external clients and scripts. |
-| `spring.jackson.deserialization.fail-on-trailing-tokens: false` | Content after the JSON document is ignored today, including a second concatenated object. Refusing it is stricter and no serializer emits it, but the 500 makes it the wrong trade until an unreadable body answers 400. |
+| `spring.jackson.deserialization.fail-on-null-for-primitives: false` — **still pinned** | `ManualSqlGenerationRequestDto.forceFullGeneration` is the only primitive in any `@RequestBody` (#300's reflective inventory). An explicit `null` reads as `false` today; refusing it would reject a body the owner and admin generate-SQL routes accept now — 400 since #320, but a refusal of a working request whatever the status. The frontend omits the field entirely, so the exposure is external clients and scripts. |
+| ~~`spring.jackson.deserialization.fail-on-trailing-tokens: false`~~ — **accepted by #320** | Content after the JSON document was ignored, including a second concatenated object, which was dropped silently. Refusing it is stricter and no serializer emits it; the 500 made it the wrong trade while an unreadable body answered 500. Since #320 it answers 400, so the key is gone from `application.yml` and Jackson 3's default refuses trailing content. Trailing whitespace is not a token and is still accepted. |
 
 **Accepted (11),** each measured to change nothing a client can observe:
 
@@ -149,10 +150,17 @@ between the two modes must carry a verdict, and the five Boot pins itself are na
 a difference-based check is by construction blind to a row that never differs. Both halves exist for the
 same reason: that is how such a table stops describing the API it claims to describe.
 
-Rejected: mapping an unreadable request body to 400 instead of 500. It is the precondition for ever
-accepting `FAIL_ON_TRAILING_TOKENS`, but #300 pins the current 500 as characterized behaviour and
-changing it touches every malformed-body route, so it is a decision of its own rather than a
-consequence of dropping a Jackson flag.
+Rejected by #303, then taken as its own decision by #320: mapping an unreadable request body to 400
+instead of 500. #303 left it out because #300 pinned the 500 as characterized behaviour and changing it
+touches every malformed-body route. #320 made that decision: `GlobalExceptionHandler` handles
+`HttpMessageNotReadableException` — broken JSON, a missing body, an unknown enum value, the wrong JSON
+shape, trailing content — as **400** with the standard `ErrorResponseDto`. The message is
+`Malformed request body`, followed by `at '<json path>'` when Jackson names the value that did not bind
+(`at 'severity'`, `at 'items[1].grade'`). The path is built from Jackson's path references, not from
+`getPathReference()`, which prefixes each step with a Java type name. The parser's own text — type
+names, a source excerpt, the rejected value — goes to one WARN line without a stack trace, never to the
+client and never to ERROR. With that in place `FAIL_ON_TRAILING_TOKENS` was accepted (above), and
+#300's `unreadableBodyAnswers500` became `unreadableBodyAnswers400`.
 
 ### JSONB (hypersistence-utils 3.15 on Jackson 3)
 

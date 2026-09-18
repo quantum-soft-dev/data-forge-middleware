@@ -263,6 +263,48 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- unreadable-body-400: A request body the server cannot read answers **400**, not 500, and Jackson 3's
+  `FAIL_ON_TRAILING_TOKENS` is accepted now that it can (issue #320, found by #300's characterization
+  and made a precondition by #303). `GlobalExceptionHandler` had no handler for
+  `HttpMessageNotReadableException`, so broken JSON, a missing body, an unknown enum value
+  (`"severity":"warning"` — enums bind by name, case-sensitive) or the wrong JSON shape reached the
+  catch-all: 500 "An unexpected error occurred" and an ERROR with a stack trace. A client's error read
+  as a server fault in two places at once — to a client that retries 5xx (the Windows extractor does)
+  and to an alert on ERROR. It is now a 400 with the standard `ErrorResponseDto`, logged as **one WARN
+  line without a stack trace** that keeps the parser's own text for the operator.
+  **What the client is told is the one part that needed a decision.** The ticket asked for a message
+  that does not expose the parser's internals, and the parser's text is exactly what it must not
+  carry: Jackson's message names the Java type it was building, quotes a source excerpt and echoes the
+  rejected value. A fixed message alone would have been safe and unhelpful, since the client then cannot
+  tell which of its fields was refused. So the message is `Malformed request body`, followed by
+  `at '<path>'` when Jackson names the value that did not bind (`at 'severity'`, `at 'items[1].grade'`).
+  The path is built from `JacksonException.getPath()` references, **not** from `getPathReference()`,
+  which prefixes each step with a Java type name — the mutation that proves the difference (return
+  `getPathReference()`) turns two contract tests red. A path is the client's own vocabulary, the field
+  names it sent; a syntax error or a missing body has none, and the message then stops at
+  `Malformed request body`.
+  **The second half is the `FAIL_ON_TRAILING_TOKENS` pin of #303, which existed only because of the
+  first.** #303 kept `spring.jackson.deserialization.fail-on-trailing-tokens: false` for one reason:
+  refusing trailing content surfaced as a 500. With a 400 the reason is gone, and the pin was hiding a
+  defect of its own — a second concatenated JSON document was dropped silently. The key is removed from
+  `application.yml`, the `JacksonHttpDefaultsContractTest` verdict moves from PINNED to ACCEPTED, and
+  `trailingTokensAreIgnored` (201) becomes `trailingTokensAreRefused` (400), with trailing whitespace
+  still accepted (201) so the line a trailing newline must stay on is pinned too.
+  `fail-on-null-for-primitives: false` **stays pinned** whatever the status: refusing it would reject a
+  body the generate-SQL routes accept from shipped clients today, and a 400 is still a refusal.
+  **Deliberate behaviour changes to #300's characterization, named rather than slipped in:**
+  `unreadableBodyAnswers500` → `unreadableBodyAnswers400` (full `WireJson` body, path included), and the
+  unreadable control inside `nullForAPrimitiveBooleanReadsAsFalse` moves 500 → 400.
+  `GlobalExceptionHandlerContractTest` (fast gate, standalone MockMvc) adds four cases — the status and
+  body for four kinds of unreadable body, no leak of parser text, type names or the rejected value, the
+  nested and indexed path, and the WARN-not-ERROR log — each red against the missing handler.
+  **Not taken, and filed:** the other Spring MVC client-side exceptions — an unsupported
+  `Content-Type`, a missing required header, an unacceptable `Accept` — still reach the catch-all and
+  answer 500 the same way; that is a question about every route and is its own ticket, **#336**.
+  No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key
+  or frontend change; one configuration key is removed (`fail-on-trailing-tokens`). Client guides
+  updated (`docs/postgres-delta-client-development-guide.md`, `docs/device-flow-client-guide.md`: a 400
+  on an unreadable body is not to be retried). See `docs/cr-spring-boot-4-1.md`.
 - remove-upload-history-cache: The two Upload History caches and Redis are gone, because neither cache
   ever held a value and making them live would have been wrong (issue #319, filed by #300 on this
   branch). `batch-details` (`BatchHistoryService.getBatchDetails`) was conditioned on `#result`, which
@@ -417,7 +459,6 @@ pages/{feature}/            # Route pages
   The Gradle protobuf plugin moves 0.9.4 → **0.9.6**. No REST, gRPC contract, DTO, migration
   (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, cache, S3-key or frontend change;
   no `docs/` page names a gRPC or protobuf version, so none needed rewriting.
-||||||| parent of 88cbbf6e (chore(api): take the Jackson 3 HTTP defaults, pinning the two that would answer 500 (#303))
 - spring-boot-4-1: Spring Boot 3.5.16 → **4.1.1** — Framework 7.0.9, Security 7.1.1, Hibernate 7.4.5,
   Jackson 3.1.5, Flyway 12.4, Micrometer 1.17.1, JUnit 6.0.3, HikariCP 7.0.2, Testcontainers 2.0.5
   (issue #302, the atomic step of the migration, merged into `migration/spring-boot-4.1`; prepared by

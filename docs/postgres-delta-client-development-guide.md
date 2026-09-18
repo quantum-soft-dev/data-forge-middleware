@@ -597,6 +597,13 @@ is useful to the client:
 that is the operator's visibility into a struggling site (unread badge, severity filter on the
 dashboard).
 
+**A body the server cannot read is a 400, not a retry.** Invalid JSON, a missing body, content after
+the JSON document (a second object included), or a value that does not bind — `severity` is
+case-sensitive, so `"warning"` is refused — answers **400** with the standard error body, and the
+message names the offending field when there is one: `"Malformed request body at 'severity'"`. The
+same request will be refused again, so do not retry it; fix the payload. Until issue #320 these
+answered 500, which a client retrying 5xx would have retried for ever.
+
 Server-side observability that will help during development: the backend logs every session event
 (`Delta session start/opened/committed/rejected/transport drop`, `auth_failure`) and exports
 Micrometer meters (`delta_sessions_started_total` etc.) — see the "Server-side observability"
