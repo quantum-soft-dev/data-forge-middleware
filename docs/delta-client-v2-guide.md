@@ -2489,7 +2489,10 @@ segment can pin — and it is **not silent**:
 `delta.retention.segments.deleted-pending{reason=pending_plugin_sql|pending_egress}` (registered
 at zero) counts every pending segment it destroys, beside a WARN naming the batch and the counts.
 A non-zero rate there means work sat in a queue for the whole retention window — an incident to
-explain, not routine.
+explain, not routine. **Until #344 this horizon existed on paper only**: the pass ran its deletes
+without a transaction and deleted nothing, so the first working night after that fix takes the
+whole accumulated backlog — including, legitimately, segments still pending — and this series can
+spike once. See `docs/cr-batch-retention-transaction.md` for the rollout with a dry run first.
 
 **Deliberately no age or count bound of the prune's own on the hold-back.** The main
 permanent-stall scenario — a mistyped `plugin.sql-generation.heap-threshold-percent` making every

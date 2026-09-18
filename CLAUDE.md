@@ -713,6 +713,36 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- batch-retention-transaction: Batch retention deletes again — it had deleted nothing in production
+  since `d4ae8ca4` (issue #344). `BatchRetentionService.cleanupSiteInDb` was a `protected`,
+  self-invoked `@Transactional` — inert, the #164 shape — so the nightly pass ran its bulk deletes
+  with no transaction and every expired batch failed with `TransactionRequiredException`, nightly,
+  while batches, uploads, segments, SQL generations and batch Parquet accumulated without bound and
+  #212's "outer horizon" (`delta.retention.segments.deleted-pending`) never fired. The tests could
+  not see it because both integration methods carried `@Transactional`, standing in for the missing
+  one. **New bean `BatchRetentionTransaction`, one transaction per batch rather than per site**:
+  the pass records a failing batch and moves on, which one site-wide transaction cannot do (after
+  the first SQL error PostgreSQL refuses the rest, rolling the whole site back). Each transaction
+  re-locks its batch with the shared candidate predicate (`lockCleanupCandidate`,
+  `FOR UPDATE SKIP LOCKED` — the old listing's lock ran outside any transaction and was released at
+  once), deletes the rows, segment rows included via `deleteMetadataByBatchId`, and returns the
+  object keys; it **refuses to run without a transaction**. `BatchRetentionService` is a
+  non-transactional orchestrator that **refuses a caller's transaction**, deletes a site's objects
+  after its batch transactions committed (segment objects now leave there too and are counted in
+  `deletedFiles`), and counts `deleted-pending` only after a commit. **Owner decision 1**: the
+  candidate predicate, one text shared by listing, lock and dry run, excludes a batch with
+  `uploaded_files` while its site has no `checkpoints` row — for such a site the historical CSVs are
+  the only Bit BI baseline (`CheckpointFileQueryService` fallback), and HTTP ingestion's removal
+  (#032) made every v1 batch older than the 45-day default. **Owner decision 2** is the rollout:
+  park the cron on `0 0 0 31 2 *` before the deploy, `dryRun` through `POST /api/v1/batches/cleanup`,
+  then restore `0 0 2 * * *` — the first working night takes the whole backlog (1000 per pass).
+  Other self-invoked `@Transactional` in `batch/application`: checked, none needs a change.
+  Integration tests call `runCleanup` as the scheduler does (red on the old code with the production
+  error); mutation-proven — dropping `@Transactional` from `deleteBatch` reddens four integration
+  tests and the proxy-shape unit test, neutralising the checkpoint clause reddens the v1-kept and
+  dry-run cases. No REST route, DTO shape, gRPC, proto, migration (**V58 stays free**),
+  configuration-key, metric-name, S3-key or frontend change. See
+  `docs/cr-batch-retention-transaction.md`.
 - migration-lands-in-develop: The Spring Boot 4.1 migration branch lands in `develop` as a **merge
   commit**, not a squash — the one recorded exception to Rule 1 (issue #305). `migration/spring-boot-4.1`
   carried nine tickets (#299–#304, #319, #320, #336), each already squashed into that branch by its own
