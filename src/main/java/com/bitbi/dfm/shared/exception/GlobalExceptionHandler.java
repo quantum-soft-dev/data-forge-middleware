@@ -19,7 +19,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
+import tools.jackson.core.JacksonException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -134,6 +136,67 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle HttpMessageNotReadableException (400 Bad Request).
+     * <p>
+     * A request body that is missing, is not JSON, or holds a value its field cannot bind (an unknown
+     * enum constant, a string where an object belongs) is the client's error. Without this handler it
+     * reached the catch-all and answered 500 with an ERROR stack trace (issue #320), which a client
+     * that retries 5xx retries for ever and an ERROR-rate alert reports as a server fault.
+     * </p>
+     * <p>
+     * The message names the JSON path of the value that did not bind — field names the client itself
+     * sent — and nothing else: the parser's own text carries Java type names, the source excerpt and
+     * the rejected value. That text goes to the WARN line instead, without a stack trace.
+     * </p>
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponseDto> handleUnreadableBody(
+            HttpMessageNotReadableException ex,
+            HttpServletRequest request) {
+
+        String path = jsonPath(ex);
+        String errorMessage = path.isEmpty() ? "Malformed request body" : "Malformed request body at '" + path + "'";
+        logger.warn("Unreadable request body on {} {}: {}", request.getMethod(), request.getRequestURI(),
+                ex.getMostSpecificCause().getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * The JSON path of the value Jackson could not bind, as {@code items[1].grade}, or empty when the
+     * failure has no path (a syntax error at the root, a missing body). Built from the path references
+     * rather than {@link JacksonException#getPathReference()}, which prefixes each step with the Java
+     * type it was reading.
+     */
+    private static String jsonPath(HttpMessageNotReadableException ex) {
+        for (Throwable cause = ex.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof JacksonException jackson) {
+                StringBuilder path = new StringBuilder();
+                for (JacksonException.Reference reference : jackson.getPath()) {
+                    if (reference.getPropertyName() != null) {
+                        if (!path.isEmpty()) {
+                            path.append('.');
+                        }
+                        path.append(reference.getPropertyName());
+                    } else if (reference.getIndex() >= 0) {
+                        path.append('[').append(reference.getIndex()).append(']');
+                    }
+                }
+                return path.toString();
+            }
+        }
+        return "";
     }
 
     /**
