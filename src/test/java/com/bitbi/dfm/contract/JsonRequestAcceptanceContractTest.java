@@ -65,11 +65,17 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
         assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\",\"notAField\":42}")).isEqualTo(201);
     }
 
+    /**
+     * Pinned at 201 by #300 and kept there by #303 while an unreadable body answered 500; refused since
+     * #320 took Jackson 3's {@code FAIL_ON_TRAILING_TOKENS}. Trailing whitespace is not a token and is
+     * still accepted — the line a client's pretty-printer or a trailing newline must stay on.
+     */
     @Test
-    @DisplayName("trailing content after the JSON value is ignored: 201")
-    void trailingTokensAreIgnored() throws Exception {
-        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"} trailing")).isEqualTo(201);
-        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"}{\"type\":\"U\"}")).isEqualTo(201);
+    @DisplayName("trailing content after the JSON value, a second document included, is refused: 400")
+    void trailingTokensAreRefused() throws Exception {
+        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"} trailing")).isEqualTo(400);
+        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"}{\"type\":\"U\"}")).isEqualTo(400);
+        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"}\r\n \t\n")).isEqualTo(201);
     }
 
     @Test

@@ -80,9 +80,11 @@ class JacksonHttpDefaultsContractTest {
     /**
      * Every Jackson default this application had to decide, with its verdict.
      * <p>
-     * The first two are pinned because accepting them turns a request that answers 201/404 today into
-     * a 500 from the catch-all handler — a client-side malformation reported as a server error. The
-     * eleven accepted ones were each measured to be invisible on this surface. The last five never
+     * The first is pinned because accepting it refuses a body that shipped clients send and are
+     * answered 404/200 for today. The second was pinned by #303 for as long as an unreadable body
+     * answered 500, and accepted by #320 once it answers 400: content after the JSON document — a
+     * second concatenated object included, which used to be dropped silently — is now refused. The
+     * other eleven accepted ones were each measured to be invisible on this surface. The last five never
      * differed on the HTTP mapper at all, because Boot pins them regardless of the flag; they are
      * asserted so that a Boot release which stops pinning them is caught here rather than by a client
      * reading a date as a number, and they are named in {@link #BOOT_PINNED} so that a verdict cannot
@@ -92,11 +94,12 @@ class JacksonHttpDefaultsContractTest {
             new JsonMapperDecision(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, false, "PINNED",
                     "ManualSqlGenerationRequestDto.forceFullGeneration is the only primitive in any "
                             + "@RequestBody; an explicit null reads as false today and would become an "
-                            + "unreadable body, so the owner and admin generate-SQL routes would answer "
-                            + "500 to a request they accept now"),
-            new JsonMapperDecision(DeserializationFeature.FAIL_ON_TRAILING_TOKENS, false, "PINNED",
-                    "content after the JSON document is ignored today; refusing it surfaces as 500 "
-                            + "rather than 400, because an unreadable body reaches the catch-all handler"),
+                            + "unreadable body, so the owner and admin generate-SQL routes would refuse "
+                            + "(400 since #320) a request they accept now"),
+            new JsonMapperDecision(DeserializationFeature.FAIL_ON_TRAILING_TOKENS, true, "ACCEPTED",
+                    "content after the JSON document is refused with 400 (#320) instead of being "
+                            + "ignored; no serializer emits it, and a second concatenated object was "
+                            + "dropped silently"),
             new JsonMapperDecision(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true, "ACCEPTED",
                     "records keep their creator order, so every DTO on this surface is unmoved; the two "
                             + "raw Page<> responses are reordered, and no JSON parser reads members by "
