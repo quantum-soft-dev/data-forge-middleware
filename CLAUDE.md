@@ -290,7 +290,16 @@ Normally, then, the go-ahead is per PR,
 via `/merge <pr>` (invoking it is the authorization). That command re-checks readiness, merges
 with **squash** (one issue = one commit, as the whole current history), closes the issue, moves
 the card to `Done` and strips the `status: *` labels. `deleteBranchOnMerge` is off in the repo
-settings, so `--delete-branch` is passed explicitly. Cleanup removes only what the command
+settings, so the command deletes the branch itself — through **`scripts/pr-merge.sh <pr>`**, not
+`gh pr merge --delete-branch` (issue #332). Run from a worktree, which is where `/task` and the
+dispatcher's `agents` mode merge, `gh` merges the PR on GitHub and then fails its *local* cleanup
+(`fatal: '<base>' is already used by worktree`): it exits non-zero, the branch is deleted neither
+locally nor on the remote, and the output reads as a merge that did not happen. The script merges
+with `--repo` and no `--delete-branch` (so `gh` never touches the local tree), takes the verdict
+from the PR re-read over REST rather than from `gh`'s exit code, and deletes the head ref over REST
+with a read-back; exit `3` means *merged, branch left* — never merge again. Enabling
+`deleteBranchOnMerge` would also fix it, but that is a human's repository setting, and reading the
+exit code as the verdict would stay wrong either way. Cleanup removes only what the command
 created: a nested worktree is removed, a **Conductor workspace is never touched** — the human
 archives it (or the "Auto-archive on PR close" setting does).
 
@@ -704,6 +713,38 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- pr-merge-script: The merge step of `/task`, `/merge` and `/github-issue-runner` is one script,
+  `scripts/pr-merge.sh <pr> [--rebase]`, and it no longer reads `gh`'s exit code as its verdict
+  (issue #332). `gh pr merge --squash --delete-branch` run from a worktree — the normal path of
+  `/task`, whose step 3 always creates one, and of the dispatcher's `agents` mode — merged the PR on
+  GitHub and *then* tried to clean up locally by switching to the base, which the main checkout
+  already holds: `fatal: 'develop' is already used by worktree`, a non-zero exit, and
+  `--delete-branch` done neither locally nor on the remote. With `deleteBranchOnMerge` off nothing
+  else removes the branch (#310's `chore/310-form-base-branch` had to be deleted by hand), and the
+  output reads as a failed merge, whose retry answers "not mergeable".
+  **Option (a) of the ticket, as a script rather than three paraphrases** — the `issue-base.sh`
+  reasoning: a copy of a rule in each command drifts silently. It merges with `--repo` and without
+  `--delete-branch`, which `gh`'s help ties its local cleanup to, so no local git is touched; re-reads
+  the PR over REST (0 GraphQL points — the merge itself is the one GraphQL call) and takes `merged`
+  as the verdict, printing `gh`'s output as a warning when it exited non-zero after the merge landed;
+  deletes `git/refs/heads/<head>` over REST and reads it back, a 404 being the only answer to
+  "deleted" (a 422 from the delete means it was already gone). A PR already merged by an earlier run
+  is not merged again — only its branch is removed. It refuses, before touching anything, a PR whose
+  head is a long-lived branch (`develop`, `main`, `stage`, `release*`, `migration/*` — the final
+  merge of a migration decides its own method, and its branch must not be deleted) and a PR closed
+  without a merge; a head in a fork is merged and left alone. Exit codes: `0` merged + deleted, `1`
+  not merged, `2` refused, `3` **merged, branch left** — never merge again. **Rejected**: (b) keeping
+  `--delete-branch` and teaching every command to recognise that one `fatal` line (still the exit
+  code as the verdict, still three copies); (c) enabling `deleteBranchOnMerge` — a human's repository
+  setting, which would remove the branch but leave the misread exit code.
+  **Tests**: `PrMergeScriptTest` runs the script against a stand-in `gh` that plays GitHub from
+  fixtures and refuses `--delete-branch`, `gh pr view` and GraphQL — 18 cases, among them the #332
+  failure itself (merge lands, `gh` exits 1 with the worktree `fatal`, the script still succeeds and
+  deletes the branch). Mutation-proven: restoring `--delete-branch` reddens 7, taking the verdict
+  from the exit code reddens the #332 case, dropping the long-lived-head guard reddens 5. The script
+  is a declared input of `test` and the pre-commit hook runs `com.bitbi.dfm.documentation.*` when it
+  changes. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - error-logging-full-signatures: `ErrorLoggingService` has one signature per kind of log, and both
   take the severity (issue #326, recorded by #321 rather than folded into it). After #321 the four
   overloads without an `ErrorSeverity` — `logError` with and without metadata,

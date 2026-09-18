@@ -256,6 +256,10 @@ tasks.named<Test>("test") {
     // (#308): an escaped path must not break a section silently. Same reasoning as the two above.
     inputs.files("scripts/issue-find.sh")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // PrMergeScriptTest runs scripts/pr-merge.sh, the one merge step of /task, /merge and the
+    // dispatcher (#332), against a stand-in gh. Same reasoning as the three above.
+    inputs.files("scripts/pr-merge.sh")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
