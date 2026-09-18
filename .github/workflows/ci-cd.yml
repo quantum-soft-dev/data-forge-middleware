@@ -70,16 +70,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
       localstack:
         # Pinned to the community edition used by Testcontainers (TestContainersManager).
         # `:latest` now requires LOCALSTACK_AUTH_TOKEN and fails container init.
@@ -138,8 +128,6 @@ jobs:
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/dataforge_test
           SPRING_DATASOURCE_USERNAME: dataforge
           SPRING_DATASOURCE_PASSWORD: dataforge_test_password
-          SPRING_DATA_REDIS_HOST: localhost
-          SPRING_DATA_REDIS_PORT: 6379
           S3_ENDPOINT: http://localhost:4566
           S3_BUCKET_NAME: data-forge-test-bucket
           S3_REGION: us-east-1

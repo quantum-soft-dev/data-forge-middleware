@@ -1,6 +1,5 @@
 package com.bitbi.dfm.integration;
 
-import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.localstack.LocalStackContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -61,9 +60,6 @@ public class TestContainersManager {
             if (manager.postgresContainer != null && manager.postgresContainer.isRunning()) {
                 manager.postgresContainer.stop();
             }
-            if (manager.redisContainer != null && manager.redisContainer.isRunning()) {
-                manager.redisContainer.stop();
-            }
             if (manager.localStackContainer != null && manager.localStackContainer.isRunning()) {
                 manager.localStackContainer.stop();
             }
@@ -77,11 +73,6 @@ public class TestContainersManager {
      * May be null if using external services.
      */
     private final PostgreSQLContainer postgresContainer;
-    /**
-     * Redis 7 container - singleton shared across ALL tests.
-     * May be null if using external services.
-     */
-    private final GenericContainer<?> redisContainer;
     /**
      * LocalStack container for S3 - singleton shared across ALL tests.
      * May be null if using external services.
@@ -104,7 +95,6 @@ public class TestContainersManager {
             System.out.println("[TestContainersManager] External services detected (CI environment) - skipping Testcontainers");
             // Don't initialize containers - use external services
             postgresContainer = null;
-            redisContainer = null;
             localStackContainer = null;
             return;
         }
@@ -118,13 +108,6 @@ public class TestContainersManager {
                 .withDatabaseName("dataforge_test")
                 .withUsername("test")
                 .withPassword("test");
-
-        // Initialize Redis container
-        redisContainer = new GenericContainer<>(
-                DockerImageName.parse("redis:7-alpine")
-        )
-                .withExposedPorts(6379)
-                .withCommand("redis-server", "--requirepass", "test_password");
 
         // Initialize LocalStack container
         // Using LocalStack 3.x which is compatible with Testcontainers 1.20+
@@ -145,7 +128,7 @@ public class TestContainersManager {
 
     /**
      * Detect if external services are already available (CI environment).
-     * Checks if PostgreSQL, Redis, and LocalStack are reachable at localhost.
+     * Checks if PostgreSQL and LocalStack are reachable at localhost.
      *
      * @return true if all external services are available
      */
@@ -162,15 +145,11 @@ public class TestContainersManager {
         boolean postgresAvailable = isPortOpen("localhost", 5432);
         System.out.println("[TestContainersManager] PostgreSQL (localhost:5432): " + (postgresAvailable ? "available" : "not available"));
 
-        // Check Redis at localhost:6379
-        boolean redisAvailable = isPortOpen("localhost", 6379);
-        System.out.println("[TestContainersManager] Redis (localhost:6379): " + (redisAvailable ? "available" : "not available"));
-
         // Check LocalStack at localhost:4566
         boolean localstackAvailable = isPortOpen("localhost", 4566);
         System.out.println("[TestContainersManager] LocalStack (localhost:4566): " + (localstackAvailable ? "available" : "not available"));
 
-        return postgresAvailable && redisAvailable && localstackAvailable;
+        return postgresAvailable && localstackAvailable;
     }
 
     /**
@@ -208,12 +187,6 @@ public class TestContainersManager {
         if (!postgresContainer.isRunning()) {
             postgresContainer.start();
             System.out.println("[TestContainersManager] PostgreSQL started: " + postgresContainer.getJdbcUrl());
-        }
-
-        // Start Redis
-        if (!redisContainer.isRunning()) {
-            redisContainer.start();
-            System.out.println("[TestContainersManager] Redis started: " + redisContainer.getHost() + ":" + redisContainer.getMappedPort(6379));
         }
 
         // Start LocalStack
@@ -303,15 +276,6 @@ public class TestContainersManager {
     }
 
     /**
-     * Get the Redis container.
-     *
-     * @return the running Redis container, or null if using external services
-     */
-    public GenericContainer<?> getRedisContainer() {
-        return redisContainer;
-    }
-
-    /**
      * Get the LocalStack container.
      *
      * @return the running LocalStack container, or null if using external services
@@ -330,7 +294,6 @@ public class TestContainersManager {
             return detectExternalServices();
         }
         return postgresContainer != null && postgresContainer.isRunning()
-                && redisContainer != null && redisContainer.isRunning()
                 && localStackContainer != null && localStackContainer.isRunning();
     }
 
@@ -344,20 +307,6 @@ public class TestContainersManager {
             return "jdbc:postgresql://localhost:5432/dataforge_test";
         }
         return postgresContainer.getJdbcUrl();
-    }
-
-    /**
-     * Get Redis connection info for debugging.
-     *
-     * @return Redis connection string
-     */
-    public String getRedisConnectionInfo() {
-        if (useExternalServices) {
-            return "redis://localhost:6379";
-        }
-        return String.format("redis://%s:%d",
-                redisContainer.getHost(),
-                redisContainer.getMappedPort(6379));
     }
 
     /**

@@ -178,6 +178,10 @@ entity and every flush writes the row.
 
 ### Redis cache
 
+> **Superseded by #319.** Both caches were inert and Redis had no other user, so the cache, its
+> serializer, its key prefix and the Redis dependency were removed rather than carried further; the
+> paragraphs below record what #302 did to them in the meantime.
+
 `GenericJackson2JsonRedisSerializer` → `GenericJacksonJsonRedisSerializer` with default typing and
 Spring's cache null marker, as before, and **every key prefixed with `jackson3:`**
 (`CacheConfiguration.KEY_PREFIX`) so old and new pods sharing Redis during a rolling deployment never

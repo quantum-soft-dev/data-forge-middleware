@@ -152,8 +152,6 @@ jobs:
             --project=${{ steps.env.outputs.project }} \
             --format="value(ipAddresses[0].ipAddress)")
           kubectl get namespace forge >/dev/null 2>&1 || kubectl create namespace forge
-          # SPRING_DATA_REDIS_PASSWORD is empty: GKE Redis (in-cluster dev / Memorystore w/o AUTH)
-          # has no password. Wire a real secret here if Memorystore AUTH is enabled later.
           kubectl create secret generic forge-secrets \
             --from-literal=DB_URL="jdbc:postgresql://${PRIVATE_IP}:5432/dfm" \
             --from-literal=DB_USERNAME="dfm-app" \
@@ -163,7 +161,6 @@ jobs:
             --from-literal=AUTH0_MGMT_CLIENT_SECRET="${AUTH0_MGMT_CLIENT_SECRET}" \
             --from-literal=AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             --from-literal=AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
-            --from-literal=SPRING_DATA_REDIS_PASSWORD="" \
             --from-literal=PLUGIN_BITBI_CLIENT_ID="${PLUGIN_BITBI_CLIENT_ID}" \
             -n forge --dry-run=client -o yaml | kubectl apply -f -
 

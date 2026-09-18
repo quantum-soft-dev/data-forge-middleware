@@ -6,7 +6,7 @@
 # context FAILS if it's invalid — so AUTH0_MGMT_CLIENT_ID/SECRET must be REAL. Put them in
 # /tmp/forge-dev-gen.env (sourced below); they fall back to dummy values only, which will
 # crash-loop the backend. Validates: Terraform infra, image build/push to Artifact Registry,
-# Cloud SQL connectivity + Flyway, GCS via S3-compat, in-cluster Redis, rollout and health.
+# Cloud SQL connectivity + Flyway, GCS via S3-compat, rollout and health.
 # Bit BI plugin features are NOT exercised (dummy PLUGIN_BITBI_CLIENT_ID).
 #
 # Fully reversible:  terraform -chdir=infra/environments/dev destroy   &&   kubectl delete ns forge
@@ -99,7 +99,6 @@ kubectl create secret generic forge-secrets \
   --from-literal=AUTH0_MGMT_CLIENT_SECRET="${AUTH0_MGMT_CLIENT_SECRET:-smoke-dummy-mgmt-secret}" \
   --from-literal=AWS_ACCESS_KEY_ID="${HMAC_ID}" \
   --from-literal=AWS_SECRET_ACCESS_KEY="${HMAC_SECRET}" \
-  --from-literal=SPRING_DATA_REDIS_PASSWORD="" \
   --from-literal=PLUGIN_BITBI_CLIENT_ID="smoke-dummy-plugin-client-id" \
   -n forge --dry-run=client -o yaml | kubectl apply -f -
 
@@ -111,7 +110,6 @@ kubectl -n forge set image deploy/forge-frontend frontend="${FRONTEND_REF}"
 
 # ── 6) Wait for rollout + health ──────────────────────────────────────────────
 echo "[6/6] waiting for rollout (Flyway V1..V28 on first boot — allow several minutes) ..."
-kubectl -n forge rollout status deploy/forge-redis    --timeout=120s || true
 kubectl -n forge rollout status deploy/forge-backend  --timeout=600s
 kubectl -n forge rollout status deploy/forge-frontend --timeout=300s
 

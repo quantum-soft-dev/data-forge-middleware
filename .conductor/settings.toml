@@ -11,8 +11,8 @@
 # in a fresh cloud clone, and setting it twice costs nothing.
 setup = "npm --prefix frontend ci && git config core.hooksPath .githooks"
 
-# The backend binds a fixed 8080, and postgres/redis/localstack come from one docker-compose
-# stack on fixed host ports (5432/6379/4566). Two workspaces cannot run these at once.
+# The backend binds a fixed 8080, and postgres/localstack come from one docker-compose
+# stack on fixed host ports (5432/4566). Two workspaces cannot run these at once.
 run_mode = "nonconcurrent"
 
 # Runs when the workspace is archived. Only stale registrations are dropped — a nested
@@ -24,7 +24,7 @@ archive = "git worktree prune"
 
 [scripts.run.deps]
 # Start this first: the backend, the integration suite and ~30 contract tests all need it.
-command = "docker compose up postgres redis localstack"
+command = "docker compose up postgres localstack"
 available_in = [ "local" ]
 icon = "database"
 

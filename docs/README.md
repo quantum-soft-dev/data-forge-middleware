@@ -29,7 +29,7 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
   - Troubleshooting guide
 
 - **[Environment Variables Reference](./deployment/environment-variables.md)** - Comprehensive reference for all environment variables
-  - Backend configuration (Spring Boot, PostgreSQL, Redis, S3, Auth0)
+  - Backend configuration (Spring Boot, PostgreSQL, S3, Auth0)
   - Frontend configuration (Auth0, NGINX)
   - Security best practices
   - Environment-specific examples

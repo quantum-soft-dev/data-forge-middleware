@@ -86,41 +86,6 @@ SPRING_DATASOURCE_PASSWORD=secure_random_password_here
 
 ---
 
-### Redis Configuration
-
-#### `SPRING_DATA_REDIS_HOST`
-
-**Description:** Redis server hostname
-**Required:** Yes
-**Type:** String (hostname/IP)
-**Default:** None
-
-**Examples:**
-```bash
-# Local development
-SPRING_DATA_REDIS_HOST=localhost
-
-# Docker Compose
-SPRING_DATA_REDIS_HOST=redis
-
-# Kubernetes
-SPRING_DATA_REDIS_HOST=redis-service.dataforge.svc.cluster.local
-```
-
-#### `SPRING_DATA_REDIS_PORT`
-
-**Description:** Redis server port
-**Required:** No
-**Type:** Integer
-**Default:** `6379`
-
-**Example:**
-```bash
-SPRING_DATA_REDIS_PORT=6379
-```
-
----
-
 ### AWS S3 Configuration
 
 #### `S3_ENDPOINT`
@@ -412,7 +377,6 @@ BACKEND_URL=https://api.dataforge.com
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres:5432/dataforge` | Medium |
 | `SPRING_DATASOURCE_USERNAME` | `dataforge` | Medium |
 | `SPRING_DATASOURCE_PASSWORD` | `secure_password` | **HIGH** |
-| `SPRING_DATA_REDIS_HOST` | `redis` | Low |
 | `S3_ENDPOINT` | `https://s3.amazonaws.com` | Low |
 | `S3_BUCKET_NAME` | `dataforge-uploads` | Low |
 | `S3_REGION` | `us-east-1` | Low |
@@ -445,8 +409,6 @@ SPRING_PROFILES_ACTIVE=dev
 SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/dataforge_dev
 SPRING_DATASOURCE_USERNAME=dataforge
 SPRING_DATASOURCE_PASSWORD=dev_password
-SPRING_DATA_REDIS_HOST=localhost
-SPRING_DATA_REDIS_PORT=6379
 S3_ENDPOINT=http://localhost:4566
 S3_BUCKET_NAME=dataforge-dev-bucket
 S3_REGION=us-east-1
@@ -512,7 +474,6 @@ frontend:
 ```yaml
 SPRING_PROFILES_ACTIVE: "prod"
 SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-staging:5432/dataforge_staging"
-SPRING_DATA_REDIS_HOST: "redis-staging"
 S3_ENDPOINT: "https://s3.amazonaws.com"
 S3_BUCKET_NAME: "dataforge-uploads-staging"
 S3_REGION: "us-east-1"
@@ -543,7 +504,6 @@ VITE_AUTH0_CLIENT_ID: "staging-spa-client-id"
 ```yaml
 SPRING_PROFILES_ACTIVE: "prod"
 SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-prod.rds.amazonaws.com:5432/dataforge_prod"
-SPRING_DATA_REDIS_HOST: "redis-prod.cache.amazonaws.com"
 S3_ENDPOINT: "https://s3.amazonaws.com"
 S3_BUCKET_NAME: "dataforge-uploads-production"
 S3_REGION: "us-east-1"

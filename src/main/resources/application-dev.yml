@@ -5,12 +5,6 @@ spring:
     username: dfm
     password: dfm_password
 
-  data:
-    redis:
-      host: ${SPRING_DATA_REDIS_HOST:localhost}
-      port: ${SPRING_DATA_REDIS_PORT:6379}
-      password: ${SPRING_DATA_REDIS_PASSWORD:redis_password}
-
   flyway:
     locations: classpath:db/migration,classpath:db/seed
 

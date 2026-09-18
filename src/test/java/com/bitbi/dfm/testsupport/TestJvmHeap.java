@@ -45,7 +45,7 @@ public final class TestJvmHeap {
      * Ceiling of the agreed range.
      *
      * <p>The bound that matters is the CI runner: {@code ubuntu-latest} has 16 GB shared with a
-     * PostgreSQL, a Redis and a LocalStack service container, the Gradle build JVM, and the
+     * PostgreSQL and a LocalStack service container, the Gradle build JVM, and the
      * Testcontainers images the suite starts on top of those. A test-JVM ceiling above this stops
      * being a ceiling — the kernel's OOM killer answers first, and that failure names nothing at
      * all.</p>

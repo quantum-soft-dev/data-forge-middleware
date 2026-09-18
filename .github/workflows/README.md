@@ -12,7 +12,7 @@
 ## CI (`ci-cd.yml`)
 
 - **Push** to `develop`, `main`, `release`, `feature/**`, `bugfix/**`, `hotfix/**`, `NNN/**`, `migration/**` and **PRs** to `develop`/`main`/`release`/`migration/**`. A `migration/<name>` branch holds a migration too large for one PR; its tickets merge there (issue #298, `CLAUDE.md` → Rule 1).
-- All branches/PRs: `backend-test` (full `./gradlew test` with Postgres/Redis/LocalStack services) + `frontend-test` (vitest).
+- All branches/PRs: `backend-test` (full `./gradlew test` with Postgres/LocalStack services) + `frontend-test` (vitest).
 - `develop`/`main`/`release` additionally run `code-quality` (checkstyle/SpotBugs, non-blocking) and `dependency-analysis`.
 - **Dormant jobs** (`if: false`, kept for a quick AWS rollback): `build` (jar artifact), `docker-build` / `docker-build-frontend` (ghcr images), `deploy` (AWS ECS). GKE builds its own images, so these are not needed since the GKE migration (022).
 - Required status check for PRs to `develop`: `backend-test` — and the same on `migration/**`, a branch-protection setting a human configures.

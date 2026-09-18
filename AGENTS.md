@@ -7,7 +7,7 @@
 - **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 12**
 - **AWS SDK v2** (S3) + **HikariCP** + **Micrometer** + **SpringDoc OpenAPI 3**
 - **Auth0 2.26.0** (Management API) + **Hypersistence Utils** (JSONB)
-- **Redis + Caffeine** (Spring Cache) + **Bucket4j** (rate limiting) + **Spring Framework retry** (`@Retryable`, `@EnableResilientMethods`)
+- **Caffeine** (in-process, rate limiter buckets) + **Bucket4j** (rate limiting) + **Spring Framework retry** (`@Retryable`, `@EnableResilientMethods`)
 - **Apache POI / commons-csv / commons-compress** + **java-diff-utils** (file diff) + **json-schema-validator**
 - **JUnit 6 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
 
@@ -76,7 +76,7 @@ docker-compose up postgres localstack     # Start dependencies
 - **N+1 Prevention**: JOIN FETCH in @Query annotations
 - **Cursor Pagination**: For large datasets (batches, audit logs)
 - **JSONB**: site_schemas, plugin metadata, comparison diffs (Hypersistence Utils)
-- **Caching**: Spring Cache (Redis + Caffeine) via `config/CacheConfiguration` (e.g. batch history)
+- **No Spring Cache, no Redis** (#319): reads hit PostgreSQL; `NoSpringCacheConventionTest` refuses a cache annotation or a Redis dependency
 
 ### Site Types & Schemas (019)
 - **SiteType** (immutable per site): `DBF` (full CSV snapshots, server diffs) | `POSTGRES_CDC` (CSV baseline + JSONL deltas)
@@ -263,6 +263,41 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- remove-upload-history-cache: The two Upload History caches and Redis are gone, because neither cache
+  ever held a value and making them live would have been wrong (issue #319, filed by #300 on this
+  branch). `batch-details` (`BatchHistoryService.getBatchDetails`) was conditioned on `#result`, which
+  a `condition` evaluates **before** the call, where it is undefined, so nothing was stored;
+  `batch-first-page` sat on `fetchFirstPage`, a `protected` method reached through `this`, which the
+  proxy never sees. Since #302 the serializer half of the ticket no longer held on this branch — the
+  Jackson 3 serializer writes `java.time` — so the two caches were inert by their annotations alone.
+  **Decided by the owner: delete rather than repair**, and the arguments are the part worth keeping.
+  Production has had no cache since 008, so removing it changes no behaviour. **A live
+  `batch-details` would have been a cross-account leak**: its key was the batch id alone while the
+  owner check runs inside the method, so an entry cached from the owner's read answered any account
+  that knew the id — proven, not argued: with `condition` turned into the `unless` it meant,
+  `BatchHistoryWithoutCacheIntegrationTest.ownerCheckRunsOnEveryRead` goes red because the other
+  account's read no longer throws. "A COMPLETED batch is immutable" was false as well — deletion,
+  retention and a site wipe all remove it — so a live cache needed eviction from three subsystems. And
+  a five-minute first page on a monitoring screen, where a CONTINUOUS session is one batch growing for
+  hours, is a stale list rather than an optimization; the "~80% less DB load" in `CacheConfiguration`
+  was never measured. **Redis went with the cache**, because it was its only user (rate limiting is
+  Caffeine, used directly): `spring-boot-starter-data-redis` and `-cache` are out of the build, so Boot
+  no longer builds a connection factory or a `redis` health contributor for a store that held nothing;
+  `spring.data.redis` is gone from `application-{dev,prod}.yml`, the Redis Testcontainer and the CI
+  `redis` service are gone, and so are `k8s/overlays/dev/redis.yaml`, the `SPRING_DATA_REDIS_*`
+  ConfigMap keys, the compose/devcontainer/Conductor Redis services and the Redis lines of the living
+  docs. **Not done here, and filed**: Memorystore in `infra/` (Terraform, stage/prod), the
+  `forge-redis` already running in the dev cluster (`kubectl apply -k` does not prune), and the dormant
+  AWS path's `REDIS_PASSWORD` — **#335**. Tests: `NoSpringCacheConventionTest` (fast gate) refuses a
+  Spring Cache annotation in `src/main`, a Redis client or cache starter in the build, Spring Data
+  Redis on the classpath and a `redis:`/`cache:` block in shipped configuration, and
+  `BatchHistoryWithoutCacheIntegrationTest` holds the wired half — no `CacheManager` and no Redis bean
+  in the context, the owner check on every read, and a second read of a detail and of the first page
+  seeing a change made in between (both red under the "make it live" mutation). #300's
+  `RedisCacheSerializationIntegrationTest` is deleted with the thing it characterized. No REST, gRPC,
+  proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric or frontend change; the Spring Cache
+  **names** `batch-details`/`batch-first-page` disappear with it, and `/actuator/health` loses its
+  `redis` component.
 - jackson3-http-defaults: The HTTP API is on Jackson 3's own defaults, with two of them pinned back by
   name instead of all eighteen deferred by a flag (issue #303). #302 shipped
   `spring.jackson.use-jackson2-defaults: true`, which is a compatibility mode rather than a

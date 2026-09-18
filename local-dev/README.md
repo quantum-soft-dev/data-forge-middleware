@@ -5,7 +5,7 @@ without a real Auth0 tenant. HTTP API stays on 8080.
 
 ## Prerequisites
 
-- Docker (for postgres + localstack + redis)
+- Docker (for postgres + localstack)
 - JDK 25 (Gradle toolchain picks it up automatically)
 - `grpcurl` and `python3` (for the smoke test): `brew install grpcurl`
 
@@ -23,7 +23,7 @@ Auth0-less; behaviour is unchanged when Auth0 is configured:
 ## 1. Start dependencies
 
 ```bash
-docker compose up -d postgres localstack redis
+docker compose up -d postgres localstack
 ./local-dev/ensure-bucket.sh          # make sure the S3 bucket exists
 ```
 
@@ -44,7 +44,7 @@ SPRING_PROFILES_ACTIVE=dev AWS_S3_BUCKET_NAME=dfm-uploads ./gradlew bootRun
 ```
 
 Why `AWS_S3_BUCKET_NAME`: the `dev` profile defaults the bucket to `data-forge-bucket`, but localstack
-creates `dfm-uploads`. Everything else (DB `dfm/dfm_password`, redis password, S3 endpoint
+creates `dfm-uploads`. Everything else (DB `dfm/dfm_password`, S3 endpoint
 `http://localhost:4566`, the fixed dev `jwt.secret`) already has correct `dev` defaults in
 `application-dev.yml`.
 

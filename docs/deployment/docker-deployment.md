@@ -40,8 +40,7 @@ Both images are built automatically via GitHub Actions CI/CD pipeline and pushed
 └─────────────┘      └──────────────┘      └────────────┘
                             │                      │
                             │                      ├─▶ PostgreSQL
-                            └─▶ /api/*             ├─▶ Redis
-                                                   └─▶ AWS S3
+                            └─▶ /api/*             └─▶ AWS S3
 ```
 
 **Flow:**
@@ -86,8 +85,6 @@ docker pull ghcr.io/quantum-soft-dev/data-forge-middleware-frontend:main
 | `SPRING_DATASOURCE_URL` | PostgreSQL JDBC URL | `jdbc:postgresql://postgres:5432/dataforge` |
 | `SPRING_DATASOURCE_USERNAME` | PostgreSQL username | `dataforge` |
 | `SPRING_DATASOURCE_PASSWORD` | PostgreSQL password | `secure_password` |
-| `SPRING_DATA_REDIS_HOST` | Redis host | `redis` |
-| `SPRING_DATA_REDIS_PORT` | Redis port | `6379` |
 | `S3_ENDPOINT` | S3 endpoint URL | `https://s3.amazonaws.com` |
 | `S3_BUCKET_NAME` | S3 bucket name | `dataforge-uploads` |
 | `S3_REGION` | S3 region | `us-east-1` |
@@ -110,8 +107,6 @@ docker run -d \
   -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-host:5432/dataforge \
   -e SPRING_DATASOURCE_USERNAME=dataforge \
   -e SPRING_DATASOURCE_PASSWORD=secure_password \
-  -e SPRING_DATA_REDIS_HOST=redis-host \
-  -e SPRING_DATA_REDIS_PORT=6379 \
   -e S3_ENDPOINT=https://s3.amazonaws.com \
   -e S3_BUCKET_NAME=dataforge-uploads \
   -e S3_REGION=us-east-1 \
@@ -135,7 +130,6 @@ curl http://localhost:8080/actuator/health
   "status": "UP",
   "components": {
     "db": {"status": "UP"},
-    "redis": {"status": "UP"},
     "s3": {"status": "UP"}
   }
 }
@@ -238,18 +232,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis Cache
-  redis:
-    image: redis:7-alpine
-    container_name: dataforge-redis
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Backend API
   backend:
     image: ghcr.io/quantum-soft-dev/data-forge-middleware:main
@@ -257,15 +239,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dataforge
       SPRING_DATASOURCE_USERNAME: dataforge
       SPRING_DATASOURCE_PASSWORD: secure_password
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: 6379
       S3_ENDPOINT: https://s3.amazonaws.com
       S3_BUCKET_NAME: dataforge-uploads
       S3_REGION: us-east-1
@@ -367,8 +345,6 @@ data:
   # Backend
   SPRING_PROFILES_ACTIVE: "prod"
   SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-service:5432/dataforge"
-  SPRING_DATA_REDIS_HOST: "redis-service"
-  SPRING_DATA_REDIS_PORT: "6379"
   S3_ENDPOINT: "https://s3.amazonaws.com"
   S3_BUCKET_NAME: "dataforge-uploads-prod"
   S3_REGION: "us-east-1"
@@ -599,10 +575,6 @@ kubectl logs -f -n dataforge deployment/dataforge-frontend
   - [ ] User credentials secured
   - [ ] Connection tested
 
-- [ ] **Redis**
-  - [ ] Redis 7+ running
-  - [ ] Connection tested
-
 - [ ] **AWS S3**
   - [ ] S3 bucket created
   - [ ] IAM user with bucket access
@@ -624,7 +596,6 @@ kubectl logs -f -n dataforge deployment/dataforge-frontend
   - [ ] Login with Auth0 works
   - [ ] API endpoints respond correctly
   - [ ] File upload works (S3 integration)
-  - [ ] Redis caching works
 
 - [ ] **Monitoring**
   - [ ] Application logs visible
@@ -653,18 +624,6 @@ org.postgresql.util.PSQLException: Connection refused
 1. Check `SPRING_DATASOURCE_URL` is correct
 2. Verify PostgreSQL is running: `docker ps | grep postgres`
 3. Test connection: `psql -h localhost -U dataforge -d dataforge`
-
-#### Redis Connection Failed
-
-**Error:**
-```
-io.lettuce.core.RedisConnectionException: Unable to connect to localhost:6379
-```
-
-**Solution:**
-1. Check `SPRING_DATA_REDIS_HOST` and `SPRING_DATA_REDIS_PORT`
-2. Verify Redis is running: `docker ps | grep redis`
-3. Test connection: `redis-cli -h localhost ping`
 
 #### S3 Access Denied
 
@@ -743,7 +702,7 @@ Access to fetch at 'http://backend:8080/api/v1/accounts' from origin 'http://loc
 1. Check logs: `docker logs dataforge-backend`
 2. Check health endpoint manually
 3. Increase health check timeouts
-4. Verify all dependencies are ready (postgres, redis)
+4. Verify all dependencies are ready (postgres, S3)
 
 #### Out of Memory
 
