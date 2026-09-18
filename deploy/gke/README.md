@@ -5,14 +5,14 @@ forge runs in the **`forge`** namespace across three clusters, mirroring bitbi
 `develop` → dev, `stage` → stage, `main` → prod.
 
 Manifests live in [`k8s/`](../../k8s): `base/` + `overlays/{dev,stage,prod}` (kustomize).
-Backend (`forge-backend`, 8080) and frontend (`forge-frontend`, 80) are separate Deployments;
-dev additionally runs an in-cluster `forge-redis`. **Dev is internal-only** (ClusterIP, no public
+Backend (`forge-backend`, 8080) and frontend (`forge-frontend`, 80) are separate Deployments.
+**Dev is internal-only** (ClusterIP, no public
 ingress) — bitbi reaches forge at `http://forge-backend.forge.svc.cluster.local:8080`.
 
 ## What kustomize applies vs. what is provisioned out-of-band
 
-`kubectl apply -k` creates: namespace, ServiceAccount, ConfigMaps, Deployments, Services, HPA, PDB,
-and (dev) Redis. It does **not** create Secrets — those are provisioned separately so secrets never
+`kubectl apply -k` creates: namespace, ServiceAccount, ConfigMaps, Deployments, Services, HPA and PDB.
+It does **not** create Secrets — those are provisioned separately so secrets never
 live in git. The backend pod will stay `Pending`/`CrashLoop` until both exist:
 
 - `forge-secrets` — app credentials, synced via `sync-secrets.sh` (below);
@@ -26,7 +26,6 @@ live in git. The backend pod will stay `Pending`/`CrashLoop` until both exist:
   `serviceAccount:{project}.svc.id.goog[forge/forge-app]`.
 - Cloud SQL database `dfm` + user `dfm-app` (dev: on `dev-bitbi-db`).
 - GCS bucket `dfm-{env}-uploads` + HMAC keys for the S3-compatible client.
-- (stage/prod) Memorystore Redis instance.
 
 ## Manual dev deploy
 

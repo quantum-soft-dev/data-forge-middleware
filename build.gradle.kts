@@ -81,9 +81,6 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.28.0")
     // Encoding detection
     implementation("com.ibm.icu:icu4j:76.1")
-    // Redis caching
-    implementation("org.springframework.boot:spring-boot-starter-data-redis")
-    implementation("org.springframework.boot:spring-boot-starter-cache")
 
     // File Comparison Feature Dependencies
     // Diff library for file comparison

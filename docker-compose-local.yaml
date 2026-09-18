@@ -52,22 +52,6 @@ services:
     networks:
       - dfm-network
 
-  redis:
-    image: redis:7-alpine
-    container_name: dfm-redis-local
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password}
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data_local:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - dfm-network
-
   localstack:
     image: localstack/localstack:stable
     container_name: dfm-localstack-local
@@ -106,11 +90,6 @@ services:
       SPRING_DATASOURCE_USERNAME: dfm
       SPRING_DATASOURCE_PASSWORD: ${DFM_DB_PASSWORD:-dfm_password}
 
-      # Redis
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: 6379
-      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_password}
-
       # S3 (LocalStack)
       AWS_S3_ENDPOINT: http://localstack:4566
       AWS_S3_REGION: us-east-1
@@ -138,8 +117,6 @@ services:
       - "8080:8080"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       localstack:
         condition: service_healthy
@@ -184,8 +161,6 @@ services:
 volumes:
   postgres_data_local:
     driver: local
-  redis_data_local:
-    driver: local
   localstack_data_local:
     driver: local
 
@@ -203,7 +178,6 @@ networks:
 # - Backend API: http://localhost:8080
 # - Frontend UI: http://localhost:3000
 # - PostgreSQL: localhost:5432 (user: dfm, password: dfm_password)
-# - Redis: localhost:6379 (password: redis_password)
 # - LocalStack S3: http://localhost:4566
 # - Actuator: http://localhost:8080/actuator
 # - Swagger UI: http://localhost:8080/swagger-ui.html

@@ -18,7 +18,6 @@ import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,7 +41,6 @@ import java.util.stream.Collectors;
  * <p><strong>Features:</strong></p>
  * <ul>
  *   <li>Cursor-based pagination (no OFFSET performance issues)</li>
- *   <li>Redis caching for first page (5-minute TTL)</li>
  *   <li>Authorization via accountId → sites → batches chain</li>
  *   <li>DTO projection to avoid N+1 queries</li>
  * </ul>
@@ -102,7 +100,7 @@ public class BatchHistoryService {
         List<BatchWithFileCountProjection> projections;
 
         if (cursor == null) {
-            // First page (cacheable)
+            // First page
             projections = fetchFirstPage(siteIds, fetchLimit);
         } else {
             // Subsequent page with cursor
@@ -145,42 +143,16 @@ public class BatchHistoryService {
     }
 
     /**
-     * Generate cache key from site IDs list.
+     * T027: Fetch first page of batches.
      * <p>
-     * Sorts IDs before generating key to ensure consistent cache keys regardless of input order.
-     * Example: [UUID2, UUID1] and [UUID1, UUID2] generate the same key.
-     * </p>
-     * <p>
-     * <strong>Note:</strong> Must be public for Spring Cache SpEL expression access.
+     * Not cached, and deliberately so (issue #319): the first page of a monitoring screen, where a
+     * CONTINUOUS session is one batch growing for hours, is read from the database on every call.
      * </p>
      *
-     * @param siteIds List of site IDs
-     * @return Sorted, comma-separated string of site IDs
-     */
-    public String generateCacheKey(List<UUID> siteIds) {
-        return siteIds.stream()
-                .sorted()
-                .map(UUID::toString)
-                .collect(Collectors.joining(","));
-    }
-
-    /**
-     * T027: Fetch first page of batches (cacheable).
-     * <p>
-     * Cached with 5-minute TTL in Redis for performance.
-     * Cache key: "batch-first-page:{sorted-siteIds}" (sorted to ensure consistent key)
-     * </p>
-     * <p>
-     * <strong>Cache Key Consistency:</strong>
-     * siteIds are sorted before creating cache key to ensure [UUID1, UUID2] and [UUID2, UUID1]
-     * generate the same cache key and can share cached results.
-     * </p>
-     *
-     * @param siteIds Site IDs to filter (will be sorted for cache key)
+     * @param siteIds Site IDs to filter
      * @param limit   Fetch limit
      * @return Batch projections
      */
-    @Cacheable(value = "batch-first-page", key = "#root.target.generateCacheKey(#siteIds)")
     protected List<BatchWithFileCountProjection> fetchFirstPage(List<UUID> siteIds, int limit) {
         logger.debug("Fetching first page for siteIds={}, limit={}", siteIds.size(), limit);
         return batchRepository.findBySiteIdsFirstPage(siteIds, limit);
@@ -189,7 +161,7 @@ public class BatchHistoryService {
     /**
      * T026: Fetch batches with cursor.
      * <p>
-     * NOT cached - cursors are unique per request.
+     * Not cached (see {@link #fetchFirstPage}).
      * </p>
      *
      * @param siteIds Site IDs to filter
@@ -240,7 +212,8 @@ public class BatchHistoryService {
      * <p>
      * Loads batch with all uploaded files eagerly (JOIN FETCH) to avoid N+1 queries.
      * Includes authorization check to ensure user owns the batch.
-     * Redis caching with 30-minute TTL for COMPLETED batches only (immutable data).
+     * Not cached (issue #319): the owner check below must run on every read, and a COMPLETED batch
+     * still changes what it reads — deletion, retention and a site wipe all remove it.
      * </p>
      *
      * @param batchId   Batch identifier
@@ -249,11 +222,6 @@ public class BatchHistoryService {
      * @throws BatchNotFoundException              if batch doesn't exist
      * @throws UnauthorizedBatchAccessException    if batch doesn't belong to user
      */
-    @Cacheable(
-        value = "batch-details",
-        key = "#batchId",
-        condition = "#result != null && #result.status() == 'COMPLETED'"
-    )
     public BatchDetailDto getBatchDetails(UUID batchId, UUID accountId) {
         logger.info("Getting batch details for batchId={}, accountId={}", batchId, accountId);
 

@@ -192,7 +192,7 @@ class ParquetScratchCeilingBudgetTest {
                 "(^|\\s|-\\s)(" + SNAPSHOT_CEILING_KEY + "|" + FRAME_CEILING_KEY + "|"
                         + BATCH_CEILING_KEY + "|" + DIRECTORY_BUDGET_KEY + ")\\s*[:=]",
                 Pattern.MULTILINE);
-        // A sizeLimit belonging to some other volume (dev's Redis, say) is none of this test's
+        // A sizeLimit belonging to some other volume is none of this test's
         // business; one in a file that also names the scratch volume or its mount is.
         Pattern sizeLimitOverride = Pattern.compile("^\\s*sizeLimit\\s*:", Pattern.MULTILINE);
         try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {

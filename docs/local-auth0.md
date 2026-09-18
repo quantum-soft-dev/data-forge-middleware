@@ -125,7 +125,7 @@ If these secrets are missing, logins may fail at Post-Login time.
 ## Local Run (No AWS)
 
 Infra (Docker):
-- Use `docker-compose.dev.yml` (Postgres, Redis, LocalStack)
+- Use `docker-compose.dev.yml` (Postgres, LocalStack)
 
 Backend:
 - `./gradlew bootRun`
@@ -177,7 +177,6 @@ from there instead of copying from the Auth0 UI.
 Common locations in this AWS account:
 - `dfm-dev/auth0/credentials` (Auth0 domain, audience, management client id/secret)
 - `dfm-dev/jwt/secret` (device API JWT secret)
-- `dfm-dev/redis/password` (Redis password)
 - `dfm-dev/db/app-credentials` (DB app username/password)
 
 Example commands:

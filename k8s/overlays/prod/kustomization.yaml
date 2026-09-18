@@ -3,7 +3,6 @@ kind: Kustomization
 
 resources:
   - ../../base
-  # No in-cluster Redis: prod uses Memorystore (host set in configmap-patch).
 
 images:
   - name: us-central1-docker.pkg.dev/bitbi-production/forge-app/backend
