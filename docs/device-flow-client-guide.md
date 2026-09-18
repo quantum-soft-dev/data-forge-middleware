@@ -631,6 +631,8 @@ exit 1
 | 400 | Bad request / OAuth2 error. Also a request body the server cannot read — invalid JSON, a missing body, trailing content after the JSON document, a value that does not bind (message `Malformed request body[ at '<field>']`). Do not retry it unchanged |
 | 401 | Authentication required (for protected endpoints) |
 | 404 | Resource not found |
+| 406 | The `Accept` header allows nothing the endpoint produces (the JSON endpoints produce `application/json`). The body is the standard error JSON when the client accepts JSON, and empty otherwise. Do not retry it unchanged |
+| 415 | The `Content-Type` of the body is not one the endpoint reads — send `application/json`; the response's `Accept` header lists what it does read. Do not retry it unchanged |
 | 429 | Rate limit exceeded |
 | 500 | Server error |
 
