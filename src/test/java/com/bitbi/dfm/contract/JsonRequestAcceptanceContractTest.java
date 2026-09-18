@@ -20,7 +20,9 @@ import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,9 +36,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * {@code FAIL_ON_TRAILING_TOKENS} (content after the JSON value), {@code FAIL_ON_NULL_FOR_PRIMITIVES}
  * ({@code null} into an {@code int}/{@code boolean}), and — in the other direction — the unknown
  * property rule Spring Boot already relaxes. The statuses below are what the application answers
- * <em>today</em>, including two that are arguably wrong (an unreadable body and an unknown enum
- * value both reach the catch-all handler and answer 500): a characterization pins behaviour, it
- * does not endorse it, so a change on #302 is visible either way.
+ * <em>today</em>: a characterization pins behaviour, it does not endorse it, so a change on #302 is
+ * visible either way. Two of the original pins were changed deliberately since — an unreadable body
+ * and an unknown enum value answered 500 from the catch-all handler and answer 400 since #320.
  * </p>
  * The main subject is {@code POST /api/v1/device/errors}, a Device API body with a free-form map
  * and an enum; the one primitive in a request body is pinned on its own route. The class is {@code @Transactional}, so the error logs it writes are rolled back.
@@ -63,11 +65,17 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
         assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\",\"notAField\":42}")).isEqualTo(201);
     }
 
+    /**
+     * Pinned at 201 by #300 and kept there by #303 while an unreadable body answered 500; refused since
+     * #320 took Jackson 3's {@code FAIL_ON_TRAILING_TOKENS}. Trailing whitespace is not a token and is
+     * still accepted — the line a client's pretty-printer or a trailing newline must stay on.
+     */
     @Test
-    @DisplayName("trailing content after the JSON value is ignored: 201")
-    void trailingTokensAreIgnored() throws Exception {
-        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"} trailing")).isEqualTo(201);
-        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"}{\"type\":\"U\"}")).isEqualTo(201);
+    @DisplayName("trailing content after the JSON value, a second document included, is refused: 400")
+    void trailingTokensAreRefused() throws Exception {
+        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"} trailing")).isEqualTo(400);
+        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"}{\"type\":\"U\"}")).isEqualTo(400);
+        assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\"}\r\n \t\n")).isEqualTo(201);
     }
 
     @Test
@@ -76,18 +84,26 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
         assertThat(postErrorLog("{\"type\":\"T\",\"message\":\"m\",\"severity\":null}")).isEqualTo(201);
     }
 
+    /**
+     * Pinned at 500 by #300 as characterized behaviour and changed deliberately by #320: an unreadable
+     * body is the client's error, so it answers 400 with the standard body, naming the JSON path of a
+     * value that does not bind and nothing of the parser behind it.
+     */
     @Test
-    @DisplayName("an unreadable body and an unknown enum value reach the catch-all: 500 with the generic body")
-    void unreadableBodyAnswers500() throws Exception {
-        for (String json : List.of("{\"type\":", "{\"type\":\"T\",\"message\":\"m\",\"severity\":\"warning\"}")) {
+    @DisplayName("an unreadable body and an unknown enum value answer 400 with the standard body")
+    void unreadableBodyAnswers400() throws Exception {
+        Map<String, String> messages = new LinkedHashMap<>();
+        messages.put("{\"type\":", "Malformed request body");
+        messages.put("{\"type\":\"T\",\"message\":\"m\",\"severity\":\"warning\"}", "Malformed request body at 'severity'");
+        for (Map.Entry<String, String> entry : messages.entrySet()) {
             var response = mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG)
                             .header("Authorization", generateToken("store-01.example.com"))
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(json))
+                            .content(entry.getKey()))
                     .andReturn().getResponse();
-            assertThat(response.getStatus()).as(json).isEqualTo(500);
-            WireJson.assertMatches("{\"timestamp\":\"<instant>\",\"status\":500,\"error\":\"Internal Server Error\","
-                    + "\"message\":\"An unexpected error occurred\",\"path\":\"/api/v1/device/errors\"}",
+            assertThat(response.getStatus()).as(entry.getKey()).isEqualTo(400);
+            WireJson.assertMatches("{\"timestamp\":\"<instant>\",\"status\":400,\"error\":\"Bad Request\","
+                    + "\"message\":\"" + entry.getValue() + "\",\"path\":\"/api/v1/device/errors\"}",
                     response.getContentAsString());
         }
     }
@@ -126,8 +142,8 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
     /**
      * {@code null} for the primitive {@code forceFullGeneration} is read as {@code false}: the body is
      * accepted and the request reaches the handler, which answers 404 because the seeded account has
-     * no bit-bi activation. An unreadable body on the same route answers 500 (the catch-all), so 404
-     * here proves deserialization succeeded.
+     * no bit-bi activation. An unreadable body on the same route answers 400 (#320), so 404 here
+     * proves deserialization succeeded.
      */
     @Test
     @DisplayName("null for a primitive boolean reads as false and the handler runs")
@@ -148,7 +164,7 @@ class JsonRequestAcceptanceContractTest extends BaseIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"batchId\":"))
                 .andReturn().getResponse().getStatus();
-        assertThat(unreadable).isEqualTo(500);
+        assertThat(unreadable).isEqualTo(400);
     }
 
     record ScanProbeNested(long count, String name) {

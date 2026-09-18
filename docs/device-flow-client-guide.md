@@ -628,7 +628,7 @@ exit 1
 | Status | Meaning |
 |--------|---------|
 | 200 | Success |
-| 400 | Bad request / OAuth2 error |
+| 400 | Bad request / OAuth2 error. Also a request body the server cannot read — invalid JSON, a missing body, trailing content after the JSON document, a value that does not bind (message `Malformed request body[ at '<field>']`). Do not retry it unchanged |
 | 401 | Authentication required (for protected endpoints) |
 | 404 | Resource not found |
 | 429 | Rate limit exceeded |
