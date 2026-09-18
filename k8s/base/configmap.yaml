@@ -85,16 +85,18 @@ data:
   # The last DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES + DELTA_CHECKPOINT_MAX_TEMP_BYTES of this
   # budget cannot be taken by batch writers (issue #193, widened by #292): that is the reserved
   # share for the nightly checkpoint. It used to be the frame alone, because the folded build
-  # wrote the frame, uploaded it and deleted it before the first table's file existed. The
-  # streamed bootstrap build's snapshot passes READ the frame, so it stays on the volume beside a
-  # snapshot file and the reserve is the two together: 5Gi - (1.5Gi + 1Gi) leaves 2.5Gi for
+  # wrote the frame, uploaded it and deleted it before the first table's file existed. Every
+  # streamed build's snapshot passes (the #292 bootstrap, every nightly incremental one since
+  # #293) READ the frame, so it stays on the volume beside a snapshot file and the reserve is the two together: 5Gi - (1.5Gi + 1Gi) leaves 2.5Gi for
   # completed-batch artifacts, which still clears their own 1Gi ceiling.
   # One snapshot, not DELTA_CHECKPOINT_SNAPSHOT_WRITERS of them, for the same reason this share
   # is not max-concurrent x the batch ceiling: the per-file keys are safety ceilings rather than
   # size estimates and the directory is charged by bytes actually written, so what is reserved is
   # PROGRESS -- the streamed build can always write its frame and one snapshot -- while the
-  # writers after the first take whatever is free. ParquetScratchCeilingBudgetTest asserts both
-  # halves of this arithmetic against these manifests.
+  # writers after the first take whatever is free. Kept on measurement, not on the ceilings (#296):
+  # a refusal on delta.parquet.scratch.refused{writer=checkpoint_table} means lower
+  # DELTA_CHECKPOINT_SNAPSHOT_WRITERS first, then raise this key and sizeLimit together.
+  # ParquetScratchCeilingBudgetTest asserts both halves of this arithmetic against these manifests.
   DELTA_PARQUET_MAX_SCRATCH_BYTES: "5368709120"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"

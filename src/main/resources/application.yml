@@ -468,8 +468,11 @@ delta:
     # stop at max-scratch-bytes minus (max-frame-temp-bytes + max-temp-bytes), so the streamed build
     # can always write its frame and ONE snapshot whatever a completed-batch backlog is doing. The
     # writers after the first take whatever the directory has free; a refusal ends the build and the
-    # next tick retries, and raising W past what the directory can hold buys retries rather than
-    # speed. See docs/delta-client-v2-guide.md ("Sizing note").
+    # next tick (the next night) retries, and raising W past what the directory can hold buys
+    # retries rather than speed. The reserve stays at one snapshot on measurement (#296): real
+    # snapshot files are one to two orders of magnitude below max-temp-bytes. If
+    # delta.parquet.scratch.refused{writer=checkpoint_table} moves, lower this before raising the
+    # directory. See docs/delta-client-v2-guide.md ("Sizing note").
     snapshot-writers: ${DELTA_CHECKPOINT_SNAPSHOT_WRITERS:8}
     # The same inversion for every OTHER build — the nightly, incremental one (issue #293). A build
     # seeded from a frame used to fold the frame and then the period's segments into one map of

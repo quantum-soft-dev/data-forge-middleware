@@ -10,6 +10,7 @@ import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
+import com.bitbi.dfm.error.domain.ErrorSeverity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -194,7 +195,7 @@ class BatchHistoryIntegrationTest extends AbstractIntegrationTest {
                     null, // stackTrace
                     null, // clientVersion
                     Map.of("index", i)
-            );
+            , ErrorSeverity.ERROR);
             errors.add(error);
         }
 
@@ -269,7 +270,7 @@ class BatchHistoryIntegrationTest extends AbstractIntegrationTest {
                 null,
                 null,
                 Map.of("order", "oldest")
-        ));
+        , ErrorSeverity.ERROR));
 
         errors.add(ErrorLog.create(
                 testSiteId,
@@ -280,7 +281,7 @@ class BatchHistoryIntegrationTest extends AbstractIntegrationTest {
                 null,
                 null,
                 Map.of("order", "newest")
-        ));
+        , ErrorSeverity.ERROR));
 
         errors.add(ErrorLog.create(
                 testSiteId,
@@ -291,7 +292,7 @@ class BatchHistoryIntegrationTest extends AbstractIntegrationTest {
                 null,
                 null,
                 Map.of("order", "middle")
-        ));
+        , ErrorSeverity.ERROR));
 
         // Save all errors
         for (ErrorLog error : errors) {

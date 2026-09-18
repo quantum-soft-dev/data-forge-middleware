@@ -1,6 +1,7 @@
 package com.bitbi.dfm.documentation;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -13,6 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -198,6 +201,91 @@ class IssueBaseBranchScriptTest {
         assertThat(result.exitCode()).as("exit code, stderr: %s", result.stderr()).isNotZero();
         assertThat(result.stdout()).isEmpty();
         assertThat(result.stderr()).contains("номер issue");
+    }
+
+    /**
+     * The forms of {@code .github/ISSUE_TEMPLATE/} cannot carry the declaration in a field of their own
+     * (issue #310): GitHub renders every field as {@code ### <label>} with its value beneath, and a form
+     * body therefore <em>begins</em> with a heading — the region this resolver reads is empty for every
+     * ticket filed from the web UI. So a migration ticket filed that way declares its base by hand, and
+     * the forms carry a hint saying so.
+     *
+     * <p>A hint is prose, and prose rots in one direction that costs: teaching a line the script refuses
+     * sends every migration ticket into a refusal, and teaching one it silently ignores restores the gap
+     * #298 exists for. These cases take the line <em>out of the form</em> and require the script to read
+     * it, so the hint and the resolver are one fact rather than two. What they cannot hold is where the
+     * hint says to put the line; that is held from the other side, by the two cases below showing that
+     * every position a form can produce resolves to {@code develop}.
+     */
+    @Nested
+    @DisplayName("Issue forms")
+    class IssueForms {
+
+        private static final String TASK_FORM = ".github/ISSUE_TEMPLATE/task.yml";
+        private static final String BUG_FORM = ".github/ISSUE_TEMPLATE/bug.yml";
+
+        /** The declaration as the repository writes it, inside the double-backtick span of a hint. */
+        private static final Pattern DECLARATION = Pattern.compile("Base branch: `([^`\n]+)`");
+
+        @Test
+        @DisplayName("a base arriving as a form field of its own is not read: its section is below the first heading")
+        void shouldStayOnDevelopWhenTheBaseArrivesAsAFormSection() throws Exception {
+            assertResolves(formBody("""
+                    ### Base branch
+
+                    migration/spring-boot-4.1
+                    """), "develop");
+        }
+
+        @Test
+        @DisplayName("a declaration written inside a form section is not read either")
+        void shouldStayOnDevelopWhenTheDeclarationSitsInsideAFormSection() throws Exception {
+            assertResolves(formBody("""
+                    ### Смежное, сюда не входит
+
+                    Base branch: `migration/spring-boot-4.1`
+                    """), "develop");
+        }
+
+        @ParameterizedTest(name = "[{index}] {0}")
+        @ValueSource(strings = {TASK_FORM, BUG_FORM})
+        @DisplayName("the line the form teaches is the line the resolver accepts, above a form body")
+        void shouldAcceptTheDeclarationTheFormTeaches(String form) throws Exception {
+            assertResolves(declarationTaughtBy(form) + "\n" + formBody(""), MIGRATION);
+        }
+
+        /**
+         * The one declaration a form quotes, with the {@code <name>} placeholder resolved. Exactly one,
+         * because a second copy is a second chance for the two to disagree.
+         */
+        private String declarationTaughtBy(String form) throws IOException {
+            Matcher matcher = DECLARATION.matcher(Files.readString(Path.of(form), StandardCharsets.UTF_8));
+
+            assertThat(matcher.find())
+                    .as("%s must teach a migration ticket the exact declaration, or nothing tells the person "
+                            + "filing one that the base has to be written by hand", form)
+                    .isTrue();
+            String branch = matcher.group(1).replace("<name>", "spring-boot-4.1");
+            assertThat(matcher.find())
+                    .as("%s quotes the declaration more than once; one of the copies will go stale", form)
+                    .isFalse();
+
+            return "Base branch: `" + branch + "`";
+        }
+
+        /** A body as GitHub renders an issue form: every field under its own heading, nothing above the first. */
+        private String formBody(String extraSection) {
+            return """
+                    ### Предлагаемый майлстоун
+
+                    Sprint Migration — Spring Boot 4.1
+
+                    ### Что происходит
+
+                    Prose.
+
+                    """ + extraSection;
+        }
     }
 
     private void assertResolves(String body, String expectedBase) throws Exception {

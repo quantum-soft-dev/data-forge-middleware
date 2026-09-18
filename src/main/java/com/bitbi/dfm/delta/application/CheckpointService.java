@@ -8,30 +8,18 @@ import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.SegmentSeqRange;
 import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
-import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
-import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
-import com.bitbi.dfm.site.domain.TableSchema;
-import org.apache.avro.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -47,6 +35,14 @@ import java.util.UUID;
  * rematerializes any table whose snapshot is missing (issue #128); a forced rebuild rematerializes
  * every table from the frame without moving the pointer.</p>
  *
+ * <p><b>This class chooses the path and owns the order; it does not do the work</b> (issue #297).
+ * Which frame producer runs — the fold, the streamed bootstrap or the merge — and whether the visit
+ * is idle, refused or discarded is decided here, and so is the sequence every advancing build
+ * follows: the epoch checked with nothing in the bucket (#136/#142), the frame uploaded before any
+ * snapshot (#153), the pointer and its event last. Producing the frame is
+ * {@link CheckpointFrameProducer}; writing the snapshots and keeping the {@code checkpoints} rows is
+ * {@link CheckpointSnapshotMaterializer}.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -56,34 +52,24 @@ public class CheckpointService {
     private static final Logger log = LoggerFactory.getLogger(CheckpointService.class);
 
     private final ChangelogSegmentRepository segmentRepository;
-    private final ChangelogSegmentService changelogSegmentService;
-    private final CheckpointRepository checkpointRepository;
     private final DeltaSyncStateService syncStateService;
     private final S3CheckpointStorage checkpointStorage;
-    private final SiteSchemaService siteSchemaService;
     private final DeltaMetrics metrics;
-    private final DeltaParquetProperties parquetProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final CheckpointEpochGuard epochGuard;
     private final CheckpointRetryProperties retryProperties;
-    private final ApplicationShutdownSignal shutdownSignal;
-    /** One fold at a time in this JVM, so {@link #maxFoldBytes} bounds the process (issue #178). */
+    private final CheckpointShutdownCheck shutdown;
+    /** One fold at a time in this JVM, so {@code delta.checkpoint.max-fold-bytes} bounds the process (issue #178). */
     private final CheckpointFoldBudget foldBudget;
     /**
      * The bound on the scratch <em>directory</em> this build shares with the completed-batch
-     * workers (issue #150) — the per-file ceilings below cannot bound a count of files.
+     * workers (issue #150), and the directory itself.
      */
-    private final ParquetScratchBudget scratchBudget;
-    private final Path tempDirectory;
-    /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
-    private final long maxTempBytes;
-    /** Reload-frame ceiling: crossing it aborts the build, so it is deliberately its own key. */
-    private final long maxFrameTempBytes;
-    /**
-     * Heap ceiling on the fold itself (issue #152) — the one bound that is not about disk, and the
-     * one a growing site reaches first.
-     */
-    private final long maxFoldBytes;
+    private final CheckpointScratch scratch;
+    /** Produces the build's reload frame — by fold, by streamed bootstrap or by merge (issue #297). */
+    private final CheckpointFrameProducer frames;
+    /** Materializes the per-table snapshots and keeps the {@code checkpoints} rows (issue #297). */
+    private final CheckpointSnapshotMaterializer snapshots;
     /**
      * Whether a bootstrap build whose whole history is a {@code FULL_SNAPSHOT} session may skip the
      * fold and stream (issue #292). The off switch, not the safety: the path is chosen automatically
@@ -111,12 +97,6 @@ public class CheckpointService {
      */
     private final boolean streamingMerge;
 
-    /**
-     * How far the merge may partition a delta that does not fit the fold budget before it gives up
-     * and aborts the build as it did before (issue #293). {@code 1} disables the fallback.
-     */
-    private final int maxMergePartitions;
-
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
                              CheckpointRepository checkpointRepository,
@@ -131,7 +111,7 @@ public class CheckpointService {
                              ApplicationShutdownSignal shutdownSignal,
                              CheckpointFoldBudget foldBudget,
                              ParquetScratchBudget scratchBudget,
-                             // fully qualified: the delta wire Value is imported above
+                             // fully qualified: the delta wire Value shares the simple name
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
                              @org.springframework.beans.factory.annotation.Value(
@@ -163,23 +143,15 @@ public class CheckpointService {
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.max-merge-partitions:64}") int maxMergePartitions) {
         this.segmentRepository = segmentRepository;
-        this.changelogSegmentService = changelogSegmentService;
-        this.checkpointRepository = checkpointRepository;
         this.syncStateService = syncStateService;
         this.checkpointStorage = checkpointStorage;
-        this.siteSchemaService = siteSchemaService;
         this.metrics = metrics;
-        this.parquetProperties = parquetProperties;
         this.eventPublisher = eventPublisher;
         this.epochGuard = epochGuard;
         this.retryProperties = retryProperties;
-        this.shutdownSignal = shutdownSignal;
+        this.shutdown = new CheckpointShutdownCheck(shutdownSignal);
         this.foldBudget = foldBudget;
-        this.scratchBudget = scratchBudget;
-        this.tempDirectory = Path.of(tempDirectory);
-        this.maxTempBytes = maxTempBytes;
-        this.maxFrameTempBytes = maxFrameTempBytes;
-        this.maxFoldBytes = resolveMaxFoldBytes(maxFoldBytes);
+        this.scratch = new CheckpointScratch(Path.of(tempDirectory), scratchBudget);
         this.streamingBootstrap = streamingBootstrap;
         // Named with its value, the #185/#251 rule: a zero here would open no writer at all and the
         // build would publish an empty checkpoint for every table, which is the kind of silent
@@ -195,7 +167,15 @@ public class CheckpointService {
                     "delta.checkpoint.max-merge-partitions must be at least 1, but was "
                             + maxMergePartitions);
         }
-        this.maxMergePartitions = maxMergePartitions;
+        // The three roles this service used to hold in one class (issue #297). Built here rather than
+        // injected so the bean, its configuration keys and its constructor stay exactly what they
+        // were: the path selection below is still the only entry point, and the order it calls
+        // these in is what #136/#142/#153 rest on.
+        this.frames = new CheckpointFrameProducer(changelogSegmentService, checkpointStorage, metrics,
+                scratch, shutdown, maxFrameTempBytes, resolveMaxFoldBytes(maxFoldBytes), maxMergePartitions);
+        this.snapshots = new CheckpointSnapshotMaterializer(checkpointRepository, checkpointStorage,
+                siteSchemaService, metrics, parquetProperties, epochGuard, retryProperties, scratch,
+                shutdown, maxTempBytes, snapshotWriters);
     }
 
     /**
@@ -224,16 +204,6 @@ public class CheckpointService {
      */
     static long resolveMaxFoldBytes(long configured) {
         return configured > 0 ? configured : Runtime.getRuntime().maxMemory() / 2;
-    }
-
-    /**
-     * How this pass writes Parquet. Incremental work always advances {@code seq}. An idle
-     * pass (no new segments) never does: it either retries missing keys or rewrites every table.
-     */
-    private enum SnapshotPass {
-        INCREMENTAL,
-        RETRY_MISSING,
-        FORCE
     }
 
     /**
@@ -350,7 +320,7 @@ public class CheckpointService {
             // A build can have spent minutes waiting, so the process may be going away by the time
             // it inherits the budget. Without this it would read, download and fold a whole site
             // during the termination grace period, for a verdict issue #162 says it must not record.
-            stopIfShuttingDown(siteId);
+            shutdown.stopIfShuttingDown(siteId);
             // The epoch is read *before* the segments, and the order is load-bearing. Read the other
             // way round, a re-baseline (or a wipe) committing between the two would hand the build
             // the pre-reset segment list together with the new epoch: every guarded write would then
@@ -525,7 +495,7 @@ public class CheckpointService {
         }
         if (ranges.isEmpty()) {
             metrics.checkpointBuildAborted("history_gone");
-            settleSiteWide(siteId, epoch, pass);
+            snapshots.settleSiteWide(siteId, epoch, pass);
             log.error("Checkpoint frame@{} for site {} is gone and the changelog is empty — there "
                     + "is no history left to rebuild this site's checkpoints from. Recovery is a "
                     + "re-baseline or a history wipe; a forced rebuild re-arms the retry but cannot "
@@ -557,13 +527,13 @@ public class CheckpointService {
             // forced one, and once every row has given up, end the visit quietly — the site stays
             // pinned to the work list by its held-back segments, and
             // delta.checkpoint.tables.given-up is the standing signal from then on.
-            if (pass != SnapshotPass.FORCE && !hasRetryableUnmaterializedTables(siteId)) {
+            if (pass != SnapshotPass.FORCE && !snapshots.hasRetryableUnmaterializedTables(siteId)) {
                 log.debug("Frame@{} for site {} is gone and only below-checkpoint segments remain; "
                         + "the retry has already been spent — ending the visit quietly", checkpointSeq, siteId);
                 return Map.of();
             }
             metrics.checkpointBuildAborted("lossy_refold");
-            settleSiteWide(siteId, epoch, pass);
+            snapshots.settleSiteWide(siteId, epoch, pass);
             // Pass-aware (R2-6): #186 puts this text verbatim into the admin lastRebuildMessage,
             // and on the forced pass settleSiteWide re-arms instead of spending — telling the
             // operator their documented recovery action burned an attempt would be false.
@@ -634,42 +604,6 @@ public class CheckpointService {
     }
 
     /**
-     * Charge a site-wide abort to the rows that keep the site on the nightly work list.
-     *
-     * <p>The abort happens before any table is reached, so no per-table catch can record it — yet
-     * it is exactly as final for those rows as an unrenderable value would be, and without this
-     * they would be retried nightly forever for a build that cannot start.</p>
-     */
-    private void spendAnAttemptOnEveryRetryableTable(UUID siteId, SiteEpoch epoch) {
-        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
-            if (checkpoint.hasGivenUpMaterializing(retryProperties.maxMaterializeAttempts())
-                    || checkpoint.getS3KeyParquet() != null) {
-                continue;
-            }
-            checkpoint.recordFailedMaterialization();
-            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-        }
-    }
-
-    /**
-     * The forced-rebuild counterpart of {@link #spendAnAttemptOnEveryRetryableTable}: put every
-     * unmaterialized row of the site back into the nightly population.
-     *
-     * <p>A forced rebuild that ends in a site-wide abort still means what a forced rebuild always
-     * means — the operator asserting the cause has been dealt with. Charging it an attempt would
-     * make the documented recovery action the fastest way to exhaust the retry.</p>
-     */
-    private void rearmEveryUnmaterializedTable(UUID siteId, SiteEpoch epoch) {
-        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
-            if (checkpoint.getS3KeyParquet() != null || checkpoint.materializeAttempts() == 0) {
-                continue;
-            }
-            checkpoint.rearmMaterialization();
-            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-        }
-    }
-
-    /**
      * The fold and everything it feeds, with the process's fold budget already held by
      * {@link #run} (issue #178).
      *
@@ -709,7 +643,7 @@ public class CheckpointService {
             // segments — hydrates no entity at all.
             if (nothingNew
                     && (!haveFrame || (idlePass == SnapshotPass.RETRY_MISSING
-                            && !hasRetryableUnmaterializedTables(siteId)))) {
+                            && !snapshots.hasRetryableUnmaterializedTables(siteId)))) {
                 return Map.of();
             }
 
@@ -763,229 +697,14 @@ public class CheckpointService {
             }
 
             Map<String, Map<String, FoldedRow>> state =
-                    foldSite(siteId, checkpointSeq, haveFrame, newSegments);
+                    frames.foldSite(siteId, checkpointSeq, haveFrame, newSegments);
 
             if (newSegments.isEmpty()) {
-                writeSnapshots(siteId, state, checkpointSeq, idlePass, epoch);
+                snapshots.writeSnapshots(siteId, state, checkpointSeq, idlePass, epoch);
                 return state;
             }
             return materialize(siteId, state, newSegments, epoch);
         });
-    }
-
-    /**
-     * Fold the site: the seed frame first, then every new segment, one record at a time.
-     *
-     * <p>Nothing between S3 and the fold is retained (issue #152). The frame used to arrive as a
-     * gzipped {@code byte[]} that {@code ChangelogCodec.parse} expanded into a {@code List} of every
-     * record in the site, and the new segments were collected into a second such list before a
-     * single {@code fold} call that <em>copied</em> the seed — four full-site copies at the peak, on
-     * a pod whose memory limit is measured in gigabytes. Now one state is built in place and each
-     * record is dropped as soon as it has been applied.</p>
-     *
-     * <p>The two meters keep their meaning: {@code phase=download_frame} is time spent reading the
-     * frame off the network, measured through {@link TimingInputStream} because the transfer is now
-     * interleaved with the fold rather than finished before it. {@code phase=fold} is everything
-     * else — the segment downloads it always covered, and now also the seed frame's own fold, which
-     * was untimed while it sat between the two phases.</p>
-     *
-     * <p>Streaming makes the peak smaller; it does not make it bounded. What is still proportional
-     * to the site's row count is the fold itself, so it is folded <b>against a budget</b>
-     * ({@link BudgetedFold}) and a site that outgrows the heap is refused rather than left to be
-     * {@code OOMKilled} halfway through.</p>
-     */
-    private Map<String, Map<String, FoldedRow>> foldSite(UUID siteId,
-                                                         long checkpointSeq,
-                                                         boolean haveFrame,
-                                                         List<ChangelogSegment> newSegments) {
-        BudgetedFold fold = new BudgetedFold(siteId, maxFoldBytes);
-        long startedAt = System.nanoTime();
-        // Written by foldFrame even when it throws — an abort halfway through the frame would
-        // otherwise report download_frame=0 and charge the whole transfer to fold, on exactly the
-        // build whose phases are worth looking at.
-        long[] frameReadNanos = {0L};
-        try {
-            if (haveFrame) {
-                foldFrame(siteId, checkpointSeq, fold, frameReadNanos);
-            }
-            for (ChangelogSegment segment : newSegments) {
-                foldSegment(siteId, segment, fold::apply);
-            }
-        } finally {
-            // Recorded even when the fold ended in an abort: a build that ran out of budget is
-            // exactly the one whose phases an operator wants to see.
-            if (haveFrame) {
-                metrics.recordCheckpointPhase("download_frame", frameReadNanos[0]);
-            }
-            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos[0]);
-        }
-        reportFoldSize(siteId, fold);
-        return fold.state();
-    }
-
-    /**
-     * Say how close this site is to the ceiling <em>before</em> it reaches it.
-     *
-     * <p>Without this the first word an operator gets is the abort itself, and the fold is the one
-     * term of the checkpoint budget that nothing else makes visible: the scratch ceilings show up as
-     * files on a volume, while the fold exists only while the build runs.</p>
-     *
-     * <p>Against the <b>peak</b>, not the size the fold happened to end at — the ceiling is enforced
-     * on the running total, so a site whose fold rises and then falls back (a night's segments
-     * inserting before they bulk-delete) would otherwise stay quiet at DEBUG right up to the tick
-     * whose peak crosses the budget, which is precisely the warning this exists to give.</p>
-     */
-    private void reportFoldSize(UUID siteId, BudgetedFold fold) {
-        reportFoldSize(siteId, fold.peakEstimatedBytes());
-    }
-
-    /** As above, for the merge path, whose peak is the largest partition's delta (issue #293). */
-    private void reportFoldSize(UUID siteId, long bytes) {
-        // On the meter as well as in the log, for the reason #153 put the abort on one: the band
-        // below the ceiling is the only warning that precedes a permanent abort, and an alert
-        // cannot be written on a log line. A build that aborted does not reach here — its size is
-        // the counter's business, and recording it would put the one over-budget sample into the
-        // series an operator reads as "how much room is left".
-        metrics.recordCheckpointFoldBytes(bytes);
-        if (bytes * 100 >= maxFoldBytes * FOLD_BUDGET_WARN_PERCENT) {
-            log.warn("The checkpoint fold for site {} holds an estimated {} bytes of heap, {}% of "
-                    + "delta.checkpoint.max-fold-bytes ({}). The build is refused outright once it "
-                    + "crosses that, so raise the key (and the pod's heap with it) before this site "
-                    + "grows further", siteId, bytes, bytes * 100 / Math.max(1L, maxFoldBytes), maxFoldBytes);
-        } else {
-            log.debug("The checkpoint fold for site {} holds an estimated {} bytes of heap, against "
-                    + "delta.checkpoint.max-fold-bytes ({})", siteId, bytes, maxFoldBytes);
-        }
-    }
-
-    /** How full the fold budget may get before a build starts saying so. */
-    private static final int FOLD_BUDGET_WARN_PERCENT = 75;
-
-    /**
-     * Stream the seed frame into the fold.
-     *
-     * <p>{@code readNanos} is filled in whichever way this ends — it is the caller's
-     * {@code phase=download_frame} sample, and an abort mid-frame is when the split between
-     * transfer and fold is most worth having. The {@code GetObject} itself is timed separately from
-     * the body, and timed <em>even when it throws</em>: during a read outage every site of the tick
-     * would otherwise contribute a zero-nanosecond sample, and the timer would read as though frame
-     * downloads had got faster exactly while they were failing.</p>
-     *
-     * <p>Every failure of the body is renamed. The one that actually fires is
-     * {@code UncheckedIOException}: {@code ChangelogCodec.forEach} wraps each read and parse failure
-     * into one whose message mentions neither the site nor the key, while the checked
-     * {@code IOException} can only come from the close. {@code RuntimeException} is caught with them
-     * because the AWS SDK raises {@code SdkClientException} — not an {@code IOException} — for a
-     * body that ends short of its content length. Before streaming, {@code download} named the
-     * object in a {@code CheckpointStorageException}; that is what this restores. The one exception
-     * that must keep its own type is the fold's own abort, which is re-thrown untouched.</p>
-     */
-    private void foldFrame(UUID siteId, long checkpointSeq, BudgetedFold fold, long[] readNanos) {
-        long openedAt = System.nanoTime();
-        InputStream opened;
-        try {
-            // Outside the body's try: openFrame already names the key it could not read, and a
-            // failure here must not be re-wrapped as if the frame had been read and rejected.
-            opened = checkpointStorage.openFrame(siteId, checkpointSeq);
-        } finally {
-            readNanos[0] = System.nanoTime() - openedAt;
-        }
-        try (InputStream frame = opened) {
-            TimingInputStream timed = new TimingInputStream(frame);
-            try {
-                ChangelogCodec.forEach(timed, fold::apply);
-            } finally {
-                readNanos[0] += timed.readNanos();
-            }
-        } catch (FoldTooLargeException e) {
-            throw e;
-        } catch (IOException | RuntimeException e) {
-            throw new S3CheckpointStorage.CheckpointStorageException(
-                    "Failed to read the checkpoint frame of site " + siteId + " at seq " + checkpointSeq, e);
-        }
-    }
-
-    /**
-     * Stream one segment into the fold, naming it if it cannot be read.
-     *
-     * <p>The same renaming the frame gets, and for the same regression: {@code readRecords} used to
-     * surface a mid-transfer failure as a {@code SegmentStorageException} carrying the segment key,
-     * while the streaming path raises {@code UncheckedIOException("Failed to stream change
-     * records")}. {@code CheckpointScheduler} logs only {@code e.getMessage()}, so without this the
-     * failing segment is not in the logs at all.</p>
-     */
-    private void foldSegment(UUID siteId, ChangelogSegment segment,
-                             java.util.function.Consumer<ChangeRecord> consumer) {
-        try {
-            changelogSegmentService.forEachRecord(segment.getS3Key(), consumer);
-        } catch (FoldTooLargeException | BootstrapFrameWriter.NotAFullSnapshotException
-                | ArtifactSizeLimitExceededException | ScratchBudgetExceededException e) {
-            // The consumer's own refusals, not the segment's: renaming them would report a fold
-            // that outgrew its budget, a frame that outgrew its ceiling or a full scratch directory
-            // as an unreadable object, and send an operator to S3 for a local problem.
-            throw e;
-        } catch (RuntimeException e) {
-            throw new S3CheckpointStorage.CheckpointStorageException(
-                    "Failed to read changelog segment " + segment.getS3Key() + " of site " + siteId, e);
-        }
-    }
-
-    /**
-     * One site's fold, with a ceiling on how much heap it may hold (issue #152).
-     *
-     * <p>The running total is kept by {@link ChangelogFold#apply}, which returns what each record
-     * did to the state's size, so the budget costs one addition per record rather than a walk over
-     * the fold — the weighing itself is proportional to the width of the row that record touches,
-     * no wider than the array copy the fold does for it anyway. It is an estimate — see
-     * {@link ChangelogFold#estimatedRetainedBytes(String, ChangelogFold.FoldedRow)} — and it is
-     * compared against a budget expressed in the same units, so the two are wrong together or not
-     * at all.</p>
-     *
-     * <p><b>The ceiling is per build and the process holds one build at a time</b>, so it bounds the
-     * process (issue #178). It did not before: two folds at 45% of the budget each crossed nothing
-     * and still exhausted the heap between them, which takes a forced rebuild running beside the
-     * nightly sweep — the {@code 2 x} the scratch budget still reserves for on disk. What closes it
-     * is {@link CheckpointFoldBudget}, an exclusion held for the whole build rather than a running
-     * total shared between folds; a build that cannot have it within
-     * {@code delta.checkpoint.fold-wait-seconds} is <em>deferred</em>, never refused, so no
-     * concurrency-caused outcome reaches the abort counter.</p>
-     */
-    private static final class BudgetedFold {
-
-        private final Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
-        private final UUID siteId;
-        private final long maxBytes;
-        private long bytes;
-        private long peakBytes;
-
-        private BudgetedFold(UUID siteId, long maxBytes) {
-            this.siteId = siteId;
-            this.maxBytes = maxBytes;
-        }
-
-        /**
-         * Fold one record, then stop the build if the fold no longer fits.
-         *
-         * <p>Checked after applying rather than before, because the cost of one record is only
-         * known once it has been applied — and one record over the ceiling is not what runs a pod
-         * out of memory.</p>
-         */
-        private void apply(ChangeRecord record) {
-            bytes += ChangelogFold.apply(state, record);
-            peakBytes = Math.max(peakBytes, bytes);
-            if (bytes > maxBytes) {
-                throw new FoldTooLargeException(siteId, bytes, maxBytes);
-            }
-        }
-
-        private Map<String, Map<String, FoldedRow>> state() {
-            return state;
-        }
-
-        /** The largest the fold ever was — what the ceiling is enforced against, record by record. */
-        private long peakEstimatedBytes() {
-            return peakBytes;
-        }
     }
 
     /** {@code SessionMode.FULL_SNAPSHOT} as {@code ChangelogSegmentService} records it on a segment. */
@@ -1001,7 +720,7 @@ public class CheckpointService {
      *
      * <h2>Which side is in heap</h2>
      *
-     * <p>{@link #foldSite} folds the frame and then the segments into one map of every surviving
+     * <p>{@link CheckpointFrameProducer#foldSite} folds the frame and then the segments into one map of every surviving
      * row — the site — so {@code delta.checkpoint.max-fold-bytes} bounds the <em>site</em>, and a
      * site that outgrows it never shrinks back. Here the delta is folded and the frame is streamed
      * past it ({@link ChangelogMerge}), which puts the night's work in heap and the site on the
@@ -1031,8 +750,8 @@ public class CheckpointService {
         long seq = advancing ? newSegments.get(newSegments.size() - 1).getLastSeq() : checkpointSeq;
         SnapshotPass pass = advancing ? SnapshotPass.INCREMENTAL : idlePass;
 
-        prepareScratchDirectory();
-        Path frame = createScratchFile(siteId, ".pb.gz");
+        scratch.prepareDirectory();
+        Path frame = scratch.createFile(siteId, ".pb.gz");
         // One lease per attempt, and the successful attempt's is held for the whole build: the
         // snapshots are written by re-reading this file, so its bytes are on the volume until the
         // last table is done. A partitioned retry rewrites the file from scratch, and its lease has
@@ -1041,21 +760,19 @@ public class CheckpointService {
         ScratchLease[] lease = {null};
         try {
             CheckpointFrameWriter.FrameManifest manifest =
-                    mergeIntoFrame(siteId, checkpointSeq, seq, newSegments, frame, lease);
+                    frames.mergeIntoFrame(siteId, checkpointSeq, seq, newSegments, frame, lease);
 
             // The same order the other two paths take, and for the same reasons (issue #153):
             // notice a closing process before the longest single call of the build, and check the
             // epoch with nothing uploaded so a wipe that has already committed is seen before the
             // object is in the bucket rather than after.
-            stopIfShuttingDown(siteId);
+            shutdown.stopIfShuttingDown(siteId);
             epochGuard.requireEpoch(siteId, epoch);
             if (advancing) {
-                withFrameCeilingReported(siteId, seq, () ->
-                        metrics.timeCheckpointPhase("upload", () ->
-                                checkpointStorage.uploadFrame(siteId, seq, frame)));
+                frames.uploadWrittenFrame(siteId, seq, frame);
             }
 
-            int passes = writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch, pass);
+            int passes = snapshots.writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch, pass);
             log.info("Merged the checkpoint of site {} at seq {}: {} record(s) across {} table(s) "
                     + "from {} segment(s), {} pass(es) over the local frame with {} snapshot "
                     + "writer(s), no site fold", siteId, seq, manifest.records(),
@@ -1067,207 +784,10 @@ public class CheckpointService {
             }
             return Map.of();
         } finally {
-            deleteQuietly(frame, "_frame", siteId);
+            CheckpointScratch.deleteQuietly(frame, "_frame", siteId);
             if (lease[0] != null) {
                 lease[0].close();
             }
-        }
-    }
-
-    /**
-     * Write the new frame: the period's delta folded into heap, the old frame streamed past it.
-     *
-     * <h2>The fallback, when the delta itself does not fit</h2>
-     *
-     * <p>A delta outgrows the budget when a site's builds have not run for a long time, or when the
-     * client streams a very large incremental session — the DBF client opens {@code CONTINUOUS} for
-     * an incremental change set of a million records or more, so this is a shape the wire contract
-     * produces rather than a hypothetical. Rather than abort, the merge is re-run in {@code K} hash
-     * partitions of the row identity, applied to both sides so a row and its changes always land in
-     * the same pass; each pass then holds about {@code 1/K} of the delta. {@code K} is found by
-     * catching the refusal and multiplying, because the delta's size is not known before it is
-     * folded and a configured constant would be wrong in both directions.</p>
-     *
-     * <p><b>It is the fallback and not the design</b>, and the cost says why: every partition
-     * re-reads the seed frame and every segment of the period, so the work is {@code K} times the
-     * work and {@code K} grows with the delta. It is here so that a build that would have been
-     * refused finishes; a rate on {@code delta.checkpoint.builds.partitioned} says the budget wants
-     * raising. Two properties are given up with it, both deliberately: the rows of one table come
-     * out partition by partition rather than in the fold's order, and the frame is written once per
-     * attempt, so an attempt that refuses is thrown away whole. Nothing durable exists at that
-     * point — the frame is a local scratch file that has not been uploaded — which is what makes
-     * the retry safe, and is the same property the streaming bootstrap leans on.</p>
-     *
-     * <p>{@code delta.checkpoint.max-merge-partitions} bounds the escalation. Past it the build
-     * ends on {@code FoldTooLargeException} exactly as it did before this ticket, so
-     * {@code builds.aborted{reason=fold_too_large}} keeps meaning "this site cannot be built at
-     * this budget".</p>
-     */
-    private CheckpointFrameWriter.FrameManifest mergeIntoFrame(UUID siteId,
-                                                               long checkpointSeq,
-                                                               long seq,
-                                                               List<ChangelogSegment> newSegments,
-                                                               Path frame,
-                                                               ScratchLease[] lease) {
-        long startedAt = System.nanoTime();
-        // Written by every attempt: phase=download_frame is the transfer, and a partitioned build
-        // pays for it once per partition, which is exactly what an operator needs to see.
-        long[] frameReadNanos = {0L};
-        int partitions = 1;
-        try {
-            while (true) {
-                lease[0] = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
-                try {
-                    return mergeAttempt(siteId, checkpointSeq, newSegments, frame, lease[0],
-                            partitions, frameReadNanos);
-                } catch (FoldTooLargeException e) {
-                    lease[0].close();
-                    lease[0] = null;
-                    if (partitions >= maxMergePartitions) {
-                        throw e;
-                    }
-                    if (partitions == 1) {
-                        // Once per build, not once per partition: the series counts builds that
-                        // needed the fallback, and an escalation is one build still.
-                        metrics.checkpointBuildPartitioned();
-                    }
-                    partitions = (int) Math.min(
-                            (long) partitions * PARTITION_GROWTH, maxMergePartitions);
-                    log.warn("The delta of site {} did not fit delta.checkpoint.max-fold-bytes "
-                            + "(an estimated {} bytes against {}), so its checkpoint is merged in "
-                            + "{} hash partitions instead — the build finishes, at the cost of "
-                            + "re-reading the seed frame and all {} segment(s) once per partition. "
-                            + "Raise the key (and the pod's heap with it) if this is not a one-off",
-                            siteId, e.estimatedBytes(), e.budgetBytes(), partitions,
-                            newSegments.size());
-                }
-            }
-        } catch (ArtifactSizeLimitExceededException | ScratchBudgetExceededException e) {
-            throw reportFrameCeiling(siteId, seq, e);
-        } finally {
-            metrics.recordCheckpointPhase("download_frame", frameReadNanos[0]);
-            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos[0]);
-        }
-    }
-
-    /** How fast the merge escalates once a delta has refused to fit: the ticket's {@code K x 4}. */
-    private static final int PARTITION_GROWTH = 4;
-
-    /** One attempt at the merged frame, in {@code partitions} passes over both sides. */
-    private CheckpointFrameWriter.FrameManifest mergeAttempt(UUID siteId,
-                                                              long checkpointSeq,
-                                                              List<ChangelogSegment> newSegments,
-                                                              Path frame,
-                                                              ScratchLease lease,
-                                                              int partitions,
-                                                              long[] frameReadNanos) {
-        try (OutputStream out = new CappedOutputStream(
-                        Files.newOutputStream(frame), maxFrameTempBytes, lease);
-                CheckpointFrameWriter writer = CheckpointFrameWriter.open(out)) {
-            long peakBytes = 0L;
-            for (int partition = 0; partition < partitions; partition++) {
-                stopIfShuttingDown(siteId);
-                BudgetedMerge merge = new BudgetedMerge(siteId, maxFoldBytes, partitions, partition);
-                for (ChangelogSegment segment : newSegments) {
-                    foldSegment(siteId, segment, merge::apply);
-                }
-                streamFrameThrough(siteId, checkpointSeq, merge, writer::accept, frameReadNanos);
-                merge.drain(writer::accept);
-                peakBytes = Math.max(peakBytes, merge.peakEstimatedBytes());
-            }
-            // The band below the ceiling, on the same meter the fold reports (issue #152). The
-            // largest partition is the one that decides whether this build fits, so it is the
-            // sample; on the unpartitioned path there is only one.
-            reportFoldSize(siteId, peakBytes);
-            return writer.manifest();
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
-        }
-    }
-
-    /**
-     * Stream the seed frame through the merge and into the new frame.
-     *
-     * <p>{@code frameReadNanos} is filled in whichever way this ends, and is added to rather than
-     * assigned: a partitioned build streams the frame once per partition and the samples belong
-     * together. The {@code GetObject} itself is timed even when it throws, for the reason
-     * {@link #foldFrame} states — during a read outage every site of the tick would otherwise
-     * contribute a zero-nanosecond sample.</p>
-     *
-     * <p>The consumer <em>writes</em> here, unlike the fold's, so its own refusals — the frame's
-     * two ceilings — travel out untouched. Renaming them would report a full scratch directory as
-     * an unreadable object and send an operator to S3 for a local problem.</p>
-     */
-    private void streamFrameThrough(UUID siteId, long checkpointSeq, BudgetedMerge merge,
-                                    java.util.function.Consumer<ChangeRecord> out,
-                                    long[] frameReadNanos) {
-        long openedAt = System.nanoTime();
-        InputStream opened;
-        try {
-            opened = checkpointStorage.openFrame(siteId, checkpointSeq);
-        } finally {
-            frameReadNanos[0] += System.nanoTime() - openedAt;
-        }
-        try (InputStream frame = opened) {
-            TimingInputStream timed = new TimingInputStream(frame);
-            try {
-                ChangelogCodec.forEach(timed, record -> merge.accept(record, out));
-            } finally {
-                frameReadNanos[0] += timed.readNanos();
-            }
-        } catch (FoldTooLargeException | ArtifactSizeLimitExceededException
-                | ScratchBudgetExceededException e) {
-            throw e;
-        } catch (IOException | RuntimeException e) {
-            throw new S3CheckpointStorage.CheckpointStorageException(
-                    "Failed to read the checkpoint frame of site " + siteId + " at seq " + checkpointSeq, e);
-        }
-    }
-
-    /**
-     * One partition's merge, with the same ceiling on heap the fold has (issue #152) and expressed
-     * in the same estimated bytes, so the key means one thing on both paths.
-     */
-    private static final class BudgetedMerge {
-
-        private final ChangelogMerge merge;
-        private final UUID siteId;
-        private final long maxBytes;
-        private long bytes;
-        private long peakBytes;
-
-        private BudgetedMerge(UUID siteId, long maxBytes, int partitions, int partition) {
-            this.siteId = siteId;
-            this.maxBytes = maxBytes;
-            this.merge = new ChangelogMerge(partitions, partition);
-        }
-
-        /**
-         * Fold one record of the period, then stop the build if the delta no longer fits.
-         *
-         * <p>Checked after applying rather than before, for the reason {@code BudgetedFold} states:
-         * the cost of one record is only known once it has been applied, and one record over the
-         * ceiling is not what runs a pod out of memory.</p>
-         */
-        private void apply(ChangeRecord record) {
-            bytes += merge.apply(record);
-            peakBytes = Math.max(peakBytes, bytes);
-            if (bytes > maxBytes) {
-                throw new FoldTooLargeException(siteId, bytes, maxBytes);
-            }
-        }
-
-        private void accept(ChangeRecord base, java.util.function.Consumer<ChangeRecord> out) {
-            merge.accept(base, out);
-        }
-
-        private void drain(java.util.function.Consumer<ChangeRecord> out) {
-            merge.drain(out);
-        }
-
-        /** The largest this partition's delta ever was. */
-        private long peakEstimatedBytes() {
-            return peakBytes;
         }
     }
 
@@ -1292,15 +812,15 @@ public class CheckpointService {
                                                                         List<ChangelogSegment> segments,
                                                                         SiteEpoch epoch) {
         long seq = segments.get(segments.size() - 1).getLastSeq();
-        prepareScratchDirectory();
-        Path frame = createScratchFile(siteId, ".pb.gz");
+        scratch.prepareDirectory();
+        Path frame = scratch.createFile(siteId, ".pb.gz");
         // Held for the whole build, unlike the general path's frame lease: the snapshots are written
         // by re-reading this file, so its bytes are on the volume until the last table is done. The
         // checkpoint reserve of issue #193 is what keeps a completed-batch backlog out of them.
-        ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
+        ScratchLease lease = scratch.budget().open(ParquetScratchBudget.CHECKPOINT_FRAME);
         try {
             CheckpointFrameWriter.FrameManifest manifest =
-                    streamSegmentsIntoFrame(siteId, segments, frame, lease);
+                    frames.streamSnapshotIntoFrame(siteId, segments, frame, lease);
             if (manifest == null) {
                 return null;
             }
@@ -1309,13 +829,11 @@ public class CheckpointService {
             // a closing process before the longest single call of the build, and check the epoch
             // with nothing written so a wipe that has already committed is seen before the object
             // is in the bucket rather than after.
-            stopIfShuttingDown(siteId);
+            shutdown.stopIfShuttingDown(siteId);
             epochGuard.requireEpoch(siteId, epoch);
-            withFrameCeilingReported(siteId, seq, () ->
-                    metrics.timeCheckpointPhase("upload", () ->
-                            checkpointStorage.uploadFrame(siteId, seq, frame)));
+            frames.uploadWrittenFrame(siteId, seq, frame);
 
-            int passes = writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch,
+            int passes = snapshots.writeSnapshotsFromFrame(siteId, frame, manifest, seq, epoch,
                     SnapshotPass.INCREMENTAL);
             // The measurement the operator needs and the one this path is judged by: the pass count
             // is a function of the table count and delta.checkpoint.snapshot-writers alone, never of
@@ -1331,259 +849,8 @@ public class CheckpointService {
             // build's result is the frame, the snapshots and the pointer.
             return Map.of();
         } finally {
-            deleteQuietly(frame, "_frame", siteId);
+            CheckpointScratch.deleteQuietly(frame, "_frame", siteId);
             lease.close();
-        }
-    }
-
-    /**
-     * Stream every segment of the snapshot session into the local frame file.
-     *
-     * @return what the frame holds, or {@code null} when the session broke the all-{@code INSERT}
-     *         contract and the build must fold instead
-     */
-    private CheckpointFrameWriter.FrameManifest streamSegmentsIntoFrame(UUID siteId,
-                                                                       List<ChangelogSegment> segments,
-                                                                       Path frame,
-                                                                       ScratchLease lease) {
-        long startedAt = System.nanoTime();
-        try {
-            // phase=fold, because this is what replaces it: the segment downloads it always
-            // covered, and the writing of the frame that the fold would otherwise have paid for
-            // later. phase=download_frame stays absent, as it is on any build with no seed frame.
-            CheckpointFrameWriter.FrameManifest manifest;
-            try (OutputStream out = new CappedOutputStream(
-                            Files.newOutputStream(frame), maxFrameTempBytes, lease);
-                    BootstrapFrameWriter writer = BootstrapFrameWriter.open(out)) {
-                for (ChangelogSegment segment : segments) {
-                    foldSegment(siteId, segment, writer::accept);
-                }
-                manifest = writer.manifest();
-            } catch (IOException e) {
-                throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
-            }
-            return manifest;
-        } catch (BootstrapFrameWriter.NotAFullSnapshotException e) {
-            // Loud, because it says the client is not sending what the wire contract promises — and
-            // the build still succeeds, so nothing else would say so.
-            log.warn("The FULL_SNAPSHOT history of site {} does not satisfy the all-INSERT contract, "
-                    + "so its first checkpoint is folded the general way instead of streamed: {}",
-                    siteId, e.getMessage());
-            return null;
-        } catch (ArtifactSizeLimitExceededException | ScratchBudgetExceededException e) {
-            // The frame's own ceilings, reported exactly as the general path reports them.
-            throw reportFrameCeiling(siteId, segments.get(segments.size() - 1).getLastSeq(), e);
-        } finally {
-            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt);
-        }
-    }
-
-    /**
-     * Write each table's Parquet snapshot by re-reading the frame this build just wrote, {@code W}
-     * tables at a time (issue #292).
-     *
-     * <p>Everything about a table's outcome is the general path's: {@link #prepareTable} decides
-     * whether it is written at all, {@link #publishTable} uploads and saves it, {@link #failTable}
-     * classifies a failure. What differs is only that the rows arrive interleaved, so a table cannot
-     * be rendered by iterating a collection of its own.</p>
-     */
-    private int writeSnapshotsFromFrame(UUID siteId,
-                                        Path frame,
-                                        CheckpointFrameWriter.FrameManifest manifest,
-                                        long seq,
-                                        SiteEpoch epoch,
-                                        SnapshotPass pass) {
-        stopIfShuttingDown(siteId);
-        Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
-
-        Map<String, Checkpoint> pending = new LinkedHashMap<>();
-        for (String tableName : manifest.tables()) {
-            stopIfShuttingDown(siteId);
-            Checkpoint checkpoint = prepareTable(siteId, tableName,
-                    manifest.rowCounts().getOrDefault(tableName, 0L), seq,
-                    pass, epoch, schemas.get(tableName));
-            if (checkpoint != null) {
-                pending.put(tableName, checkpoint);
-            }
-        }
-
-        int passes = 0;
-        Map<String, Schema> avroSchemas = new LinkedHashMap<>();
-        if (closeDecimalEnvelopes(frame, pending.keySet(), schemas, avroSchemas)) {
-            passes++;
-        }
-
-        List<String> tables = List.copyOf(pending.keySet());
-        for (int from = 0; from < tables.size(); from += snapshotWriters) {
-            stopIfShuttingDown(siteId);
-            writeSnapshotGroup(siteId, frame, seq, epoch, schemas, avroSchemas, pending,
-                    tables.subList(from, Math.min(from + snapshotWriters, tables.size())), pass);
-            passes++;
-        }
-
-        stopIfShuttingDown(siteId);
-        if (manifest.tables().isEmpty()) {
-            // The empty-fold answer of the general path, for the same reason: the per-table settle
-            // lives inside the loop above, so a site whose snapshot carried no record at all would
-            // otherwise be revisited nightly forever without ever spending an attempt.
-            settleSiteWide(siteId, epoch, pass);
-            return passes;
-        }
-        reapTablesAbsentFrom(siteId, Set.copyOf(manifest.tables()), epoch);
-        return passes;
-    }
-
-    /**
-     * One pass over the local frame that closes every table's decimal envelope.
-     *
-     * <p>{@code writeParquet} affords two traversals of a table's rows because the general path
-     * holds them; here the second traversal would be a second set of passes over the frame, so every
-     * table is measured together in this one. Tables that declare no decimal column need no
-     * measuring at all, and when none of them does the pass is skipped outright.</p>
-     *
-     * @param avroSchemas filled with each table's record schema, widened where it was measured
-     * @return whether a pass over the frame was actually made
-     */
-    private boolean closeDecimalEnvelopes(Path frame,
-                                          Set<String> tables,
-                                          Map<String, TableSchema> schemas,
-                                          Map<String, Schema> avroSchemas) {
-        Map<String, ParquetCheckpointWriter.DecimalEnvelope> envelopes = new LinkedHashMap<>();
-        for (String tableName : tables) {
-            Schema declared = ParquetSchemaMapper.toAvroSchema(tableName, schemas.get(tableName));
-            ParquetCheckpointWriter.DecimalEnvelope envelope =
-                    ParquetCheckpointWriter.decimalEnvelope(declared);
-            avroSchemas.put(tableName, declared);
-            if (envelope.measuresAnything()) {
-                envelopes.put(tableName, envelope);
-            }
-        }
-        if (envelopes.isEmpty()) {
-            return false;
-        }
-        readFrame(frame, record -> {
-            ParquetCheckpointWriter.DecimalEnvelope envelope = envelopes.get(record.getTable());
-            if (envelope != null) {
-                envelope.observe(record.getDataMap());
-            }
-        });
-        envelopes.forEach((tableName, envelope) -> avroSchemas.put(tableName, envelope.widened()));
-        return true;
-    }
-
-    /**
-     * Write one group of tables in a single pass over the local frame.
-     *
-     * <p>A table that fails mid-pass stops being written and is recorded through {@link #failTable}
-     * when the pass ends — the same skip-and-continue contract the folded path has, except that the
-     * pass carries the other tables of the group on rather than moving to the next table. A refusal
-     * by the shared scratch directory is systemic and ends the build where it happens, as it does
-     * there.</p>
-     */
-    private void writeSnapshotGroup(UUID siteId,
-                                    Path frame,
-                                    long seq,
-                                    SiteEpoch epoch,
-                                    Map<String, TableSchema> schemas,
-                                    Map<String, Schema> avroSchemas,
-                                    Map<String, Checkpoint> pending,
-                                    List<String> group,
-                                    SnapshotPass pass) {
-        Map<String, OpenSnapshot> open = new LinkedHashMap<>();
-        try {
-            for (String tableName : group) {
-                Path file = createScratchFile(siteId);
-                ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_TABLE);
-                open.put(tableName, new OpenSnapshot(file, lease,
-                        ParquetCheckpointWriter.openTable(file, tableName, schemas.get(tableName),
-                                avroSchemas.get(tableName), maxTempBytes,
-                                parquetProperties.rowGroupBytes(), lease)));
-            }
-
-            metrics.timeCheckpointPhase("parquet", () -> readFrame(frame, record -> {
-                OpenSnapshot snapshot = open.get(record.getTable());
-                if (snapshot == null || snapshot.failure != null) {
-                    return;
-                }
-                try {
-                    snapshot.writer.write(record.getDataMap());
-                } catch (RuntimeException e) {
-                    if (isScratchBudgetRefusal(e)) {
-                        throw scratchDirectoryFull(siteId, record.getTable(), e);
-                    }
-                    snapshot.failure = e;
-                }
-            }));
-
-            for (Map.Entry<String, OpenSnapshot> entry : open.entrySet()) {
-                OpenSnapshot snapshot = entry.getValue();
-                try {
-                    snapshot.writer.close();
-                    snapshot.closed = true;
-                } catch (RuntimeException e) {
-                    if (isScratchBudgetRefusal(e)) {
-                        throw scratchDirectoryFull(siteId, entry.getKey(), e);
-                    }
-                    if (snapshot.failure == null) {
-                        snapshot.failure = e;
-                    }
-                }
-            }
-
-            for (Map.Entry<String, OpenSnapshot> entry : open.entrySet()) {
-                String tableName = entry.getKey();
-                OpenSnapshot snapshot = entry.getValue();
-                Checkpoint checkpoint = pending.get(tableName);
-                try {
-                    if (snapshot.failure != null) {
-                        throw snapshot.failure;
-                    }
-                    ParquetCheckpointWriter.warnDegraded(tableName, snapshot.writer.tally());
-                    publishTable(siteId, checkpoint, tableName, seq, snapshot.file,
-                            snapshot.writer.tally(), epoch);
-                } catch (RuntimeException e) {
-                    failTable(siteId, checkpoint, tableName, pass, epoch, e);
-                }
-            }
-        } finally {
-            open.forEach((tableName, snapshot) -> {
-                if (!snapshot.closed) {
-                    // Best effort: the group is unwinding on something systemic, and a writer left
-                    // open would keep its scratch file undeletable on the platforms that care.
-                    try {
-                        snapshot.writer.close();
-                    } catch (RuntimeException ignored) {
-                        // the file is deleted next, and the failure that is unwinding is the story
-                    }
-                }
-                deleteQuietly(snapshot.file, tableName, siteId);
-                snapshot.lease.close();
-            });
-        }
-    }
-
-    /** One table's open snapshot file within a group pass. */
-    private static final class OpenSnapshot {
-
-        private final Path file;
-        private final ScratchLease lease;
-        private final ParquetCheckpointWriter.OpenTable writer;
-        private RuntimeException failure;
-        private boolean closed;
-
-        private OpenSnapshot(Path file, ScratchLease lease, ParquetCheckpointWriter.OpenTable writer) {
-            this.file = file;
-            this.lease = lease;
-            this.writer = writer;
-        }
-    }
-
-    /** Read the locally written frame back, record by record. */
-    private static void readFrame(Path frame, java.util.function.Consumer<ChangeRecord> consumer) {
-        try (InputStream in = Files.newInputStream(frame)) {
-            ChangelogCodec.forEach(in, consumer);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read the local checkpoint frame " + frame, e);
         }
     }
 
@@ -1613,10 +880,10 @@ public class CheckpointService {
         // Cheapest possible place to notice the process is going: the frame upload is the longest
         // single call of a build, and starting a multi-GiB PUT that will be cut off mid-flight
         // leaves an orphan for nothing.
-        stopIfShuttingDown(siteId);
+        shutdown.stopIfShuttingDown(siteId);
         epochGuard.requireEpoch(siteId, epoch);
-        uploadFrame(siteId, seq, state);
-        writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, epoch);
+        frames.uploadFoldedFrame(siteId, seq, state);
+        snapshots.writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, epoch);
 
         epochGuard.inEpoch(siteId, epoch, () -> syncStateService.recordCheckpoint(siteId, seq));
         // The single choke point every checkpoint build passes through, scheduled or forced. The
@@ -1644,510 +911,6 @@ public class CheckpointService {
         } catch (RuntimeException e) {
             log.error("A checkpoint listener failed for site {} at seq {}; the checkpoint itself "
                     + "is committed", siteId, seq, e);
-        }
-    }
-
-    /**
-     * Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be
-     * pruned. Same file-backed path as the snapshot (issue #126): one record at a time into a
-     * scratch file, then {@code RequestBody.fromFile} — never a collected List and never a gzip
-     * {@code byte[]}. The site fold itself stays in heap.
-     *
-     * <p>Its own ceiling, not the snapshot's (issue #138). The two files share a directory but not
-     * a failure mode: an oversized table is skipped and repaired by the next build, while an
-     * oversized frame ends the build, because the frame is the next incremental seed. One key for
-     * both meant the value had to be set for the harsher of the two, which left it above the
-     * deployed scratch volume and made a kubelet eviction the first thing to happen.</p>
-     *
-     * <p>The file is uploaded and deleted here rather than kept open across the snapshot loop, so
-     * the checkpoint path holds one scratch file at a time. Batch writers cannot take the last
-     * {@code max-frame-temp-bytes} of the directory budget (issue #193), which is what keeps a
-     * completed-batch backlog from starving this write.</p>
-     */
-    private void uploadFrame(UUID siteId, long seq, Map<String, Map<String, FoldedRow>> state) {
-        prepareScratchDirectory();
-        Path frame = createScratchFile(siteId, ".pb.gz");
-        // Closed after the delete, not after the upload: the bytes are on the volume until the file
-        // is gone, and releasing the lease earlier would let another writer be told there is room
-        // that does not exist yet. Released even when the delete failed — see the same finally in
-        // BatchParquetFinalizationService for why holding it would be the worse, and permanent,
-        // error.
-        ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_FRAME);
-        try {
-            metrics.timeCheckpointPhase("upload", () -> {
-                try (OutputStream out = new CappedOutputStream(
-                        Files.newOutputStream(frame), maxFrameTempBytes, lease)) {
-                    ChangelogCodec.write(CheckpointFrame.records(state), out);
-                } catch (IOException e) {
-                    throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
-                }
-                checkpointStorage.uploadFrame(siteId, seq, frame);
-            });
-        } catch (ArtifactSizeLimitExceededException | ScratchBudgetExceededException e) {
-            throw reportFrameCeiling(siteId, seq, e);
-        } finally {
-            deleteQuietly(frame, "_frame", siteId);
-            lease.close();
-        }
-    }
-
-    /**
-     * Run the frame's write-and-upload with its two ceilings reported the way #138 and #150 report
-     * them — shared by the folded path and by the streaming bootstrap path (issue #292), which
-     * writes and uploads the same file in two separate steps.
-     */
-    private void withFrameCeilingReported(UUID siteId, long seq, Runnable work) {
-        try {
-            work.run();
-        } catch (ArtifactSizeLimitExceededException | ScratchBudgetExceededException e) {
-            throw reportFrameCeiling(siteId, seq, e);
-        }
-    }
-
-    /**
-     * Log (and, for the deterministic one, count) a reload frame that could not be written, and
-     * hand the exception back for the caller to throw. Either way the build ends: the frame is the
-     * next incremental seed and there is nothing to fall back on.
-     */
-    private RuntimeException reportFrameCeiling(UUID siteId, long seq, RuntimeException e) {
-        if (e instanceof ArtifactSizeLimitExceededException) {
-            // Both ceilings raise the same exception with the same "temp-file limit of N bytes"
-            // text, and the per-table one is reported by its own counter — say which guard this
-            // was and name the key, or the operator has only a byte count to go on. Rethrown
-            // unchanged: an oversized frame still ends the build.
-            //
-            // Counted as well as logged (issue #153). The failure is deterministic for a given
-            // fold, so it recurs on every tick with the pointer — and therefore retention — frozen
-            // in place; a log line is not something an alert can be built on, and the symptom an
-            // operator would otherwise notice first is an unbounded segment table.
-            //
-            // Logged before it is counted: the counter validates its reason and throws on an
-            // unknown one (the same contract as checkpointTableUnmaterialized, and a programming
-            // error either way), which would otherwise replace this exception *and* swallow the
-            // only line naming the site and the key.
-            log.error("The checkpoint reload frame for site {} at seq {} crossed "
-                    + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned "
-                    + "before any snapshot was written, so nothing durable changed: the per-table "
-                    + "keys and last_checkpoint_seq stay where they were. Retention is frozen at "
-                    + "that pointer and the next tick will fail identically, because the fold has "
-                    + "not changed. Raise that key (and the scratch volume behind it) rather than "
-                    + "the per-table ceiling",
-                    siteId, seq, maxFrameTempBytes);
-            metrics.checkpointBuildAborted("frame_too_large");
-            return e;
-        }
-        if (e instanceof ScratchBudgetExceededException) {
-            // The frame's existing failure mode — the build ends, because the frame is the next
-            // incremental seed and there is nothing to fall back on. What it is deliberately NOT is
-            // a fifth value on delta.checkpoint.builds.aborted: every value there is a refusal that
-            // never repairs itself (#153), and this one clears the moment the batch workers holding
-            // the directory finish. delta.parquet.scratch.refused{writer=checkpoint_frame} already
-            // counted it inside the budget.
-            //
-            // A completed-batch backlog cannot take the reserved share (#193): batch writers stop
-            // at max-scratch-bytes minus this frame ceiling. Seeing this with the directory budget
-            // on is therefore a reserve of zero, a misconfiguration, or a checkpoint writer
-            // competing with itself — not the operator's backlog.
-            log.error("The checkpoint reload frame for site {} at seq {} could not be written "
-                    + "because the shared Parquet scratch directory was full — the build is "
-                    + "abandoned before any snapshot was written, so nothing durable changed and "
-                    + "the next tick tries again. This is contention, not a fact about the site: "
-                    + "raise delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
-                    + "delta.batch-parquet.max-concurrent", siteId, seq, e);
-            return e;
-        }
-        return e;
-    }
-
-    /**
-     * Every scratch file of this build goes through the same directory, one at a time. Creating it
-     * is systemic, not per-artifact: if it fails, nothing can be materialized this build, so let it
-     * fail the build loudly instead of counting every table as its own skip.
-     */
-    private void prepareScratchDirectory() {
-        try {
-            Files.createDirectories(tempDirectory);
-        } catch (IOException e) {
-            throw new UncheckedIOException(
-                    "Cannot prepare the checkpoint scratch directory " + tempDirectory, e);
-        }
-    }
-
-    /**
-     * Write (or retry) each table's Parquet snapshot at {@code seq}.
-     *
-     * <p>{@link SnapshotPass#INCREMENTAL} advances seq and detaches a failed key.
-     * {@link SnapshotPass#RETRY_MISSING} and {@link SnapshotPass#FORCE} stay on the recorded
-     * pointer and keep a last-good key if the rewrite fails.</p>
-     *
-     * <p>Every row write goes through {@link CheckpointEpochGuard}, so a build whose site was wiped
-     * or re-baselined mid-flight stops here instead of re-inserting the rows that just went.</p>
-     */
-    private void writeSnapshots(UUID siteId,
-                                Map<String, Map<String, FoldedRow>> state,
-                                long seq,
-                                SnapshotPass pass,
-                                SiteEpoch epoch) {
-        stopIfShuttingDown(siteId);
-        Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
-        prepareScratchDirectory();
-
-        // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
-        // additionally materializes the full per-table load as typed Parquet (the only format V2
-        // produces since issue #113) plus the frame seed.
-        state.forEach((tableName, rows) -> {
-            // Between tables, not only inside the catch: once the context is closing every
-            // remaining table would fail identically, and each failure is another opportunity to
-            // mistake "this process is ending" for "this table cannot be materialized".
-            stopIfShuttingDown(siteId);
-            Checkpoint checkpoint =
-                    prepareTable(siteId, tableName, rows.size(), seq, pass, epoch, schemas.get(tableName));
-            if (checkpoint == null) {
-                return;
-            }
-            TableSchema tableSchema = schemas.get(tableName);
-
-            // One table at a time: write this table's rows to disk, hand the file to S3, drop
-            // it. Materialization therefore costs one row-group buffer and one scratch file at
-            // a time instead of one encoded Parquet per table. The new frame (issue #126) went
-            // through the same directory just before this loop and its file is already gone, so
-            // "one at a time" covers the whole build and not only its snapshot half.
-            //
-            // One table's coercion failure (schema drift, bad value) must not abort the whole
-            // build: the pointer would freeze, retention would stop, and segments would grow
-            // unbounded. Skip that table and keep going — the same skip-and-continue contract
-            // as DeltaEgressService.
-            Path snapshot = createScratchFile(siteId);
-            ScratchLease lease = scratchBudget.open(ParquetScratchBudget.CHECKPOINT_TABLE);
-            try {
-                // Captured rather than returned through timeCheckpointPhase so the phase keeps
-                // being timed as a Runnable: which overload times a phase is incidental to this
-                // change, and CheckpointServiceTest pins the shape as part of the #111 phase guard.
-                java.util.concurrent.atomic.AtomicReference<DecimalDegradeTally> nonFinite = new java.util.concurrent.atomic.AtomicReference<>();
-                metrics.timeCheckpointPhase("parquet", () ->
-                        nonFinite.set(ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
-                                dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
-                                lease)));
-
-                publishTable(siteId, checkpoint, tableName, seq, snapshot, nonFinite.get(), epoch);
-            } catch (RuntimeException e) {
-                failTable(siteId, checkpoint, tableName, pass, epoch, e);
-            } finally {
-                // The scratch file is this build's litter whichever way the table ended: kept,
-                // it would fill the node one checkpoint cycle at a time.
-                deleteQuietly(snapshot, tableName, siteId);
-                lease.close();
-            }
-        });
-
-        // After the loop, not before it. The rows this build is about to write exist by now, so
-        // `checkpoints` is never transiently empty for a site that has tables — and a reader
-        // landing in that window would not be a cosmetic problem: CheckpointFileQueryService keys
-        // its pre-Delta fallback on the site having no checkpoint rows at all, and would hand a
-        // Bit BI client historical uploaded CSVs as if they were its current baseline.
-        stopIfShuttingDown(siteId);
-        if (state.isEmpty()) {
-            // Every row would be reaped, and the reap must never empty a site (see below) — so
-            // without this the site would be folded every night forever and never spend an
-            // attempt, because the per-table settle lives inside the loop above and an empty fold
-            // never enters it. That is the unbounded retry this ticket removes, minus even the
-            // visibility. Settle it site-wide instead, exactly as a history_gone abort does: the
-            // rows drain to the cap, the site stops naming itself, and
-            // delta.checkpoint.tables.given-up carries it from then on.
-            settleSiteWide(siteId, epoch, pass);
-            return;
-        }
-        reapTablesAbsentFromTheFold(siteId, state, epoch);
-    }
-
-    /**
-     * The {@code checkpoints} row bookkeeping that precedes a table's Parquet, shared by the folded
-     * and the streaming path (issue #292).
-     *
-     * <p>The order matters and is the one {@code writeSnapshots} has always had: the dedicated-retry
-     * skips first, then the row (created or advanced to this seq and row count), then a forced
-     * rebuild's re-arm, and only then the declared schema — a table with no schema still gets its
-     * row, so the hole is visible rather than absent.</p>
-     *
-     * @return the row to write this table into, or {@code null} when the table must be skipped —
-     *         already materialized on a dedicated retry, past the retry cap, or missing its schema
-     *         (which is reported and charged here, since there is nothing left to attempt)
-     */
-    private Checkpoint prepareTable(UUID siteId, String tableName, long rowCount, long seq,
-                                    SnapshotPass pass, SiteEpoch epoch, TableSchema tableSchema) {
-        if (pass == SnapshotPass.RETRY_MISSING) {
-            Optional<Checkpoint> existing =
-                    checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
-            if (existing.isPresent() && existing.get().getS3KeyParquet() != null) {
-                return null;
-            }
-            // The bound on the retry (issue #149). A row that has spent its attempts is not
-            // going to materialize tonight either: the causes that survive this many nights —
-            // a schema the client never submits, a value Parquet cannot render — are not the
-            // kind that pass with time. Only the *dedicated* retry stops; an incremental build
-            // below still writes this table with the rest of its fold.
-            if (existing.isPresent()
-                    && existing.get().hasGivenUpMaterializing(
-                            retryProperties.maxMaterializeAttempts())) {
-                return null;
-            }
-        }
-        Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rowCount);
-        if (pass == SnapshotPass.FORCE) {
-            // The operator's exit from the cap, and the reason giving up is not a dead end:
-            // asking for a rebuild says the cause has been dealt with, so the row goes back
-            // into the nightly population whether this attempt succeeds or not.
-            checkpoint.rearmMaterialization();
-        }
-
-        if (tableSchema == null) {
-            // Parquet needs the declared schema, and there is no CSV left to fall back on: this
-            // table simply has nothing to download until a schema arrives. The client is
-            // required to SubmitSchema before its first session, so this means the site is
-            // misconfigured — count it so the hole is visible rather than silent.
-            // Write first, then report — the reverse of failTable, and deliberately so: there is
-            // no cause to preserve here, and an epoch refusal must leave the meter alone. A
-            // discarded build has no tables to report a hole for.
-            if (abandonStaleSnapshot(checkpoint, pass)) {
-                checkpoint.recordFailedMaterialization();
-                epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-            }
-            metrics.checkpointTableUnmaterialized("no_schema");
-            log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
-                    + "without a downloadable artifact (the client must SubmitSchema)",
-                    tableName, siteId);
-            return null;
-        }
-        return checkpoint;
-    }
-
-    /**
-     * Publish one written snapshot: upload it, save the row through the epoch guard, then count the
-     * cells that had to be degraded (issue #292 — shared by both snapshot paths).
-     */
-    private void publishTable(UUID siteId, Checkpoint checkpoint, String tableName, long seq,
-                              Path snapshot, DecimalDegradeTally nonFinite, SiteEpoch epoch) {
-        metrics.timeCheckpointPhase("upload", () ->
-                checkpoint.attachParquet(checkpointStorage.uploadParquet(
-                        siteId, tableName, seq, snapshot)));
-        epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-        // After the epoch guard, not merely after the upload (review round 3): a wipe or
-        // re-baseline landing mid-build makes the guard throw and discards everything the
-        // build produced, so counting earlier credited cells to an artifact that was never
-        // published -- and the next build re-renders and counts them again.
-        metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
-        metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
-    }
-
-    /**
-     * Classify one table's failure: end the build, or record it against the table and carry on
-     * (issue #292 — shared by both snapshot paths).
-     */
-    private void failTable(UUID siteId, Checkpoint checkpoint, String tableName, SnapshotPass pass,
-                           SiteEpoch epoch, RuntimeException e) {
-        if (e instanceof CheckpointEpochGuard.EpochChangedException) {
-            // A replaced baseline is not a fact about this table: nothing this build produced
-            // may be published, so it must escape the per-table skip below and end the build.
-            throw e;
-        }
-        if (e instanceof BuildEndedByShutdownException) {
-            throw e;
-        }
-        // A full scratch directory is a SYSTEMIC scratch failure, so it ends the build —
-        // the same answer prepareScratchDirectory() gives an unusable directory, for the
-        // reason stated there: skipping would detach every last-good snapshot while the
-        // pointer advanced. Skipping this one table looks gentler and is not (issue #150,
-        // review round 2). The pointer would move to the new seq with this table's row left
-        // at the old one, and nothing would mark it as owing a rewrite: the nightly
-        // rematerialize keys on a NULL s3_key_parquet, so a site that then goes quiet
-        // serves a snapshot silently missing every change in between, indefinitely, while
-        // retention has already pruned the segments below the new pointer. Detaching
-        // instead would fix the retry and 404 a healthy artifact for a neighbour's disk
-        // use. And on a site's FIRST build, findOrCreate's row is not saved either, so a
-        // refusal across every table leaves `checkpoints` empty with the pointer advanced —
-        // which CheckpointFileQueryService reads as "not a Delta site yet" and answers with
-        // the historical uploaded CSVs as if they were the current baseline.
-        //
-        // Ending the build has none of those: no object, no row, no pointer, no attempt
-        // spent, retention frozen for one night and the whole seq redone on the next tick.
-        // Deliberately NOT on delta.checkpoint.builds.aborted (#153's tag values never
-        // repair themselves); delta.parquet.scratch.refused{writer=checkpoint_table}
-        // counted it inside the budget, and issue #193 tracks the asymmetry with the
-        // completed-batch side, which degrades one artifact at a time.
-        if (isScratchBudgetRefusal(e)) {
-            throw scratchDirectoryFull(siteId, tableName, e);
-        }
-        // A failure seen while the context is closing is a fact about the process, not
-        // about this table (issue #162). The S3Client and the DataSource are destroyed
-        // right after ContextClosedEvent is published, so every call from here on fails
-        // with an exception that reads exactly like a broken table. Recording it would
-        // detach a healthy snapshot on an advancing seq, and the row would 404 for Bit BI
-        // and Parquet Export until the next nightly rematerialize.
-        if (shutdownSignal.isShuttingDown()) {
-            throw new BuildEndedByShutdownException(siteId, tableName, e);
-        }
-        // Report the cause first: the detach below goes through the epoch guard, which
-        // throws rather than returns when the site was wiped mid-build, and this table's
-        // actual failure (schema drift, an oversized table) would leave no trace at all.
-        metrics.checkpointTableUnmaterialized("parquet_failed");
-        log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                + "artifact this build (check the declared schema against the data, or "
-                + "delta.checkpoint.max-temp-bytes against the table's size)",
-                tableName, siteId, e);
-        // When seq advanced, the previous key would sit beside a newer seq and be served
-        // as its snapshot — detach it. On a same-seq rematerialize the last-good object
-        // is still at that key; keep the row pointing at it.
-        if (abandonStaleSnapshot(checkpoint, pass)) {
-            // The row ends this build owing a snapshot, so the attempt is spent (issue
-            // #149). A failure that leaves a still-valid last-good key is deliberately not
-            // counted: the retry exists for rows with nothing to serve, and charging one
-            // to a healthy row would eventually retire a table nobody is waiting on.
-            checkpoint.recordFailedMaterialization();
-            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.save(checkpoint));
-        }
-    }
-
-    /**
-     * Charge (or re-arm) every unmaterialized row of a site for an outcome that belongs to the
-     * whole build rather than to any one table.
-     *
-     * <p>A forced rebuild re-arms where a scheduled one spends: it is the operator asserting the
-     * cause has been dealt with, and it is the documented recovery from both states that reach
-     * here, so it must not be the fastest way to exhaust the retry it is meant to restore.</p>
-     */
-    private void settleSiteWide(UUID siteId, SiteEpoch epoch, SnapshotPass pass) {
-        if (pass == SnapshotPass.FORCE) {
-            rearmEveryUnmaterializedTable(siteId, epoch);
-        } else {
-            spendAnAttemptOnEveryRetryableTable(siteId, epoch);
-        }
-    }
-
-    /**
-     * Delete the checkpoint rows of tables the site no longer has (issue #149).
-     *
-     * <p>The fold is the whole of the site's state at this build's seq — the frame is a complete
-     * all-INSERT snapshot and every surviving segment above it is folded on top — so a table with a
-     * {@code checkpoints} row and no entry in the fold is a table that no longer exists. It got
-     * there by having its last row {@code DELETE}d: the build that saw the deletion still had the
-     * (now empty) table in its fold and wrote it, but {@link CheckpointFrame} emits no record for a
-     * table with no rows, so the frame it wrote never mentions the table again.</p>
-     *
-     * <p>Before this, nothing could clear such a row. Both snapshot passes iterate the fold, so the
-     * loop never reached the table; only a wipe or a re-baseline deletes checkpoint rows; and with
-     * the row's key still null it named its site on the tick's work list every night, forever, for
-     * work no build — not even a forced rebuild — could do. Reaping it is the exit, and it is the
-     * truthful answer for a row that <em>did</em> keep a key too: that snapshot describes a table
-     * the site dropped, and serving it as current would be a lie.</p>
-     *
-     * <p><b>Promptly for the first, eventually for the second.</b> This runs inside
-     * {@code writeSnapshots}, which a scheduled build reaches only when it has work — new segments,
-     * or a still-retryable unmaterialized row (the probe in {@link #build} returns before the fold
-     * otherwise, which is the whole point of issue #149's cheap idle visit). A dropped table whose
-     * row kept a live key therefore survives on a site that is completely idle, until the next build
-     * with any work at all, or a forced rebuild. That is deliberate: making the reap its own reason
-     * to fold a whole site nightly would reintroduce the cost this ticket removed, for a stale
-     * listing entry rather than a missing artifact.</p>
-     *
-     * <p>The object the row named is left in {@code checkpoints/{siteId}/} as an orphan, which is
-     * what every superseded snapshot has always been there (the row carries one key and each build
-     * replaces it): a site wipe and {@code DeltaS3OrphanSweeper} (#158) both collect it. Deleting it
-     * here would put an S3 round trip on the build for no new guarantee.</p>
-     *
-     * <p>Deletes run through the epoch guard like every other write of a build, so a wipe or a
-     * re-baseline committing mid-build ends the build instead of deleting rows of a baseline it
-     * knows nothing about.</p>
-     *
-     * <p><b>Never called with an empty fold.</b> Every row would go, and "this site has no
-     * checkpoint rows" is a load-bearing state elsewhere: {@code CheckpointFileQueryService} reads
-     * it as "not a Delta site yet" and falls back to the pre-Delta uploaded CSVs, which is exactly
-     * what it must not hand a Bit BI client as a current baseline. A site whose every table was
-     * emptied is settled site-wide by the caller instead — see {@link #settleSiteWide}.</p>
-     */
-    private void reapTablesAbsentFromTheFold(UUID siteId,
-                                             Map<String, Map<String, FoldedRow>> state,
-                                             SiteEpoch epoch) {
-        reapTablesAbsentFrom(siteId, state.keySet(), epoch);
-    }
-
-    /** See {@link #reapTablesAbsentFromTheFold}; the streaming path knows its tables by name only. */
-    private void reapTablesAbsentFrom(UUID siteId, Set<String> tables, SiteEpoch epoch) {
-        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
-            if (tables.contains(checkpoint.getTableName())) {
-                continue;
-            }
-            log.info("Dropping the checkpoint row for table {} of site {}: the table is absent from "
-                    + "the folded state, so its last row was deleted at the source",
-                    checkpoint.getTableName(), siteId);
-            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.deleteById(checkpoint.getId()));
-        }
-    }
-
-    /**
-     * End the build: the shared scratch directory had no room for this table's snapshot.
-     *
-     * <p>Returns the exception rather than throwing it, so the call site reads
-     * {@code throw scratchDirectoryFull(...)} and the compiler can see the branch ends. A
-     * completed-batch backlog cannot take the reserved share (#193); seeing this with the
-     * directory budget on is a reserve of zero or a misconfiguration, not the operator's
-     * backlog.</p>
-     */
-    private static RuntimeException scratchDirectoryFull(UUID siteId, String tableName,
-                                                        RuntimeException error) {
-        log.error("The checkpoint snapshot for table {} of site {} could not be written because the "
-                + "shared Parquet scratch directory was full — the build is abandoned, so nothing "
-                + "durable changed: the per-table keys and last_checkpoint_seq stay where they were "
-                + "and the next tick tries again. This is contention, not a fact about the site: "
-                + "raise delta.parquet.max-scratch-bytes (and the volume behind it), or lower "
-                + "delta.batch-parquet.max-concurrent", tableName, siteId, error);
-        return error;
-    }
-
-    /**
-     * Is this failure the shared scratch directory refusing room (issue #150)?
-     *
-     * <p>The whole cause chain, as {@code DeltaParquetWriter.failure()} already walks it for the
-     * per-file ceiling's exception. Nothing wraps this one today, so a direct {@code instanceof}
-     * would work — but a future wrap would be silently <em>worse</em> here than on the batch path:
-     * the refusal would fall through to {@code parquet_failed}, which detaches a healthy last-good
-     * snapshot on an advancing seq and spends a materialize attempt against
-     * {@code delta.checkpoint.tables.given-up} (raised in review).</p>
-     */
-    private static boolean isScratchBudgetRefusal(Throwable error) {
-        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-            if (cause instanceof ScratchBudgetExceededException) {
-                return true;
-            }
-            if (cause.getCause() == cause) {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Detach the snapshot key only when keeping it would lie (seq moved, or there was never a
-     * key). A same-seq rematerialize that fails must leave a still-valid last-good key in place.
-     *
-     * @return {@code true} when the row changed and must be saved
-     */
-    private static boolean abandonStaleSnapshot(Checkpoint checkpoint, SnapshotPass pass) {
-        if (pass == SnapshotPass.INCREMENTAL || checkpoint.getS3KeyParquet() == null) {
-            checkpoint.detachParquet();
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * End the build if the application has begun to close.
-     *
-     * <p>Thrown rather than returned so it escapes the per-table catch below: a build ending with
-     * the process must publish nothing, not skip one table and carry on to the next.</p>
-     */
-    private void stopIfShuttingDown(UUID siteId) {
-        if (shutdownSignal.isShuttingDown()) {
-            throw new BuildEndedByShutdownException(siteId, null, null);
         }
     }
 
@@ -2244,86 +1007,17 @@ public class CheckpointService {
     /**
      * The build stopped because this application context is closing — never a verdict on a table.
      *
-     * <p>Private because it must not be caught anywhere but in {@link #run}: every other handler in
-     * this class exists to turn a failure into a durable conclusion, which is precisely what this
-     * one must not become.</p>
+     * <p>Not public because it must not be caught anywhere but in {@link #run}: every other handler
+     * of a checkpoint build exists to turn a failure into a durable conclusion, which is precisely
+     * what this one must not become. Package-private only so the frame producer and the snapshot
+     * materializer can raise it (issue #297); they rethrow it untouched.</p>
      */
-    private static final class BuildEndedByShutdownException extends RuntimeException {
+    static final class BuildEndedByShutdownException extends RuntimeException {
 
-        private BuildEndedByShutdownException(UUID siteId, String tableName, Throwable cause) {
+        BuildEndedByShutdownException(UUID siteId, String tableName, Throwable cause) {
             super("The checkpoint build for site " + siteId
                     + (tableName == null ? "" : " (table " + tableName + ")")
                     + " ended because the application is shutting down", cause);
         }
-    }
-
-    /**
-     * Does this site still owe a rematerialize that the nightly pass is allowed to attempt?
-     *
-     * <p>"Unmaterialized" alone is not the question (issue #149): a row that has spent its attempts
-     * is unmaterialized and will stay that way, and answering yes for it is what made an idle visit
-     * pay a frame download and a whole-site fold every night for work the pass would then skip.</p>
-     */
-    private boolean hasRetryableUnmaterializedTables(UUID siteId) {
-        int maxAttempts = retryProperties.maxMaterializeAttempts();
-        return checkpointRepository.findBySiteId(siteId).stream()
-                .anyMatch(checkpoint -> checkpoint.getS3KeyParquet() == null
-                        && !checkpoint.hasGivenUpMaterializing(maxAttempts));
-    }
-
-    /**
-     * A lazily iterated view of one table's folded rows — the writer traverses it (twice at most,
-     * for the decimal envelope) instead of receiving a materialized copy of the state.
-     */
-    private static Iterable<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
-        return () -> rows.values().stream().map(FoldedRow::data).iterator();
-    }
-
-    /**
-     * Create this artifact's scratch file. A failure here says the scratch directory itself is
-     * unusable (gone, read-only, out of inodes) — it is not a fact about this table and it would
-     * hit every table of every site alike. Skipping per table would detach every last-good
-     * snapshot while the pointer still advanced. A later rematerialize (issue #128) can restore
-     * a per-table hole, but a systemic scratch failure must not throw away the last downloadable
-     * snapshots first. Fail the build instead, leaving the pointer and keys where they were so the
-     * next run redoes everything; {@code CheckpointScheduler} catches per site, so one site's
-     * failure does not stop the sweep.
-     *
-     * <p>A failure <em>during</em> the write stays a per-table skip (the general catch above), so a
-     * single oversized or unrenderable table cannot freeze the pointer and stop retention.</p>
-     */
-    private Path createScratchFile(UUID siteId) {
-        return createScratchFile(siteId, ".parquet");
-    }
-
-    private Path createScratchFile(UUID siteId, String suffix) {
-        try {
-            return Files.createTempFile(tempDirectory,
-                    ParquetScratch.CHECKPOINT_PREFIX + siteId + "-", suffix);
-        } catch (IOException e) {
-            throw new UncheckedIOException(
-                    "Cannot create a checkpoint scratch file in " + tempDirectory, e);
-        }
-    }
-
-    private static void deleteQuietly(Path snapshot, String tableName, UUID siteId) {
-        if (snapshot == null) {
-            return;
-        }
-        try {
-            Files.deleteIfExists(snapshot);
-        } catch (IOException e) {
-            log.warn("Could not delete the temporary checkpoint snapshot {} of table {} for site {}",
-                    snapshot, tableName, siteId, e);
-        }
-    }
-
-    private Checkpoint findOrCreate(UUID siteId, String tableName, long seq, long rowCount) {
-        return checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
-                .map(existing -> {
-                    existing.update(seq, rowCount);
-                    return existing;
-                })
-                .orElseGet(() -> Checkpoint.create(siteId, tableName, seq, rowCount));
     }
 }

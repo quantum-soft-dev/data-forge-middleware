@@ -18,6 +18,19 @@ import static org.mockito.Mockito.when;
 
 class BatchParquetQueueMetricsTest {
 
+    /**
+     * The bound binder, held past the last gauge read (#316).
+     *
+     * <p>{@code Gauge.builder(name, target, fn)} keeps the target weakly, so a binder this class
+     * did not reference would be collected and every read below would answer {@code NaN} — which is
+     * how this very method failed inside {@code integrationTest}, on a diff that had touched none of
+     * it. A field rather than a local: the test instance is reachable from the running frame for the
+     * whole method, while a local the method never reads again may be collected where it stands. See
+     * {@code MeterBinderReachabilityConventionTest}.</p>
+     */
+    @SuppressWarnings("unused")
+    private BatchParquetQueueMetrics boundMetrics;
+
     @Test
     void sharesOneGroupedSnapshotAcrossAllStatusGaugesAndRefreshesAfterItsTtl() {
         BatchParquetArtifactRepository repository = mock(BatchParquetArtifactRepository.class);
@@ -33,8 +46,8 @@ class BatchParquetQueueMetricsTest {
                         new BatchParquetQueueDepth(BatchParquetArtifactStatus.PENDING, 42)));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
-        new BatchParquetQueueMetrics(repository, clock::get, Duration.ofSeconds(5))
-                .bindTo(registry);
+        boundMetrics = new BatchParquetQueueMetrics(repository, clock::get, Duration.ofSeconds(5));
+        boundMetrics.bindTo(registry);
 
         for (BatchParquetArtifactStatus status : BatchParquetArtifactStatus.values()) {
             double expected = switch (status) {

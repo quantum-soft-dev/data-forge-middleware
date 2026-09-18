@@ -195,7 +195,7 @@ alone: PRs resolve by `--head <branch>`, and the issue number lives in the PR ti
 **A ticket's base branch.** Everything above says `develop` for the ticket that declares nothing,
 which is almost every ticket. A migration ticket (Rule 1's exception) declares
 `` Base branch: `migration/<name>` `` and then every place where the commands say `develop` about
-branching, syncing, the PR base or the merge target means that branch instead. Four rules carry it:
+branching, syncing, the PR base or the merge target means that branch instead. Five rules carry it:
 
 - **The line is read by one script, not four paraphrases.** `scripts/issue-base.sh <n>` prints
   the base — `develop`, or the branch from a line of exactly that form in column 0, before the first
@@ -208,6 +208,15 @@ branching, syncing, the PR base or the merge target means that branch instead. F
   the gap the script exists for. It is the same reasoning as the board identifiers kept in one
   section: a copy of the rule in each command would drift silently. `IssueBaseBranchScriptTest`
   holds it, including over #298's real body.
+- **A ticket filed from an issue form writes the line by hand, after creation** (#310). GitHub
+  renders every form field as `### <label>` with its value beneath, so a form-filed body *begins*
+  with a heading and the region the resolver reads is empty — a `Base branch` field would be
+  written, displayed and silently unread, which is the gap itself. `task.yml` and `bug.yml`
+  therefore carry a hint: open the body and add the declaration as its **first line**, above every
+  section. `Blocked by #N` needs none of this — `scripts/board.sh unblock` and the commands read it
+  from the whole body, so a line inside «Что происходит» works, and the two must not be written in
+  the same place. `IssueBaseBranchScriptTest.IssueForms` takes the declaration out of the forms and
+  requires the script to accept it, so the hint and the resolver cannot drift apart.
 - **`/task`, `/github-issue` and `/github-issue-runner` resolve it before they take the ticket.**
   `/task` branches its worktree from `origin/<base>`, rebases on it and opens `gh pr create --base
   <base>`; `/github-issue` does the same, moves a clean Conductor workspace onto the base with
@@ -281,7 +290,16 @@ Normally, then, the go-ahead is per PR,
 via `/merge <pr>` (invoking it is the authorization). That command re-checks readiness, merges
 with **squash** (one issue = one commit, as the whole current history), closes the issue, moves
 the card to `Done` and strips the `status: *` labels. `deleteBranchOnMerge` is off in the repo
-settings, so `--delete-branch` is passed explicitly. Cleanup removes only what the command
+settings, so the command deletes the branch itself — through **`scripts/pr-merge.sh <pr>`**, not
+`gh pr merge --delete-branch` (issue #332). Run from a worktree, which is where `/task` and the
+dispatcher's `agents` mode merge, `gh` merges the PR on GitHub and then fails its *local* cleanup
+(`fatal: '<base>' is already used by worktree`): it exits non-zero, the branch is deleted neither
+locally nor on the remote, and the output reads as a merge that did not happen. The script merges
+with `--repo` and no `--delete-branch` (so `gh` never touches the local tree), takes the verdict
+from the PR re-read over REST rather than from `gh`'s exit code, and deletes the head ref over REST
+with a read-back; exit `3` means *merged, branch left* — never merge again. Enabling
+`deleteBranchOnMerge` would also fix it, but that is a human's repository setting, and reading the
+exit code as the verdict would stay wrong either way. Cleanup removes only what the command
 created: a nested worktree is removed, a **Conductor workspace is never touched** — the human
 archives it (or the "Auto-archive on PR close" setting does).
 
@@ -695,6 +713,35 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- migration-lands-in-develop: The Spring Boot 4.1 migration branch lands in `develop` as a **merge
+  commit**, not a squash — the one recorded exception to Rule 1 (issue #305). `migration/spring-boot-4.1`
+  carried nine tickets (#299–#304, #319, #320, #336), each already squashed into that branch by its own
+  PR; squashing the branch again would turn a framework upgrade that moved Framework, Security,
+  Hibernate, Jackson and protobuf in separate steps into one commit that `git bisect` cannot look
+  inside, which is exactly when bisect is wanted. The decision was the ticket's open question and was
+  taken by a human on 2026-09-18; the landing itself is done by hand (`gh pr merge <pr> --merge`, then
+  the branch deleted over REST), because `scripts/pr-merge.sh` (#332) refuses a PR whose head is a
+  long-lived branch by design. **Every other ticket still squashes** — this is the exception Rule 1
+  already names ("its own ticket decides"), not a change of the rule.
+  **Before the PR, `develop` was merged into the branch** (nine commits: #297, #296, #308, #316, #321,
+  #310, #326, #332, #334), in that direction and as a merge commit, so the conflicts are resolved once
+  on the branch rather than inside the landing. Three files conflicted. The two journals were
+  interleaved **by merge time** — the same order in `CLAUDE.md` and `AGENTS.md`, which is what
+  `AgentJournalConsistencyTest` holds — and the sync removed a stray `||||||| 91b14924` diff3 line
+  that `develop` itself had committed into both journals (the second such leftover after #212's round
+  2). `ErrorAdminControllerTest` took both sides' imports. **One file needed porting to Jackson 3
+  although it merged cleanly**: #321's `DeviceErrorContractTest` built a Jackson 2
+  `com.fasterxml.jackson.databind.ObjectMapper` — it still compiled, since Jackson 2 stays on the
+  classpath through `json-schema-validator` and `jjwt-jackson`, which is precisely why only a read of the incoming code
+  finds it — and now uses `tools.jackson`, like every other test after #302. The rest of `develop`'s
+  code (the `CheckpointService` split, the `ErrorLoggingService`/`ErrorLog` signature removals,
+  `scripts/pr-merge.sh`) built and passed on Boot 4 unchanged.
+  **Flyway**: neither side added a migration since the branch point, both end at V57, so there is no
+  number collision; **V58 stays free**. `integrationTest` ran green in UTC and in `Asia/Jerusalem`.
+  The dev smoke (Auth0 sign-in, a Windows-client Delta session, Bit BI `/sql-changes`, a Parquet
+  Export download, Swagger UI, `/actuator/prometheus`) is a human step recorded in the PR. No REST,
+  gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change beyond what the
+  nine migration tickets already recorded.
 - mvc-error-response-status: A Spring MVC exception that carries its own HTTP status answers it, not
   the catch-all 500 (issue #336, found working #320). `GlobalExceptionHandler`'s
   `@ExceptionHandler(Exception.class)` runs before `DefaultHandlerExceptionResolver`, so every MVC
@@ -726,6 +773,27 @@ pages/{feature}/            # Route pages
   **needed** and done (`docs/device-flow-client-guide.md` gains 406 and 415, `docs/bitbi-integration.md`
   406). No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`,
   configuration-key, metric, S3-key or frontend change.
+- errorlog-factory-full-signature: `ErrorLog.create` has one factory, and it takes the severity
+  (issue #334, found working #326). #326 removed the severity-less overloads from
+  `ErrorLoggingService`; the same shape lived one layer down, in the domain factory — an 8-argument
+  `create` whose whole body was the 9-argument one with `ErrorSeverity.ERROR`, i.e. #321's mechanism
+  (two valid signatures differing by one argument, the shorter substituting `ERROR`) waiting for its
+  first production caller outside the service. **Counted before deciding**: the 8-argument form had
+  **no** production caller — `ErrorLoggingService`'s two calls already pass the severity — and 50 test
+  callers across `ErrorLogTest` (18), `ErrorAdminControllerTest` (14), `ErrorLogExportServiceTest`
+  (9), `ErrorLoggingServiceTest` (5) and `BatchHistoryIntegrationTest` (4); `ErrorLogRepositoryTest`'s
+  13 already used the full form. **Deleted rather than kept as a test convenience** (the ticket's
+  option 1, #326's shape): the convenience is in the full signature already, since `null` is stored
+  as `ERROR`. The 50 calls were moved, not deleted, and pass `ErrorSeverity.ERROR` explicitly — the
+  value they always had, now visible. `ErrorLogTest` gains the tests the factory never had — a passed
+  `CRITICAL`/`WARNING`/`INFO` is stored, `null` is stored as `ERROR` — and
+  `everyPublicFactoryTakesTheSeverity`, the factory twin of #326's service guard: any public static
+  method of `ErrorLog` returning an `ErrorLog` without an `ErrorSeverity` parameter fails it.
+  Mutation-proven both ways: restoring the overload fails the guard, and the factory storing `ERROR`
+  instead of its argument fails the three non-`ERROR` cases plus three `ErrorLoggingServiceTest`
+  cases. The `null` → `ERROR` default is enforced twice (factory and constructor), so its test pins
+  the outcome, not the place — said in its Javadoc. No production behaviour, REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - unreadable-body-400: A request body the server cannot read answers **400**, not 500, and Jackson 3's
   `FAIL_ON_TRAILING_TOKENS` is accepted now that it can (issue #320, found by #300's characterization
   and made a precondition by #303). `GlobalExceptionHandler` had no handler for
@@ -803,6 +871,58 @@ pages/{feature}/            # Route pages
   proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric or frontend change; the Spring Cache
   **names** `batch-details`/`batch-first-page` disappear with it, and `/actuator/health` loses its
   `redis` component.
+- pr-merge-script: The merge step of `/task`, `/merge` and `/github-issue-runner` is one script,
+  `scripts/pr-merge.sh <pr> [--rebase]`, and it no longer reads `gh`'s exit code as its verdict
+  (issue #332). `gh pr merge --squash --delete-branch` run from a worktree — the normal path of
+  `/task`, whose step 3 always creates one, and of the dispatcher's `agents` mode — merged the PR on
+  GitHub and *then* tried to clean up locally by switching to the base, which the main checkout
+  already holds: `fatal: 'develop' is already used by worktree`, a non-zero exit, and
+  `--delete-branch` done neither locally nor on the remote. With `deleteBranchOnMerge` off nothing
+  else removes the branch (#310's `chore/310-form-base-branch` had to be deleted by hand), and the
+  output reads as a failed merge, whose retry answers "not mergeable".
+  **Option (a) of the ticket, as a script rather than three paraphrases** — the `issue-base.sh`
+  reasoning: a copy of a rule in each command drifts silently. It merges with `--repo` and without
+  `--delete-branch`, which `gh`'s help ties its local cleanup to, so no local git is touched; re-reads
+  the PR over REST (0 GraphQL points — the merge itself is the one GraphQL call) and takes `merged`
+  as the verdict, printing `gh`'s output as a warning when it exited non-zero after the merge landed;
+  deletes `git/refs/heads/<head>` over REST and reads it back, a 404 being the only answer to
+  "deleted" (a 422 from the delete means it was already gone). A PR already merged by an earlier run
+  is not merged again — only its branch is removed. It refuses, before touching anything, a PR whose
+  head is a long-lived branch (`develop`, `main`, `stage`, `release*`, `migration/*` — the final
+  merge of a migration decides its own method, and its branch must not be deleted) and a PR closed
+  without a merge; a head in a fork is merged and left alone. Exit codes: `0` merged + deleted, `1`
+  not merged, `2` refused, `3` **merged, branch left** — never merge again. **Rejected**: (b) keeping
+  `--delete-branch` and teaching every command to recognise that one `fatal` line (still the exit
+  code as the verdict, still three copies); (c) enabling `deleteBranchOnMerge` — a human's repository
+  setting, which would remove the branch but leave the misread exit code.
+  **Tests**: `PrMergeScriptTest` runs the script against a stand-in `gh` that plays GitHub from
+  fixtures and refuses `--delete-branch`, `gh pr view` and GraphQL — 18 cases, among them the #332
+  failure itself (merge lands, `gh` exits 1 with the worktree `fatal`, the script still succeeds and
+  deletes the branch). Mutation-proven: restoring `--delete-branch` reddens 7, taking the verdict
+  from the exit code reddens the #332 case, dropping the long-lived-head guard reddens 5. The script
+  is a declared input of `test` and the pre-commit hook runs `com.bitbi.dfm.documentation.*` when it
+  changes. No production code, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
+- error-logging-full-signatures: `ErrorLoggingService` has one signature per kind of log, and both
+  take the severity (issue #326, recorded by #321 rather than folded into it). After #321 the four
+  overloads without an `ErrorSeverity` — `logError` with and without metadata,
+  `logStandaloneError` likewise — had **no production caller** (the only one, `DeviceErrorController`,
+  passes `request.effectiveSeverity()`), and `ErrorLoggingServiceTest` was their only caller, one
+  test each. Each one's whole body substituted `ErrorSeverity.ERROR`, and that overload **was** #321's
+  mechanism: the controller took the shorter signature, both compiled, and a client's `WARNING` was
+  stored as `ERROR` with nothing in the compiler or CI to notice. **Deleted rather than documented**
+  (the ticket's option 1, the #165 shape) because the convenience they offered is already in the
+  full signature: `null` is stored as `ERROR` by `ErrorLog.create`, so a caller with no severity to
+  pass says so at the call site instead of getting one substituted behind it. The four tests moved to
+  the full signatures, not deleted, and now assert the severity that reached the repository — with
+  `WARNING`, `CRITICAL` and `INFO`, since an `ERROR` expectation cannot tell a passed severity from a
+  substituted one — plus the `null` → `ERROR` case. A reflective guard,
+  `everyPublicLogMethodTakesTheSeverity`, fails on any public `log*` method of the service without an
+  `ErrorSeverity` parameter, so the overload cannot come back unnoticed. Mutation-proven both ways:
+  restoring one overload fails the guard, and the service passing `ERROR` instead of its argument
+  fails the three non-`ERROR` tests. `ErrorLog.create`'s own severity-less factory is deliberately
+  untouched — a domain factory is outside this ticket's file list. No REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - jackson3-http-defaults: The HTTP API is on Jackson 3's own defaults, with two of them pinned back by
   name instead of all eighteen deferred by a flag (issue #303). #302 shipped
   `spring.jackson.use-jackson2-defaults: true`, which is a compatibility mode rather than a
@@ -870,6 +990,126 @@ pages/{feature}/            # Route pages
   No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key,
   cache-key or frontend change — no field name, type or Zod schema moves, and key order is not something
   a parser reads. See `docs/cr-spring-boot-4-1.md` ("Jackson 3 defaults").
+- form-base-branch-hint: An issue form cannot carry a ticket's base, so the forms say so and the
+  resolver is left alone (issue #310, filed by #298 when the forms of #309 reached `develop` after
+  that ticket was taken). GitHub renders every form field as `### <label>` with its value beneath,
+  so a form-filed body **begins** with a heading — and `scripts/issue-base.sh` reads only what is
+  above the first one, which for such a ticket is nothing. A `Base branch` field would therefore be
+  written, displayed, and silently unread: a migration ticket filed from the web UI would open its
+  PR into `develop`, which is the one gap #298 exists to close.
+  **Option (b) of the ticket, and the two premises that decided it were both corrections to the
+  ticket's own statement of them.** First, **`Blocked by` is not affected at all**: `board.sh
+  unblock` greps the whole body with newlines squashed to spaces (`scripts/board.sh`), and `/task`
+  and `/github-issue` read it the same way, so the line works inside the form's «Что происходит»
+  section — which is exactly where `task.yml` already tells a filer to put it. The ticket's "same
+  story for `Blocked by`" is false, and a rule written on it would have added a second field for a
+  problem that does not exist. Second, **option (a)'s real cost is not "a second reading rule" but a
+  coupling to how GitHub renders an empty optional field** (`_No response_`): ignoring a section it
+  cannot read restores the very silence the field was added for, and refusing it makes a change in
+  GitHub's wording block every form-filed ticket at once — the resolver is called *before* a ticket
+  is taken, so that failure lands on all of them. A required field defaulting to `develop` removes
+  the coupling and puts a machine-read field with an always-identical answer in front of everyone
+  filing any ticket. Against a path used zero times — the migration tickets #298–#305 were all filed
+  with `gh issue create --body` — that is not worth the verified rule.
+  **What ships**: a paragraph in the top `markdown` block of `task.yml` and `bug.yml` naming the
+  mechanism, the exact line, and the instruction to add it as the **first line of the body** right
+  after creation. It is deliberately **not** placed beside the `Blocked by` instruction in the
+  «Что происходит» field description, which would be a trap: that line works inside a section and
+  this one only above every heading, and a person reading the two together writes both in one
+  place. `decision.yml` gets nothing — a design decision is not implemented on a branch and has no
+  base. `markdown` blocks are display-only and never reach the body, so no ticket grows a section.
+  **The hint and the resolver are held as one fact, not two.** `IssueBaseBranchScriptTest.IssueForms`
+  takes the declaration **out of each form** (exactly one per file; a second copy is a second chance
+  to disagree), resolves the `<name>` placeholder and requires the script to accept it above a
+  form-shaped body — so a hint teaching a line the script refuses is red, and so is a deleted hint.
+  From the other side, two cases pin the premise: a `### Base branch` section and a declaration
+  written inside a form section both resolve to `develop`. Mutation-proven in both directions —
+  lowercase the hint's declaration and the form case is red; implement option (a) in the resolver
+  (scan the whole body for the section) and all three premise cases are red, the pre-existing
+  below-heading case among them. `.github/ISSUE_TEMPLATE` is a declared input of the `test` task and
+  a branch of the pre-commit hook, because a forms-only commit would otherwise leave `test`
+  UP-TO-DATE and the guard would never run — the trap #298 and #311 both fell into.
+  Documentation, forms and tests only: no production code, REST, gRPC, proto, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- gauge-weak-target-held: A gauge test holds the object its gauge reads, so the value stops turning
+  into `NaN` when the collector runs (issue #316). `Gauge.builder(name, target, fn)` keeps `target`
+  behind a **weak reference** — the registry never keeps alive the thing it reads — and six call
+  sites in three classes wrote `new SomeMetrics(...).bindTo(registry)`, dropping the only strong
+  reference on the same line. Alone each class passed; inside `./gradlew integrationTest`, one JVM
+  with some 2900 tests and plenty of collections, `BatchParquetQueueMetricsTest` failed as
+  `expected: <42.0> but was: <NaN>` on a branch whose diff had touched none of it — the #207/#226
+  class, where the gate names an innocent test and costs a full investigation.
+  **The fix is a field, not a local, and the difference is the point.** The binder lives on the test
+  instance, which is reachable from the running frame for the whole method; a local the method never
+  reads again is dead, and HotSpot is free to collect it where it stands although it is still in
+  scope. `.strongReference(true)` was rejected as the ticket proposed it: it changes production code
+  to hold a reference only the tests need.
+  **The ticket's second half — are there more of this shape — found one the list did not name and
+  cleared three.** `ParquetScratchBudgetTest` is the same hazard through a different registration:
+  `delta.parquet.scratch.bytes` is built on the budget's own `liveBytes` field, the `budget` local is
+  dead before most methods' closing `assertEquals(0.0, liveBytes())`, and that read would answer
+  `NaN`. It gets the same field. **Review round 1 found the claim about a third file too broad and
+  the hole real**, which is the part worth keeping: the first draft wrote that
+  `SqlGenerationConcurrencyTest` and `SqlGenerationStreamingTest` are safe because the service whose
+  semaphore the gauge reads is still in use after the read. That is true of
+  `awaitSemaphoreQueueSize`, which polls while other threads hold the service, and of
+  `SqlGenerationStreamingTest`, which only asserts the gauge *exists* and never reads its value —
+  and false of `shouldShowZeroQueueSizeWhenNoWaiters`, whose service is created and never touched
+  again, so `isEqualTo(0.0)` would meet `NaN`. The shape is #316 exactly, one registration form over
+  (`meterRegistry.gauge(name, target, fn)` rather than a binder), and it is **fixed** rather than
+  written down as accepted — the wording that no longer matched the code was how a permanent
+  document would have started lying. It is also outside what the scan can see, since nothing is
+  chained there. Cleared for real: `ComparisonMetrics` has no test at all, and in production its
+  weak target is a repository bean the context holds.
+  **The guard bans the shape that is wrong unconditionally and says what it cannot see.**
+  `MeterBinderReachabilityConventionTest` scans `src/main/java` and `src/test/java` for a `.bindTo(`
+  whose receiver is a **call rather than a name**: `bindTo` returns `void`, so such a binder is
+  unreachable the instant the call returns and no liveness argument is needed. The wider property —
+  the weak target strongly reachable at the *last* gauge read — is not statically decidable, so it is
+  held by hand at the four sites above and each says so; the scan is honest about the gap rather than
+  pretending to close it. It reuses `AsyncExecutorQualifierTest.strip` (literal mask included: this
+  class's own fixtures are Java sources inside text blocks, which would otherwise report themselves).
+  **The wired half is what keeps the ban from being a rule nobody can check**: one registry, one
+  binder held and one dropped, a full GC proven to have run by a witness `WeakReference` rather than
+  assumed from a bare `System.gc()` — the unheld gauge must read `NaN` and the held one its value.
+  That test holds its own binder with `Reference.reachabilityFence`, because it never reads the local
+  again and would otherwise be the defect it documents. Mutation-proven in the ordinary direction
+  too: the scan was red on exactly the six sites before the fix and names file and line.
+  Test and documentation only: no production code, REST, gRPC, proto, DTO, migration (**V58 stays
+  free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- device-error-severity: `POST /api/v1/device/errors` stores the severity the client sends instead of
+  stamping everything `ERROR` (issue #321, found working #300). `LogErrorRequestDto` has carried an
+  optional `severity` since 016 — documented in its `@Schema`, in the client guide and in the
+  response DTO — and both device POSTs called the `ErrorLoggingService` overload **without** it, the
+  one whose whole body is `… , ErrorSeverity.ERROR)`. A client reporting `"severity":"WARNING"` was
+  answered `"ERROR"` and the row carried `ERROR`, so the dashboard's Global Errors widget rendered
+  every client-reported error at one level and its severity filter could not separate a disk-space
+  warning from a fatal upload failure. The fix is that both endpoints pass
+  `request.effectiveSeverity()`, which until now had **no production caller at all** — the method
+  existed, and nothing reached it.
+  **Two facts the ticket did not name and the tests had to establish.** `DeviceErrorController` is
+  the only production caller of `ErrorLoggingService`, so the severity-less overloads are now
+  reached by tests alone; they are deliberately left (deleting them is the #165 shape, a decision of
+  its own) and recorded as **#326**. And the ERROR default is enforced **twice** — by
+  `effectiveSeverity()` and again by `ErrorLog.create`, which maps a null severity to ERROR — so the
+  two "no severity sent" tests stay green when the controller is put back to `severity()`, and that
+  is written in their Javadoc rather than left as an implied claim. The boundary still calls
+  `effectiveSeverity()`, so the default the request contract documents is the one applied where the
+  request arrives.
+  Tests assert both halves of the ticket's wording, because neither implies the other: the response
+  body is built from the entity the service returned and would show the right value even if the
+  column held another, while the column alone says nothing about what the client was told. The
+  stored value is read as a **raw column** through `JdbcTemplate` after an explicit flush — the
+  class is `@Transactional` and the entity carries an assigned UUID, so a JPA read would be served
+  from the persistence context and return the very instance the controller built (#245's reasoning,
+  one layer up). Mutation-proven in both directions: restoring the severity-less overload reddens
+  the two sent-severity tests, and changing `effectiveSeverity()`'s default to `INFO` reddens the
+  two default tests.
+  **Documentation: not needed on the client side and that is the point** —
+  `docs/postgres-delta-client-development-guide.md` already documents `severity?` with an ERROR
+  default, so the guide described the intention and the code contradicted it. No REST **route**,
+  gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric,
+  cache, S3-key or frontend change.
 - protobuf-4-35-from-bom: protobuf 3.25.9 → **4.35.1**, taken from the Spring Boot 4.1 BOM rather
   than declared (issue #304). #302 had held it at 3.25.9 through the BOM property so that the
   framework change and the transport change did not land together; gRPC had already moved to
@@ -959,6 +1199,40 @@ pages/{feature}/            # Route pages
   `integrationTest` 307 tests, 14 skipped, 0 failed in `TZ=UTC` and `TZ=Asia/Jerusalem`. No REST route,
   gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric-name, S3-key
   or frontend change. See `docs/cr-spring-boot-4-1.md`.
+- scratch-reserve-one-snapshot: The #193 scratch reserve stays at the frame plus **one** snapshot,
+  and that is now a recorded decision rather than a gap (issue #296, raised by `review-architecture`
+  as a MINOR on PR #295). The reserve is `max-frame-temp-bytes + max-temp-bytes` (deployed
+  1.5 GiB + 1 GiB of the 5 GiB directory), while a streamed build holds the frame open beside up to
+  `delta.checkpoint.snapshot-writers` (8) snapshot files — a gap that dates from #292 but mattered
+  more after #293, which made the streamed shape every nightly incremental build instead of a
+  site's one bootstrap. **Decided on measurement, not on the ceilings.** On the dev deployment,
+  after a wipe and a `FULL_SNAPSHOT` of a ~5-million-record, 87-table site, the completed-batch
+  Parquet of the same rows came to 95 MiB in total with a 15 MiB largest table, the day's
+  `max_over_time(delta_parquet_scratch_bytes)` was 87 MiB and `delta.parquet.scratch.refused` was
+  zero for every writer — so eight snapshots at once is about 120 MiB beside the frame, against a
+  2.5 GiB reserve batch cannot touch. The on-disk size of the frame itself was not yet measured when
+  this was decided; the first streamed build on that site is where it will be. **Rejected, with
+  their costs:** reserving `frame + W x table` (9.5 GiB of a 5 GiB directory); reserving
+  `frame + N x table` and capping the snapshot group at `N` (at `N = 2`, 45 passes over the local
+  frame every night instead of 12 for 87 tables, paid whether or not the directory is busy);
+  lowering `DELTA_CHECKPOINT_MAX_TEMP_BYTES` so the arithmetic fits (it trades a transient disk
+  refusal for a deterministic per-table one that gives up after
+  `delta.checkpoint.max-materialize-attempts` nights, #149); and retrying a scratch-refused
+  snapshot group with one writer inside the same build — the right shape if refusals ever appear,
+  not built because at these sizes it would never run, and not free, since the frame is already
+  uploaded and part of the group may be published by then. **The operating rule** is written where
+  an operator looks: `delta.parquet.scratch.refused{writer=checkpoint_table}` moving at all is the
+  signal, one refusal costs a night (the next tick is the next cron occurrence), and the remedies
+  are lowering `DELTA_CHECKPOINT_SNAPSHOT_WRITERS` first and then raising
+  `DELTA_PARQUET_MAX_SCRATCH_BYTES` together with the volume's `sizeLimit`; the decision itself is
+  to be revisited when the seven-day peak of `delta.parquet.scratch.bytes` passes about half the
+  reserve. Stale wording that still called the streamed build "the bootstrap" is corrected in
+  `ParquetScratchBudget`, `application.yml` and `k8s/base/configmap.yaml`, and a guide
+  cross-reference that named a heading which no longer exists now names the real one.
+  Documentation and comments only: no production behaviour, REST, gRPC, proto, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, configuration-value, metric, S3-key or
+  frontend change. See `docs/delta-client-v2-guide.md` ("Frame plus one snapshot is a decision,
+  not an oversight").
 - boot41-characterization-net: The JSON surfaces Spring Boot 4.1 moves — HTTP bodies, request
   acceptance, the seven JSONB columns and the Redis cache — are pinned on Boot 3.5 before the upgrade
   (issue #300, the safety net for #302 in `migration/spring-boot-4.1`). Tests only; every one was
@@ -1004,6 +1278,48 @@ pages/{feature}/            # Route pages
   green on 2026-09-17 against Boot 3.5.16 — 88 classes, 306 tests, 14 skipped by `@Disabled` that
   predates this ticket, 0 failures. No production code, REST, gRPC, proto, DTO, migration (**V58
   stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- checkpoint-service-split: `CheckpointService` is split along its three roles, with no change in
+  behaviour (issue #297, raised by `review-architecture` on PR #294 and again on PR #295). Two tickets
+  running had moved **algorithms** out of the class (`BootstrapFrameWriter`, `ChangelogMerge`,
+  `CheckpointFrameWriter`, `DecimalEnvelope`/`OpenTable`) and the file still grew to ~2300 lines,
+  because the orchestration stayed. **What stays in `CheckpointService`** is what it is as an
+  application service: choosing the build's path (fold, streamed bootstrap, merge; idle, refused,
+  discarded — `run`, `runWithBudgetHeld`, `refuseRefold`, `build`) and the three orchestrators
+  (`buildByMerge`, `buildFromSnapshotStream`, `materialize`) that own the **order** every advancing
+  build follows. **`CheckpointFrameProducer`** produces the frame: the fold (`foldSite`,
+  `BudgetedFold`, the frame written from it), the streamed bootstrap and the merge (`mergeIntoFrame`,
+  `BudgetedMerge`), with the shared segment reader, fold-size report and frame-ceiling report.
+  **`CheckpointSnapshotMaterializer`** writes the snapshots — the folded pass, the frame passes,
+  writer groups, decimal envelopes — and keeps every `checkpoints` row (`prepareTable`,
+  `publishTable`, `failTable`, `settleSiteWide`, `reapTablesAbsentFrom`, the idle probe's
+  `hasRetryableUnmaterializedTables`). `CheckpointScratch`, `CheckpointShutdownCheck` and
+  `SnapshotPass` are what they share. ~1030 lines stay in the service.
+  **One boundary of the ticket's suggested set was not taken**: no single "give me frame(M) and a
+  manifest" interface over the three producers. The fold hands back a heap state that the snapshots
+  are written from one scratch file at a time, the frame uploaded and deleted first
+  (`stillKeepsOneCheckpointScratchFileOnDiskAtATime`, #126/#153); forcing it into "a local file and
+  a manifest" would change its scratch peak, which is behaviour, not structure.
+  **Behaviour is held by construction and by test.** The bean, its constructor and every
+  configuration key are unchanged — the collaborators are built inside the constructor, not injected
+  — so `CheckpointServiceTest` (the ~100 cases over all three paths) runs **untouched**. Every moved
+  log line keeps its text **and its logger category**: the collaborators log under
+  `CheckpointService`, which is what an operator sets to DEBUG to size the fold and what three tests
+  attach `LogCapture` to. The public exception types stay nested in `CheckpointService`;
+  `BuildEndedByShutdownException` goes from private to package-private only so the collaborators
+  can raise it. **The invariant the ticket asked to pin**: the epoch checked before the first object
+  is in the bucket (#136/#142), the frame before any snapshot (#153), then the pointer and its event —
+  asserted before this change only on the default fixture's streamed bootstrap. New
+  `checksTheEpochThenWritesTheFrameThenTheSnapshotsThenThePointerOnEveryPath` holds it on the fold,
+  the streamed bootstrap and the merge; mutation-proven before and after the split (the epoch check
+  moved after the merge path's frame upload, and the fold path's snapshots moved ahead of its frame,
+  are each caught by that test **alone**). One test changed: `ParquetScratchOrphanSweeperTest`'s
+  textual prefix guard reads `CheckpointScratch.java`, where scratch files are now created.
+  **Found on the way and fixed in the same PR**: `IssueFindScriptTest` (#308) inherited `GIT_DIR`
+  and `GIT_INDEX_FILE` when run from the pre-commit hook, so its fixture `git init` reinitialized the
+  **real** repository and set `core.bare=true` in its shared config — every checkout and worktree
+  then refused `git add` — while the test stayed green by hand; its subprocesses now drop every
+  `GIT_*` variable. No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key, log-message or frontend change.
 - boot-3-5-16-deprecations: Spring Boot 3.5.6 → **3.5.16** (Framework 6.2.19, Security 6.5.11,
   Jackson 2.21.4) and JaCoCo 0.8.13 → **0.8.14**, the first release that supports Java 25 officially,
   with the deprecated calls Boot 4 removes taken out first (issue #299, the first ticket of the Spring
@@ -1046,6 +1362,27 @@ pages/{feature}/            # Route pages
   scope (bucket4j `Refill`, commons-csv, POI, commons-compress, the project's own `@Deprecated`).
   No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key or frontend
   change; configuration loses one dead key.
+- issue-find-path-roles: `scripts/issue-find.sh` no longer goes silently empty on a correctly escaped
+  path, and has a test (issue #308, found working #298). Its path argument plays three roles that want
+  different spellings, and the script used one spelling for all of them: a **regular expression** over
+  issue bodies (where `.` must be escaped), a **literal** interpolated into the `--jq` string of the PR
+  section, and a **git pathspec**. So `ci-cd\.yml` made jq refuse the expression (`"\."` is an invalid
+  escape in a string literal) and matched no file as a pathspec, leaving two of the three path sections
+  empty with nothing to tell "found nothing" from "could not search" — on the search `/task` makes
+  mandatory before taking a ticket and before filing one. Now the argument is used as given only for
+  `test()`; its literal form (the escapes removed) goes to `gh pr list --search`, reaches jq only through
+  `--arg`, and becomes the pathspec `:(icase)*<literal>*` — the fnmatch `*` crosses directories, so a
+  bare file or class name finds `.github/workflows/ci-cd.yml` rather than needing the full path. A
+  failing `git log` (no `origin/develop`, say) now prints that it failed instead of `2>/dev/null`
+  hiding it, and a failed PR search says so rather than `|| true`. **Tests**: `IssueFindScriptTest`
+  runs the script in a throwaway git repository whose `origin/develop` is a local ref, against a
+  stand-in `gh` (`src/test/resources/process/fake-gh-issue-find`) that applies `--jq` with a real jq
+  and returns its failure as gh does — six scenarios, no network. Mutation: putting `$p` back into the
+  `--jq` string fails the escaped-path scenario. That mutation first **passed**, because the script was
+  not a declared input of `test` and the task stayed UP-TO-DATE — the #298 trap for the third time — so
+  `scripts/issue-find.sh` is an input of `test` now, and the pre-commit hook runs
+  `com.bitbi.dfm.documentation.*` when it changes. No production code, REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - grpc-classpath-single-version: Every `io.grpc:*` artifact on the runtime classpath is one version,
   and so is every `com.google.protobuf:protobuf-java*` artifact — held by a fast-gate test instead of
   by luck (issue #301, a guard for the Spring Boot 4.1 migration, landed in

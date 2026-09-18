@@ -4,11 +4,13 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.domain.ErrorSeverity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.lang.reflect.Modifier;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -43,22 +45,25 @@ class ErrorLoggingServiceTest {
     }
 
     @Test
-    @DisplayName("Should log error with batch and update hasErrors flag")
+    @DisplayName("Should log error with batch, store its severity and update hasErrors flag")
     void shouldLogErrorWithBatchAndUpdateHasErrorsFlag() {
         // Given
         String type = "ValidationError";
         String message = "Invalid data format";
         Map<String, Object> metadata = Map.of("field", "amount", "value", "abc");
 
-        ErrorLog savedErrorLog = ErrorLog.create(testSiteId, testBatchId, type, type, message, null, null, metadata);
-        when(errorLogRepository.save(any(ErrorLog.class))).thenReturn(savedErrorLog);
+        when(errorLogRepository.save(any(ErrorLog.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // When
-        ErrorLog result = errorLoggingService.logError(testBatchId, testSiteId, type, message, metadata);
+        ErrorLog result = errorLoggingService.logError(testBatchId, testSiteId, type, message, metadata,
+                ErrorSeverity.WARNING);
 
         // Then
         assertNotNull(result);
-        verify(errorLogRepository, times(1)).save(any(ErrorLog.class));
+        ArgumentCaptor<ErrorLog> captor = ArgumentCaptor.forClass(ErrorLog.class);
+        verify(errorLogRepository, times(1)).save(captor.capture());
+        assertEquals(testBatchId, captor.getValue().getBatchId());
+        assertEquals(ErrorSeverity.WARNING, captor.getValue().getSeverity());
         verify(batchLifecycleService, times(1)).markBatchHasErrors(testBatchId);
     }
 
@@ -69,15 +74,18 @@ class ErrorLoggingServiceTest {
         String type = "NetworkError";
         String message = "Connection timeout";
 
-        ErrorLog savedErrorLog = ErrorLog.create(testSiteId, testBatchId, type, type, message, null, null, null);
-        when(errorLogRepository.save(any(ErrorLog.class))).thenReturn(savedErrorLog);
+        when(errorLogRepository.save(any(ErrorLog.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // When
-        ErrorLog result = errorLoggingService.logError(testBatchId, testSiteId, type, message);
+        ErrorLog result = errorLoggingService.logError(testBatchId, testSiteId, type, message, null,
+                ErrorSeverity.CRITICAL);
 
         // Then
         assertNotNull(result);
-        verify(errorLogRepository, times(1)).save(any(ErrorLog.class));
+        ArgumentCaptor<ErrorLog> captor = ArgumentCaptor.forClass(ErrorLog.class);
+        verify(errorLogRepository, times(1)).save(captor.capture());
+        assertNull(captor.getValue().getMetadata());
+        assertEquals(ErrorSeverity.CRITICAL, captor.getValue().getSeverity());
         verify(batchLifecycleService, times(1)).markBatchHasErrors(testBatchId);
     }
 
@@ -89,44 +97,73 @@ class ErrorLoggingServiceTest {
         String message = "Missing configuration file";
         Map<String, Object> metadata = Map.of("file", "config.ini");
 
-        ErrorLog savedErrorLog = ErrorLog.create(testSiteId, null, type, type, message, null, null, metadata);
-        when(errorLogRepository.save(any(ErrorLog.class))).thenReturn(savedErrorLog);
+        when(errorLogRepository.save(any(ErrorLog.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // When
-        ErrorLog result = errorLoggingService.logStandaloneError(testSiteId, type, message, metadata);
+        ErrorLog result = errorLoggingService.logStandaloneError(testSiteId, type, message, metadata,
+                ErrorSeverity.INFO);
 
         // Then
         assertNotNull(result);
         ArgumentCaptor<ErrorLog> captor = ArgumentCaptor.forClass(ErrorLog.class);
         verify(errorLogRepository, times(1)).save(captor.capture());
         assertNull(captor.getValue().getBatchId());
+        assertEquals(ErrorSeverity.INFO, captor.getValue().getSeverity());
         verify(batchLifecycleService, never()).markBatchHasErrors(any());
     }
 
     @Test
-    @DisplayName("Should log standalone error without metadata")
+    @DisplayName("Should log standalone error without metadata or severity as ERROR")
     void shouldLogStandaloneErrorWithoutMetadata() {
         // Given
         String type = "AuthenticationError";
         String message = "Invalid credentials";
 
-        ErrorLog savedErrorLog = ErrorLog.create(testSiteId, null, type, type, message, null, null, null);
-        when(errorLogRepository.save(any(ErrorLog.class))).thenReturn(savedErrorLog);
+        when(errorLogRepository.save(any(ErrorLog.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        // When
-        ErrorLog result = errorLoggingService.logStandaloneError(testSiteId, type, message);
+        // When: a caller with no severity to pass says so with null, and gets ERROR from ErrorLog.create
+        ErrorLog result = errorLoggingService.logStandaloneError(testSiteId, type, message, null, null);
 
         // Then
         assertNotNull(result);
-        verify(errorLogRepository, times(1)).save(any(ErrorLog.class));
+        ArgumentCaptor<ErrorLog> captor = ArgumentCaptor.forClass(ErrorLog.class);
+        verify(errorLogRepository, times(1)).save(captor.capture());
+        assertNull(captor.getValue().getMetadata());
+        assertEquals(ErrorSeverity.ERROR, captor.getValue().getSeverity());
         verify(batchLifecycleService, never()).markBatchHasErrors(any());
+    }
+
+    /**
+     * Every public method that writes an error log takes the severity as a parameter (issue #326).
+     * <p>
+     * An overload without it, whose body substitutes {@link ErrorSeverity#ERROR}, was how #321
+     * happened: the device controller picked the shorter signature, both compiled, and the
+     * client's severity was dropped silently. A caller that does not care passes {@code null},
+     * which {@link ErrorLog#create} reads as ERROR — at the call site, not behind it.
+     * </p>
+     */
+    @Test
+    @DisplayName("Every public log method takes the severity rather than substituting one")
+    void everyPublicLogMethodTakesTheSeverity() {
+        List<String> withoutSeverity = Arrays.stream(ErrorLoggingService.class.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers()))
+                .filter(method -> method.getName().startsWith("log"))
+                .filter(method -> !Arrays.asList(method.getParameterTypes()).contains(ErrorSeverity.class))
+                .map(method -> method.getName() + Arrays.toString(method.getParameterTypes()))
+                .sorted()
+                .toList();
+
+        assertEquals(List.of(), withoutSeverity,
+                "These ErrorLoggingService methods write an error log without taking its severity, "
+                        + "so a caller can drop the client's severity without noticing (#321)");
     }
 
     @Test
     @DisplayName("Should get error log by ID")
     void shouldGetErrorLogById() {
         // Given
-        ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "TestError", "TestError", "Test message", null, null, null);
+        ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "TestError", "TestError", "Test message",
+                null, null, null, ErrorSeverity.ERROR);
         when(errorLogRepository.findById(testErrorId)).thenReturn(Optional.of(errorLog));
 
         // When
@@ -156,8 +193,10 @@ class ErrorLoggingServiceTest {
     void shouldListErrorsByBatch() {
         // Given
         List<ErrorLog> expectedErrors = Arrays.asList(
-                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1", null, null, null),
-                ErrorLog.create(testSiteId, testBatchId, "Error2", "Error2", "Message 2", null, null, null)
+                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1",
+                        null, null, null, ErrorSeverity.ERROR),
+                ErrorLog.create(testSiteId, testBatchId, "Error2", "Error2", "Message 2",
+                        null, null, null, ErrorSeverity.ERROR)
         );
         when(errorLogRepository.findByBatchId(testBatchId)).thenReturn(expectedErrors);
 
@@ -176,8 +215,10 @@ class ErrorLoggingServiceTest {
     void shouldListErrorsBySite() {
         // Given
         List<ErrorLog> expectedErrors = Arrays.asList(
-                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1", null, null, null),
-                ErrorLog.create(testSiteId, null, "Error2", "Error2", "Message 2", null, null, null)
+                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1",
+                        null, null, null, ErrorSeverity.ERROR),
+                ErrorLog.create(testSiteId, null, "Error2", "Error2", "Message 2",
+                        null, null, null, ErrorSeverity.ERROR)
         );
         when(errorLogRepository.findBySiteId(testSiteId)).thenReturn(expectedErrors);
 

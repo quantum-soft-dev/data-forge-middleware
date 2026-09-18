@@ -58,7 +58,9 @@ public class ErrorLoggingService {
      * @param type     error type (e.g., "validation", "upload", "processing")
      * @param message  error message
      * @param metadata optional error metadata (stored as JSONB)
-     * @param severity error severity level (defaults to ERROR if null)
+     * @param severity error severity level; {@code null} is stored as ERROR by {@link ErrorLog#create}.
+     *                 There is deliberately no overload without it (issue #326): one that substituted
+     *                 ERROR is how a client's severity was dropped silently (#321)
      * @return created error log
      */
     public ErrorLog logError(UUID batchId, UUID siteId, String type, String message,
@@ -79,36 +81,6 @@ public class ErrorLoggingService {
     }
 
     /**
-     * Log error for batch with default severity (ERROR).
-     * <p>
-     * Updates batch hasErrors flag automatically.
-     * </p>
-     *
-     * @param batchId  batch identifier
-     * @param siteId   site identifier
-     * @param type     error type (e.g., "validation", "upload", "processing")
-     * @param message  error message
-     * @param metadata optional error metadata (stored as JSONB)
-     * @return created error log
-     */
-    public ErrorLog logError(UUID batchId, UUID siteId, String type, String message, Map<String, Object> metadata) {
-        return logError(batchId, siteId, type, message, metadata, ErrorSeverity.ERROR);
-    }
-
-    /**
-     * Log error without metadata.
-     *
-     * @param batchId batch identifier
-     * @param siteId  site identifier
-     * @param type    error type
-     * @param message error message
-     * @return created error log
-     */
-    public ErrorLog logError(UUID batchId, UUID siteId, String type, String message) {
-        return logError(batchId, siteId, type, message, null, ErrorSeverity.ERROR);
-    }
-
-    /**
      * Log standalone error without batch association with severity.
      * <p>
      * Used for errors that occur outside of batch processing context,
@@ -119,7 +91,9 @@ public class ErrorLoggingService {
      * @param type     error type (e.g., "ConfigurationError", "AuthenticationError")
      * @param message  error message
      * @param metadata optional error metadata (stored as JSONB)
-     * @param severity error severity level (defaults to ERROR if null)
+     * @param severity error severity level; {@code null} is stored as ERROR by {@link ErrorLog#create}.
+     *                 There is deliberately no overload without it (issue #326): one that substituted
+     *                 ERROR is how a client's severity was dropped silently (#321)
      * @return created error log
      */
     public ErrorLog logStandaloneError(UUID siteId, String type, String message,
@@ -134,35 +108,6 @@ public class ErrorLoggingService {
                 saved.getId(), siteId, type, saved.getSeverity());
 
         return saved;
-    }
-
-    /**
-     * Log standalone error without batch association with default severity (ERROR).
-     * <p>
-     * Used for errors that occur outside of batch processing context,
-     * such as configuration errors, startup errors, or authentication errors.
-     * </p>
-     *
-     * @param siteId   site identifier
-     * @param type     error type (e.g., "ConfigurationError", "AuthenticationError")
-     * @param message  error message
-     * @param metadata optional error metadata (stored as JSONB)
-     * @return created error log
-     */
-    public ErrorLog logStandaloneError(UUID siteId, String type, String message, Map<String, Object> metadata) {
-        return logStandaloneError(siteId, type, message, metadata, ErrorSeverity.ERROR);
-    }
-
-    /**
-     * Log standalone error without metadata.
-     *
-     * @param siteId  site identifier
-     * @param type    error type
-     * @param message error message
-     * @return created error log
-     */
-    public ErrorLog logStandaloneError(UUID siteId, String type, String message) {
-        return logStandaloneError(siteId, type, message, null, ErrorSeverity.ERROR);
     }
 
     /**

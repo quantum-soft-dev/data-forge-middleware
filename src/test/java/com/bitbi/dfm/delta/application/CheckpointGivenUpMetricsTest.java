@@ -28,12 +28,24 @@ class CheckpointGivenUpMetricsTest {
     private final CheckpointRetryProperties retryProperties = new CheckpointRetryProperties(MAX_ATTEMPTS);
     private final AtomicLong clock = new AtomicLong();
 
+    /**
+     * The bound binder, held past the last gauge read (#316).
+     *
+     * <p>{@code Gauge.builder(name, target, fn)} keeps the target weakly, so the binder
+     * {@link #bind(Duration, SimpleMeterRegistry)} builds would otherwise be collected and every
+     * read below would answer {@code NaN}. A field rather than a local: the test instance is
+     * reachable from the running frame for the whole method, while a local the method never reads
+     * again may be collected where it stands. See {@code MeterBinderReachabilityConventionTest}.</p>
+     */
+    @SuppressWarnings("unused")
+    private CheckpointGivenUpMetrics boundMetrics;
+
     @Test
     void gaugesTheRowsTheNightlyPassHasStoppedRetrying() {
         when(repository.countGivenUpMaterializing(MAX_ATTEMPTS)).thenReturn(3L);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
-        metrics(Duration.ofSeconds(30)).bindTo(registry);
+        bind(Duration.ofSeconds(30), registry);
 
         assertEquals(3.0, gauge(registry).value());
     }
@@ -45,7 +57,7 @@ class CheckpointGivenUpMetricsTest {
         when(repository.countGivenUpMaterializing(anyInt())).thenReturn(0L);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
-        metrics(Duration.ofSeconds(30)).bindTo(registry);
+        bind(Duration.ofSeconds(30), registry);
         gauge(registry).value();
 
         verify(repository).countGivenUpMaterializing(MAX_ATTEMPTS);
@@ -56,7 +68,7 @@ class CheckpointGivenUpMetricsTest {
         // The number changes at most once a night; a scrape must not turn into a table scan.
         when(repository.countGivenUpMaterializing(MAX_ATTEMPTS)).thenReturn(1L);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        metrics(Duration.ofSeconds(30)).bindTo(registry);
+        bind(Duration.ofSeconds(30), registry);
 
         gauge(registry).value();
         gauge(registry).value();
@@ -69,7 +81,7 @@ class CheckpointGivenUpMetricsTest {
     void refreshesOnceTheSnapshotHasExpired() {
         when(repository.countGivenUpMaterializing(MAX_ATTEMPTS)).thenReturn(1L, 4L);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        metrics(Duration.ofSeconds(30)).bindTo(registry);
+        bind(Duration.ofSeconds(30), registry);
 
         assertEquals(1.0, gauge(registry).value());
         clock.addAndGet(Duration.ofSeconds(31).toNanos());
@@ -77,8 +89,10 @@ class CheckpointGivenUpMetricsTest {
         assertEquals(4.0, gauge(registry).value());
     }
 
-    private CheckpointGivenUpMetrics metrics(Duration ttl) {
-        return new CheckpointGivenUpMetrics(repository, retryProperties, clock::get, ttl);
+    /** Builds the binder, keeps it in {@link #boundMetrics} and binds it to {@code registry}. */
+    private void bind(Duration ttl, SimpleMeterRegistry registry) {
+        boundMetrics = new CheckpointGivenUpMetrics(repository, retryProperties, clock::get, ttl);
+        boundMetrics.bindTo(registry);
     }
 
     private static Gauge gauge(SimpleMeterRegistry registry) {

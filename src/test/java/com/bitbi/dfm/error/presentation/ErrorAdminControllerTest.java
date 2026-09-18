@@ -4,6 +4,7 @@ import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
+import com.bitbi.dfm.error.domain.ErrorSeverity;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,8 +54,10 @@ class ErrorAdminControllerTest {
     @DisplayName("Should list all errors with pagination")
     void shouldListAllErrorsWithPagination() {
         // Given
-        ErrorLog error1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type1", "Message 1", null, null, null);
-        ErrorLog error2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type2", "Message 2", null, null, null);
+        ErrorLog error1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type1", "Message 1",
+                null, null, null, ErrorSeverity.ERROR);
+        ErrorLog error2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type2", "Message 2",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error1, error2);
         Page<ErrorLog> page = new PageImpl<>(errors, PageRequest.of(0, 20), 2);
 
@@ -79,7 +82,8 @@ class ErrorAdminControllerTest {
     @DisplayName("Should filter errors by site ID")
     void shouldFilterErrorsBySiteId() {
         // Given
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type1", "Message 1", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type1", "Message 1",
+                null, null, null, ErrorSeverity.ERROR);
         Page<ErrorLog> page = new PageImpl<>(Arrays.asList(error), PageRequest.of(0, 20), 1);
 
         when(errorLogRepository.findBySiteId(eq(testSiteId), any(Pageable.class))).thenReturn(page);
@@ -100,7 +104,8 @@ class ErrorAdminControllerTest {
     void shouldFilterErrorsByType() {
         // Given
         String errorType = "ValidationError";
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", errorType, "Message", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", errorType, "Message",
+                null, null, null, ErrorSeverity.ERROR);
         Page<ErrorLog> page = new PageImpl<>(Arrays.asList(error), PageRequest.of(0, 20), 1);
 
         when(errorLogRepository.findByType(eq(errorType), any(Pageable.class))).thenReturn(page);
@@ -121,7 +126,8 @@ class ErrorAdminControllerTest {
     void shouldFilterErrorsBySiteIdAndType() {
         // Given
         String errorType = "ValidationError";
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", errorType, "Message", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", errorType, "Message",
+                null, null, null, ErrorSeverity.ERROR);
         Page<ErrorLog> page = new PageImpl<>(Arrays.asList(error), PageRequest.of(0, 20), 1);
 
         when(errorLogRepository.findBySiteIdAndType(eq(testSiteId), eq(errorType), any(Pageable.class)))
@@ -159,8 +165,10 @@ class ErrorAdminControllerTest {
     @DisplayName("Should export errors to CSV")
     void shouldExportErrorsToCsv() {
         // Given
-        ErrorLog error1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type1", "Message 1", null, null, null);
-        ErrorLog error2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type2", "Message 2", null, null, null);
+        ErrorLog error1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type1", "Message 1",
+                null, null, null, ErrorSeverity.ERROR);
+        ErrorLog error2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Type2", "Message 2",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error1, error2);
 
         when(errorLogRepository.exportByFilters(any(), any(), any(), any())).thenReturn(errors);
@@ -183,7 +191,8 @@ class ErrorAdminControllerTest {
     void shouldExportErrorsWithFilters() {
         // Given
         String errorType = "ValidationError";
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", errorType, "Message", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", errorType, "Message",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error);
 
         when(errorLogRepository.exportByFilters(eq(testSiteId), eq(errorType), any(), any())).thenReturn(errors);
@@ -205,7 +214,8 @@ class ErrorAdminControllerTest {
         // Given
         String start = "2025-10-01T00:00:00";
         String end = "2025-10-07T23:59:59";
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error);
 
         when(errorLogRepository.exportByFilters(any(), any(), any(LocalDateTime.class), any(LocalDateTime.class)))
@@ -225,7 +235,8 @@ class ErrorAdminControllerTest {
     @DisplayName("Should escape CSV special characters")
     void shouldEscapeCsvSpecialCharacters() {
         // Given
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message with, comma", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message with, comma",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error);
 
         when(errorLogRepository.exportByFilters(any(), any(), any(), any())).thenReturn(errors);
@@ -243,7 +254,8 @@ class ErrorAdminControllerTest {
     @DisplayName("Should handle null batch ID in CSV export")
     void shouldHandleNullBatchIdInCsvExport() {
         // Given
-        ErrorLog error = ErrorLog.create(testSiteId, null, "Error", "Type", "Message", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, null, "Error", "Type", "Message",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error);
 
         when(errorLogRepository.exportByFilters(any(), any(), any(), any())).thenReturn(errors);
@@ -264,7 +276,8 @@ class ErrorAdminControllerTest {
         // Given
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("key", "value");
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message", null, null, metadata);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message",
+                null, null, metadata, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error);
 
         when(errorLogRepository.exportByFilters(any(), any(), any(), any())).thenReturn(errors);
@@ -315,7 +328,8 @@ class ErrorAdminControllerTest {
         // Given
         List<ErrorLog> errors = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
-            errors.add(ErrorLog.create(testSiteId, testBatchId, "Error", "Type" + i, "Message " + i, null, null, null));
+            errors.add(ErrorLog.create(testSiteId, testBatchId, "Error", "Type" + i, "Message " + i,
+                    null, null, null, ErrorSeverity.ERROR));
         }
         Page<ErrorLog> page = new PageImpl<>(errors.subList(0, 50), PageRequest.of(0, 50), 100);
 
@@ -337,7 +351,8 @@ class ErrorAdminControllerTest {
     @DisplayName("Should format timestamps in CSV export")
     void shouldFormatTimestampsInCsvExport() {
         // Given
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message", null, null, null);
+        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message",
+                null, null, null, ErrorSeverity.ERROR);
         List<ErrorLog> errors = Arrays.asList(error);
 
         when(errorLogRepository.exportByFilters(any(), any(), any(), any())).thenReturn(errors);

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Stand-in for the GitHub CLI in IssueFindScriptTest (issue #308). It records every call, one line per
+# call with its arguments tab-separated, and answers `gh issue list` / `gh pr list` from fixture files
+# in $FAKE_GH_DIR. `--jq` is applied with a real jq and its failure is returned, as gh does: a jq
+# expression the script builds wrongly — an escaped path interpolated into a string literal — must turn
+# the test red, not quietly print nothing. Anything else is refused.
+set -euo pipefail
+log=${FAKE_GH_LOG:?}
+dir=${FAKE_GH_DIR:?}
+
+printf '%s\t' "$@" | tr '\n' ' ' >> "$log"
+printf '\n' >> "$log"
+
+refuse() { printf 'fake-gh: %s: %s\n' "$1" "$*" >&2; exit 97; }
+
+case "${1:-} ${2:-}" in
+  "issue list") fixture=issues.json ;;
+  "pr list") fixture=prs.json ;;
+  *) refuse "unexpected command" "$@" ;;
+esac
+shift 2
+
+jq_expr=""
+while (($#)); do
+  case "$1" in
+    --jq|-q) jq_expr=$2; shift 2 ;;
+    -R|--repo|--state|--limit|--search|--json) shift 2 ;;
+    *) refuse "unknown argument" "$1" ;;
+  esac
+done
+
+if [[ -f "$dir/$fixture" ]]; then json=$(cat "$dir/$fixture"); else json='[]'; fi
+if [[ -n "$jq_expr" ]]; then
+  printf '%s' "$json" | jq -r "$jq_expr"
+else
+  printf '%s' "$json"
+fi
