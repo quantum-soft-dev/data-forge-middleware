@@ -120,7 +120,29 @@ public record BatchSummaryDto(
      */
     public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection,
                                                  SegmentBatchAggregate aggregate) {
-        Long tableCount = aggregate != null ? aggregate.getTableCount() : null;
+        return withDeltaTotals(projection,
+                aggregate != null ? aggregate.getTotalRecords() : null,
+                aggregate != null ? aggregate.getTableCount() : null);
+    }
+
+    /**
+     * Issue #346: create the DTO from a finished batch's stored session totals, which survive the
+     * changelog retention that deletes its segments. A session that recorded no segment stores 0
+     * tables, and keeps the rendering an empty session always had: no totals at all.
+     *
+     * @param projection Batch projection carrying its stored totals
+     * @return BatchSummaryDto
+     */
+    public static BatchSummaryDto fromProjectionWithStoredTotals(BatchWithFileCountProjection projection) {
+        Integer tableCount = projection.getTableCount();
+        boolean recordedAny = tableCount != null && tableCount > 0;
+        return withDeltaTotals(projection,
+                recordedAny ? projection.getTotalRecords() : null,
+                recordedAny ? tableCount.longValue() : null);
+    }
+
+    private static BatchSummaryDto withDeltaTotals(BatchWithFileCountProjection projection,
+                                                   Long totalRecords, Long tableCount) {
         return new BatchSummaryDto(
                 projection.getId(),
                 projection.getSiteId(),
@@ -132,7 +154,7 @@ public record BatchSummaryDto(
                 projection.getStartedAt().toInstant(ZoneOffset.UTC),
                 projection.getCompletedAt() != null ? projection.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
                 projection.getStartedAt().toInstant(ZoneOffset.UTC),  // Use startedAt as createdAt approximation
-                aggregate != null ? aggregate.getTotalRecords() : null,
+                totalRecords,
                 tableCount != null && tableCount > 0 ? tableCount.intValue() : null
         );
     }

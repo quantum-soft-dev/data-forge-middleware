@@ -1,16 +1,20 @@
 package com.bitbi.dfm.batch.domain;
 
 import com.bitbi.dfm.upload.domain.UploadedFile;
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -79,6 +83,40 @@ public class Batch {
     @Column(name = "session_mode", length = 20)
     private String sessionMode;
 
+    // ---- Delta v2 session totals (issue #346) --------------------------------------------------
+    //
+    // The session's history, kept on the batch because the changelog segments it used to be
+    // computed from are working units that retention deletes below the checkpoint. A NULL
+    // total_records means "not tracked": a row written before V58, or started by a pre-V58 pod
+    // during a rolling deploy, whose earlier segments were never counted — history then falls back
+    // to reading the segments, exactly as before.
+    //
+    // updatable = false on all five: they are written only by the targeted
+    // JpaBatchRepository#storeDeltaTotals, never by a whole-entity save. A transition flushing a
+    // Batch it loaded before a seal recorded its segment would otherwise write the old totals back
+    // (the #245 clobber), and the targeted write deliberately does not bump @Version (030).
+
+    /** Records in the session's committed segments; {@code null} = totals not tracked. */
+    @Column(name = "total_records", updatable = false)
+    private Long totalRecords;
+
+    /** Distinct tables in {@link #tableStats}. */
+    @Column(name = "table_count", updatable = false)
+    private Integer tableCount;
+
+    /** Per-table insert/update/delete counts across the session. */
+    @Type(JsonBinaryType.class)
+    @Column(name = "table_stats", columnDefinition = "jsonb", updatable = false)
+    private Map<String, BatchTableStats> tableStats;
+
+    /** Lowest sequence number recorded; {@code null} until a segment is recorded. */
+    @Column(name = "first_seq", updatable = false)
+    private Long firstSeq;
+
+    /** Highest sequence number recorded; {@code null} until a segment is recorded. */
+    @Column(name = "last_seq", updatable = false)
+    private Long lastSeq;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
@@ -133,6 +171,9 @@ public class Batch {
         Batch batch = new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
                 0, 0L, false, now, null, now);
         batch.sessionMode = sessionMode;
+        batch.totalRecords = 0L;
+        batch.tableCount = 0;
+        batch.tableStats = new TreeMap<>();
         return batch;
     }
 
@@ -194,6 +235,40 @@ public class Batch {
      */
     public void touchActivity() {
         this.lastActivityAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Whether this batch carries its own Delta v2 totals (issue #346): {@code true} for every batch
+     * started since V58, {@code false} for older rows, whose history is read from the segments.
+     */
+    public boolean tracksDeltaTotals() {
+        return totalRecords != null;
+    }
+
+    /**
+     * Add one committed changelog segment to the session totals (issue #346).
+     * <p>
+     * A no-op on an untracked batch: its earlier segments were never counted, so adding only the
+     * later ones would store a partial total that reads as the whole. The caller persists the
+     * result with {@code BatchRepository#storeDeltaTotals} — these columns are not written by a
+     * save of the entity.
+     * </p>
+     *
+     * @param segment the segment's contribution
+     */
+    public void recordDeltaSegment(BatchDeltaSegment segment) {
+        if (!tracksDeltaTotals()) {
+            return;
+        }
+        Map<String, BatchTableStats> merged = new TreeMap<>(tableStats != null ? tableStats : Map.of());
+        if (segment.stats() != null) {
+            segment.stats().forEach((table, stats) -> merged.merge(table, stats, BatchTableStats::plus));
+        }
+        this.totalRecords += segment.recordCount();
+        this.tableStats = merged;
+        this.tableCount = merged.size();
+        this.firstSeq = firstSeq == null ? segment.firstSeq() : Math.min(firstSeq, segment.firstSeq());
+        this.lastSeq = lastSeq == null ? segment.lastSeq() : Math.max(lastSeq, segment.lastSeq());
     }
 
     public boolean isExpired(int timeoutMinutes) {

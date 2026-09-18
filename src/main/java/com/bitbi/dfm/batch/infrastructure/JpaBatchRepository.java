@@ -3,9 +3,12 @@ package com.bitbi.dfm.batch.infrastructure;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.batch.domain.BatchTableStats;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -13,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -91,6 +95,27 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
     @Query("UPDATE Batch b SET b.lastActivityAt = :now WHERE b.id = :batchId "
             + "AND b.status = com.bitbi.dfm.batch.domain.BatchStatus.IN_PROGRESS")
     int touchActivity(UUID batchId, LocalDateTime now);
+
+    @Override
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM Batch b WHERE b.id = :batchId")
+    Optional<Batch> findByIdForUpdate(UUID batchId);
+
+    /**
+     * Bulk JPQL, like {@link #touchActivity}: no {@code @Version} bump (only {@code UPDATE VERSIONED}
+     * would), and not restricted to IN_PROGRESS — a seal committed just before the batch was reaped
+     * is still that batch's data. Runs inside the ingestion commit's transaction.
+     */
+    @Override
+    @Modifying
+    @Query("""
+            UPDATE Batch b
+               SET b.totalRecords = :totalRecords, b.tableCount = :tableCount, b.tableStats = :tableStats,
+                   b.firstSeq = :firstSeq, b.lastSeq = :lastSeq
+             WHERE b.id = :batchId
+            """)
+    int storeDeltaTotals(UUID batchId, Long totalRecords, Integer tableCount,
+                         Map<String, BatchTableStats> tableStats, Long firstSeq, Long lastSeq);
 
     /**
      * Reap an expired batch, but only while it is <em>still</em> expired and IN_PROGRESS (030/T06).
@@ -313,7 +338,7 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         SELECT b.id as id, b.siteId as siteId, b.status as status,
                b.hasErrors as hasErrors, b.startedAt as startedAt,
                b.completedAt as completedAt, b.uploadedFilesCount as fileCount,
-               b.totalSize as totalSize
+               b.totalSize as totalSize, b.totalRecords as totalRecords, b.tableCount as tableCount
         FROM Batch b
         WHERE b.siteId IN :siteIds
         ORDER BY b.startedAt DESC, b.id DESC
@@ -338,7 +363,7 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         SELECT b.id as id, b.siteId as siteId, b.status as status,
                b.hasErrors as hasErrors, b.startedAt as startedAt,
                b.completedAt as completedAt, b.uploadedFilesCount as fileCount,
-               b.totalSize as totalSize
+               b.totalSize as totalSize, b.totalRecords as totalRecords, b.tableCount as tableCount
         FROM Batch b
         WHERE b.siteId IN :siteIds
           AND (b.startedAt < :cursorStartedAt

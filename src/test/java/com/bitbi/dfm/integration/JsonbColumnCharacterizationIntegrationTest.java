@@ -3,6 +3,9 @@ package com.bitbi.dfm.integration;
 import com.bitbi.dfm.account.domain.AdminActionLog;
 import com.bitbi.dfm.account.domain.AdminActionType;
 import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchTableStats;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.comparison.domain.ChangeType;
 import com.bitbi.dfm.comparison.domain.ComparisonRepository;
 import com.bitbi.dfm.comparison.domain.ComparisonResult;
@@ -39,9 +42,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Characterization of the seven JSONB columns mapped with {@code @Type(JsonBinaryType.class)},
+ * Characterization of the JSONB columns mapped with {@code @Type(JsonBinaryType.class)}: the seven
  * pinned on Spring Boot 3.5 / Hibernate 6.6 / Jackson 2 before the move to Hibernate 7 and the
- * Jackson 3 only {@code hypersistence-utils-hibernate-73} (issue #300, the safety net for #302).
+ * Jackson 3 only {@code hypersistence-utils-hibernate-73} (issue #300, the safety net for #302),
+ * and {@code batches.table_stats}, added by issue #346 after that move.
  * <p>
  * Two directions per entity, because they fail differently:
  * </p>
@@ -105,6 +109,9 @@ class JsonbColumnCharacterizationIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private ComparisonRepository comparisonRepository;
+
+    @Autowired
+    private BatchRepository batchRepository;
 
     /** The free-form map every {@code Map<String, Object>} column is written with. */
     private static Map<String, Object> writtenDocument() {
@@ -352,6 +359,51 @@ class JsonbColumnCharacterizationIntegrationTest extends BaseIntegrationTest {
     }
 
     @Nested
+    @DisplayName("batches.table_stats (Batch, Map<String, BatchTableStats>) — issue #346")
+    class BatchTableStatsColumn {
+
+        private Batch saveBatch() {
+            // A finished batch, so it does not take store-01's one active slot.
+            Batch batch = Batch.start(ACCOUNT_ID, STORE_01_SITE_ID, "CONTINUOUS");
+            batch.complete();
+            return batchRepository.save(batch);
+        }
+
+        @Test
+        @DisplayName("write: the targeted update stores the shape of changelog_segments.stats")
+        void write() {
+            Batch saved = saveBatch();
+            Map<String, BatchTableStats> stats = new LinkedHashMap<>();
+            stats.put("orders", new BatchTableStats(3, 1, 0));
+            stats.put("customers", new BatchTableStats(0, 0, 9_000_000_000L));
+
+            batchRepository.storeDeltaTotals(saved.getId(), 9_000_000_004L, 2, stats, 1L, 9_000_000_004L);
+
+            // V58 backfills this column from changelog_segments.stats by member name, so the two
+            // shapes must stay one: inserts / updates / deletes, nothing else.
+            assertThat(columnText("batches", "table_stats", "id", saved.getId())).isEqualTo(normalized(
+                    "{\"orders\": {\"deletes\": 0, \"inserts\": 3, \"updates\": 1}, "
+                            + "\"customers\": {\"deletes\": 9000000000, \"inserts\": 0, \"updates\": 0}}"));
+        }
+
+        @Test
+        @DisplayName("read: a started batch stores an empty object, and a pre-V58 row (NULL) reads as null")
+        void read() {
+            Batch saved = saveBatch();
+            assertThat(columnText("batches", "table_stats", "id", saved.getId())).isEqualTo("{}");
+
+            setColumn("batches", "table_stats", "id", saved.getId(),
+                    "{\"orders\": {\"inserts\": 3, \"updates\": 1, \"deletes\": 0}}");
+            assertThat(batchRepository.findById(saved.getId()).orElseThrow().getTableStats())
+                    .containsExactlyEntriesOf(Map.of("orders", new BatchTableStats(3, 1, 0)));
+
+            jdbc.update("UPDATE batches SET table_stats = NULL WHERE id = ?", saved.getId());
+            entityManager.clear();
+            assertThat(batchRepository.findById(saved.getId()).orElseThrow().getTableStats()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("comparison_results.unified_diff (ComparisonResultEntity, String)")
     class ComparisonResults {
 
@@ -394,7 +446,7 @@ class JsonbColumnCharacterizationIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("the seven entities pinned here are every @Type(JsonBinaryType.class) mapping")
+    @DisplayName("the eight columns pinned here are every @Type(JsonBinaryType.class) mapping")
     void everyJsonbMappingIsCovered() {
         List<String> mapped = entityManager.getMetamodel().getEntities().stream()
                 .flatMap(entity -> Arrays.stream(entity.getJavaType().getDeclaredFields())
@@ -408,6 +460,6 @@ class JsonbColumnCharacterizationIntegrationTest extends BaseIntegrationTest {
         assertThat(mapped).containsExactlyInAnyOrder(
                 "SiteSchema.schemaData", "AccountPlugin.pluginData", "PluginConfig.config",
                 "PluginAuditLog.metadata", "AdminActionLog.details", "ChangelogSegment.stats",
-                "ComparisonResultEntity.unifiedDiff");
+                "ComparisonResultEntity.unifiedDiff", "Batch.tableStats");
     }
 }

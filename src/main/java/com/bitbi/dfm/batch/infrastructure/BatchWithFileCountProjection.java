@@ -96,4 +96,13 @@ public interface BatchWithFileCountProjection {
      * @return Total size in bytes
      */
     Long getTotalSize();
+
+    /**
+     * Records in the Delta v2 session's committed segments (issue #346); {@code null} when the
+     * batch does not track its totals (started before V58).
+     */
+    Long getTotalRecords();
+
+    /** Distinct tables in the Delta v2 session (issue #346); {@code null} when not tracked. */
+    Integer getTableCount();
 }

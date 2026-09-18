@@ -1,11 +1,19 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.domain.BatchDeltaSegment;
+import com.bitbi.dfm.batch.domain.BatchTableStats;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.TableChangeStats;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -69,22 +77,32 @@ public class DeltaSessionCommitTransaction {
             // segments sealed earlier in this session are excluded by construction (033/T03).
             rebaselineService.reset(siteId, sessionFirstSeq);
         }
+        List<BatchDeltaSegment> recorded = new ArrayList<>();
         String segmentKey = "";
         // An empty session records no segment: a degenerate segment at first_seq=watermark+1 would
         // not advance the watermark and would then collide on UNIQUE(site_id, first_seq).
         if (prepared != null) {
             segmentKey = changelogSegmentService.persistPrepared(prepared).getS3Key();
+            recorded.add(contributionOf(prepared));
             wakeEgressAfterCommit();
         }
         if (rebaseline) {
             // Publish the segments sealed earlier in this session, after the old baseline is gone and
             // before the watermark moves: readers switch from the whole old baseline to the whole new
             // one in one transaction. A no-op for a snapshot small enough never to have sealed.
+            // They were not counted while provisional (#346); they join the totals as they publish.
+            changelogSegmentService.findProvisional(batchId).stream()
+                    .map(DeltaSessionCommitTransaction::contributionOf)
+                    .forEach(recorded::add);
             if (changelogSegmentService.publishProvisional(batchId) > 0) {
                 wakeEgressAfterCommit();
             }
         }
         syncStateService.advanceWatermark(siteId, committedSeq);
+        // After the watermark: site_sync_state before batches, the lock order of every writer here.
+        if (!recorded.isEmpty()) {
+            batchLifecycleService.recordDeltaSegments(batchId, recorded);
+        }
         batchLifecycleService.completeBatch(batchId);
         return segmentKey;
     }
@@ -99,6 +117,9 @@ public class DeltaSessionCommitTransaction {
         String segmentKey = changelogSegmentService.persistPrepared(prepared).getS3Key();
         wakeEgressAfterCommit();
         syncStateService.advanceWatermark(siteId, committedSeq);
+        // Seal by seal, not once at SessionEnd (#346): a CONTINUOUS session can outlive a nightly
+        // checkpoint, and retention then deletes its early segments while it is still running.
+        batchLifecycleService.recordDeltaSegments(prepared.batchId(), List.of(contributionOf(prepared)));
         return segmentKey;
     }
 
@@ -121,6 +142,26 @@ public class DeltaSessionCommitTransaction {
     @Transactional
     public int reassignProvisionalSegments(UUID fromBatchId, UUID toBatchId) {
         return changelogSegmentService.reassignProvisionalBatch(fromBatchId, toBatchId);
+    }
+
+    private static BatchDeltaSegment contributionOf(PreparedSegment segment) {
+        return new BatchDeltaSegment(segment.recordCount(), segment.firstSeq(), segment.lastSeq(),
+                batchStatsOf(segment.stats()));
+    }
+
+    private static BatchDeltaSegment contributionOf(ChangelogSegment segment) {
+        return new BatchDeltaSegment(segment.getRecordCount(), segment.getFirstSeq(), segment.getLastSeq(),
+                batchStatsOf(segment.getStats()));
+    }
+
+    private static Map<String, BatchTableStats> batchStatsOf(Map<String, TableChangeStats> stats) {
+        if (stats == null) {
+            return null;
+        }
+        Map<String, BatchTableStats> converted = new HashMap<>();
+        stats.forEach((table, counts) -> converted.put(table,
+                new BatchTableStats(counts.inserts(), counts.updates(), counts.deletes())));
+        return converted;
     }
 
     /**

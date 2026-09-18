@@ -122,6 +122,41 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void theSnapshotBatchStoresTotalsOverEverySegmentItPublished() {
+        // Issue #346: the two mid-stream seals were provisional — uncounted — until the flip, and
+        // join the batch's totals in the transaction that publishes them, beside the tail.
+        seedSchema();
+        releaseActiveBatch();
+        seedOldBaseline();
+        requestRebaseline();
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 100L));
+            for (long i = 0; i < SNAPSHOT_RECORDS; i++) {
+                req.onNext(customer(100L + i, 1000L + i));
+            }
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder()
+                    .setLastSeq(100L + SNAPSHOT_RECORDS - 1)
+                    .putPerTable("customers", TableStats.newBuilder().setInserts(SNAPSHOT_RECORDS).build())
+                    .build()).build());
+        });
+
+        UUID batchId = jdbc.queryForObject(
+                "SELECT DISTINCT batch_id FROM changelog_segments WHERE site_id = ?", UUID.class, SITE);
+        Map<String, Object> totals = jdbc.queryForMap(
+                "SELECT status, total_records, table_count, first_seq, last_seq, "
+                        + "table_stats -> 'customers' ->> 'inserts' AS customer_inserts "
+                        + "FROM batches WHERE id = ?", batchId);
+        assertEquals("COMPLETED", totals.get("status"));
+        assertEquals(SNAPSHOT_RECORDS, ((Number) totals.get("total_records")).longValue(),
+                "two published seals of 100 plus the 50-record tail");
+        assertEquals(1, ((Number) totals.get("table_count")).intValue());
+        assertEquals(100L, ((Number) totals.get("first_seq")).longValue());
+        assertEquals(100L + SNAPSHOT_RECORDS - 1, ((Number) totals.get("last_seq")).longValue());
+        assertEquals(String.valueOf(SNAPSHOT_RECORDS), totals.get("customer_inserts"));
+    }
+
+    @Test
     void dropMidSnapshotLeavesThePreviousBaselineUsable() {
         seedSchema();
         releaseActiveBatch();

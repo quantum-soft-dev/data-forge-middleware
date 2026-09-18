@@ -146,7 +146,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V57**, next is **V58**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V58**, next is **V59**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **Follow-ups**: a finding out of scope first goes looking for an existing ticket on the same **theme** — open and closed, related-but-not-identical included. An open match gets the evidence as a comment, so the ticket grows into one run-sized problem instead of a sibling appearing. A closed match is **never reopened**: a stale observation (the fix is already in `develop`, the worktree is just older) needs nothing at all, and only a true regression — reproducing on current `origin/develop` — gets a new issue linking the old one and the fixing commit. A closed match carrying **`duplicate`** is the exception to "stale": it was closed by another ticket's work, which may still be open (three of the seventeen labelled closes are today), so read the absorber named in its closing comment and look at *its* state — and ask the search for labels, not just titles. Only when the theme has no ticket yet is one filed, framed as the theme (root cause / subsystem), and its body states three things before it is filed — the files it expects to touch, whether it needs a Flyway migration or a `specs/NNN-*` directory, and which open tickets live in those same files ("none found" is valid). `.github/ISSUE_TEMPLATE/task.yml` carries those three as required form fields; a ticket filed with `gh issue create --body` gets no form, so the same sections are written by hand. A keyword search *does* find these tickets — #190 and #200 both open with "SQL regeneration" — but nothing in the process asked anyone to run it, and the colliding pairs surfaced only because somebody read every open ticket in one sitting. A file list makes that check mechanical instead of something somebody has to think to do. `/github-issue-runner` reads those lines at step 2b where they exist, and still re-checks by grep. The full rule, the search method and the reasoning live in **`CLAUDE.md`** → "Follow-ups" and "Every follow-up says what it will touch"; this file is the condensed mirror.
 - **Absorbed tickets carry `duplicate`**: closing a ticket folded into another (`folds #NNN`) auto-moves its card to `Done` via project 16's enabled `Item closed` workflow, so `Done` mixes a ticket closed by its own PR with one closed by somebody else's — the 2026-08-19 pass read eight such closes (not all of them; see the census in `CLAUDE.md`), four with the absorber still open, the sharpest #200 (`priority: high`, unfixed) in `Done` under a blocked #190, indistinguishable from #143/#162/#204/#214 whose work really did land. Whoever closes a ticket as absorbed applies the **`duplicate`** label **and** comments naming the absorber and whether it is still open. The label means the durable fact *closed by another ticket's work, not its own PR* — not "still unfixed", a reading the closer cannot know and which decays (#200 was labelled as unfixed and #190 merged the next day) — so every absorbed close is labelled and the absorber's own state answers whether it shipped. The card stays in `Done`: a separate column would be overwritten by that same workflow on every close. `Done` minus `duplicate` is the work that closed on its own merits. Reasoning and the rejected options live in **`CLAUDE.md`** → "A ticket closed as absorbed carries `duplicate`"; this file is the condensed mirror.
 - **Closed tickets keep no `status: *` label**: the column is `Done`; the live labels are a state machine for open work. `gh issue list --label "status: in progress"` and `/merge`'s `--label "status: ready to merge"` are read across states often enough that a closed ticket wearing one is a wrong answer (#89 still read in progress a month after it shipped). Every close route strips every `status:*` actually present — query then remove, because `gh issue edit --remove-label` 404s on a label that is not on the issue, which is why `/merge` naming only `ready to merge` + `in review` was the defect. The backstop is `.github/workflows/strip-closed-status-labels.yml` (`issues: closed` + weekly sweep). A scheduled auto-strip is worth having here (the predicate is mechanical) and was declined as a journal guard on #205. Full rule in **`CLAUDE.md`** → "Status lives in two places".
@@ -260,9 +260,67 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
+- Migrations current at **V58**; next migration is **V59** (do not reuse numbers)
 
 ## Recent Changes
+- batch-delta-totals: A batch keeps its Delta v2 session totals, so Upload History and Batch Detail
+  stop shrinking once retention prunes the segments they were computed from (issue #346, seen on
+  `fyt-new` the morning after a wipe: an 87-table, 5 012 611-record snapshot read as 17 tables once
+  the nightly checkpoint had pruned everything but the audit window). Records, tables, per-table
+  counts and seq range were recomputed from `changelog_segments` on every read
+  (`aggregateByBatchIds` for the list, `findByBatchId` for the detail), and a segment is a working
+  unit of the queues and of retention, not a record of history. **V58** adds `batches.total_records`,
+  `table_count`, `table_stats` (JSONB, the shape of a segment's `stats`), `first_seq`, `last_seq`, all
+  nullable; `session_mode` (V47) already existed.
+  **Added seal by seal, not computed once at `SessionEnd` — the one point where this departs from the
+  ticket's wording, and the reason is the ticket's own bug one level up**: a `CONTINUOUS` session
+  lives for hours, its seals commit and advance the watermark, so the 02:00 checkpoint and the prune
+  after it can delete a session's first segments while it is still running, and a sum taken at the
+  end would miss them. `DeltaSessionCommitTransaction` therefore adds each segment in the transaction
+  that writes its row: `commitSegment` (a seal), `commit` (the tail) and, for a re-baseline, the
+  provisional segments it is about to publish — read with `findProvisional` just before the flip,
+  since they are uncounted while invisible (033). The call sits after `advanceWatermark`, so the lock
+  order stays `site_sync_state` → `batches`.
+  **The write takes no part in `@Version`, which is the 030 lesson applied rather than rediscovered.**
+  `BatchLifecycleService.recordDeltaSegments` reads the batch `PESSIMISTIC_WRITE`, adds in the
+  domain (`Batch.recordDeltaSegment`) and writes the five columns with a targeted JPQL update
+  (`storeDeltaTotals`), which, like `touchActivity`, bumps no version: a whole-entity save would make
+  every seal compete with the timeout sweeper and a cancel for the version and throw
+  `OptimisticLockingFailureException` into the ingest path. The five columns are `updatable = false`
+  on `Batch`, so a transition flushing a batch it loaded before a seal cannot write old totals back
+  (#245's clobber) — and `storeDeltaTotals` is their only writer.
+  **`total_records IS NULL` means "not tracked" and stays so.** `Batch.start` initializes zeros; a
+  row from before V58, or one a pre-V58 pod starts during the rolling deploy, keeps `NULL`, and
+  `recordDeltaSegment` is a no-op on it — counting only its later segments would store a partial total
+  that reads as the whole. The columns have no default for the same reason: a default of 0 would mark
+  every row an old pod inserts as tracked while nothing ever adds to it.
+  **Read side — the ticket asked for the choice to be recorded**: a finished, tracked batch reads its
+  stored totals; an `IN_PROGRESS` batch and an untracked one read their segments exactly as before.
+  Running batches stay on the segments because a re-baseline's seals are provisional until the flip,
+  so the stored totals would show nothing for the hours a large snapshot uploads, while
+  `aggregateByBatchIds` shows the progress it always did; the list query asks the segments only for
+  those rows. **And V58 backfills** the finished batches that still have published segments, in SQL
+  over the same `stats` shape (`jsonb_each` + `jsonb_object_agg`), so what they show today stops
+  shrinking; `IN_PROGRESS` rows are left alone, since an old pod may still be writing them, and a
+  batch already partly pruned keeps what remained — that loss predates the migration.
+  A tracked finished session that recorded no segment stores 0 tables and is mapped to no totals, the
+  rendering an empty session always had; its detail now shows the session `mode` where it showed none.
+  **Tests**: `BatchTest` (accumulation, merge, min/max range, a segment without stats, an untracked
+  batch left alone), `BatchLifecycleServiceTest` (locked read, targeted write, **no** `save`),
+  `DeltaSessionCommitServiceTest` (seal, tail, re-baseline publishes, lock order, empty session),
+  `BatchHistoryServiceTest` (stored vs segment read per row); three existing list tests now stub the
+  projection's totals as `null` — Mockito's default `0L` read as a tracked batch, and those tests are
+  about the segment path. `ChangelogRetentionIntegrationTest` (window 0) drives the real commit,
+  checkpoint and `prune`: a finished session shows the same list row and detail after every segment
+  is pruned, a session whose first seal is pruned while it runs still ends with every record, and an
+  untracked batch keeps reading its segments. `SegmentedRebaselineIntegrationTest` pins the totals of
+  a snapshot whose two seals were published at the flip, and `JsonbColumnCharacterizationIntegrationTest`
+  gains the column (write through `storeDeltaTotals`, read of a `NULL` row). Mutation-proven: reading
+  the segments for every batch reddens both prune tests and three unit tests; dropping the per-seal
+  `recordDeltaSegments` reddens both prune tests and the seal unit test; not counting the published
+  provisional segments reddens the re-baseline test and its unit twin. No REST route, DTO shape, gRPC, proto, configuration-key,
+  metric, S3-key or frontend change; **V58 is taken, V59 is next**. See
+  `docs/delta-client-v2-guide.md` ("A batch's history outlives its segments").
 - batch-retention-transaction: Batch retention deletes again — it had deleted nothing in production
   since `d4ae8ca4` (issue #344). `BatchRetentionService.cleanupSiteInDb` was a `protected`,
   self-invoked `@Transactional` — inert, the #164 shape — so the nightly pass ran its bulk deletes

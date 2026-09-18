@@ -1,6 +1,7 @@
 package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.batch.domain.exception.BatchNotFoundException;
 import com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException;
 import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
@@ -115,19 +116,25 @@ public class BatchHistoryService {
                 ? projections.subList(0, pageSize)
                 : projections;
 
-        // Per-batch delta totals for the page, aggregated SQL-side (029): a session batch owns N
-        // segments, so the list shows SUM(record_count) and the distinct-table count — one grouped
-        // query for the whole page, never the raw segment rows.
-        Map<UUID, SegmentBatchAggregate> aggregatesByBatchId = pageItems.isEmpty()
+        // Per-batch delta totals for the page. A finished batch that tracks its totals carries
+        // them (issue #346) — its segments may already be pruned below the checkpoint. The rest —
+        // running batches, whose re-baseline progress lives in provisional segments the totals
+        // count only once published (033), and rows from before V58 — are aggregated SQL-side from
+        // their segments (029): one grouped query for those rows, never the raw segment rows.
+        List<UUID> readFromSegments = pageItems.stream()
+                .filter(p -> !hasStoredTotals(p))
+                .map(BatchWithFileCountProjection::getId)
+                .toList();
+        Map<UUID, SegmentBatchAggregate> aggregatesByBatchId = readFromSegments.isEmpty()
                 ? Map.of()
-                : changelogSegmentRepository
-                        .aggregateByBatchIds(pageItems.stream().map(BatchWithFileCountProjection::getId).toList())
-                        .stream()
+                : changelogSegmentRepository.aggregateByBatchIds(readFromSegments).stream()
                         .collect(Collectors.toMap(SegmentBatchAggregate::getBatchId, a -> a));
 
         // Convert projections to DTOs
         List<BatchSummaryDto> dtos = pageItems.stream()
-                .map(p -> BatchSummaryDto.fromProjection(p, aggregatesByBatchId.get(p.getId())))
+                .map(p -> hasStoredTotals(p)
+                        ? BatchSummaryDto.fromProjectionWithStoredTotals(p)
+                        : BatchSummaryDto.fromProjection(p, aggregatesByBatchId.get(p.getId())))
                 .collect(Collectors.toList());
 
         // Generate cursor for next page
@@ -239,9 +246,45 @@ public class BatchHistoryService {
         logger.info("Returning batch details for batchId={} with {} files",
                 batchId, batch.getUploadedFiles().size());
 
+        if (hasStoredTotals(batch)) {
+            return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles(),
+                    storedDeltaStats(batch), batch.getSessionMode(), storedSeqRange(batch));
+        }
         List<ChangelogSegment> segments = changelogSegmentRepository.findByBatchId(batchId);
         return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles(),
                 resolveDeltaStats(segments), resolveMode(segments), resolveSeqRange(segments));
+    }
+
+    /**
+     * Whether a batch's history is read from its stored totals (issue #346) rather than from its
+     * changelog segments: it tracks them, and it has finished. A running batch reads its segments,
+     * because a re-baseline's sealed segments are provisional until {@code SessionEnd} publishes
+     * them and only then join the totals (033) — the live view would otherwise show nothing for the
+     * hours a large snapshot uploads.
+     */
+    private static boolean hasStoredTotals(Batch batch) {
+        return batch.tracksDeltaTotals() && batch.getStatus() != BatchStatus.IN_PROGRESS;
+    }
+
+    private static boolean hasStoredTotals(BatchWithFileCountProjection projection) {
+        return projection.getTotalRecords() != null
+                && !BatchStatus.IN_PROGRESS.name().equals(projection.getStatus());
+    }
+
+    private static List<DeltaTableStatsDto> storedDeltaStats(Batch batch) {
+        if (batch.getTableStats() == null) {
+            return List.of();
+        }
+        return new TreeMap<>(batch.getTableStats()).entrySet().stream()
+                .map(entry -> new DeltaTableStatsDto(entry.getKey(), entry.getValue().inserts(),
+                        entry.getValue().updates(), entry.getValue().deletes()))
+                .toList();
+    }
+
+    private static DeltaSeqRangeDto storedSeqRange(Batch batch) {
+        return batch.getFirstSeq() == null || batch.getLastSeq() == null
+                ? null
+                : new DeltaSeqRangeDto(batch.getFirstSeq(), batch.getLastSeq());
     }
 
     /**

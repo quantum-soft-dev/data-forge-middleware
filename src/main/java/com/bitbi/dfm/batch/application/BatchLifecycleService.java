@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchDeltaSegment;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -182,6 +184,37 @@ public class BatchLifecycleService {
             logger.warn("touchActivity: liveness stamp failed, ignoring: batchId={}, error={}",
                     batchId, e.getMessage());
         }
+    }
+
+    /**
+     * Add committed changelog segments to their batch's Delta v2 totals (issue #346).
+     * <p>
+     * Called inside the ingestion commit's transaction, after the segment rows are written, so the
+     * totals and the segments commit together — a batch's history then survives
+     * {@code ChangelogRetentionService.prune} deleting the segments below the checkpoint. The batch
+     * row is locked for the read-modify-write and written back with a targeted, version-free
+     * update: taking part in {@code @Version} would make a seal fail a concurrent transition, or
+     * be failed by it (030). An untracked batch (pre-V58) is left as it is.
+     * </p>
+     *
+     * @param batchId  batch (session) identifier
+     * @param segments the committed segments' contributions; nothing happens when empty
+     * @throws BatchNotFoundException if the batch does not exist
+     */
+    @Transactional
+    public void recordDeltaSegments(UUID batchId, List<BatchDeltaSegment> segments) {
+        if (segments.isEmpty()) {
+            return;
+        }
+        Batch batch = batchRepository.findByIdForUpdate(batchId)
+                .orElseThrow(() -> new BatchNotFoundException("Batch not found"));
+        if (!batch.tracksDeltaTotals()) {
+            logger.debug("Batch {} predates stored totals; its history keeps reading the segments", batchId);
+            return;
+        }
+        segments.forEach(batch::recordDeltaSegment);
+        batchRepository.storeDeltaTotals(batchId, batch.getTotalRecords(), batch.getTableCount(),
+                batch.getTableStats(), batch.getFirstSeq(), batch.getLastSeq());
     }
 
     /**
