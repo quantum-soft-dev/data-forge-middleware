@@ -2,6 +2,7 @@ package com.bitbi.dfm.error.application;
 
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.domain.ErrorSeverity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,8 +46,10 @@ class ErrorLogExportServiceTest {
         String errorType = "ValidationError";
 
         List<ErrorLog> errorLogs = Arrays.asList(
-                ErrorLog.create(testSiteId, testBatchId, errorType, errorType, "Error 1", null, null, null),
-                ErrorLog.create(testSiteId, testBatchId, errorType, errorType, "Error 2", null, null, null)
+                ErrorLog.create(testSiteId, testBatchId, errorType, errorType, "Error 1",
+                        null, null, null, ErrorSeverity.ERROR),
+                ErrorLog.create(testSiteId, testBatchId, errorType, errorType, "Error 2",
+                        null, null, null, ErrorSeverity.ERROR)
         );
 
         when(errorLogRepository.exportByFilters(testSiteId, errorType, start, end))
@@ -73,7 +76,7 @@ class ErrorLogExportServiceTest {
         // Given
         List<ErrorLog> errorLogs = Collections.singletonList(
                 ErrorLog.create(testSiteId, testBatchId, "FileReadError", "FileReadError",
-                        "Failed to read file", null, null, Map.of("fileName", "data.csv"))
+                        "Failed to read file", null, null, Map.of("fileName", "data.csv"), ErrorSeverity.ERROR)
         );
 
         when(errorLogRepository.findByBatchId(testBatchId)).thenReturn(errorLogs);
@@ -100,9 +103,9 @@ class ErrorLogExportServiceTest {
         UUID anotherBatchId = UUID.randomUUID();
         List<ErrorLog> errorLogs = Arrays.asList(
                 ErrorLog.create(testSiteId, testBatchId, "NetworkError", "NetworkError",
-                        "Connection timeout", null, null, null),
+                        "Connection timeout", null, null, null, ErrorSeverity.ERROR),
                 ErrorLog.create(testSiteId, anotherBatchId, "ConfigError", "ConfigError",
-                        "Missing config", null, null, null)
+                        "Missing config", null, null, null, ErrorSeverity.ERROR)
         );
 
         when(errorLogRepository.findBySiteId(testSiteId)).thenReturn(errorLogs);
@@ -144,7 +147,7 @@ class ErrorLogExportServiceTest {
     void shouldEscapeCsvSpecialCharacters() {
         // Given
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "QuoteError", "QuoteError",
-                "Message with \"quotes\" and, comma", null, null, null);
+                "Message with \"quotes\" and, comma", null, null, null, ErrorSeverity.ERROR);
 
         when(errorLogRepository.findByBatchId(testBatchId))
                 .thenReturn(Collections.singletonList(errorLog));
@@ -162,7 +165,7 @@ class ErrorLogExportServiceTest {
     void shouldHandleNullMetadataGracefully() {
         // Given
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "TestError", "TestError",
-                "Test message", null, null, null);
+                "Test message", null, null, null, ErrorSeverity.ERROR);
 
         when(errorLogRepository.findByBatchId(testBatchId))
                 .thenReturn(Collections.singletonList(errorLog));
@@ -185,7 +188,7 @@ class ErrorLogExportServiceTest {
         metadata.put("lineNumber", 42);
 
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "ParseError", "ParseError",
-                "Parse failed", null, null, metadata);
+                "Parse failed", null, null, metadata, ErrorSeverity.ERROR);
 
         when(errorLogRepository.findBySiteId(testSiteId))
                 .thenReturn(Collections.singletonList(errorLog));
@@ -204,7 +207,7 @@ class ErrorLogExportServiceTest {
     void shouldFormatTimestampsCorrectlyInCsv() {
         // Given
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "TimeError", "TimeError",
-                "Time test", null, null, null);
+                "Time test", null, null, null, ErrorSeverity.ERROR);
 
         when(errorLogRepository.findByBatchId(testBatchId))
                 .thenReturn(Collections.singletonList(errorLog));

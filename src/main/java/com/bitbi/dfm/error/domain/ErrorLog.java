@@ -91,21 +91,11 @@ public class ErrorLog {
     }
 
     /**
-     * Create a new ErrorLog with default severity (ERROR).
+     * Create a new ErrorLog with the specified severity.
      * <p>
-     * Backwards-compatible factory method for existing code.
-     * </p>
-     */
-    public static ErrorLog create(UUID siteId, UUID batchId, String type, String title,
-                                  String message, String stackTrace, String clientVersion,
-                                  Map<String, Object> metadata) {
-        return create(siteId, batchId, type, title, message, stackTrace, clientVersion, metadata, ErrorSeverity.ERROR);
-    }
-
-    /**
-     * Create a new ErrorLog with specified severity.
-     * <p>
-     * New factory method for global error handling with severity support.
+     * The only factory, and it takes the severity: a shorter overload substituting {@code ERROR}
+     * is how a client's severity was once dropped without anything noticing (#321, #334). A caller
+     * with no severity to pass writes {@code null}, which is stored as {@code ERROR}.
      * </p>
      *
      * @param siteId        site identifier
