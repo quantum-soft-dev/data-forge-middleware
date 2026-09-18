@@ -1845,6 +1845,37 @@ endpoint returns lightweight `deltaRecordCount`/`deltaTableCount` totals. Both a
 v1 file-based batches. The batch detail additionally carries the session `mode`
 (DELTA / CONTINUOUS / FULL_SNAPSHOT) and `seqRange {first, last}` (feature 023, B9).
 
+### A batch's history outlives its segments (issue #346)
+
+Those totals used to be recomputed from `changelog_segments` on every read, and a segment is a
+working unit of the delta queues and of retention: once a checkpoint covers it,
+`ChangelogRetentionService.prune` deletes it beyond `delta.retention.audit-window-segments`. So the
+morning after its first checkpoint a 5-million-record, 87-table snapshot read as the 17 tables the
+last 20 segments happened to hold, and with a window of 0 as a batch with no delta stats at all —
+the data was intact, only the history lied.
+
+Since V58 the batch keeps them: `batches.total_records`, `table_count`, `table_stats` (JSONB, the
+shape of a segment's `stats`), `first_seq`, `last_seq`. Each committed segment is added **in the
+transaction that commits it** — a seal, the `SessionEnd` tail, and the provisional segments a
+re-baseline publishes at its flip (033) — rather than summed once at `SessionEnd`, because a
+`CONTINUOUS` session outlives the nightly checkpoint and loses its first segments while still
+running. The write is a row-locked read and a targeted, version-free update: the totals take no
+part in `@Version`, so a seal cannot fail a concurrent transition or be failed by one (030).
+
+What reads what:
+
+| Batch | List and detail read |
+|---|---|
+| finished, started since V58 | the stored totals — unchanged when retention, or a later re-baseline discarding the old baseline, deletes its segments |
+| `IN_PROGRESS` | its segments, as before: a running re-baseline's seals are provisional and join the totals only when published, so the stored totals would show nothing for the hours a snapshot uploads |
+| started before V58 (`total_records IS NULL`) | its segments, as before |
+
+V58 backfills the finished batches that still had published segments when it ran; a batch already
+pruned keeps what remained, since the loss happened before the migration. A batch that a pre-V58
+pod started during the rolling deploy is not tracked (counting only its later segments would store a
+partial total that reads as the whole) and stays on the segment read. One visible difference: a
+finished session that recorded no segment now shows its `mode` in the detail, where it showed none.
+
 ## Delta Sync UI (feature 023)
 
 Since feature 023 the dashboard has a monitoring/management layer over Delta v2 — a **Delta Sync**

@@ -1,8 +1,15 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.batch.application.BatchHistoryService;
+import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
+import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
+import com.bitbi.dfm.batch.presentation.dto.DeltaSeqRangeDto;
+import com.bitbi.dfm.batch.presentation.dto.DeltaTableStatsDto;
 import com.bitbi.dfm.delta.application.ChangelogRetentionService;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
+import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import com.bitbi.dfm.delta.domain.Checkpoint;
@@ -18,6 +25,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -78,6 +86,20 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private BatchParquetArtifactRepository artifactRepository;
+
+    @Autowired
+    private DeltaSessionCommitService commitService;
+
+    @Autowired
+    private BatchLifecycleService batchLifecycleService;
+
+    @Autowired
+    private BatchHistoryService batchHistoryService;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    private static final UUID ACCOUNT = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
     @MockitoSpyBean
     private S3FileStorageService objectDeleter;
@@ -313,6 +335,108 @@ class ChangelogRetentionIntegrationTest extends BaseIntegrationTest {
                 "the pruned object must be deleted exactly once, with no transaction open (issue #234)");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isEmpty(), "segment row pruned");
         assertFalse(segmentStorage.exists(prunedKey), "segment S3 object pruned");
+    }
+
+    // ---- Issue #346: a batch's history survives the pruning of its segments -------------------
+
+    @Test
+    void aFinishedSessionShowsTheSameTotalsAfterItsSegmentsArePruned() {
+        // The fyt-new report: one session, checkpointed that night, and the next morning Upload
+        // History showed only what the audit window kept — with a window of 0, nothing at all.
+        UUID batchId = startSession("CONTINUOUS");
+        commitService.commitSegment(SITE, batchId, "CONTINUOUS", 1L, 2L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann")),
+                rec("customers", Op.INSERT, 2L, key("id", 2L), data("id", 2L, "name", "Bob"))));
+        commitService.commit(SITE, batchId, "CONTINUOUS", 3L, 4L, List.of(
+                rec("orders", Op.INSERT, 3L, key("id", 1L), data("id", 1L, "name", "Pen")),
+                rec("customers", Op.DELETE, 4L, key("id", 1L), Map.of())));
+        BatchSummaryDto listedBefore = listed(batchId);
+        BatchDetailDto detailBefore = batchHistoryService.getBatchDetails(batchId, ACCOUNT);
+        assertEquals(4L, listedBefore.deltaRecordCount(), "fixture: the session committed four records");
+
+        pruneEverySegmentOf(batchId);
+
+        BatchSummaryDto listedAfter = listed(batchId);
+        assertEquals(listedBefore.deltaRecordCount(), listedAfter.deltaRecordCount());
+        assertEquals(listedBefore.deltaTableCount(), listedAfter.deltaTableCount());
+        assertEquals(2, listedAfter.deltaTableCount());
+        BatchDetailDto detailAfter = batchHistoryService.getBatchDetails(batchId, ACCOUNT);
+        assertEquals(detailBefore.deltaStats(), detailAfter.deltaStats());
+        assertEquals(detailBefore.mode(), detailAfter.mode());
+        assertEquals(detailBefore.seqRange(), detailAfter.seqRange());
+        assertEquals(List.of(
+                        new DeltaTableStatsDto("customers", 2, 0, 1),
+                        new DeltaTableStatsDto("orders", 1, 0, 0)),
+                detailAfter.deltaStats());
+        assertEquals(new DeltaSeqRangeDto(1L, 4L), detailAfter.seqRange());
+        assertEquals("CONTINUOUS", detailAfter.mode());
+    }
+
+    @Test
+    void aSessionWhoseEarlySegmentsArePrunedWhileItRunsStillCountsThem() {
+        // Why the totals are added seal by seal rather than computed at SessionEnd: a CONTINUOUS
+        // session outlives the nightly checkpoint, and retention deletes its first segments while
+        // it is still IN_PROGRESS. Summing the segments at the end would miss them.
+        UUID batchId = startSession("CONTINUOUS");
+        commitService.commitSegment(SITE, batchId, "CONTINUOUS", 1L, 2L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann")),
+                rec("customers", Op.INSERT, 2L, key("id", 2L), data("id", 2L, "name", "Bob"))));
+        checkpointService.buildCheckpoint(SITE);
+        markSegmentsProcessed(SITE);
+        assertEquals(1, retentionService.prune(SITE), "fixture: the running session's seal is pruned");
+
+        commitService.commit(SITE, batchId, "CONTINUOUS", 3L, 3L, List.of(
+                rec("orders", Op.INSERT, 3L, key("id", 1L), data("id", 1L, "name", "Pen"))));
+
+        BatchSummaryDto row = listed(batchId);
+        assertEquals(3L, row.deltaRecordCount());
+        assertEquals(2, row.deltaTableCount());
+        assertEquals(new DeltaSeqRangeDto(1L, 3L),
+                batchHistoryService.getBatchDetails(batchId, ACCOUNT).seqRange());
+    }
+
+    @Test
+    void aBatchStartedBeforeTheTotalsExistedKeepsReadingItsSegments() {
+        // total_records NULL: a pre-V58 row, or one a pre-V58 pod started during the rollout.
+        // Counting only the segments committed from now on would store a partial total that reads
+        // as the whole, so such a batch is left on the segment read.
+        UUID batchId = startSession("CONTINUOUS");
+        jdbc.update("UPDATE batches SET total_records = NULL, table_count = NULL, table_stats = NULL "
+                + "WHERE id = ?", batchId);
+        commitService.commit(SITE, batchId, "CONTINUOUS", 1L, 1L, List.of(
+                rec("orders", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Pen"))));
+
+        assertEquals(null, jdbc.queryForObject("SELECT total_records FROM batches WHERE id = ?",
+                Long.class, batchId), "an untracked batch must not start tracking half-way");
+        assertEquals(1L, listed(batchId).deltaRecordCount(), "read from its segment, as before V58");
+    }
+
+    private UUID startSession(String mode) {
+        // test-data.sql seeds an IN_PROGRESS batch for store-01; one active batch per site.
+        jdbc.update("UPDATE batches SET status = 'FAILED', completed_at = now() AT TIME ZONE 'UTC' "
+                + "WHERE site_id = ? AND status = 'IN_PROGRESS'", SITE);
+        return batchLifecycleService.startBatch(ACCOUNT, SITE, mode).getId();
+    }
+
+    /**
+     * What the nightly tick does to a finished session: a checkpoint covering it, then retention
+     * (window 0 in this class). The artifact rows its completion enqueued are dropped first —
+     * they are #244's hold-back, which is not what this test is about.
+     */
+    private void pruneEverySegmentOf(UUID batchId) {
+        checkpointService.buildCheckpoint(SITE);
+        markSegmentsProcessed(SITE);
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE batch_id = ?", batchId);
+        retentionService.prune(SITE);
+        assertTrue(segmentRepository.findByBatchId(batchId).isEmpty(),
+                "fixture: every segment of the session is pruned");
+    }
+
+    private BatchSummaryDto listed(UUID batchId) {
+        return batchHistoryService.listBatchHistory(ACCOUNT, null, 100).items().stream()
+                .filter(row -> row.id().equals(batchId))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("batch " + batchId + " not on the first page"));
     }
 
     private double heldBack(String reason) {

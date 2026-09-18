@@ -2,8 +2,10 @@ package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchDeltaSegment;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.batch.domain.BatchTableStats;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -23,6 +25,8 @@ import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -525,6 +529,58 @@ class BatchLifecycleServiceTest {
 
             verify(batch, never()).markAsHavingErrors();
             verify(batchRepository, never()).save(any());
+        }
+    }
+    @Nested
+    @DisplayName("recordDeltaSegments (issue #346)")
+    class RecordDeltaSegments {
+
+        @Test
+        @DisplayName("Should add the segments under the row lock and write the totals without a save")
+        void shouldAddTheSegmentsToALockedBatchAndStoreThemWithoutASave() {
+            Batch batch = Batch.start(accountId, siteId, "CONTINUOUS");
+            when(batchRepository.findByIdForUpdate(batch.getId())).thenReturn(Optional.of(batch));
+
+            service.recordDeltaSegments(batch.getId(), List.of(
+                    new BatchDeltaSegment(2L, 1L, 2L, Map.of("orders", new BatchTableStats(2, 0, 0))),
+                    new BatchDeltaSegment(1L, 3L, 3L, Map.of("customers", new BatchTableStats(0, 1, 0)))));
+
+            verify(batchRepository).storeDeltaTotals(batch.getId(), 3L, 2,
+                    Map.of("orders", new BatchTableStats(2, 0, 0), "customers", new BatchTableStats(0, 1, 0)),
+                    1L, 3L);
+            // A save would take part in @Version and could fail a concurrent transition (030).
+            verify(batchRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Should leave a batch that predates the stored totals untouched")
+        void shouldLeaveAnUntrackedBatchUntouched() {
+            Batch untracked = mock(Batch.class);
+            when(untracked.tracksDeltaTotals()).thenReturn(false);
+            when(batchRepository.findByIdForUpdate(batchId)).thenReturn(Optional.of(untracked));
+
+            service.recordDeltaSegments(batchId, List.of(new BatchDeltaSegment(1L, 1L, 1L, null)));
+
+            verify(untracked, never()).recordDeltaSegment(any());
+            verify(batchRepository, never()).storeDeltaTotals(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Should not even lock the batch when there is nothing to add")
+        void shouldNotTouchTheBatchForNoSegments() {
+            service.recordDeltaSegments(batchId, List.of());
+
+            verifyNoInteractions(batchRepository);
+        }
+
+        @Test
+        @DisplayName("Should fail the commit when the batch does not exist")
+        void shouldThrowWhenTheBatchIsMissing() {
+            when(batchRepository.findByIdForUpdate(batchId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.recordDeltaSegments(batchId,
+                    List.of(new BatchDeltaSegment(1L, 1L, 1L, null))))
+                    .isInstanceOf(BatchLifecycleService.BatchNotFoundException.class);
         }
     }
 }

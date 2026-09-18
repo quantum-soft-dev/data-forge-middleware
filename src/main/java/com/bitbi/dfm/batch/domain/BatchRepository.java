@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -46,6 +47,26 @@ public interface BatchRepository {
      * @return number of rows updated (0 when the batch no longer exists)
      */
     int touchActivity(UUID batchId, LocalDateTime now);
+
+    /**
+     * Load a batch holding its row lock until the transaction ends (issue #346), so adding a
+     * segment to its totals is a read-modify-write nobody can interleave with. The lock is a row
+     * lock, not a version check: it makes a concurrent writer wait, never fail.
+     *
+     * @param batchId batch identifier
+     * @return the locked batch, if it exists
+     */
+    Optional<Batch> findByIdForUpdate(UUID batchId);
+
+    /**
+     * Write a batch's Delta v2 totals (issue #346) — the only writer of those columns, which the
+     * entity maps {@code updatable = false}. Version-free like {@link #touchActivity}: recording a
+     * segment is not a state transition and must not make a concurrent transition fail.
+     *
+     * @return number of rows updated
+     */
+    int storeDeltaTotals(UUID batchId, Long totalRecords, Integer tableCount,
+                         Map<String, BatchTableStats> tableStats, Long firstSeq, Long lastSeq);
 
     /**
      * Atomically reap a batch that is <em>still</em> expired (030/T06).

@@ -1,7 +1,10 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.domain.BatchDeltaSegment;
+import com.bitbi.dfm.batch.domain.BatchTableStats;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -293,6 +296,85 @@ class DeltaSessionCommitServiceTest {
         commit.commit(SITE, BATCH, "DELTA", 1L, 1L, List.of(ChangeRecord.newBuilder().setSeq(1L).build()));
 
         verify(rebaselineService, never()).reset(any(), anyLong());
+    }
+
+    // ---- Issue #346: the batch keeps its totals, the segments are only working units ----------
+
+    @Test
+    void aSealAddsItsSegmentToTheBatchTotalsAfterTheWatermarkMoves() {
+        // A CONTINUOUS session lives for hours and its seals are checkpointed and pruned while it
+        // still runs, so the totals are added seal by seal, in the transaction writing the row —
+        // never recomputed from the segments at SessionEnd. After the watermark keeps the lock
+        // order every other writer uses: site_sync_state first, then batches.
+        PreparedSegment prepared = new PreparedSegment(UUID.randomUUID(), SITE, BATCH, "CONTINUOUS",
+                1L, 100L, 100, "hash", "delta/site/segments/s1.pb.gz",
+                Map.of("orders", new TableChangeStats(70, 20, 10)));
+        stubUpload(prepared);
+        stubRow("delta/site/segments/s1.pb.gz");
+
+        commit.commitSegment(SITE, BATCH, "CONTINUOUS", 1L, 100L,
+                List.of(ChangeRecord.newBuilder().setSeq(100L).build()));
+
+        InOrder order = inOrder(segmentService, syncStateService, batchLifecycleService);
+        order.verify(segmentService).persistPrepared(prepared);
+        order.verify(syncStateService).advanceWatermark(SITE, 100L);
+        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, List.of(
+                new BatchDeltaSegment(100L, 1L, 100L, Map.of("orders", new BatchTableStats(70, 20, 10)))));
+    }
+
+    @Test
+    void theTailIsAddedToTheBatchTotalsBeforeTheBatchCompletes() {
+        PreparedSegment prepared = new PreparedSegment(UUID.randomUUID(), SITE, BATCH, "DELTA",
+                101L, 103L, 3, "hash", "delta/site/segments/t.pb.gz",
+                Map.of("orders", new TableChangeStats(3, 0, 0)));
+        stubUpload(prepared);
+        stubRow("delta/site/segments/t.pb.gz");
+
+        commit.commit(SITE, BATCH, "DELTA", 101L, 103L,
+                List.of(ChangeRecord.newBuilder().setSeq(103L).build()));
+
+        InOrder order = inOrder(syncStateService, batchLifecycleService);
+        order.verify(syncStateService).advanceWatermark(SITE, 103L);
+        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, List.of(
+                new BatchDeltaSegment(3L, 101L, 103L, Map.of("orders", new BatchTableStats(3, 0, 0)))));
+        order.verify(batchLifecycleService).completeBatch(BATCH);
+    }
+
+    @Test
+    void aReBaselineAddsTheSegmentsItPublishesAsWellAsItsTail() {
+        // 033: the snapshot's mid-stream seals were provisional — invisible and uncounted — and
+        // join the batch totals in the transaction that publishes them.
+        ChangelogSegment sealed = mock(ChangelogSegment.class);
+        when(sealed.getRecordCount()).thenReturn(100L);
+        when(sealed.getFirstSeq()).thenReturn(100L);
+        when(sealed.getLastSeq()).thenReturn(199L);
+        when(sealed.getStats()).thenReturn(Map.of("customers", new TableChangeStats(100, 0, 0)));
+        when(segmentService.findProvisional(BATCH)).thenReturn(List.of(sealed));
+        when(segmentService.publishProvisional(BATCH)).thenReturn(1);
+        PreparedSegment tail = new PreparedSegment(UUID.randomUUID(), SITE, BATCH, "FULL_SNAPSHOT",
+                200L, 249L, 50, "hash", "delta/site/segments/tail.pb.gz",
+                Map.of("customers", new TableChangeStats(50, 0, 0)));
+        stubUpload(tail);
+        stubRow("delta/site/segments/tail.pb.gz");
+
+        commit.commit(SITE, BATCH, "FULL_SNAPSHOT", 100L, 249L,
+                List.of(ChangeRecord.newBuilder().setSeq(249L).build()), true);
+
+        InOrder order = inOrder(segmentService, batchLifecycleService);
+        order.verify(segmentService).findProvisional(BATCH);
+        order.verify(segmentService).publishProvisional(BATCH);
+        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, List.of(
+                new BatchDeltaSegment(50L, 200L, 249L, Map.of("customers", new BatchTableStats(50, 0, 0))),
+                new BatchDeltaSegment(100L, 100L, 199L, Map.of("customers", new BatchTableStats(100, 0, 0)))));
+        order.verify(batchLifecycleService).completeBatch(BATCH);
+    }
+
+    @Test
+    void anEmptySessionAddsNothingToTheBatchTotals() {
+        commit.commit(SITE, BATCH, "DELTA", 5L, 4L, List.of());
+
+        verify(batchLifecycleService, never()).recordDeltaSegments(any(), any());
+        verify(batchLifecycleService).completeBatch(BATCH);
     }
 
     private static PreparedSegment prepared(long firstSeq, long lastSeq) {

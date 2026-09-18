@@ -175,6 +175,17 @@ public class ChangelogSegmentService {
     }
 
     /**
+     * The still-provisional segments of a batch — read just before {@link #publishProvisional}, so
+     * the commit can add what it is about to publish to the batch's totals (issue #346).
+     *
+     * @param batchId the snapshot session's batch
+     * @return its provisional segments, possibly none
+     */
+    public List<ChangelogSegment> findProvisional(UUID batchId) {
+        return repository.findProvisionalByBatchId(batchId);
+    }
+
+    /**
      * Move a session's provisional segments onto a different batch (033 review) — used when a resume
      * runs under a replacement batch, so publication (which is batch-keyed) still covers them.
      *

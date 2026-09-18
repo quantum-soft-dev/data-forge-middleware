@@ -1,6 +1,8 @@
 package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchDeltaSegment;
+import com.bitbi.dfm.batch.domain.BatchTableStats;
 import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
 import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
@@ -167,6 +169,8 @@ class BatchHistoryServiceTest {
         when(projection.getCompletedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(projection.getFileCount()).thenReturn(0);
         when(projection.getTotalSize()).thenReturn(0L);
+        // Started before V58: no stored totals, so the segments are read (issue #346).
+        when(projection.getTotalRecords()).thenReturn(null);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
 
         SegmentBatchAggregate aggregate = mock(SegmentBatchAggregate.class);
@@ -200,6 +204,8 @@ class BatchHistoryServiceTest {
         when(projection.getCompletedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(projection.getFileCount()).thenReturn(0);
         when(projection.getTotalSize()).thenReturn(0L);
+        // Started before V58: no stored totals, so the segments are read (issue #346).
+        when(projection.getTotalRecords()).thenReturn(null);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
 
         SegmentBatchAggregate aggregate = mock(SegmentBatchAggregate.class);
@@ -231,6 +237,7 @@ class BatchHistoryServiceTest {
         when(projection.getCompletedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
         when(projection.getFileCount()).thenReturn(2);
         when(projection.getTotalSize()).thenReturn(2048L);
+        when(projection.getTotalRecords()).thenReturn(null);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
         when(changelogSegmentRepository.aggregateByBatchIds(anyList())).thenReturn(List.of());
 
@@ -239,5 +246,153 @@ class BatchHistoryServiceTest {
         BatchSummaryDto dto = page.items().get(0);
         assertNull(dto.deltaRecordCount());
         assertNull(dto.deltaTableCount());
+    }
+
+    // ---- Issue #346: a finished batch's totals survive changelog retention --------------------
+
+    @Test
+    void getBatchDetailsReadsTheStoredTotalsOfAFinishedBatchWhoseSegmentsWerePruned() {
+        // Retention deleted every segment of this session (the fyt-new case with an audit window
+        // of 0): before #346 the detail degraded to a v1-looking batch with no stats, no mode and
+        // no seq range. The totals recorded while the session committed are what is shown.
+        UUID accountId = UUID.randomUUID();
+        Batch batch = finishedTrackedBatch(accountId, "FULL_SNAPSHOT");
+        when(batchRepository.findByIdWithFiles(batch.getId())).thenReturn(Optional.of(batch));
+        when(changelogSegmentRepository.findByBatchId(batch.getId())).thenReturn(List.of());
+
+        BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
+
+        assertEquals(2, dto.deltaStats().size());
+        assertEquals("customers", dto.deltaStats().get(0).table());
+        assertEquals(40, dto.deltaStats().get(0).inserts());
+        assertEquals("orders", dto.deltaStats().get(1).table());
+        assertEquals(60, dto.deltaStats().get(1).inserts());
+        assertEquals("FULL_SNAPSHOT", dto.mode());
+        assertEquals(1L, dto.seqRange().first());
+        assertEquals(100L, dto.seqRange().last());
+        verify(changelogSegmentRepository, never()).findByBatchId(any());
+    }
+
+    @Test
+    void getBatchDetailsOfARunningBatchStillReadsItsSegments() {
+        // A running re-baseline's sealed segments are provisional and not in the stored totals
+        // until the flip (033), so the live view keeps reading segments while the batch runs.
+        UUID accountId = UUID.randomUUID();
+        Batch batch = Batch.start(accountId, UUID.randomUUID(), "FULL_SNAPSHOT");
+        ChangelogSegment segment = mock(ChangelogSegment.class);
+        when(segment.getStats()).thenReturn(Map.of("orders", new TableChangeStats(100, 0, 0)));
+        when(segment.getMode()).thenReturn("FULL_SNAPSHOT");
+        when(segment.getFirstSeq()).thenReturn(1L);
+        when(segment.getLastSeq()).thenReturn(100L);
+        when(batchRepository.findByIdWithFiles(batch.getId())).thenReturn(Optional.of(batch));
+        when(changelogSegmentRepository.findByBatchId(batch.getId())).thenReturn(List.of(segment));
+
+        BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
+
+        assertEquals(1, dto.deltaStats().size());
+        assertEquals(100, dto.deltaStats().get(0).inserts());
+        assertEquals(100L, dto.seqRange().last());
+    }
+
+    @Test
+    void getBatchDetailsOfAFinishedEmptySessionShowsNoSeqRange() {
+        UUID accountId = UUID.randomUUID();
+        Batch batch = Batch.start(accountId, UUID.randomUUID(), "DELTA");
+        batch.complete();
+        when(batchRepository.findByIdWithFiles(batch.getId())).thenReturn(Optional.of(batch));
+
+        BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
+
+        assertTrue(dto.deltaStats().isEmpty());
+        assertNull(dto.seqRange(), "no segment was ever recorded, so there is no range to show");
+    }
+
+    @Test
+    void listBatchHistoryReadsTheStoredTotalsOfAFinishedBatchWithoutAskingTheSegments() {
+        UUID accountId = UUID.randomUUID();
+        Site site = Site.createForTesting(accountId, "delta.pruned", "Delta Pruned");
+        when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
+        BatchWithFileCountProjection projection = projection(site, "COMPLETED", 5012611L, 87);
+        when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
+
+        CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
+
+        BatchSummaryDto dto = page.items().get(0);
+        assertEquals(5012611L, dto.deltaRecordCount());
+        assertEquals(87, dto.deltaTableCount());
+        verify(changelogSegmentRepository, never()).aggregateByBatchIds(anyList());
+    }
+
+    @Test
+    void listBatchHistoryMapsAStoredZeroTableCountToNull() {
+        // A finished session that recorded no segment keeps the rendering an empty session always
+        // had: no "0 changes • 0 tables" badge.
+        UUID accountId = UUID.randomUUID();
+        Site site = Site.createForTesting(accountId, "delta.empty", "Delta Empty");
+        when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
+        BatchWithFileCountProjection projection = projection(site, "COMPLETED", 0L, 0);
+        when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
+
+        BatchSummaryDto dto = service.listBatchHistory(accountId, null, 20).items().get(0);
+
+        assertNull(dto.deltaRecordCount());
+        assertNull(dto.deltaTableCount());
+    }
+
+    @Test
+    void listBatchHistoryAsksTheSegmentsOnlyForRunningOrUntrackedBatches() {
+        UUID accountId = UUID.randomUUID();
+        Site site = Site.createForTesting(accountId, "delta.mixed", "Delta Mixed");
+        when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
+        BatchWithFileCountProjection finished = projection(site, "COMPLETED", 10L, 1);
+        BatchWithFileCountProjection running = projection(site, "IN_PROGRESS", 3L, 1);
+        BatchWithFileCountProjection legacy = projection(site, "COMPLETED", null, null);
+        when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt()))
+                .thenReturn(List.of(finished, running, legacy));
+        SegmentBatchAggregate live = aggregate(running.getId(), 7L, 2L);
+        SegmentBatchAggregate old = aggregate(legacy.getId(), 4L, 1L);
+        when(changelogSegmentRepository.aggregateByBatchIds(anyList())).thenReturn(List.of(live, old));
+
+        List<BatchSummaryDto> rows = service.listBatchHistory(accountId, null, 20).items();
+
+        verify(changelogSegmentRepository).aggregateByBatchIds(List.of(running.getId(), legacy.getId()));
+        assertEquals(10L, rows.get(0).deltaRecordCount());
+        assertEquals(7L, rows.get(1).deltaRecordCount());
+        assertEquals(2, rows.get(1).deltaTableCount());
+        assertEquals(4L, rows.get(2).deltaRecordCount());
+    }
+
+    private static Batch finishedTrackedBatch(UUID accountId, String mode) {
+        Batch batch = Batch.start(accountId, UUID.randomUUID(), mode);
+        batch.recordDeltaSegment(new BatchDeltaSegment(60L, 1L, 60L,
+                Map.of("orders", new BatchTableStats(60, 0, 0))));
+        batch.recordDeltaSegment(new BatchDeltaSegment(40L, 61L, 100L,
+                Map.of("customers", new BatchTableStats(40, 0, 0))));
+        batch.complete();
+        return batch;
+    }
+
+    private static BatchWithFileCountProjection projection(Site site, String status,
+                                                           Long totalRecords, Integer tableCount) {
+        BatchWithFileCountProjection projection = mock(BatchWithFileCountProjection.class);
+        UUID id = UUID.randomUUID();
+        when(projection.getId()).thenReturn(id);
+        when(projection.getSiteId()).thenReturn(site.getId());
+        when(projection.getStatus()).thenReturn(status);
+        when(projection.getHasErrors()).thenReturn(false);
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now(ZoneOffset.UTC));
+        when(projection.getFileCount()).thenReturn(0);
+        when(projection.getTotalSize()).thenReturn(0L);
+        when(projection.getTotalRecords()).thenReturn(totalRecords);
+        when(projection.getTableCount()).thenReturn(tableCount);
+        return projection;
+    }
+
+    private static SegmentBatchAggregate aggregate(UUID batchId, long records, long tables) {
+        SegmentBatchAggregate aggregate = mock(SegmentBatchAggregate.class);
+        when(aggregate.getBatchId()).thenReturn(batchId);
+        when(aggregate.getTotalRecords()).thenReturn(records);
+        when(aggregate.getTableCount()).thenReturn(tables);
+        return aggregate;
     }
 }
