@@ -52,7 +52,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
                 Map.of("malicious", "true")
         );
 
-        String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
+        String requestBody = new tools.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
         // When: Attempt to log error to store-01's batch (using store-02's token)
         mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, STORE_01_BATCH_ID)
@@ -81,7 +81,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
                 Map.of("field", "amount", "value", "invalid")
         );
 
-        String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
+        String requestBody = new tools.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
         // When: Log error to own batch
         mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, STORE_01_BATCH_ID)
@@ -114,7 +114,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
                 null  // metadata
         );
 
-        String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
+        String requestBody = new tools.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
         String nonExistentBatchId = "00000000-0000-0000-0000-000000000000";
 

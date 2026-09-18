@@ -1,6 +1,6 @@
 # Data Forge Middleware
 
-A Spring Boot 3.5.6 middleware service for secure batch file uploads with AWS S3 integration, designed for multi-tenant environments.
+A Spring Boot 4.1.1 middleware service for secure batch file uploads with AWS S3 integration, designed for multi-tenant environments.
 
 ## Overview
 
@@ -25,7 +25,7 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 
 ### Option 0: DevContainer (Local Dev Environment)
 
-This repo includes a DevContainer that starts infrastructure (PostgreSQL, Redis, LocalStack S3)
+This repo includes a DevContainer that starts infrastructure (PostgreSQL, LocalStack S3)
 via `docker-compose.dev.yml` and provides a Java 25 + Node 20 dev environment.
 
 1. Configure backend env vars in `.env` (see `.env.example`).
@@ -46,7 +46,7 @@ Notes:
 Run infrastructure services in Docker and DFM from IDE for debugging:
 
 ```bash
-# Start infrastructure (PostgreSQL, Redis, LocalStack)
+# Start infrastructure (PostgreSQL, LocalStack)
 ./scripts/docker-dev.sh start
 
 # Or manually
@@ -60,7 +60,6 @@ Then in IntelliJ IDEA:
 
 Infrastructure services:
 - **PostgreSQL**: localhost:5432 (user: `postgres`, password: `postgres`, database: `dfm`)
-- **Redis**: localhost:6379
 - **LocalStack S3**: http://localhost:4566 (bucket: dfm-uploads)
 
 Authentication is not part of the local stack — the backend validates Auth0-issued
@@ -78,7 +77,7 @@ See [docker-compose.dev.yml](docker-compose.dev.yml) for configuration details.
 The easiest way to run the complete stack:
 
 ```bash
-# Start all services (PostgreSQL, Redis, LocalStack S3, DFM Backend)
+# Start all services (PostgreSQL, LocalStack S3, DFM Backend)
 docker-compose up -d
 
 # Check services are healthy

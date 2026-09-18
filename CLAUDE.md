@@ -3,13 +3,13 @@
 ## Tech Stack
 
 ### Backend
-- **Java 25** (LTS) + **Spring Boot 3.5.6** + **Spring Security 6** (Auth0 OAuth2)
-- **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 11**
+- **Java 25** (LTS) + **Spring Boot 4.1.1** (Spring Framework 7) + **Spring Security 7** (Auth0 OAuth2)
+- **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 12**
 - **AWS SDK v2** (S3) + **HikariCP** + **Micrometer** + **SpringDoc OpenAPI 3**
 - **Auth0 2.26.0** (Management API) + **Hypersistence Utils** (JSONB)
-- **Redis + Caffeine** (Spring Cache) + **Bucket4j** (rate limiting) + **Spring Retry**
+- **Caffeine** (in-process, rate limiter buckets) + **Bucket4j** (rate limiting) + **Spring Framework retry** (`@Retryable`, `@EnableResilientMethods`)
 - **Apache POI / commons-csv / commons-compress** + **java-diff-utils** (file diff) + **json-schema-validator**
-- **JUnit 5 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
+- **JUnit 6 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
 
 ### Frontend
 - **React 19.2** + **TypeScript 5.6** + **Vite 7**
@@ -77,7 +77,7 @@ docker-compose up postgres localstack     # Start dependencies
 - **N+1 Prevention**: JOIN FETCH in @Query annotations
 - **Cursor Pagination**: For large datasets (batches, audit logs)
 - **JSONB**: site_schemas, plugin metadata, comparison diffs (Hypersistence Utils)
-- **Caching**: Spring Cache (Redis + Caffeine) via `config/CacheConfiguration` (e.g. batch history)
+- **No Spring Cache, no Redis** (#319): reads hit PostgreSQL; `NoSpringCacheConventionTest` refuses a cache annotation or a Redis dependency
 
 ### Site Types & Schemas (019)
 - **SiteType** (immutable per site): `DBF` (full CSV snapshots, server diffs) | `POSTGRES_CDC` (CSV baseline + JSONL deltas)
@@ -706,13 +706,73 @@ pages/{feature}/            # Route pages
 - OpenAPI spec: `/v3/api-docs`
 
 ## Active Technologies
-- Java 25 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)
+- Java 25 (LTS) + Spring Boot 4.1.1, Spring Security 7 (Auth0 OAuth2), Spring Data JPA (Hibernate 7.4), Jackson 3, AWS SDK v2 (S3)
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
-- PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
+- PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- migration-lands-in-develop: The Spring Boot 4.1 migration branch lands in `develop` as a **merge
+  commit**, not a squash — the one recorded exception to Rule 1 (issue #305). `migration/spring-boot-4.1`
+  carried nine tickets (#299–#304, #319, #320, #336), each already squashed into that branch by its own
+  PR; squashing the branch again would turn a framework upgrade that moved Framework, Security,
+  Hibernate, Jackson and protobuf in separate steps into one commit that `git bisect` cannot look
+  inside, which is exactly when bisect is wanted. The decision was the ticket's open question and was
+  taken by a human on 2026-09-18; the landing itself is done by hand (`gh pr merge <pr> --merge`, then
+  the branch deleted over REST), because `scripts/pr-merge.sh` (#332) refuses a PR whose head is a
+  long-lived branch by design. **Every other ticket still squashes** — this is the exception Rule 1
+  already names ("its own ticket decides"), not a change of the rule.
+  **Before the PR, `develop` was merged into the branch** (nine commits: #297, #296, #308, #316, #321,
+  #310, #326, #332, #334), in that direction and as a merge commit, so the conflicts are resolved once
+  on the branch rather than inside the landing. Three files conflicted. The two journals were
+  interleaved **by merge time** — the same order in `CLAUDE.md` and `AGENTS.md`, which is what
+  `AgentJournalConsistencyTest` holds — and the sync removed a stray `||||||| 91b14924` diff3 line
+  that `develop` itself had committed into both journals (the second such leftover after #212's round
+  2). `ErrorAdminControllerTest` took both sides' imports. **One file needed porting to Jackson 3
+  although it merged cleanly**: #321's `DeviceErrorContractTest` built a Jackson 2
+  `com.fasterxml.jackson.databind.ObjectMapper` — it still compiled, since Jackson 2 stays on the
+  classpath through `json-schema-validator` and `jjwt-jackson`, which is precisely why only a read of the incoming code
+  finds it — and now uses `tools.jackson`, like every other test after #302. The rest of `develop`'s
+  code (the `CheckpointService` split, the `ErrorLoggingService`/`ErrorLog` signature removals,
+  `scripts/pr-merge.sh`) built and passed on Boot 4 unchanged.
+  **Flyway**: neither side added a migration since the branch point, both end at V57, so there is no
+  number collision; **V58 stays free**. `integrationTest` ran green in UTC and in `Asia/Jerusalem`.
+  The dev smoke (Auth0 sign-in, a Windows-client Delta session, Bit BI `/sql-changes`, a Parquet
+  Export download, Swagger UI, `/actuator/prometheus`) is a human step recorded in the PR. No REST,
+  gRPC, proto, DTO, migration, configuration-key, metric, S3-key or frontend change beyond what the
+  nine migration tickets already recorded.
+- mvc-error-response-status: A Spring MVC exception that carries its own HTTP status answers it, not
+  the catch-all 500 (issue #336, found working #320). `GlobalExceptionHandler`'s
+  `@ExceptionHandler(Exception.class)` runs before `DefaultHandlerExceptionResolver`, so every MVC
+  exception with no handler of its own answered 500 "An unexpected error occurred" with an ERROR stack
+  trace — a client's mistake read as a server fault by a client that retries 5xx and by an alert on
+  ERROR. #320 closed one member (`HttpMessageNotReadableException`); reachable today were two more,
+  **415** (`HttpMediaTypeNotSupportedException`, a body whose `Content-Type` the route does not read)
+  and **406** (`HttpMediaTypeNotAcceptableException`, e.g. `Accept: application/json` on `/sql-changes`,
+  which produces `text/plain`). **One path over `org.springframework.web.ErrorResponse`, not a handler
+  per type** — every such Spring exception implements it and carries its status, so the types
+  unreachable today (a missing `@RequestHeader`, multipart, an async timeout) and any a later Spring adds
+  are closed with them. `@ExceptionHandler` takes only `Throwable` types and `ErrorResponse` is an
+  interface, so the branch sits **inside** the catch-all; every more specific handler
+  (`ResponseStatusException`, `NoResourceFoundException`/`NoHandlerFoundException`,
+  `HttpRequestMethodNotSupportedException`, `MethodArgumentNotValidException`, #320's — all
+  `ErrorResponse` too) still wins, because Spring picks the closest declared type and `Exception` is the
+  farthest; each is pinned by a test that tells its answer from the generic one. Such an exception
+  answers its own status and headers (a 415 carries `Accept`) with the standard `ErrorResponseDto`: a
+  4xx with its `ProblemDetail` detail — Spring's client-facing text naming the media type or header at
+  fault, never a Java type or the cause's message — and one WARN without a stack trace; a 5xx (an async
+  timeout is 503, not 500) with the reason phrase only and an ERROR, since it is still ours. **One case
+  had to be decided rather than inherited**: a JSON route asked for `text/plain` only fails with 406,
+  and writing the JSON error body into that response fails again — Spring's resolver then logged
+  "Failure in @ExceptionHandler" with a stack trace before answering the same 406 bare — so a client
+  whose `Accept` admits no JSON (`application/json` or `application/*+json`) gets the status alone; an
+  `Accept` that does not parse is left to Spring, which copes. Tests are real requests for 415 and both
+  406 shapes, and thrown exceptions for the rest; mutation-proven — without the branch nine tests go
+  red, and dropping the annotation of any one specific handler reddens its own guard. Client guides:
+  **needed** and done (`docs/device-flow-client-guide.md` gains 406 and 415, `docs/bitbi-integration.md`
+  406). No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - errorlog-factory-full-signature: `ErrorLog.create` has one factory, and it takes the severity
   (issue #334, found working #326). #326 removed the severity-less overloads from
   `ErrorLoggingService`; the same shape lived one layer down, in the domain factory — an 8-argument
@@ -734,6 +794,83 @@ pages/{feature}/            # Route pages
   cases. The `null` → `ERROR` default is enforced twice (factory and constructor), so its test pins
   the outcome, not the place — said in its Javadoc. No production behaviour, REST, gRPC, proto, DTO,
   migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- unreadable-body-400: A request body the server cannot read answers **400**, not 500, and Jackson 3's
+  `FAIL_ON_TRAILING_TOKENS` is accepted now that it can (issue #320, found by #300's characterization
+  and made a precondition by #303). `GlobalExceptionHandler` had no handler for
+  `HttpMessageNotReadableException`, so broken JSON, a missing body, an unknown enum value
+  (`"severity":"warning"` — enums bind by name, case-sensitive) or the wrong JSON shape reached the
+  catch-all: 500 "An unexpected error occurred" and an ERROR with a stack trace. A client's error read
+  as a server fault in two places at once — to a client that retries 5xx (the Windows extractor does)
+  and to an alert on ERROR. It is now a 400 with the standard `ErrorResponseDto`, logged as **one WARN
+  line without a stack trace** that keeps the parser's own text for the operator.
+  **What the client is told is the one part that needed a decision.** The ticket asked for a message
+  that does not expose the parser's internals, and the parser's text is exactly what it must not
+  carry: Jackson's message names the Java type it was building, quotes a source excerpt and echoes the
+  rejected value. A fixed message alone would have been safe and unhelpful, since the client then cannot
+  tell which of its fields was refused. So the message is `Malformed request body`, followed by
+  `at '<path>'` when Jackson names the value that did not bind (`at 'severity'`, `at 'items[1].grade'`).
+  The path is built from `JacksonException.getPath()` references, **not** from `getPathReference()`,
+  which prefixes each step with a Java type name — the mutation that proves the difference (return
+  `getPathReference()`) turns two contract tests red. A path is the client's own vocabulary, the field
+  names it sent; a syntax error or a missing body has none, and the message then stops at
+  `Malformed request body`.
+  **The second half is the `FAIL_ON_TRAILING_TOKENS` pin of #303, which existed only because of the
+  first.** #303 kept `spring.jackson.deserialization.fail-on-trailing-tokens: false` for one reason:
+  refusing trailing content surfaced as a 500. With a 400 the reason is gone, and the pin was hiding a
+  defect of its own — a second concatenated JSON document was dropped silently. The key is removed from
+  `application.yml`, the `JacksonHttpDefaultsContractTest` verdict moves from PINNED to ACCEPTED, and
+  `trailingTokensAreIgnored` (201) becomes `trailingTokensAreRefused` (400), with trailing whitespace
+  still accepted (201) so the line a trailing newline must stay on is pinned too.
+  `fail-on-null-for-primitives: false` **stays pinned** whatever the status: refusing it would reject a
+  body the generate-SQL routes accept from shipped clients today, and a 400 is still a refusal.
+  **Deliberate behaviour changes to #300's characterization, named rather than slipped in:**
+  `unreadableBodyAnswers500` → `unreadableBodyAnswers400` (full `WireJson` body, path included), and the
+  unreadable control inside `nullForAPrimitiveBooleanReadsAsFalse` moves 500 → 400.
+  `GlobalExceptionHandlerContractTest` (fast gate, standalone MockMvc) adds four cases — the status and
+  body for four kinds of unreadable body, no leak of parser text, type names or the rejected value, the
+  nested and indexed path, and the WARN-not-ERROR log — each red against the missing handler.
+  **Not taken, and filed:** the other Spring MVC client-side exceptions — an unsupported
+  `Content-Type`, a missing required header, an unacceptable `Accept` — still reach the catch-all and
+  answer 500 the same way; that is a question about every route and is its own ticket, **#336**.
+  No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key
+  or frontend change; one configuration key is removed (`fail-on-trailing-tokens`). Client guides
+  updated (`docs/postgres-delta-client-development-guide.md`, `docs/device-flow-client-guide.md`: a 400
+  on an unreadable body is not to be retried). See `docs/cr-spring-boot-4-1.md`.
+- remove-upload-history-cache: The two Upload History caches and Redis are gone, because neither cache
+  ever held a value and making them live would have been wrong (issue #319, filed by #300 on this
+  branch). `batch-details` (`BatchHistoryService.getBatchDetails`) was conditioned on `#result`, which
+  a `condition` evaluates **before** the call, where it is undefined, so nothing was stored;
+  `batch-first-page` sat on `fetchFirstPage`, a `protected` method reached through `this`, which the
+  proxy never sees. Since #302 the serializer half of the ticket no longer held on this branch — the
+  Jackson 3 serializer writes `java.time` — so the two caches were inert by their annotations alone.
+  **Decided by the owner: delete rather than repair**, and the arguments are the part worth keeping.
+  Production has had no cache since 008, so removing it changes no behaviour. **A live
+  `batch-details` would have been a cross-account leak**: its key was the batch id alone while the
+  owner check runs inside the method, so an entry cached from the owner's read answered any account
+  that knew the id — proven, not argued: with `condition` turned into the `unless` it meant,
+  `BatchHistoryWithoutCacheIntegrationTest.ownerCheckRunsOnEveryRead` goes red because the other
+  account's read no longer throws. "A COMPLETED batch is immutable" was false as well — deletion,
+  retention and a site wipe all remove it — so a live cache needed eviction from three subsystems. And
+  a five-minute first page on a monitoring screen, where a CONTINUOUS session is one batch growing for
+  hours, is a stale list rather than an optimization; the "~80% less DB load" in `CacheConfiguration`
+  was never measured. **Redis went with the cache**, because it was its only user (rate limiting is
+  Caffeine, used directly): `spring-boot-starter-data-redis` and `-cache` are out of the build, so Boot
+  no longer builds a connection factory or a `redis` health contributor for a store that held nothing;
+  `spring.data.redis` is gone from `application-{dev,prod}.yml`, the Redis Testcontainer and the CI
+  `redis` service are gone, and so are `k8s/overlays/dev/redis.yaml`, the `SPRING_DATA_REDIS_*`
+  ConfigMap keys, the compose/devcontainer/Conductor Redis services and the Redis lines of the living
+  docs. **Not done here, and filed**: Memorystore in `infra/` (Terraform, stage/prod), the
+  `forge-redis` already running in the dev cluster (`kubectl apply -k` does not prune), and the dormant
+  AWS path's `REDIS_PASSWORD` — **#335**. Tests: `NoSpringCacheConventionTest` (fast gate) refuses a
+  Spring Cache annotation in `src/main`, a Redis client or cache starter in the build, Spring Data
+  Redis on the classpath and a `redis:`/`cache:` block in shipped configuration, and
+  `BatchHistoryWithoutCacheIntegrationTest` holds the wired half — no `CacheManager` and no Redis bean
+  in the context, the owner check on every read, and a second read of a detail and of the first page
+  seeing a change made in between (both red under the "make it live" mutation). #300's
+  `RedisCacheSerializationIntegrationTest` is deleted with the thing it characterized. No REST, gRPC,
+  proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric or frontend change; the Spring Cache
+  **names** `batch-details`/`batch-first-page` disappear with it, and `/actuator/health` loses its
+  `redis` component.
 - pr-merge-script: The merge step of `/task`, `/merge` and `/github-issue-runner` is one script,
   `scripts/pr-merge.sh <pr> [--rebase]`, and it no longer reads `gh`'s exit code as its verdict
   (issue #332). `gh pr merge --squash --delete-branch` run from a worktree — the normal path of
@@ -786,6 +923,73 @@ pages/{feature}/            # Route pages
   fails the three non-`ERROR` tests. `ErrorLog.create`'s own severity-less factory is deliberately
   untouched — a domain factory is outside this ticket's file list. No REST, gRPC, proto, DTO,
   migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- jackson3-http-defaults: The HTTP API is on Jackson 3's own defaults, with two of them pinned back by
+  name instead of all eighteen deferred by a flag (issue #303). #302 shipped
+  `spring.jackson.use-jackson2-defaults: true`, which is a compatibility mode rather than a
+  destination: it restores every Jackson 2 default at once, so each difference was inherited silently
+  rather than accepted.
+  **The population was measured, and the measurement is the part worth keeping, because the ticket's
+  own list was both too long and too short.** Two probes: a bare `JsonMapper` differs from
+  `builderWithJackson2Defaults()` in **18** features, but the mapper Boot actually builds for HTTP
+  differs in **13** — Boot pins `WRITE_DATES_AS_TIMESTAMPS`, `WRITE_DURATIONS_AS_TIMESTAMPS`,
+  `FAIL_ON_UNKNOWN_PROPERTIES` and both fast number parsers itself, whatever the flag says. So three of
+  the six changes the ticket named (dates, durations, unknown properties) never reach this application
+  at all, and eight it did not name do. With the flag off and nothing pinned, **2** of 2634 fast-gate
+  and 2943 integration tests fail, both on the request side; all seven full-body `WireJson` templates
+  of #300 — key order, `Z` on `Instant`, enums by name — are green untouched.
+  **Pinned (2), and the deciding fact is the status code rather than the strictness.** Accepting
+  `FAIL_ON_NULL_FOR_PRIMITIVES` or `FAIL_ON_TRAILING_TOKENS` turns a request that answers 404/201 today
+  into a **500** — measured, not assumed: an unreadable body reaches the catch-all handler, so a
+  client-side malformation is reported as a server error, which is the misreporting class this
+  repository files tickets about. `ManualSqlGenerationRequestDto.forceFullGeneration` is the only
+  primitive in any of the 22 `@RequestBody` types (#300's reflective inventory), and the frontend omits
+  the field rather than sending `null`, so the exposure is external clients and scripts — the ticket's
+  own recommendation, and it costs one key. Trailing tokens are the sloppier of the two to keep, since
+  a second concatenated JSON document is silently truncated to the first; that is worth fixing **after**
+  an unreadable body answers 400, which is a decision about every malformed-body route and is filed
+  rather than taken here.
+  **Accepted (11), each with the evidence rather than an assurance.** `SORT_PROPERTIES_ALPHABETICALLY`
+  is the one that looks alarming and is not: records keep their creator order, so all 22 request
+  bodies and every response DTO are unmoved, and the only getter-ordered JSON on the surface is the raw
+  `Page<>` of `AccountPluginsController#listBatches` and `PluginAdminController#listBatchesWithoutSql`,
+  whose `PageImpl` members really are reordered — invisible, because no JSON parser reads members by
+  position, and their OpenAPI schemas never documented the envelope anyway. Both enum flags are
+  invisible because **no enum in the repository overrides `toString()`**, so it is `name()` —
+  `AdminActionType`, `ActionStatus` and `UserRole` carry a label that differs from `name()` and are safe
+  for that reason alone, which is why a guard now holds it. `ONE_BASED_MONTHS` is a genuine change where
+  it applies (`Month.SEPTEMBER` writes `8` under Jackson 2 and `9` under Jackson 3) and applies nowhere:
+  no `Month`, `YearMonth` or `MonthDay` in any body. `WRITE_UTC_AS_OFFSET` has no `ZonedDateTime` or
+  `OffsetDateTime` to act on, and `Instant` renders with a `Z` either way. `STRIP_TRAILING_BIGDECIMAL_ZEROES`
+  has no `BigDecimal` and no `JsonNode` on the surface, and numbers in a free-form `Map<String, Object>`
+  bind as `Double`, so the error-log metadata round trip echoes `2.50` as `2.5` in both modes.
+  `ALLOW_FINAL_FIELDS_AS_MUTATORS`, `USE_GETTERS_AS_SETTERS` and `DETECT_PARAMETER_NAMES` are inert on
+  records. `FIX_FIELD_NAME_UPPER_CASE_PREFIX` was measured to leave record component names alone,
+  `s3Path`, `sQty` and `URL` included. `FAIL_ON_EMPTY_BEANS` can only turn a 500 into `{}`.
+  **The decisions are a test rather than a paragraph.** `JacksonHttpDefaultsContractTest` carries all
+  eighteen verdicts (13 decided plus the 5 Boot pins itself) with the evidence in the failure
+  message, and asserts four things: the flag is absent from every configuration file — in the
+  `SPRING_JACKSON_USE_JACKSON2_DEFAULTS` spelling too, since relaxed binding reaches the same property,
+  and the #282 hazard is guarded, so the comment explaining the absence is not itself read as the flag;
+  the mapper Boot builds **from the shipped `application.yml`** rather than from a copy of it carries
+  every decided value; no enum overrides `toString()`; and — the assertion review round 1 asked for —
+  **every default that actually differs between the two modes has a verdict at all**, so the table
+  cannot quietly stop describing the API when a later Jackson adds a default. That last one was the
+  round's finding turned into code rather than prose: the class Javadoc claimed to record all five
+  defaults Boot pins itself while `DECISIONS` held three, and both fast number parsers lived only in
+  the prose — a guard promising a guarantee it did not deliver. Red first on the first two; the enum
+  guard and the completeness guard were each proven by mutation (a `toString()` on `SiteType`; a
+  verdict deleted from the table, which the value check by construction cannot catch). **Round 2 then
+  found the same overclaim one layer in, and it is the more interesting half**: a difference-based
+  check is blind to a row that never differs, so the five Boot pins itself — the very population
+  round 1 had just added — could each be deleted with nothing failing, while the Javadoc claimed to
+  record all eighteen. They are named in `BOOT_PINNED` now, with the verdict count pinned beside them,
+  and the reviewer's own mutation (deleting `USE_FAST_DOUBLE_PARSER`, which passed before) is red.
+  The lesson worth keeping is that a guard derived from a diff can only ever hold what the diff can
+  see. The behavioural half of the two pins is #300's `JsonRequestAcceptanceContractTest`, which goes
+  red on the real 500s without them.
+  No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key,
+  cache-key or frontend change — no field name, type or Zod schema moves, and key order is not something
+  a parser reads. See `docs/cr-spring-boot-4-1.md` ("Jackson 3 defaults").
 - form-base-branch-hint: An issue form cannot carry a ticket's base, so the forms say so and the
   resolver is left alone (issue #310, filed by #298 when the forms of #309 reached `develop` after
   that ticket was taken). GitHub renders every form field as `### <label>` with its value beneath,
@@ -827,7 +1031,6 @@ pages/{feature}/            # Route pages
   UP-TO-DATE and the guard would never run — the trap #298 and #311 both fell into.
   Documentation, forms and tests only: no production code, REST, gRPC, proto, DTO, migration
   (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
-||||||| 91b14924
 - gauge-weak-target-held: A gauge test holds the object its gauge reads, so the value stops turning
   into `NaN` when the collector runs (issue #316). `Gauge.builder(name, target, fn)` keeps `target`
   behind a **weak reference** — the registry never keeps alive the thing it reads — and six call
@@ -907,6 +1110,95 @@ pages/{feature}/            # Route pages
   default, so the guide described the intention and the code contradicted it. No REST **route**,
   gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric,
   cache, S3-key or frontend change.
+- protobuf-4-35-from-bom: protobuf 3.25.9 → **4.35.1**, taken from the Spring Boot 4.1 BOM rather
+  than declared (issue #304). #302 had held it at 3.25.9 through the BOM property so that the
+  framework change and the transport change did not land together; gRPC had already moved to
+  **1.83.1** on Boot 3.5 (#313), which is what Boot 4.1.1 sets, so what was left is protobuf alone.
+  The Boot 4.1.1 BOM imports **both** families' BOMs — `protobuf-bom 4.35.1` and `grpc-bom 1.83.1` —
+  so neither needs a version of its own here.
+  **Removing the explicit version is what fixes the codegen, which is the opposite of what the
+  previous comment predicted.** #302 recorded that Boot's version-less `protoc` and
+  `protoc-gen-grpc-java` coordinates "resolve to no version (`Could not find
+  com.google.protobuf:protoc:.`)" and pinned both in the `protobuf` block. That failure was a
+  consequence of `protobuf-java` carrying a **direct** version, not of Boot's integration: a direct
+  version sits outside dependency management, so there is nothing for the version-less coordinate to
+  align to. With `protobuf-java` left to the BOM, both resolve, and the `protobuf` block shrinks to
+  `plugins { create("grpc") }` — the codegen now follows the runtime artifacts instead of a second
+  set of properties somebody has to keep in step. Pinning `protobuf-java` back to 3.25.9 pulls
+  `protoc` down to 3.25.9 **with** it and the build stays green, which is that alignment observed
+  rather than asserted.
+  **A gencode/runtime mismatch cannot be shipped silently, and that is worth knowing before the next
+  BOM bump.** Forced apart — `protoc` pinned at 4.35.1 against a 3.25.9 runtime — gencode 4.x calls
+  `com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion`, which 3.25.9 does not have, so
+  **`:compileJava`** fails with "cannot find symbol" across every generated message. It is a compile
+  error, not a runtime one.
+  **What the regenerated code actually is**, since "only the header moves" would be wrong: 4.35.1
+  gencode extends `GeneratedMessage` instead of `GeneratedMessageV3`, carries
+  `@com.google.protobuf.Generated` and the `RuntimeVersion` guard, and drops the builder overrides
+  (`setField`, `clearField`, `setUnknownFields`, …) the 4.x base class now handles. None of it
+  reaches our own code, which imports exactly two protobuf types — `ByteString` and `Timestamp`,
+  both unchanged. `src/main/proto/delta-ingestion.proto` is untouched and its **diff is empty**.
+  **Wire compatibility is measured, not inferred, and the gap in it is named.** A server built from
+  this branch ran a real TCP session driven by **grpcurl** — a Go protobuf runtime, independent of
+  our Java one exactly as the shipped C# client is: `GetSyncState` → `SubmitSchema` → a bidirectional
+  `StreamChanges` (`SessionStart` `FULL_SNAPSHOT`, three `ChangeRecord`s covering `int_value`,
+  `decimal_value`, `is_null` and a non-ASCII `string_value`, then `SessionEnd` with per-table
+  reconciliation) → `SessionCommitted` naming a real segment key, with the watermark advancing 0 → 3.
+  The changelog segment that session wrote — gzipped length-delimited protobuf produced by
+  protobuf-java 4.35.1 — was then pulled out of S3 and **decoded record by record with protoc
+  3.25.9**, so the durable journal already in production buckets stays readable by the old toolchain
+  in both directions. **What was not done:** the shipped `dbf-data-extractor` itself was not run —
+  this machine has neither a .NET toolchain nor the client's sources — so the DoD item asking for a
+  session of that client stands open for both transport changes, this one and #313's, exactly as
+  #313 left it.
+  **`protoc` 4.35.1 for `osx-aarch_64` is a pure arm64 Mach-O** (3.25.9 was a universal binary), so
+  the Apple Silicon property #313 exists for holds and improves; `protoc-gen-grpc-java` 1.83.1 stays
+  the universal binary #313 measured.
+  **Guards.** `GrpcArtifactVersionConsistencyTest` (#301) is green at 1.83.1 / 4.35.1 — one version
+  per family on `runtimeClasspath`, with `grpc-protobuf`'s own declared `protobuf-java 3.25.9`
+  resolved up to 4.35.1 rather than left beside it; mutation-proven by putting
+  `protobuf-java-util 3.25.9` on the classpath, which reddens it. `./gradlew test -PexcludeIntegration`
+  (2633 tests) and `./gradlew integrationTest` (307 tests) both green.
+  The Gradle protobuf plugin moves 0.9.4 → **0.9.6**. No REST, gRPC contract, DTO, migration
+  (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, cache, S3-key or frontend change;
+  no `docs/` page names a gRPC or protobuf version, so none needed rewriting.
+- spring-boot-4-1: Spring Boot 3.5.16 → **4.1.1** — Framework 7.0.9, Security 7.1.1, Hibernate 7.4.5,
+  Jackson 3.1.5, Flyway 12.4, Micrometer 1.17.1, JUnit 6.0.3, HikariCP 7.0.2, Testcontainers 2.0.5
+  (issue #302, the atomic step of the migration, merged into `migration/spring-boot-4.1`; prepared by
+  #299/#300/#301/#313). **Build**: technology starters (`-webmvc`, `-security-oauth2-resource-server`,
+  `-flyway` — without it Boot 4 runs no migrations — and the per-technology test starters); caffeine,
+  Testcontainers and Awaitility versions from the BOM; springdoc 3.1.1; `hypersistence-utils-hibernate-73`
+  3.15.5; `spring-retry` and `annotations-api` gone. **protobuf held at 3.25.9** through the BOM property
+  `protobuf-java.version` (Boot 4.1 manages 4.35.1; #304). **Boot's Gradle plugin now configures the
+  protobuf plugin**: it adds a declared `grpc` plugin to every generate task itself, so our
+  `generateProtoTasks` registration had to go ("a PluginOptions with that name already exists"), while
+  its version-less `protoc`/`protoc-gen-grpc-java` resolved to no version, so both stay pinned.
+  `spring-boot-properties-migrator` was read for `default`/`dev`/`prod`/`test` (positive control
+  reported) — no renamed key — and removed.
+  **Retry** is Spring Framework's `@Retryable(maxRetries = 2, delay = 1000, multiplier = 2.0)` +
+  `@EnableResilientMethods`, pinned by behaviour in `AccountSyncServiceRetryTest` (three calls, 1 s then
+  2 s apart; mutations: no enabler, `maxRetries = 1`), advisor order unchanged (`LOWEST_PRECEDENCE - 1`).
+  **Jackson 3** in 10 main and 18 test files; `spring.jackson.use-jackson2-defaults: true` keeps the HTTP
+  API — every #300 wire and acceptance test green **without a changed expectation** (#303 drops it).
+  `JacksonConfiguration` is a `JsonMapperBuilderCustomizer`; `PluginDataValidator` keeps a Jackson 2 mapper
+  of its own, json-schema-validator 1.5 being Jackson 2.
+  **JSONB needed two library defaults set back**: `HypersistenceJsonMapperSupplier`
+  (`hypersistence-utils.properties`) builds the mapper with Jackson 2 defaults — removing it reddens seven
+  #300 JSONB characterizations — and `TableChangeStats` is `Serializable`, because hypersistence 3.15
+  snapshots a JSON attribute by Java serialization and refuses anything else, which failed every load of a
+  segment with stats. **Redis**: `GenericJacksonJsonRedisSerializer` with typing limited to
+  `com.bitbi.dfm.*`/`java.*`, keys prefixed `jackson3:` so pods of both versions never read each other's
+  entries during a rollout (mutation: dropping the prefix reddens four tests); two #300 expectations
+  moved deliberately (the prefix; `BatchDetailDto` now round-trips), and the reads wait for the value,
+  since Spring Data Redis 4 `Cache#put` can return before it is readable elsewhere. Both caches stay inert
+  (#319). **Security 7** adds a `FACTOR_BEARER` authority to bearer tokens; nothing reads the set, and
+  `TestSecurityConfigTest` pins `{ROLE_x, FACTOR_BEARER}`. **springdoc 3**: new `OpenApiDocsContractTest`;
+  the document dumped on 3.5.16 and 4.1.1 has identical paths, operations and schema names, with more
+  precise schemas only (nullable types, typed examples, Bean Validation constraints).
+  Guard tests named by the ticket stayed green unchanged. `test -PexcludeIntegration` 2633/0 failed;
+  `integrationTest` 307 tests, 14 skipped, 0 failed in `TZ=UTC` and `TZ=Asia/Jerusalem`. No REST route,
+  gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric-name, S3-key
+  or frontend change. See `docs/cr-spring-boot-4-1.md`.
 - scratch-reserve-one-snapshot: The #193 scratch reserve stays at the frame plus **one** snapshot,
   and that is now a recorded decision rather than a gap (issue #296, raised by `review-architecture`
   as a MINOR on PR #295). The reserve is `max-frame-temp-bytes + max-temp-bytes` (deployed
@@ -941,6 +1233,51 @@ pages/{feature}/            # Route pages
   (**V58 stays free**), `specs/NNN-*`, configuration-key, configuration-value, metric, S3-key or
   frontend change. See `docs/delta-client-v2-guide.md` ("Frame plus one snapshot is a decision,
   not an oversight").
+- boot41-characterization-net: The JSON surfaces Spring Boot 4.1 moves — HTTP bodies, request
+  acceptance, the seven JSONB columns and the Redis cache — are pinned on Boot 3.5 before the upgrade
+  (issue #300, the safety net for #302 in `migration/spring-boot-4.1`). Tests only; every one was
+  green on arrival, so each is backed by a named mutation listed in its PR.
+  **What is pinned and where.** `contract/JsonResponseWireContractTest` holds whole bodies through
+  new `contract/WireJson` (a template with `<uuid>`/`<instant>`/`<local-date-time>`/`<string>`
+  placeholders and everything else literal), because `jsonPath` cannot see key order, an explicit
+  `null` or `1` vs `1.0` — exactly what Jackson 3's `SORT_PROPERTIES_ALPHABETICALLY`, date handling
+  and a `JacksonConfiguration` that Boot 4 no longer uses as the HTTP mapper can change: the Device
+  API batch (a `null` `completedAt` written), error log (enum by name, `isRead`, free-form metadata
+  numbers), `DeviceTokenErrorDto` (`error_description`, `NON_NULL`), authorize, refresh, the
+  application `ErrorResponseDto` at 400/404 and the cursor page's `"nextCursor":null`. Bit BI's table
+  and site lists and Parquet Export's listing (`producedAt`/`linkExpiresAt` as offset-less
+  `LocalDateTime`) are pinned in their own contract classes, which already mock authentication.
+  `contract/JsonRequestAcceptanceContractTest` pins acceptance: an unknown property and trailing
+  content are ignored (201), an unreadable body and an unknown enum value reach the catch-all
+  handler (500 with the generic body — no `HttpMessageNotReadableException` handler exists), and a
+  scan of every registered `@RequestBody` type pins the **one** primitive in a request body,
+  `ManualSqlGenerationRequestDto.forceFullGeneration` (owner and admin routes), whose `null` reads as
+  `false` today and becomes an unreadable body under `FAIL_ON_NULL_FOR_PRIMITIVES`.
+  `integration/JsonbColumnCharacterizationIntegrationTest` covers all seven `JsonBinaryType` mappings
+  both ways — written through the repository and read back as `jsonb::text`, and a historical
+  document set by raw SQL read back with its Java value types (`Integer`/`Long`/`Double`, `null`
+  members, `ArrayList`/`LinkedHashMap`) — plus a guard that fails when a JSONB mapping is added
+  unpinned. `integration/RedisCacheSerializationIntegrationTest` pins the cache.
+  **Findings the pinning surfaced, recorded rather than fixed.** Bit BI's `TableListResponseDto` and
+  `SiteListResponseDto` write an `"empty"` member from `isEmpty()`, and `ComparisonSummaryDto` a
+  `changePercentage` from its getter — not record components, so their fate under Jackson 3 is a
+  wire question. An `Instant` placed in a free-form JSONB map is stored as epoch seconds
+  (`1768473000.123456000`), the plain-mapper `WRITE_DATES_AS_TIMESTAMPS` default hypersistence-utils
+  builds, which Jackson 3 turns off — mixed forms would follow on one column.
+  A `changelog_segments.stats` object with a member `TableChangeStats` does not declare fails the
+  entity load, and a missing or `null` member reads as `0`. **Both Redis caches are inert in
+  production**: `batch-details` declares
+  `condition = "#result ..."`, which is evaluated before the call where `#result` is undefined, and
+  `batch-first-page` is a self-invoked `protected` method; and the configured
+  `GenericJackson2JsonRedisSerializer` cannot write `BatchDetailDto` at all (no JSR-310), so making
+  either cache live — mutation-proven — turns the endpoint into a serialization failure. And
+  `POST /api/v1/device/errors` drops the request's `severity` (always `ERROR`). Filed as #319 (the
+  inert caches), #320 (an unreadable body answers 500) and #321 (the dropped `severity`); what bears
+  on the upgrade itself is recorded on #302.
+  **Time.** `TZ=Asia/Jerusalem ./gradlew integrationTest` on Boot 3.5 is the reference for #302:
+  green on 2026-09-17 against Boot 3.5.16 — 88 classes, 306 tests, 14 skipped by `@Disabled` that
+  predates this ticket, 0 failures. No production code, REST, gRPC, proto, DTO, migration (**V58
+  stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - checkpoint-service-split: `CheckpointService` is split along its three roles, with no change in
   behaviour (issue #297, raised by `review-architecture` on PR #294 and again on PR #295). Two tickets
   running had moved **algorithms** out of the class (`BootstrapFrameWriter`, `ChangelogMerge`,
@@ -983,6 +1320,48 @@ pages/{feature}/            # Route pages
   then refused `git add` — while the test stayed green by hand; its subprocesses now drop every
   `GIT_*` variable. No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
   configuration-key, metric, S3-key, log-message or frontend change.
+- boot-3-5-16-deprecations: Spring Boot 3.5.6 → **3.5.16** (Framework 6.2.19, Security 6.5.11,
+  Jackson 2.21.4) and JaCoCo 0.8.13 → **0.8.14**, the first release that supports Java 25 officially,
+  with the deprecated calls Boot 4 removes taken out first (issue #299, the first ticket of the Spring
+  Boot 4.1 migration, merged into `migration/spring-boot-4.1`). Boot 4's own migration guide starts
+  from the latest 3.5.x with no deprecated API in use, since everything deprecated in 3.x is gone in
+  4.0. Compiled with `-Xlint:deprecation,removal`, the Spring, Spring Security, Testcontainers and
+  swagger-annotations warnings are now **zero**: `AuthorizationManager#check` → `authorize` in
+  `MetricsScrapeAccessTest`/`MetricsScrapeBindingTest`; the Testcontainers 2 container classes
+  (`org.testcontainers.postgresql.PostgreSQLContainer`, no longer generic, and
+  `org.testcontainers.localstack.LocalStackContainer`, whose single edge endpoint `getEndpoint()`
+  replaces `getEndpointOverride(S3)` and whose services are named by string) in
+  `TestContainersManager`/`AbstractIntegrationTest`; and `@Schema(required = true)` →
+  `requiredMode = REQUIRED` in `BatchHistoryController` and `CreateComparisonRequestDto` — the
+  deprecated attribute is `Schema#required` only, `@Parameter(required = …)` is not deprecated and is
+  untouched. **Proven by comparison, not asserted**: the OpenAPI document (`/api-docs`, which is where
+  springdoc serves it outside the `dev` profile) was dumped before and after and is identical after
+  key sorting, all 180 `required` entries included.
+  **`ActuatorConfiguration` is deleted.** It hand-declared `WebMvcEndpointHandlerMapping` — a
+  springfox-era workaround — which Boot's `WebMvcEndpointManagementContextConfiguration` declares
+  `@ConditionalOnMissingBean` with the same links-mapping rule, so the manual bean only shadowed it;
+  in Boot 4 the class also moves to `org.springframework.boot.webmvc.actuate.endpoint.web`. The
+  status and content type of `/actuator`, `/actuator/health`, `/health/liveness`, `/health/readiness`,
+  `/actuator/info`, `/actuator/prometheus`, `/actuator/metrics` and `/actuator/env` were recorded
+  before and after and did not change, `MetricsScrapeContractTest` stays green, and
+  `ActuatorHealthContractTest` gains `/actuator/info` so it is held on the fast gate rather than only
+  by `Auth0JwtValidationIntegrationTest` (mutation: dropping `info` from the exposure list reddens
+  it). The dead `management.metrics.export.prometheus.enabled` key is removed — it was renamed in
+  Boot 3.0 and bound to nothing.
+  **One new Spring deprecation arrived with the bump and is fixed rather than carried**: Framework
+  6.2.x marks `ContentCachingRequestWrapper(HttpServletRequest)` for removal, because an unbounded
+  cache holds the whole request body in heap. `PluginAuditFilter` passes a limit of **1 MiB + 1 B** —
+  one byte past its own hashing limit, so an oversized body still reads as oversized instead of being
+  cached truncated and hashed as if it fitted, while the controller still receives the body whole.
+  The one observable change: for a body above 1 MiB, `plugin_audit_logs.request_body_size` records
+  the cached 1 048 577 rather than the full length (the hash stays `BODY_TOO_LARGE`). The filter had
+  no test; `PluginAuditFilterRequestBodyTest` now pins both sides, and bounding the cache at exactly
+  the hashing limit (the mutation) reddens the oversized case. **Left, deliberately**: Jackson 2.21's
+  `ObjectMapper#setSerializationInclusion` deprecation in `JacksonConfiguration` — not a Spring API,
+  and #302 rewrites that class for Jackson 3 — and the non-Boot deprecations the ticket lists as out of
+  scope (bucket4j `Refill`, commons-csv, POI, commons-compress, the project's own `@Deprecated`).
+  No REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`, metric, S3-key or frontend
+  change; configuration loses one dead key.
 - issue-find-path-roles: `scripts/issue-find.sh` no longer goes silently empty on a correctly escaped
   path, and has a test (issue #308, found working #298). Its path argument plays three roles that want
   different spellings, and the script used one spelling for all of them: a **regular expression** over
@@ -1004,6 +1383,31 @@ pages/{feature}/            # Route pages
   `scripts/issue-find.sh` is an input of `test` now, and the pre-commit hook runs
   `com.bitbi.dfm.documentation.*` when it changes. No production code, REST, gRPC, proto, DTO,
   migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
+- grpc-classpath-single-version: Every `io.grpc:*` artifact on the runtime classpath is one version,
+  and so is every `com.google.protobuf:protobuf-java*` artifact — held by a fast-gate test instead of
+  by luck (issue #301, a guard for the Spring Boot 4.1 migration, landed in
+  `migration/spring-boot-4.1`). Boot 3.5 manages neither family; Boot 4.1 manages both (`grpc-bom`
+  1.83.1, `protobuf-bom` 4.35.1, through Spring gRPC), and `io.spring.dependency-management` lets an
+  explicit version win only on a **direct** dependency, so `grpc-api`/`grpc-core`/`grpc-util`/
+  `grpc-protobuf-lite` follow the BOM while `build.gradle.kts`'s direct declarations keep theirs.
+  Compilation passes on such a mix; the failure arrives at run time inside the Delta ingestion server
+  on :9090, which nothing else in the suite would notice first. `GrpcArtifactVersionConsistencyTest`
+  (`src/test/java/com/bitbi/dfm/config/`, no Spring context) scans the class loader's
+  `META-INF/MANIFEST.MF` resources and fails naming every member of a diverging family with its
+  version. **Where the version comes from was measured, not assumed**: neither gRPC 1.83.1 nor
+  protobuf 3.25.9 ships `pom.properties`, so the artifact name is the jar's file name and the version
+  its manifest (`Implementation-Version` for gRPC, `Bundle-Version` for protobuf; `pom.properties` is
+  preferred when a jar has its own). Membership also requires the family's package inside the jar,
+  so `com.google.api.grpc:*` (`grpc-google-*`, its own version line) is not read as gRPC, and a member
+  with no version in its metadata is a divergence rather than a skip. Two fail-closed properties: the
+  scan must find `grpc-api`, `grpc-core`, `grpc-stub`, `grpc-protobuf`, `grpc-netty-shaded` and
+  `protobuf-java`, so a blind scan cannot read as a consistent classpath; and the reader
+  (`GrpcArtifactVersions`) is pinned over synthetic jars in `GrpcArtifactVersionsTest`.
+  Mutation-proven: `runtimeOnly("io.grpc:grpc-util") { version { strictly("1.82.0") } }` turns the
+  guard red naming `grpc-util 1.82.0` beside seven 1.83.1 artifacts. Pinning the family on Boot 4.1
+  is #302; the protobuf 4 upgrade is #304. Test and documentation only: no production code,
+  `build.gradle.kts`, REST, gRPC, proto, DTO, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - grpc-1-83-native-codegen: gRPC 1.68.1 → **1.83.1** and protobuf 3.25.5 → **3.25.9** (`protoc` and
   `protobuf-java`, one property), still on Spring Boot 3.5 (issue #313). The reason is the build, not
   the runtime: `protoc-gen-grpc-java` for `osx-aarch_64` is an **x86_64** Mach-O up to 1.75.0 and a

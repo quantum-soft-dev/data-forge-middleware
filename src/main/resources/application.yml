@@ -2,6 +2,22 @@ spring:
   application:
     name: data-forge-middleware
 
+  # Boot 4 serializes HTTP bodies with Jackson 3. #302 deferred its changed defaults wholesale with
+  # use-jackson2-defaults; #303 removed that flag and took the differences one at a time, so there is
+  # deliberately no use-jackson2-defaults here — it would restore all eighteen at once and undo every
+  # decision below. Of the thirteen differences that reach the HTTP mapper (Boot pins dates, durations,
+  # unknown properties and both fast number parsers itself), eleven were measured to change nothing a
+  # client can observe and are accepted, and #320 accepted fail-on-trailing-tokens once an unreadable
+  # body answered 400 instead of 500 — content after the JSON document is refused rather than dropped.
+  # The one named here stays pinned. JacksonHttpDefaultsContractTest carries the whole table with the
+  # evidence for each verdict.
+  jackson:
+    deserialization:
+      # An explicit null for a primitive reads as false. The only primitive in any @RequestBody is
+      # ManualSqlGenerationRequestDto.forceFullGeneration, so refusing it would answer 400 on the owner
+      # and admin generate-SQL routes to a body they accept today.
+      fail-on-null-for-primitives: false
+
   threads:
     virtual:
       enabled: true
@@ -217,9 +233,6 @@ management:
       probes:
         enabled: true
   metrics:
-    export:
-      prometheus:
-        enabled: true
     tags:
       application: ${spring.application.name}
 

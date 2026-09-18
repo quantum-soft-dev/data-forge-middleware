@@ -6,9 +6,6 @@ metadata:
 data:
   # --- Spring / runtime ---------------------------------------------------------------
   SPRING_PROFILES_ACTIVE: "prod"          # the AWS/GCS-capable profile (not localstack)
-  # --- Redis (in-cluster for dev; Memorystore for stage/prod via overlay) -------------
-  SPRING_DATA_REDIS_HOST: "forge-redis"
-  SPRING_DATA_REDIS_PORT: "6379"
   # --- Object storage: GCS via S3-compatible XML API ----------------------------------
   AWS_S3_ENDPOINT: "https://storage.googleapis.com"
   AWS_S3_REGION: "auto"

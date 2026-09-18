@@ -9,10 +9,9 @@
   "shutdownAction": "stopCompose",
   "runServices": [
     "postgres",
-    "redis",
     "localstack"
   ],
-  "forwardPorts": [8080, 3000, 4566, 5432, 6379],
+  "forwardPorts": [8080, 3000, 4566, 5432],
   "customizations": {
     "vscode": {
       "settings": {

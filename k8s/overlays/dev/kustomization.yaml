@@ -3,7 +3,6 @@ kind: Kustomization
 
 resources:
   - ../../base
-  - redis.yaml            # in-cluster Redis (dev only; stage/prod use Memorystore)
   - gateway.yaml          # external GKE Gateway (test.dfm.bitbi.io) + HTTPRoutes + health check
   - podmonitoring.yaml    # managed-Prometheus scrape of /actuator/prometheus (delta counters)
 

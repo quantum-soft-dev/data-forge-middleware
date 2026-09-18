@@ -12,7 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.retry.annotation.EnableRetry;
+import org.springframework.resilience.annotation.EnableResilientMethods;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -37,7 +37,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * @version 1.0.0
  */
 @Configuration
-@EnableRetry
+@EnableResilientMethods
 @EnableScheduling
 public class Auth0Configuration {
 

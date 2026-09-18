@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.contract;
 
+import com.bitbi.dfm.contract.WireJson;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.plugin.application.DownloadLinkService;
 import com.bitbi.dfm.plugin.application.ParquetExportCredentialsService;
@@ -263,5 +264,35 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
                         .header("Authorization", basicAuth("pex_testLogin001:goodPassword")))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().string("Retry-After", "42"));
+    }
+
+    /**
+     * Wire form of the listing, pinned whole on Boot 3.5 / Jackson 2 before the move to Jackson 3
+     * (issue #300): declared key order, the {@code LocalDateTime} fields {@code producedAt} and
+     * {@code linkExpiresAt} as ISO strings without an offset, explicit {@code null} members, and the
+     * primitive {@code size}/{@code hasMore}.
+     */
+    @Test
+    @DisplayName("#300: the listing body is pinned whole, LocalDateTime without an offset")
+    void shouldKeepTheListingWireForm() throws Exception {
+        ParquetFileItem item = deltaItem();
+        DownloadLink link = DownloadLink.register(ACCOUNT_PLUGIN_ID, item.s3Key(), item.fileName(),
+                Duration.ofHours(1));
+        when(fileService.listFiles(eq(ACCOUNT_ID), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(new FileListing(List.of(item), 50, false, null));
+        when(downloadLinkService.registerLinks(ACCOUNT_PLUGIN_ID, List.of(item)))
+                .thenReturn(List.of(link));
+
+        String body = mockMvc.perform(get(FILES_PATH)
+                        .header("Authorization", basicAuth("pex_testLogin001:goodPassword")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        WireJson.assertMatches("{\"files\":[{\"siteId\":\"" + SITE_ID + "\",\"siteDomain\":\"shop.example.com\","
+                + "\"table\":\"orders\",\"type\":\"delta\",\"batchId\":null,\"artifactId\":null,\"status\":null,"
+                + "\"firstSeq\":100,\"lastSeq\":250,\"seq\":null,\"producedAt\":\"2026-07-20T10:00:00\","
+                + "\"fileName\":\"orders_seq100-250.parquet\",\"downloadUrl\":\"<string>\","
+                + "\"linkExpiresAt\":\"<local-date-time>\"}],\"size\":50,\"hasMore\":false,\"nextCursor\":null}",
+                body);
     }
 }

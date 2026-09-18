@@ -4,7 +4,7 @@ import com.bitbi.dfm.site.domain.SiteSchema;
 import com.bitbi.dfm.site.domain.SiteSchemaRepository;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.upload.presentation.dto.SchemaUploadRequestDto;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;

@@ -1,8 +1,7 @@
 package com.bitbi.dfm.integration;
 
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.localstack.LocalStackContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.localstack.LocalStackContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
@@ -10,7 +9,6 @@ import java.net.Socket;
 import java.net.URI;
 import java.time.Duration;
 
-import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
 /**
  * Singleton manager for Testcontainers to prevent race conditions during parallel test execution.
@@ -62,9 +60,6 @@ public class TestContainersManager {
             if (manager.postgresContainer != null && manager.postgresContainer.isRunning()) {
                 manager.postgresContainer.stop();
             }
-            if (manager.redisContainer != null && manager.redisContainer.isRunning()) {
-                manager.redisContainer.stop();
-            }
             if (manager.localStackContainer != null && manager.localStackContainer.isRunning()) {
                 manager.localStackContainer.stop();
             }
@@ -77,12 +72,7 @@ public class TestContainersManager {
      * PostgreSQL 16 container - singleton shared across ALL tests.
      * May be null if using external services.
      */
-    private final PostgreSQLContainer<?> postgresContainer;
-    /**
-     * Redis 7 container - singleton shared across ALL tests.
-     * May be null if using external services.
-     */
-    private final GenericContainer<?> redisContainer;
+    private final PostgreSQLContainer postgresContainer;
     /**
      * LocalStack container for S3 - singleton shared across ALL tests.
      * May be null if using external services.
@@ -105,7 +95,6 @@ public class TestContainersManager {
             System.out.println("[TestContainersManager] External services detected (CI environment) - skipping Testcontainers");
             // Don't initialize containers - use external services
             postgresContainer = null;
-            redisContainer = null;
             localStackContainer = null;
             return;
         }
@@ -113,26 +102,19 @@ public class TestContainersManager {
         System.out.println("[TestContainersManager] No external services detected - starting Testcontainers");
 
         // Initialize PostgreSQL container
-        postgresContainer = new PostgreSQLContainer<>(
+        postgresContainer = new PostgreSQLContainer(
                 DockerImageName.parse("postgres:16-alpine")
         )
                 .withDatabaseName("dataforge_test")
                 .withUsername("test")
                 .withPassword("test");
 
-        // Initialize Redis container
-        redisContainer = new GenericContainer<>(
-                DockerImageName.parse("redis:7-alpine")
-        )
-                .withExposedPorts(6379)
-                .withCommand("redis-server", "--requirepass", "test_password");
-
         // Initialize LocalStack container
         // Using LocalStack 3.x which is compatible with Testcontainers 1.20+
         localStackContainer = new LocalStackContainer(
                 DockerImageName.parse("localstack/localstack:3.8")
         )
-                .withServices(LocalStackContainer.Service.S3)
+                .withServices("s3")
                 .withStartupTimeout(Duration.ofMinutes(3));
 
         try {
@@ -146,7 +128,7 @@ public class TestContainersManager {
 
     /**
      * Detect if external services are already available (CI environment).
-     * Checks if PostgreSQL, Redis, and LocalStack are reachable at localhost.
+     * Checks if PostgreSQL and LocalStack are reachable at localhost.
      *
      * @return true if all external services are available
      */
@@ -163,15 +145,11 @@ public class TestContainersManager {
         boolean postgresAvailable = isPortOpen("localhost", 5432);
         System.out.println("[TestContainersManager] PostgreSQL (localhost:5432): " + (postgresAvailable ? "available" : "not available"));
 
-        // Check Redis at localhost:6379
-        boolean redisAvailable = isPortOpen("localhost", 6379);
-        System.out.println("[TestContainersManager] Redis (localhost:6379): " + (redisAvailable ? "available" : "not available"));
-
         // Check LocalStack at localhost:4566
         boolean localstackAvailable = isPortOpen("localhost", 4566);
         System.out.println("[TestContainersManager] LocalStack (localhost:4566): " + (localstackAvailable ? "available" : "not available"));
 
-        return postgresAvailable && redisAvailable && localstackAvailable;
+        return postgresAvailable && localstackAvailable;
     }
 
     /**
@@ -211,16 +189,10 @@ public class TestContainersManager {
             System.out.println("[TestContainersManager] PostgreSQL started: " + postgresContainer.getJdbcUrl());
         }
 
-        // Start Redis
-        if (!redisContainer.isRunning()) {
-            redisContainer.start();
-            System.out.println("[TestContainersManager] Redis started: " + redisContainer.getHost() + ":" + redisContainer.getMappedPort(6379));
-        }
-
         // Start LocalStack
         if (!localStackContainer.isRunning()) {
             localStackContainer.start();
-            System.out.println("[TestContainersManager] LocalStack started: " + localStackContainer.getEndpointOverride(S3));
+            System.out.println("[TestContainersManager] LocalStack started: " + localStackContainer.getEndpoint());
 
             // Create S3 bucket for tests (required for LocalStack)
             createS3TestBucket();
@@ -255,7 +227,7 @@ public class TestContainersManager {
 
                 software.amazon.awssdk.services.s3.S3Client s3Client = software.amazon.awssdk.services.s3.S3Client.builder()
                         .region(software.amazon.awssdk.regions.Region.of(localStackContainer.getRegion()))
-                        .endpointOverride(localStackContainer.getEndpointOverride(S3))
+                        .endpointOverride(localStackContainer.getEndpoint())
                         .credentialsProvider(software.amazon.awssdk.auth.credentials.StaticCredentialsProvider.create(credentials))
                         .forcePathStyle(true) // Required for LocalStack
                         .build();
@@ -299,17 +271,8 @@ public class TestContainersManager {
      *
      * @return the running PostgreSQL container, or null if using external services
      */
-    public PostgreSQLContainer<?> getPostgresContainer() {
+    public PostgreSQLContainer getPostgresContainer() {
         return postgresContainer;
-    }
-
-    /**
-     * Get the Redis container.
-     *
-     * @return the running Redis container, or null if using external services
-     */
-    public GenericContainer<?> getRedisContainer() {
-        return redisContainer;
     }
 
     /**
@@ -331,7 +294,6 @@ public class TestContainersManager {
             return detectExternalServices();
         }
         return postgresContainer != null && postgresContainer.isRunning()
-                && redisContainer != null && redisContainer.isRunning()
                 && localStackContainer != null && localStackContainer.isRunning();
     }
 
@@ -348,20 +310,6 @@ public class TestContainersManager {
     }
 
     /**
-     * Get Redis connection info for debugging.
-     *
-     * @return Redis connection string
-     */
-    public String getRedisConnectionInfo() {
-        if (useExternalServices) {
-            return "redis://localhost:6379";
-        }
-        return String.format("redis://%s:%d",
-                redisContainer.getHost(),
-                redisContainer.getMappedPort(6379));
-    }
-
-    /**
      * Get LocalStack S3 endpoint for debugging.
      *
      * @return S3 endpoint URL
@@ -370,6 +318,6 @@ public class TestContainersManager {
         if (useExternalServices) {
             return "http://localhost:4566";
         }
-        return localStackContainer.getEndpointOverride(S3).toString();
+        return localStackContainer.getEndpoint().toString();
     }
 }

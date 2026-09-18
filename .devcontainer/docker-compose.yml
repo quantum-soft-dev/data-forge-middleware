@@ -20,9 +20,6 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/dfm
       DB_USERNAME: dfm
       DB_PASSWORD: dfm_password
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: 6379
-      SPRING_DATA_REDIS_PASSWORD: redis_password
       AWS_S3_ENDPOINT: http://localstack:4566
       AWS_S3_REGION: us-east-1
       AWS_S3_BUCKET_NAME: dfm-uploads

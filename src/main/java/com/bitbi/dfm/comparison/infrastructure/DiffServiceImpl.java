@@ -2,8 +2,8 @@ package com.bitbi.dfm.comparison.infrastructure;
 
 import com.bitbi.dfm.comparison.domain.ChangeType;
 import com.bitbi.dfm.comparison.domain.DiffService;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.github.difflib.DiffUtils;
 import com.github.difflib.patch.AbstractDelta;
 import com.github.difflib.patch.Patch;
@@ -181,7 +181,7 @@ public class DiffServiceImpl implements DiffService {
 
         try {
             return objectMapper.writeValueAsString(diffStructure);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new DiffGenerationException("Failed to serialize diff to JSON", e);
         }
     }

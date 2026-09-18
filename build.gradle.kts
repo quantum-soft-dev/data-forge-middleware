@@ -3,10 +3,10 @@ import org.springframework.boot.gradle.tasks.run.BootRun
 
 plugins {
     java
-    id("org.springframework.boot") version "3.5.6"
+    id("org.springframework.boot") version "4.1.1"
     id("io.spring.dependency-management") version "1.1.7"
     jacoco
-    id("com.google.protobuf") version "0.9.4"
+    id("com.google.protobuf") version "0.9.6"
 }
 
 group = "com.bitbi"
@@ -30,13 +30,12 @@ repositories {
 
 extra["awsSdkVersion"] = "2.28.11"
 extra["grpcVersion"] = "1.83.1"
-extra["protobufVersion"] = "3.25.9"
 extra["parquetVersion"] = "1.15.2"
 extra["hadoopVersion"] = "3.4.1"
 
 dependencies {
     // Spring Boot Starters (versions managed by Spring Boot BOM)
-    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-validation")
@@ -44,7 +43,7 @@ dependencies {
 
     // Database
     runtimeOnly("org.postgresql:postgresql")
-    implementation("org.flywaydb:flyway-core")
+    implementation("org.springframework.boot:spring-boot-starter-flyway")
     runtimeOnly("org.flywaydb:flyway-database-postgresql")
 
     // AWS S3
@@ -53,14 +52,11 @@ dependencies {
     implementation("software.amazon.awssdk:s3-transfer-manager")
 
     // OAuth2 Resource Server (for Auth0 integration)
-    implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
+    implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server")
 
     // Auth0 Integration
     implementation("com.auth0:auth0:2.26.0")
     implementation("com.auth0:java-jwt:4.4.0")
-
-    // Spring Retry (for Auth0 API resilience)
-    implementation("org.springframework.retry:spring-retry")
 
     // JWT
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
@@ -68,7 +64,7 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
     // OpenAPI/Swagger
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.3")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1")
 
     // Metrics (managed by Spring Boot)
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
@@ -85,15 +81,12 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.28.0")
     // Encoding detection
     implementation("com.ibm.icu:icu4j:76.1")
-    // Redis caching
-    implementation("org.springframework.boot:spring-boot-starter-data-redis")
-    implementation("org.springframework.boot:spring-boot-starter-cache")
 
     // File Comparison Feature Dependencies
     // Diff library for file comparison
     implementation("io.github.java-diff-utils:java-diff-utils:4.12")
     // Hypersistence Utils for JSONB support
-    implementation("io.hypersistence:hypersistence-utils-hibernate-63:3.9.0")
+    implementation("io.hypersistence:hypersistence-utils-hibernate-73:3.15.5")
 
     // Plugin System Dependencies
     // JSON Schema validation for plugin data
@@ -101,15 +94,13 @@ dependencies {
     // Rate limiting for Plugin API
     implementation("com.bucket4j:bucket4j-core:8.10.1")
     // Caffeine cache for rate limiter (prevents memory leak)
-    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    implementation("com.github.ben-manes.caffeine:caffeine")
 
     // gRPC + Protobuf (Delta Client v2 ingestion — 022)
     implementation("io.grpc:grpc-stub:${property("grpcVersion")}")
     implementation("io.grpc:grpc-protobuf:${property("grpcVersion")}")
     runtimeOnly("io.grpc:grpc-netty-shaded:${property("grpcVersion")}")
-    implementation("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
-    // javax.annotation.Generated, referenced by generated gRPC stubs on JDK 9+
-    compileOnly("org.apache.tomcat:annotations-api:6.0.53")
+    implementation("com.google.protobuf:protobuf-java")
 
     // Parquet egress for Power BI (Delta Client v2 — 022, Task 4).
     // We write/read via Parquet's OutputFile/InputFile + PlainParquetConfiguration (no Hadoop FS), but
@@ -125,17 +116,18 @@ dependencies {
     annotationProcessor("org.projectlombok:lombok")
 
     // Test Dependencies
-    testImplementation("org.springframework.boot:spring-boot-starter-test")
-    testImplementation("org.springframework.security:spring-security-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-security-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-micrometer-metrics-test")
     // In-process gRPC transport for Delta v2 contract tests (022)
     testImplementation("io.grpc:grpc-inprocess:${property("grpcVersion")}")
-    // Testcontainers 2.0.3 for Docker Desktop 29.x compatibility
-    testImplementation("org.testcontainers:testcontainers:2.0.3")
-    testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.3")
-    testImplementation("org.testcontainers:testcontainers-postgresql:2.0.3")
-    testImplementation("org.testcontainers:testcontainers-localstack:2.0.3")
-    testImplementation("org.awaitility:awaitility:4.2.2")
-    // Docker 29.x compatibility handled by Testcontainers 2.0.2+
+    // Testcontainers 2.x (Docker Desktop 29.x compatible) and Awaitility, versions from the Boot BOM
+    testImplementation("org.testcontainers:testcontainers")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+    testImplementation("org.testcontainers:testcontainers-postgresql")
+    testImplementation("org.testcontainers:testcontainers-localstack")
+    testImplementation("org.awaitility:awaitility")
 }
 
 
@@ -285,7 +277,7 @@ tasks.jacocoTestReport {
 }
 
 jacoco {
-    toolVersion = "0.8.13"
+    toolVersion = "0.8.14"
 }
 
 tasks.jacocoTestCoverageVerification {
@@ -298,21 +290,17 @@ tasks.jacocoTestCoverageVerification {
     }
 }
 
+// Since Boot 4.1 the Spring Boot Gradle plugin reacts to the protobuf plugin: it gives protoc a
+// version-less artifact, and when a "grpc" plugin is declared it gives that one a version-less
+// protoc-gen-grpc-java and adds it to every generate task itself (with @generated=omit). So the
+// generateProtoTasks { all() { plugins { create("grpc") } } } this block used to carry is gone — a
+// second registration fails configuration ("a PluginOptions with that name already exists").
+// The version-less coordinates align with protobuf-java and grpc-util, which the Boot BOM manages
+// (protobuf-bom 4.35.1, grpc-bom 1.83.1), so protoc and protoc-gen-grpc-java follow the runtime
+// artifacts instead of a second place that has to be kept in step (#304).
 protobuf {
-    protoc {
-        artifact = "com.google.protobuf:protoc:${property("protobufVersion")}"
-    }
     plugins {
-        create("grpc") {
-            artifact = "io.grpc:protoc-gen-grpc-java:${property("grpcVersion")}"
-        }
-    }
-    generateProtoTasks {
-        all().forEach { task ->
-            task.plugins {
-                create("grpc")
-            }
-        }
+        create("grpc")
     }
 }
 

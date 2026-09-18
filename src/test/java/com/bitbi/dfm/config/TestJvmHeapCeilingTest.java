@@ -84,7 +84,7 @@ public class TestJvmHeapCeilingTest {
         assertTrue(declared <= TestJvmHeap.MAX_HEAP_BYTES,
                 "maxHeapSize is " + TestJvmHeap.describe(declared) + ", above the agreed ceiling of "
                         + TestJvmHeap.describe(TestJvmHeap.MAX_HEAP_BYTES) + ". The CI runner has 16 GB "
-                        + "shared with the PostgreSQL, Redis and LocalStack service containers, the "
+                        + "shared with the PostgreSQL and LocalStack service containers, the "
                         + "Gradle build JVM and every Testcontainers image the suite starts; past this "
                         + "the kernel's OOM killer answers before the JVM does, and that failure names "
                         + "nothing at all (#207)");

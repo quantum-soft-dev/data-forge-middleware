@@ -112,7 +112,11 @@ public class PluginAuditFilter extends OncePerRequestFilter {
         }
 
         // Wrap request and response to capture body and status
-        ContentCachingRequestWrapper wrappedRequest = new ContentCachingRequestWrapper(request);
+        // The cache is bounded one byte past the hashing limit: enough to tell an oversized body
+        // from one that fits, without holding the whole payload in heap. The body itself still
+        // reaches the controller whole — the limit bounds only the copy kept for the audit.
+        ContentCachingRequestWrapper wrappedRequest =
+                new ContentCachingRequestWrapper(request, MAX_REQUEST_BODY_SIZE + 1);
         ContentCachingResponseWrapper wrappedResponse = new ContentCachingResponseWrapper(response);
 
         long startTime = System.currentTimeMillis();

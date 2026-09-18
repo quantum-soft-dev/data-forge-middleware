@@ -43,6 +43,15 @@ class ActuatorHealthContractTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("Should permit /actuator/info without authentication")
+    void shouldPermitInfoWithoutAuth() throws Exception {
+        // Held on the fast gate since #299 removed the hand-declared WebMvcEndpointHandlerMapping:
+        // every actuator path is now mapped by Boot's auto-configuration alone.
+        mockMvc.perform(get("/actuator/info"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("Should deny the scrape endpoints when no allowed CIDR is configured")
     void shouldDenyScrapeEndpointsByDefault() throws Exception {
         mockMvc.perform(get("/actuator/prometheus"))

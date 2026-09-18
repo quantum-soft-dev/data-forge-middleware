@@ -17,11 +17,19 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.InvalidMediaTypeException;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
+import tools.jackson.core.JacksonException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -45,6 +53,9 @@ import java.time.Instant;
 public class GlobalExceptionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /** {@code application/*+json}: a structured-syntax suffix the JSON converter also writes. */
+    private static final MediaType JSON_SUFFIX = new MediaType("application", "*+json");
 
     /**
      * Handle IllegalArgumentException (400 Bad Request).
@@ -134,6 +145,67 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle HttpMessageNotReadableException (400 Bad Request).
+     * <p>
+     * A request body that is missing, is not JSON, or holds a value its field cannot bind (an unknown
+     * enum constant, a string where an object belongs) is the client's error. Without this handler it
+     * reached the catch-all and answered 500 with an ERROR stack trace (issue #320), which a client
+     * that retries 5xx retries for ever and an ERROR-rate alert reports as a server fault.
+     * </p>
+     * <p>
+     * The message names the JSON path of the value that did not bind — field names the client itself
+     * sent — and nothing else: the parser's own text carries Java type names, the source excerpt and
+     * the rejected value. That text goes to the WARN line instead, without a stack trace.
+     * </p>
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponseDto> handleUnreadableBody(
+            HttpMessageNotReadableException ex,
+            HttpServletRequest request) {
+
+        String path = jsonPath(ex);
+        String errorMessage = path.isEmpty() ? "Malformed request body" : "Malformed request body at '" + path + "'";
+        logger.warn("Unreadable request body on {} {}: {}", request.getMethod(), request.getRequestURI(),
+                ex.getMostSpecificCause().getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * The JSON path of the value Jackson could not bind, as {@code items[1].grade}, or empty when the
+     * failure has no path (a syntax error at the root, a missing body). Built from the path references
+     * rather than {@link JacksonException#getPathReference()}, which prefixes each step with the Java
+     * type it was reading.
+     */
+    private static String jsonPath(HttpMessageNotReadableException ex) {
+        for (Throwable cause = ex.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof JacksonException jackson) {
+                StringBuilder path = new StringBuilder();
+                for (JacksonException.Reference reference : jackson.getPath()) {
+                    if (reference.getPropertyName() != null) {
+                        if (!path.isEmpty()) {
+                            path.append('.');
+                        }
+                        path.append(reference.getPropertyName());
+                    } else if (reference.getIndex() >= 0) {
+                        path.append('[').append(reference.getIndex()).append(']');
+                    }
+                }
+                return path.toString();
+            }
+        }
+        return "";
     }
 
     /**
@@ -1268,12 +1340,33 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handle generic exceptions (500 Internal Server Error).
+     * Handle generic exceptions (500 Internal Server Error) — and every Spring MVC exception that
+     * carries its own status.
+     * <p>
+     * This advice runs before {@code DefaultHandlerExceptionResolver}, so without the
+     * {@link ErrorResponse} branch every Spring MVC exception with no handler of its own answered 500
+     * with an ERROR stack trace (issue #336): an unsupported {@code Content-Type} (415) and an
+     * {@code Accept} the route cannot produce (406) today, a missing header, a multipart or an async
+     * timeout as soon as a route uses one. {@code @ExceptionHandler} takes only {@code Throwable}
+     * types and {@code ErrorResponse} is an interface, so the branch lives here; every more specific
+     * handler above still wins, because Spring picks the closest declared type and this is the
+     * farthest.
+     * </p>
+     * <p>
+     * Such an exception answers its own status and headers (the {@code Accept} list of a 415). A 4xx
+     * is the client's: its {@link ProblemDetail} detail — the text Spring writes for clients, naming
+     * the media type or the header at fault, never a Java type — and one WARN without a stack trace.
+     * A 5xx is still ours: the reason phrase only, and an ERROR with the stack trace.
+     * </p>
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponseDto> handleGenericException(
             Exception ex,
             HttpServletRequest request) {
+
+        if (ex instanceof ErrorResponse errorResponse) {
+            return handleErrorResponse(ex, errorResponse, request);
+        }
 
         logger.error("Unexpected error: {}", ex.getMessage(), ex);
 
@@ -1286,5 +1379,59 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+
+    private ResponseEntity<ErrorResponseDto> handleErrorResponse(
+            Exception ex,
+            ErrorResponse errorResponse,
+            HttpServletRequest request) {
+
+        HttpStatusCode statusCode = errorResponse.getStatusCode();
+        HttpStatus status = HttpStatus.resolve(statusCode.value());
+        String reason = (status != null) ? status.getReasonPhrase() : statusCode.toString();
+        String detail = errorResponse.getBody().getDetail();
+        String message;
+
+        if (statusCode.is5xxServerError()) {
+            message = reason;
+            logger.error("{} on {} {}: {}", statusCode.value(), request.getMethod(), request.getRequestURI(),
+                    ex.getMessage(), ex);
+        } else {
+            message = (detail != null && !detail.isBlank()) ? detail : reason;
+            logger.warn("Client error {} on {} {}: {}", statusCode.value(), request.getMethod(),
+                    request.getRequestURI(), message);
+        }
+
+        ErrorResponseDto body = new ErrorResponseDto(
+                Instant.now(),
+                statusCode.value(),
+                reason,
+                message,
+                request.getRequestURI()
+        );
+
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(statusCode).headers(errorResponse.getHeaders());
+        return acceptsJson(request) ? response.body(body) : response.build();
+    }
+
+    /**
+     * Whether the error body can be written in a type the client accepts. A JSON route asked for
+     * {@code text/plain} only fails with 406 — and writing a JSON body into that response fails again,
+     * which Spring's resolver logs as "Failure in @ExceptionHandler" with a stack trace before it
+     * answers the same 406 bare. So such a client gets the status alone. An {@code Accept} that does
+     * not parse is left to Spring's own negotiation, which copes with it.
+     */
+    private static boolean acceptsJson(HttpServletRequest request) {
+        String accept = request.getHeader(HttpHeaders.ACCEPT);
+        if (accept == null || accept.isBlank()) {
+            return true;
+        }
+        try {
+            return MediaType.parseMediaTypes(accept).stream()
+                    .anyMatch(type -> type.isCompatibleWith(MediaType.APPLICATION_JSON)
+                            || type.isCompatibleWith(JSON_SUFFIX));
+        } catch (InvalidMediaTypeException ex) {
+            return true;
+        }
     }
 }

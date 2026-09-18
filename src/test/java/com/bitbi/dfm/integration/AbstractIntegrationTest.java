@@ -9,20 +9,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.localstack.LocalStackContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.localstack.LocalStackContainer;
 
 import java.util.UUID;
 
-import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
 /**
  * Base class for integration tests with Testcontainers singleton pattern.
  * <p>
  * Provides shared Testcontainers configuration:
  * - PostgreSQL 16 for database operations
- * - Redis 7 for caching
  * - LocalStack for S3 operations
  * </p>
  * <p>
@@ -61,13 +58,7 @@ public abstract class AbstractIntegrationTest {
      * PostgreSQL container reference from singleton manager.
      * May be null if using external services (CI environment).
      */
-    protected static final PostgreSQLContainer<?> postgresContainer = containersManager.getPostgresContainer();
-
-    /**
-     * Redis container reference from singleton manager.
-     * May be null if using external services (CI environment).
-     */
-    protected static final GenericContainer<?> redisContainer = containersManager.getRedisContainer();
+    protected static final PostgreSQLContainer postgresContainer = containersManager.getPostgresContainer();
 
     /**
      * LocalStack container reference from singleton manager.
@@ -109,11 +100,6 @@ public abstract class AbstractIntegrationTest {
         registry.add("spring.datasource.password", () -> "dataforge_test_password");
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
 
-        // Redis configuration (from CI workflow services)
-        registry.add("spring.data.redis.host", () -> "localhost");
-        registry.add("spring.data.redis.port", () -> 6379);
-        registry.add("spring.data.redis.password", () -> ""); // CI Redis has no password
-
         // S3 / LocalStack configuration (from CI workflow services)
         registry.add("s3.endpoint", () -> "http://localhost:4566");
         registry.add("s3.region", () -> "us-east-1");
@@ -138,20 +124,15 @@ public abstract class AbstractIntegrationTest {
         registry.add("spring.datasource.password", postgresContainer::getPassword);
         registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
 
-        // Redis configuration
-        registry.add("spring.data.redis.host", redisContainer::getHost);
-        registry.add("spring.data.redis.port", () -> redisContainer.getMappedPort(6379));
-        registry.add("spring.data.redis.password", () -> "test_password");
-
         // S3 / LocalStack configuration
-        registry.add("s3.endpoint", () -> localStackContainer.getEndpointOverride(S3).toString());
+        registry.add("s3.endpoint", () -> localStackContainer.getEndpoint().toString());
         registry.add("s3.region", localStackContainer::getRegion);
         registry.add("s3.access-key", localStackContainer::getAccessKey);
         registry.add("s3.secret-key", localStackContainer::getSecretKey);
         registry.add("s3.bucket.name", () -> "data-forge-test-bucket");
 
         // AWS SDK configuration (alternative property names)
-        registry.add("aws.s3.endpoint", () -> localStackContainer.getEndpointOverride(S3).toString());
+        registry.add("aws.s3.endpoint", () -> localStackContainer.getEndpoint().toString());
         registry.add("aws.s3.region", localStackContainer::getRegion);
         registry.add("aws.accessKeyId", localStackContainer::getAccessKey);
         registry.add("aws.secretAccessKey", localStackContainer::getSecretKey);
@@ -175,16 +156,6 @@ public abstract class AbstractIntegrationTest {
      */
     protected String getPostgresJdbcUrl() {
         return containersManager.getPostgresJdbcUrl();
-    }
-
-    /**
-     * Get Redis connection info.
-     * Useful for debugging connection issues.
-     *
-     * @return Redis connection string
-     */
-    protected String getRedisConnectionInfo() {
-        return containersManager.getRedisConnectionInfo();
     }
 
     /**
