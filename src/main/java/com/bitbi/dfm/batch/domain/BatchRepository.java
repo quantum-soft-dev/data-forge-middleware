@@ -24,6 +24,8 @@ public interface BatchRepository {
 
     List<Batch> findCleanupCandidatesForSite(UUID siteId, LocalDateTime cutoffTime, int limit);
 
+    Optional<Batch> lockCleanupCandidate(UUID batchId, UUID siteId, LocalDateTime cutoffTime);
+
     Page<Batch> findBySiteIdAndStatus(UUID siteId, BatchStatus status, Pageable pageable);
 
     Batch save(Batch batch);
