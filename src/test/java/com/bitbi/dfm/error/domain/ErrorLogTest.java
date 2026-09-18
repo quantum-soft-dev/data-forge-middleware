@@ -2,10 +2,15 @@ package com.bitbi.dfm.error.domain;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
+import java.lang.reflect.Modifier;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -35,7 +40,7 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, type, title, message,
-                stackTrace, clientVersion, metadata);
+                stackTrace, clientVersion, metadata, ErrorSeverity.ERROR);
 
         // Then
         assertNotNull(errorLog);
@@ -62,7 +67,7 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, null, type, title, message,
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
 
         // Then
         assertNotNull(errorLog);
@@ -85,7 +90,7 @@ class ErrorLogTest {
         // When & Then
         assertThrows(NullPointerException.class, () ->
                 ErrorLog.create(null, testBatchId, "Error", "Title", "Message",
-                        null, null, null)
+                        null, null, null, ErrorSeverity.ERROR)
         );
     }
 
@@ -95,7 +100,7 @@ class ErrorLogTest {
         // When & Then
         assertThrows(NullPointerException.class, () ->
                 ErrorLog.create(testSiteId, testBatchId, null, "Title", "Message",
-                        null, null, null)
+                        null, null, null, ErrorSeverity.ERROR)
         );
     }
 
@@ -105,7 +110,7 @@ class ErrorLogTest {
         // When & Then
         assertThrows(NullPointerException.class, () ->
                 ErrorLog.create(testSiteId, testBatchId, "Error", null, "Message",
-                        null, null, null)
+                        null, null, null, ErrorSeverity.ERROR)
         );
     }
 
@@ -115,7 +120,7 @@ class ErrorLogTest {
         // When & Then
         assertThrows(NullPointerException.class, () ->
                 ErrorLog.create(testSiteId, testBatchId, "Error", "Title", null,
-                        null, null, null)
+                        null, null, null, ErrorSeverity.ERROR)
         );
     }
 
@@ -124,9 +129,9 @@ class ErrorLogTest {
     void shouldGenerateUniqueIdsForEachErrorLog() {
         // When
         ErrorLog errorLog1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
         ErrorLog errorLog2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
 
         // Then
         assertNotEquals(errorLog1.getId(), errorLog2.getId());
@@ -140,7 +145,7 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
 
         // Then
         LocalDateTime after = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
@@ -166,7 +171,7 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, metadata);
+                null, null, metadata, ErrorSeverity.ERROR);
 
         // Then
         assertNotNull(errorLog.getMetadata());
@@ -180,9 +185,9 @@ class ErrorLogTest {
     void shouldImplementEqualsCorrectlyBasedOnId() {
         // Given
         ErrorLog errorLog1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
         ErrorLog errorLog2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
 
         // Then
         assertEquals(errorLog1, errorLog1);
@@ -196,9 +201,9 @@ class ErrorLogTest {
     void shouldImplementHashCodeCorrectlyBasedOnId() {
         // Given
         ErrorLog errorLog1 = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
         ErrorLog errorLog2 = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
 
         // Then
         assertEquals(errorLog1.hashCode(), errorLog1.hashCode());
@@ -210,7 +215,7 @@ class ErrorLogTest {
     void shouldAllowBatchIdToBeNullForNonBatchErrors() {
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, null, "Error", "Title", "Message",
-                null, null, null);
+                null, null, null, ErrorSeverity.ERROR);
 
         // Then
         assertNull(errorLog.getBatchId());
@@ -226,7 +231,7 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                stackTrace, clientVersion, metadata);
+                stackTrace, clientVersion, metadata, ErrorSeverity.ERROR);
 
         // Then
         assertEquals(stackTrace, errorLog.getStackTrace());
@@ -243,7 +248,7 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", longMessage,
-                longStackTrace, null, null);
+                longStackTrace, null, null, ErrorSeverity.ERROR);
 
         // Then
         assertEquals(longMessage, errorLog.getMessage());
@@ -258,10 +263,61 @@ class ErrorLogTest {
 
         // When
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
-                null, null, emptyMetadata);
+                null, null, emptyMetadata, ErrorSeverity.ERROR);
 
         // Then
         assertNotNull(errorLog.getMetadata());
         assertTrue(errorLog.getMetadata().isEmpty());
+    }
+
+    /**
+     * A severity that is not {@code ERROR} is the only kind of expectation that can tell a stored
+     * severity from a substituted one, so {@code ERROR} is deliberately left out here (#334).
+     */
+    @ParameterizedTest
+    @EnumSource(value = ErrorSeverity.class, names = "ERROR", mode = EnumSource.Mode.EXCLUDE)
+    @DisplayName("Should store the severity it was given")
+    void shouldStoreTheSeverityItWasGiven(ErrorSeverity severity) {
+        ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
+                null, null, null, severity);
+
+        assertEquals(severity, errorLog.getSeverity());
+    }
+
+    /**
+     * The {@code ERROR} default is enforced twice — by this factory and again by the constructor —
+     * so this test stays green if either one alone stops substituting; it pins what a caller with
+     * no severity gets, not where the default lives.
+     */
+    @Test
+    @DisplayName("Should store ERROR when no severity is given")
+    void shouldStoreErrorWhenNoSeverityIsGiven() {
+        ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "Title", "Message",
+                null, null, null, null);
+
+        assertEquals(ErrorSeverity.ERROR, errorLog.getSeverity());
+    }
+
+    /**
+     * The factory twin of {@code ErrorLoggingServiceTest.everyPublicLogMethodTakesTheSeverity}: a
+     * factory without the severity is two valid signatures differing by one argument, the shorter
+     * one substituting {@code ERROR} — the mechanism of #321, one layer below the service (#334).
+     * A caller with no severity to pass writes {@code null}, which is stored as {@code ERROR}.
+     */
+    @Test
+    @DisplayName("Every public factory takes the severity")
+    void everyPublicFactoryTakesTheSeverity() {
+        List<String> withoutSeverity = Arrays.stream(ErrorLog.class.getDeclaredMethods())
+                .filter(method -> Modifier.isPublic(method.getModifiers()))
+                .filter(method -> Modifier.isStatic(method.getModifiers()))
+                .filter(method -> method.getReturnType() == ErrorLog.class)
+                .filter(method -> !Arrays.asList(method.getParameterTypes()).contains(ErrorSeverity.class))
+                .map(method -> method.getName() + Arrays.toString(method.getParameterTypes()))
+                .sorted()
+                .toList();
+
+        assertEquals(List.of(), withoutSeverity,
+                "These ErrorLog factories create an error log without taking its severity, "
+                        + "so a caller can drop the client's severity without noticing (#321, #334)");
     }
 }

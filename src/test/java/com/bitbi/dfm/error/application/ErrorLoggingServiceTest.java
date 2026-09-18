@@ -162,7 +162,8 @@ class ErrorLoggingServiceTest {
     @DisplayName("Should get error log by ID")
     void shouldGetErrorLogById() {
         // Given
-        ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "TestError", "TestError", "Test message", null, null, null);
+        ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "TestError", "TestError", "Test message",
+                null, null, null, ErrorSeverity.ERROR);
         when(errorLogRepository.findById(testErrorId)).thenReturn(Optional.of(errorLog));
 
         // When
@@ -192,8 +193,10 @@ class ErrorLoggingServiceTest {
     void shouldListErrorsByBatch() {
         // Given
         List<ErrorLog> expectedErrors = Arrays.asList(
-                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1", null, null, null),
-                ErrorLog.create(testSiteId, testBatchId, "Error2", "Error2", "Message 2", null, null, null)
+                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1",
+                        null, null, null, ErrorSeverity.ERROR),
+                ErrorLog.create(testSiteId, testBatchId, "Error2", "Error2", "Message 2",
+                        null, null, null, ErrorSeverity.ERROR)
         );
         when(errorLogRepository.findByBatchId(testBatchId)).thenReturn(expectedErrors);
 
@@ -212,8 +215,10 @@ class ErrorLoggingServiceTest {
     void shouldListErrorsBySite() {
         // Given
         List<ErrorLog> expectedErrors = Arrays.asList(
-                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1", null, null, null),
-                ErrorLog.create(testSiteId, null, "Error2", "Error2", "Message 2", null, null, null)
+                ErrorLog.create(testSiteId, testBatchId, "Error1", "Error1", "Message 1",
+                        null, null, null, ErrorSeverity.ERROR),
+                ErrorLog.create(testSiteId, null, "Error2", "Error2", "Message 2",
+                        null, null, null, ErrorSeverity.ERROR)
         );
         when(errorLogRepository.findBySiteId(testSiteId)).thenReturn(expectedErrors);
 

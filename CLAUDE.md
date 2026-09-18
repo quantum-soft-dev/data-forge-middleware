@@ -713,6 +713,27 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- errorlog-factory-full-signature: `ErrorLog.create` has one factory, and it takes the severity
+  (issue #334, found working #326). #326 removed the severity-less overloads from
+  `ErrorLoggingService`; the same shape lived one layer down, in the domain factory — an 8-argument
+  `create` whose whole body was the 9-argument one with `ErrorSeverity.ERROR`, i.e. #321's mechanism
+  (two valid signatures differing by one argument, the shorter substituting `ERROR`) waiting for its
+  first production caller outside the service. **Counted before deciding**: the 8-argument form had
+  **no** production caller — `ErrorLoggingService`'s two calls already pass the severity — and 50 test
+  callers across `ErrorLogTest` (18), `ErrorAdminControllerTest` (14), `ErrorLogExportServiceTest`
+  (9), `ErrorLoggingServiceTest` (5) and `BatchHistoryIntegrationTest` (4); `ErrorLogRepositoryTest`'s
+  13 already used the full form. **Deleted rather than kept as a test convenience** (the ticket's
+  option 1, #326's shape): the convenience is in the full signature already, since `null` is stored
+  as `ERROR`. The 50 calls were moved, not deleted, and pass `ErrorSeverity.ERROR` explicitly — the
+  value they always had, now visible. `ErrorLogTest` gains the tests the factory never had — a passed
+  `CRITICAL`/`WARNING`/`INFO` is stored, `null` is stored as `ERROR` — and
+  `everyPublicFactoryTakesTheSeverity`, the factory twin of #326's service guard: any public static
+  method of `ErrorLog` returning an `ErrorLog` without an `ErrorSeverity` parameter fails it.
+  Mutation-proven both ways: restoring the overload fails the guard, and the factory storing `ERROR`
+  instead of its argument fails the three non-`ERROR` cases plus three `ErrorLoggingServiceTest`
+  cases. The `null` → `ERROR` default is enforced twice (factory and constructor), so its test pins
+  the outcome, not the place — said in its Javadoc. No production behaviour, REST, gRPC, proto, DTO,
+  migration (**V58 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - pr-merge-script: The merge step of `/task`, `/merge` and `/github-issue-runner` is one script,
   `scripts/pr-merge.sh <pr> [--rebase]`, and it no longer reads `gh`'s exit code as its verdict
   (issue #332). `gh pr merge --squash --delete-branch` run from a worktree — the normal path of
