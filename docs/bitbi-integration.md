@@ -693,6 +693,7 @@ Get SQL changes for a site.
 | 401 | Unauthorized | Missing/invalid OAuth token or API Key |
 | 403 | Forbidden | Site doesn't belong to account, no account found |
 | 404 | Not Found | Plugin not registered or disabled |
+| 406 | Not Acceptable | `Accept` excludes what the endpoint produces — e.g. `Accept: application/json` on `/sql-changes`, which produces `text/plain`. Not retryable unchanged |
 | 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Server Error | Internal error (contact support) |
 

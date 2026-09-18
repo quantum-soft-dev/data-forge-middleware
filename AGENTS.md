@@ -263,6 +263,37 @@ pages/{feature}/            # Route pages
 - Migrations current at **V57**; next migration is **V58** (do not reuse numbers)
 
 ## Recent Changes
+- mvc-error-response-status: A Spring MVC exception that carries its own HTTP status answers it, not
+  the catch-all 500 (issue #336, found working #320). `GlobalExceptionHandler`'s
+  `@ExceptionHandler(Exception.class)` runs before `DefaultHandlerExceptionResolver`, so every MVC
+  exception with no handler of its own answered 500 "An unexpected error occurred" with an ERROR stack
+  trace — a client's mistake read as a server fault by a client that retries 5xx and by an alert on
+  ERROR. #320 closed one member (`HttpMessageNotReadableException`); reachable today were two more,
+  **415** (`HttpMediaTypeNotSupportedException`, a body whose `Content-Type` the route does not read)
+  and **406** (`HttpMediaTypeNotAcceptableException`, e.g. `Accept: application/json` on `/sql-changes`,
+  which produces `text/plain`). **One path over `org.springframework.web.ErrorResponse`, not a handler
+  per type** — every such Spring exception implements it and carries its status, so the types
+  unreachable today (a missing `@RequestHeader`, multipart, an async timeout) and any a later Spring adds
+  are closed with them. `@ExceptionHandler` takes only `Throwable` types and `ErrorResponse` is an
+  interface, so the branch sits **inside** the catch-all; every more specific handler
+  (`ResponseStatusException`, `NoResourceFoundException`/`NoHandlerFoundException`,
+  `HttpRequestMethodNotSupportedException`, `MethodArgumentNotValidException`, #320's — all
+  `ErrorResponse` too) still wins, because Spring picks the closest declared type and `Exception` is the
+  farthest; each is pinned by a test that tells its answer from the generic one. Such an exception
+  answers its own status and headers (a 415 carries `Accept`) with the standard `ErrorResponseDto`: a
+  4xx with its `ProblemDetail` detail — Spring's client-facing text naming the media type or header at
+  fault, never a Java type or the cause's message — and one WARN without a stack trace; a 5xx (an async
+  timeout is 503, not 500) with the reason phrase only and an ERROR, since it is still ours. **One case
+  had to be decided rather than inherited**: a JSON route asked for `text/plain` only fails with 406,
+  and writing the JSON error body into that response fails again — Spring's resolver then logged
+  "Failure in @ExceptionHandler" with a stack trace before answering the same 406 bare — so a client
+  whose `Accept` admits no JSON (`application/json` or `application/*+json`) gets the status alone; an
+  `Accept` that does not parse is left to Spring, which copes. Tests are real requests for 415 and both
+  406 shapes, and thrown exceptions for the rest; mutation-proven — without the branch nine tests go
+  red, and dropping the annotation of any one specific handler reddens its own guard. Client guides:
+  **needed** and done (`docs/device-flow-client-guide.md` gains 406 and 415, `docs/bitbi-integration.md`
+  406). No REST route, gRPC, proto, DTO shape, migration (**V58 stays free**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - unreadable-body-400: A request body the server cannot read answers **400**, not 500, and Jackson 3's
   `FAIL_ON_TRAILING_TOKENS` is accepted now that it can (issue #320, found by #300's characterization
   and made a precondition by #303). `GlobalExceptionHandler` had no handler for
