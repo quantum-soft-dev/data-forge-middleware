@@ -160,20 +160,15 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
     List<Batch> findExpiredBatches(LocalDateTime cutoffTime);
 
     /**
-     * Find cleanup candidates for a site based on retention cutoff.
-     * <p>
-     * Excludes IN_PROGRESS batches and selects oldest first.
-     * Uses SKIP LOCKED to avoid concurrent cleanup collisions.
-     * </p>
-     *
-     * @param siteId site identifier
-     * @param cutoffTime batches started before this time are eligible
-     * @param limit max number of batches to return
-     * @return list of cleanup candidates
+     * The one definition of a retention cleanup candidate, shared by the candidate listing, the
+     * per-batch lock and therefore the dry run (issue #344): not {@code IN_PROGRESS}, started before
+     * the cutoff, not a plugin baseline, and not a historical upload batch of a site that has no
+     * checkpoint yet — for such a site the uploaded CSVs are the only baseline the Bit BI files API
+     * can serve ({@code CheckpointFileQueryService}'s fallback), so they are kept until the site's
+     * first checkpoint closes that fallback (owner decision 1 on #344).
      */
-    @Query(value = """
-        SELECT * FROM batches
-        WHERE site_id = :siteId
+    String CLEANUP_CANDIDATE_PREDICATE = """
+        site_id = :siteId
           AND status <> 'IN_PROGRESS'
           AND started_at < :cutoffTime
           AND NOT EXISTS (
@@ -181,11 +176,43 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
               FROM account_plugins ap
               WHERE ap.baseline_batch_id = batches.id
           )
-        ORDER BY started_at ASC
-        LIMIT :limit
-        FOR UPDATE SKIP LOCKED
-        """, nativeQuery = true)
+          AND (
+              NOT EXISTS (SELECT 1 FROM uploaded_files uf WHERE uf.batch_id = batches.id)
+              OR EXISTS (SELECT 1 FROM checkpoints c WHERE c.site_id = batches.site_id)
+          )
+        """;
+
+    /**
+     * Find cleanup candidates for a site based on retention cutoff, oldest first.
+     * <p>
+     * Takes no lock: the listing runs in a short read of its own, and each candidate is locked
+     * again, with the same predicate, by {@link #lockCleanupCandidate} inside the transaction that
+     * deletes it (issue #344 — the former {@code FOR UPDATE SKIP LOCKED} here ran with no
+     * transaction, so its lock was released the moment the statement returned).
+     * </p>
+     *
+     * @param siteId site identifier
+     * @param cutoffTime batches started before this time are eligible
+     * @param limit max number of batches to return
+     * @return list of cleanup candidates
+     */
+    @Query(value = "SELECT * FROM batches WHERE " + CLEANUP_CANDIDATE_PREDICATE
+            + " ORDER BY started_at ASC LIMIT :limit", nativeQuery = true)
     List<Batch> findCleanupCandidatesForSite(UUID siteId, LocalDateTime cutoffTime, int limit);
+
+    /**
+     * Lock one batch for deletion if it is still a cleanup candidate (issue #344).
+     * <p>
+     * {@code SKIP LOCKED}: a batch another retention pass (a sibling replica, the admin endpoint)
+     * is deleting right now is simply not ours. Must run inside the transaction that deletes it —
+     * the lock is what that transaction holds until its commit.
+     * </p>
+     *
+     * @return the batch, or empty when it is gone, locked, or no longer a candidate
+     */
+    @Query(value = "SELECT * FROM batches WHERE id = :batchId AND " + CLEANUP_CANDIDATE_PREDICATE
+            + " FOR UPDATE SKIP LOCKED", nativeQuery = true)
+    Optional<Batch> lockCleanupCandidate(UUID batchId, UUID siteId, LocalDateTime cutoffTime);
 
     /**
      * Find batches by site and status with pagination.

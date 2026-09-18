@@ -1,29 +1,26 @@
 package com.bitbi.dfm.batch.application;
 
+import ch.qos.logback.classic.Level;
+import com.bitbi.dfm.batch.application.BatchRetentionTransaction.BatchContents;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
-import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
-import com.bitbi.dfm.util.LogCapture;
-import ch.qos.logback.classic.Level;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
-import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
-import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
-
 import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
+import com.bitbi.dfm.util.LogCapture;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -32,9 +29,24 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
+/**
+ * The retention orchestrator: which batch transaction it runs, what it does with the result, and
+ * that objects go only after the rows (issue #344). The database phase itself is
+ * {@link BatchRetentionTransactionTest}; the wiring — that the phase really is a transaction — is
+ * {@code BatchRetentionIntegrationTest}.
+ */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("BatchRetentionService")
 class BatchRetentionServiceTest {
@@ -43,338 +55,218 @@ class BatchRetentionServiceTest {
     private BatchRepository batchRepository;
 
     @Mock
-    private com.bitbi.dfm.site.domain.SiteRepository siteRepository;
+    private SiteRepository siteRepository;
 
     @Mock
-    private UploadedFileRepository uploadedFileRepository;
-
-    @Mock
-    private PluginSqlGenerationRepository sqlGenerationRepository;
+    private BatchRetentionTransaction retentionTransaction;
 
     @Mock
     private S3FileStorageService s3FileStorageService;
 
-    @Mock
-    private ChangelogSegmentService changelogSegmentService;
-
-    @Mock
-    private BatchParquetArtifactRepository artifactRepository;
-
-    @Mock
-    private ChangelogSegmentRepository segmentRepository;
-
     private SimpleMeterRegistry meterRegistry;
-    private DeltaMetrics deltaMetrics;
-
     private BatchRetentionService service;
 
     private UUID siteId;
-    private UUID accountId;
     private UUID batchId;
+    private String batchPrefix;
 
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
-        deltaMetrics = new DeltaMetrics(meterRegistry);
-        service = new BatchRetentionService(
-                batchRepository,
-                siteRepository,
-                uploadedFileRepository,
-                sqlGenerationRepository,
-                s3FileStorageService,
-                changelogSegmentService,
-                segmentRepository,
-                artifactRepository,
-                deltaMetrics
-        );
+        service = new BatchRetentionService(batchRepository, siteRepository, retentionTransaction,
+                s3FileStorageService, new DeltaMetrics(meterRegistry));
         siteId = UUID.randomUUID();
-        accountId = UUID.randomUUID();
         batchId = UUID.randomUUID();
-        // Every deleting test reaches the #212 pending-work count; no pending work by default.
-        lenient().when(segmentRepository.countPendingQueueWorkByBatchId(any()))
-                .thenReturn(QueueWorkStubs.pendingWork(0, 0));
+        batchPrefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
+
+        Site site = mock(Site.class);
+        lenient().when(site.getId()).thenReturn(siteId);
+        lenient().when(site.getRetentionDays()).thenReturn(45);
+        lenient().when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+    }
+
+    @AfterEach
+    void clearAmbientTransaction() {
+        TransactionSynchronizationManager.setActualTransactionActive(false);
     }
 
     @Test
-    @DisplayName("dryRun should not delete batches or S3 objects")
-    void dryRun_shouldNotDelete() {
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
+    @DisplayName("refuses to run inside a caller's transaction, before reading anything")
+    void refusesInsideATransaction() {
+        TransactionSynchronizationManager.setActualTransactionActive(true);
 
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
+        assertThatThrownBy(() -> service.runCleanup(request(false)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("transaction");
+        verifyNoInteractions(siteRepository, batchRepository, retentionTransaction, s3FileStorageService);
+    }
 
-        UploadedFileRepository.FileKeySize fileKey = mock(UploadedFileRepository.FileKeySize.class);
-        when(fileKey.getS3Key()).thenReturn("batch/file.csv");
-        when(fileKey.getFileSize()).thenReturn(100L);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of(fileKey));
+    @Test
+    @DisplayName("dry run describes every candidate and deletes neither rows nor objects")
+    void dryRunDescribesWithoutDeleting() {
+        givenCandidates(batchId);
+        when(retentionTransaction.describeBatch(siteId, batchId)).thenReturn(
+                contents(300L, List.of("batch/file.csv", "plugins/sql.sql"), 0, 0));
+        when(s3FileStorageService.listAllKeys(batchPrefix)).thenReturn(List.of());
 
-        PluginSqlGenerationRepository.S3KeySize sqlKey = mock(PluginSqlGenerationRepository.S3KeySize.class);
-        when(sqlKey.getS3Key()).thenReturn("plugins/sql.sql");
-        when(sqlKey.getFileSizeBytes()).thenReturn(200L);
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of(sqlKey));
-
-        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(siteId, null, null, null, 10, true)
-        );
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(true));
 
         assertThat(summary.candidates()).isEqualTo(1);
-        assertThat(summary.deletedBatches()).isEqualTo(0);
+        assertThat(summary.deletedBatches()).isZero();
         assertThat(summary.deletedFiles()).isEqualTo(2);
         assertThat(summary.deletedBytes()).isEqualTo(300L);
+        verify(retentionTransaction, never()).deleteBatch(any(), any(), any());
         verify(s3FileStorageService, never()).deleteObjects(any());
-        verify(batchRepository, never()).deleteById(any());
+        assertThat(counter("pending_plugin_sql")).isZero();
     }
 
     @Test
-    @DisplayName("cleanup should delete batches when S3 deletion succeeds")
-    void cleanup_shouldDeleteOnSuccess() {
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-
-        UploadedFileRepository.FileKeySize fileKey = mock(UploadedFileRepository.FileKeySize.class);
-        when(fileKey.getS3Key()).thenReturn("batch/file.csv");
-        when(fileKey.getFileSize()).thenReturn(100L);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of(fileKey));
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
-        artifact.markBuilding();
-        String batchPrefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
+    @DisplayName("deletes a batch's rows through its transaction, then its objects and prefix orphans")
+    void deletesRowsThenObjects() {
+        givenCandidates(batchId);
         String winnerKey = batchPrefix + "attempts/winner/orders.parquet";
         String orphanKey = batchPrefix + "attempts/dead/items.parquet";
-        artifact.markReady(winnerKey, 10, 400, "hash");
-        // Mid-build: no recorded key, yet an attempt may already have uploaded the object. Reading
-        // s3_key here would silently orphan it — the key has to be derived from the row's identity.
-        BatchParquetArtifact building = BatchParquetArtifact.pending(batchId, siteId, "items");
-        building.markBuilding();
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact, building));
-        when(s3FileStorageService.listAllKeys(batchPrefix))
-                .thenReturn(List.of(winnerKey, orphanKey));
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any())).thenReturn(Optional.of(
+                contents(500L, List.of("batch/file.csv", winnerKey, "delta/segments/s.pb.gz"), 0, 0)));
+        when(s3FileStorageService.listAllKeys(batchPrefix)).thenReturn(List.of(winnerKey, orphanKey));
+        when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(4, List.of()));
 
-        ArgumentCaptor<List<String>> deleted = ArgumentCaptor.forClass(List.class);
-        when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(1, List.of()));
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(false));
 
-        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false)
-        );
-
+        assertThat(summary.errors()).isEmpty();
         assertThat(summary.deletedBatches()).isEqualTo(1);
-        verify(s3FileStorageService).deleteObjects(deleted.capture());
-        assertThat(deleted.getValue()).contains(
-                winnerKey, orphanKey, S3CheckpointStorage.batchParquetKey(siteId, batchId, "items"));
-        verify(sqlGenerationRepository).deleteByComparisonBatchId(batchId);
-        verify(sqlGenerationRepository).deleteBySourceBatchId(batchId);
-        // Delta v2 changelog segments must be removed before the batch so the batch_id FK does not block it.
-        verify(changelogSegmentService).deleteByBatchId(batchId);
-        verify(artifactRepository).deleteByBatchId(batchId);
-        verify(batchRepository).deleteById(batchId);
         assertThat(summary.deletedBytes()).isEqualTo(500L);
         assertThat(summary.deletedFiles()).isEqualTo(4);
+        InOrder order = inOrder(retentionTransaction, s3FileStorageService);
+        order.verify(retentionTransaction).deleteBatch(eq(siteId), eq(batchId), any());
+        order.verify(s3FileStorageService).deleteObjects(
+                List.of("batch/file.csv", winnerKey, "delta/segments/s.pb.gz", orphanKey));
     }
 
     @Test
-    @DisplayName("prefix listing failure preserves exact-key cleanup and committed DB deletion")
-    void cleanupFallsBackToRecordedKeysWhenPrefixListingFails() {
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        BatchParquetArtifact legacy = BatchParquetArtifact.pending(batchId, siteId, "orders");
-        legacy.markBuilding();
-        String legacyKey = legacy.expectedS3Key();
-        legacy.markReady(legacyKey, 1, 4, "hash");
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(legacy));
-        when(s3FileStorageService.listAllKeys(S3CheckpointStorage.batchParquetPrefix(siteId, batchId)))
+    @DisplayName("a batch its transaction skips (gone, locked, no longer a candidate) is neither deleted nor an error")
+    void skippedBatchIsNotCounted() {
+        givenCandidates(batchId);
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any())).thenReturn(Optional.empty());
+        when(s3FileStorageService.deleteObjects(List.of())).thenReturn(new DeleteObjectsResult(0, List.of()));
+
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(false));
+
+        assertThat(summary.candidates()).isEqualTo(1);
+        assertThat(summary.deletedBatches()).isZero();
+        assertThat(summary.errors()).isEmpty();
+        verify(s3FileStorageService, never()).listAllKeys(any());
+    }
+
+    @Test
+    @DisplayName("one failing batch is recorded and the next batch is still deleted")
+    void failingBatchDoesNotStopTheSite() {
+        UUID failing = UUID.randomUUID();
+        givenCandidates(failing, batchId);
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(failing), any()))
+                .thenThrow(new RuntimeException("FK contention"));
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any()))
+                .thenReturn(Optional.of(contents(10L, List.of("k"), 0, 0)));
+        when(s3FileStorageService.listAllKeys(batchPrefix)).thenReturn(List.of());
+        when(s3FileStorageService.deleteObjects(List.of("k"))).thenReturn(new DeleteObjectsResult(1, List.of()));
+
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(false));
+
+        assertThat(summary.deletedBatches()).isEqualTo(1);
+        assertThat(summary.errors()).singleElement().asString()
+                .contains(failing.toString()).contains("FK contention");
+        verify(s3FileStorageService, never()).listAllKeys(S3CheckpointStorage.batchParquetPrefix(siteId, failing));
+    }
+
+    @Test
+    @DisplayName("prefix listing failure preserves exact-key cleanup and the committed row deletion")
+    void listingFailureFallsBackToRecordedKeys() {
+        givenCandidates(batchId);
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any()))
+                .thenReturn(Optional.of(contents(4L, List.of("legacy.parquet"), 0, 0)));
+        when(s3FileStorageService.listAllKeys(batchPrefix))
                 .thenThrow(new S3FileStorageService.FileStorageException("list denied"));
-        when(s3FileStorageService.deleteObjects(List.of(legacyKey)))
+        when(s3FileStorageService.deleteObjects(List.of("legacy.parquet")))
                 .thenReturn(new DeleteObjectsResult(1, List.of()));
 
-        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(
-                        siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(false));
 
         assertThat(summary.deletedBatches()).isEqualTo(1);
         assertThat(summary.errors()).anyMatch(error -> error.contains("list denied"));
-        verify(s3FileStorageService).deleteObjects(List.of(legacyKey));
-        verify(batchRepository).deleteById(batchId);
+        verify(s3FileStorageService).deleteObjects(List.of("legacy.parquet"));
     }
 
     @Test
-    @DisplayName("truncated prefix listing falls back to recorded exact keys only")
-    void cleanupFallsBackToRecordedKeysWhenPrefixListingIsTruncated() {
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        BatchParquetArtifact legacy = BatchParquetArtifact.pending(batchId, siteId, "orders");
-        legacy.markBuilding();
-        String legacyKey = legacy.expectedS3Key();
-        legacy.markReady(legacyKey, 1, 4, "hash");
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(legacy));
-        when(s3FileStorageService.listAllKeys(S3CheckpointStorage.batchParquetPrefix(siteId, batchId)))
-                .thenThrow(new S3FileStorageService.FileStorageException("list truncated"));
-        when(s3FileStorageService.deleteObjects(List.of(legacyKey)))
-                .thenReturn(new DeleteObjectsResult(1, List.of()));
+    @DisplayName("S3 delete errors are reported, the committed rows stay deleted (best effort)")
+    void s3ErrorsAreBestEffort() {
+        givenCandidates(batchId);
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any()))
+                .thenReturn(Optional.of(contents(100L, List.of("batch/file.csv"), 0, 0)));
+        when(s3FileStorageService.listAllKeys(any())).thenReturn(List.of());
+        when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(0, List.of("error")));
 
-        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(
-                        siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(false));
 
         assertThat(summary.deletedBatches()).isEqualTo(1);
-        verify(s3FileStorageService).deleteObjects(List.of(legacyKey));
-        verify(batchRepository).deleteById(batchId);
+        assertThat(summary.errors()).anyMatch(error -> error.contains("S3 delete errors"));
     }
 
     @Test
-    @DisplayName("cleanup should still delete DB records even if S3 deletion returns errors (best-effort)")
-    void cleanup_shouldDeleteDbWhenS3Errors() {
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-
-        UploadedFileRepository.FileKeySize fileKey = mock(UploadedFileRepository.FileKeySize.class);
-        when(fileKey.getS3Key()).thenReturn("batch/file.csv");
-        when(fileKey.getFileSize()).thenReturn(100L);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of(fileKey));
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+    @DisplayName("deleting a batch that still carried pending queue work is counted and warned (issue #212)")
+    void countsAndWarnsDestroyedPendingWork() throws Exception {
+        givenCandidates(batchId);
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any()))
+                .thenReturn(Optional.of(contents(0L, List.of(), 2, 1)));
         when(s3FileStorageService.listAllKeys(any())).thenReturn(List.of());
-
-        when(s3FileStorageService.deleteObjects(any()))
-                .thenReturn(new DeleteObjectsResult(0, List.of("error")));
-
-        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(siteId, null, null, null, 10, false)
-        );
-
-        assertThat(summary.deletedBatches()).isEqualTo(1);
-        assertThat(summary.errors()).isNotEmpty();
-        verify(batchRepository).deleteById(batchId);
-    }
-
-    @Test
-    @DisplayName("deleting a batch that still carries pending queue work is counted and warned (issue #212)")
-    void countsAndWarnsWhenDeletingABatchWithPendingQueueWork() throws Exception {
-        // Batch retention is the deliberate outer horizon of the queues' retry: changelog
-        // retention holds a pending segment back, and this is the one scheduled deleter allowed to
-        // take it — after site.retentionDays. The loss must have a moment and a number.
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
-        when(s3FileStorageService.listAllKeys(any())).thenReturn(List.of());
-        when(s3FileStorageService.deleteObjects(any()))
-                .thenReturn(new DeleteObjectsResult(0, List.of()));
-        when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
-                .thenReturn(QueueWorkStubs.pendingWork(2, 1));
+        when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(0, List.of()));
 
         try (LogCapture capture = LogCapture.attachTo(BatchRetentionService.class)) {
-            service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
-                    siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
+            service.runCleanup(request(false));
 
             assertThat(capture.messagesAt(Level.WARN))
                     .anyMatch(message -> message.contains("pending queue work")
                             && message.contains(batchId.toString()));
         }
-
-        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
-                .tag("reason", "pending_plugin_sql").counter().count()).isEqualTo(2.0);
-        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
-                .tag("reason", "pending_egress").counter().count()).isEqualTo(1.0);
-        verify(changelogSegmentService).deleteByBatchId(batchId);
+        assertThat(counter("pending_plugin_sql")).isEqualTo(2.0);
+        assertThat(counter("pending_egress")).isEqualTo(1.0);
     }
 
     @Test
-    @DisplayName("a dry run neither deletes nor counts pending queue work as destroyed")
-    void dryRunDoesNotCountPendingWorkAsDestroyed() {
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
+    @DisplayName("a batch whose transaction fails moves no deleted-pending counter (issue #212, R2-4)")
+    void failedBatchCountsNoDestroyedWork() {
+        givenCandidates(batchId);
+        when(retentionTransaction.deleteBatch(eq(siteId), eq(batchId), any()))
+                .thenThrow(new RuntimeException("rolled back"));
+        when(s3FileStorageService.deleteObjects(List.of())).thenReturn(new DeleteObjectsResult(0, List.of()));
 
-        service.runCleanup(new BatchRetentionService.BatchCleanupRequest(
-                siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, true));
-
-        verify(segmentRepository, never()).countPendingQueueWorkByBatchId(any());
-        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
-                .tag("reason", "pending_plugin_sql").counter().count()).isEqualTo(0.0);
-    }
-
-    @Test
-    @DisplayName("a batch whose deletion fails moves no deleted-pending counter (issue #212, R2-4)")
-    void doesNotCountPendingWorkWhenTheBatchDeleteFails() {
-        // The per-batch catch swallows failures into summary.errors, so counting before the
-        // delete would inflate the 'permanently unproducible' series nightly with phantom losses
-        // — the meter's own Javadoc calls a non-zero rate an incident to explain.
-        Site site = mock(Site.class);
-        Batch batch = mock(Batch.class);
-        when(site.getId()).thenReturn(siteId);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
-                .thenReturn(List.of(batch));
-        when(batch.getId()).thenReturn(batchId);
-        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of());
-        // No listAllKeys stub: the failing batch never registers its prefix for enumeration.
-        when(s3FileStorageService.deleteObjects(any()))
-                .thenReturn(new DeleteObjectsResult(0, List.of()));
-        when(segmentRepository.countPendingQueueWorkByBatchId(batchId))
-                .thenReturn(QueueWorkStubs.pendingWork(40, 40));
-        doThrow(new RuntimeException("FK contention")).when(changelogSegmentService).deleteByBatchId(batchId);
-
-        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
-                new BatchRetentionService.BatchCleanupRequest(
-                        siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, false));
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(request(false));
 
         assertThat(summary.errors()).isNotEmpty();
-        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
-                .tag("reason", "pending_plugin_sql").counter().count())
-                .as("nothing was destroyed, so nothing is counted destroyed").isEqualTo(0.0);
-        assertThat(meterRegistry.get("delta.retention.segments.deleted-pending")
-                .tag("reason", "pending_egress").counter().count()).isEqualTo(0.0);
+        assertThat(counter("pending_plugin_sql")).isZero();
+        assertThat(counter("pending_egress")).isZero();
+    }
+
+    private void givenCandidates(UUID... ids) {
+        List<Batch> batches = new java.util.ArrayList<>();
+        for (UUID id : ids) {
+            Batch batch = mock(Batch.class);
+            when(batch.getId()).thenReturn(id);
+            batches.add(batch);
+        }
+        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt())).thenReturn(batches);
+    }
+
+    private BatchContents contents(long bytes, List<String> keys, long pendingSql, long pendingEgress) {
+        return new BatchContents(bytes, keys, batchPrefix, pendingSql, pendingEgress);
+    }
+
+    private BatchRetentionService.BatchCleanupRequest request(boolean dryRun) {
+        return new BatchRetentionService.BatchCleanupRequest(
+                siteId, null, null, LocalDateTime.now(ZoneOffset.UTC).minusDays(1), 10, dryRun);
+    }
+
+    private double counter(String reason) {
+        return meterRegistry.get("delta.retention.segments.deleted-pending")
+                .tag("reason", reason).counter().count();
     }
 }
