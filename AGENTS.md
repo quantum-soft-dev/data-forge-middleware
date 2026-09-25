@@ -265,6 +265,29 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- unused-import-lexer-cases: The unused-import scanner's lexer has tests of its own, on synthetic
+  sources (issue #357, a MINOR from the architecture review of PR #354). `UnusedImportConventionTest`
+  (#352) replaces the `-Xlint:unused` that `javac` 25 no longer accepts, and its one test walked the
+  live `src/main/java` and `src/test/java`. That walk can only see a lexer that reports **more**: a
+  false positive demands deleting a live import and goes red on today's tree. The dangerous
+  mutations all report **less** — a comment no longer blanked, a literal that swallows the code after
+  it, the tail of a qualified name read as a use — and under them the live tree stays green while the
+  next unused import slips through. The new nested `Lexer` class drives `stripComments` and
+  `unusedIn` (now package-private) over synthetic sources. A name only in a `//`, block or Javadoc
+  comment is unused. An import followed by a `// comment` on its line is still an import. An import
+  line inside a block comment is none, and the line count is kept. String, character and text-block
+  literals come back whole with `//`, `/*`, quotes and escapes inside, and do not swallow the code
+  after them. `new a.b.Widget()` is not a use of `Widget`. A name only inside a literal **is** a use:
+  that is the recorded false negative, pinned rather than fixed, since fixing it would demand deleting
+  an import whose name happens to sit in a string. The fixtures are built line by line from string
+  literals, not text blocks, because a text-block line reading `import a.b.Widget;` strips to an
+  import line of the test file itself and the walk would report it. **Mutation-proven**, eight ways,
+  each reddening a synthetic case: `//` or block comments not blanked, the character, string or
+  text-block branch removed, escapes ignored, literal contents blanked, a tail after `.` counted as a
+  use. The walk stays green under five of the eight (block comment, character literal, text block,
+  escape, qualified tail), which is what the ticket was about. The walk itself is unchanged and still
+  goes red on a planted unused import. Test only: no production code, REST, gRPC, proto, DTO,
+  migration (**V60 stays free**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - wave-dispatcher: `/wave` — an autonomous dispatcher whose planning is a script, ported from zmanly
   and bent to this repository (issue #358): `.claude/commands/wave.md` (coordinator), `.claude/agents/task-runner.md`
   (one executor per ticket, answering with a `WAVE-RESULT` block), `scripts/wave.sh`
