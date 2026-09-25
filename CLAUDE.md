@@ -713,6 +713,35 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- s3-orphan-dev-deleting: The S3 orphan sweep (#158) deletes on dev instead of only reporting
+  (issue #351). It had run in dry run since #158 shipped, and each night about 88 more objects piled
+  up under `checkpoints/{fyt-new}/`: one whole superseded generation, 87 snapshots plus a ~275 MB
+  frame. Nothing else removes them. **The report was read before the flag was set**, as the dry-run
+  default asks. The sweep's log lines and a full listing of the bucket's `checkpoints/` agree:
+  352 candidates are 4 old `seq` sets × 88 objects. Every one sits below the committed pointer
+  (read from the build's own "Merged … at seq" line and the retention line that follows it) and is
+  older than 24 h. The live set appears in no sample. The 8 objects of a prefix with no site row
+  are held back, and one site keeps a pre-reset epoch shielded by the `seq >= pointer` guard.
+  Retention's segment prefix holds exactly its audit window of 20, so the batched `DeleteObjects`
+  both paths use really deletes on GCS's S3 interop. The analysis is on #351.
+  `k8s/overlays/dev/configmap-patch.yaml` sets `DELTA_S3_ORPHAN_DRY_RUN: "false"`.
+  `reclaim-unknown-sites` stays false, and a site-less prefix is removed by hand. **Stage and prod
+  keep the dry run** until their own report has been read.
+  **Guard**: `S3OrphanSweepDeploymentTest` (fast gate) scans every file under `k8s/` and checks four
+  things: the dev overlay turns the dry run off; the ConfigMap keys are the placeholders
+  `application.yml` binds, since a renamed placeholder would leave the manifest configuring nothing;
+  no other manifest turns the dry run off; and no manifest sets `reclaim-unknown-sites` true, in
+  either the placeholder or the relaxed-binding spelling. The reader handles map entries, `KEY=value`
+  literals and both env-entry forms, and a `valueFrom` counts as unresolved, so the guard fails
+  closed. Mutation-proven: `"false"` in the stage overlay reddens the stage/prod case, and
+  `RECLAIM_UNKNOWN_SITES: "true"` in the base reddens its own. **The pre-commit hook** ran only
+  `ParquetScratchOrphanSweeperTest` on a k8s-only commit. It now runs every manifest guard: that
+  one, `ParquetScratchCeilingBudgetTest`, `ContainerTimeZoneContractTest` and the new test.
+  **Not in the PR**: DoD item 3 (`reclaimed{prefix=checkpoints}` > 0 and `delete-failed` = 0 the
+  night after the deploy) needs a `deploy-dev/*` tag, which is a human step. No production code,
+  REST, gRPC, proto, DTO, migration (**V59 is taken, V60 stays next**), `specs/NNN-*`, metric,
+  S3-key or frontend change. One configuration **value** changes, in one overlay. See
+  `docs/delta-client-v2-guide.md` ("Objects no row references are reclaimed").
 - gradle-wrapper-jdk-25: The Gradle wrapper is **9.8.0**, because 9.0 cannot start on JDK 25
   (issue #352). Java 25 support in Gradle begins at 9.1.0; this repository compiles on
   Java 25 and the machine that opened the project had no older JDK, so IntelliJ refused

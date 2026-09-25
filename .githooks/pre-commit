@@ -45,8 +45,10 @@ while IFS= read -r f; do
       # exactly the one that can break them.
       migration_guidance_changed=true ;;
     k8s/*)
-      # The pod-private scratch claim lives in the manifests and is asserted from a test
-      # (issue #141). A k8s-only commit is exactly the one that can break it.
+      # Decisions that live in the manifests and are asserted from tests: the pod-private scratch
+      # claim (#141), the scratch ceilings under the volume (#138/#150), the UTC container zone
+      # (#280) and where the S3 orphan sweep may delete (#351). A manifest-only commit is exactly
+      # the one that can break them.
       scratch_manifest_changed=true ;;
     *.java|build.gradle.kts|settings.gradle.kts|gradle.properties|gradle/*|gradlew*)
       backend_changed=true ;;
@@ -70,11 +72,14 @@ if [ "$migration_guidance_changed" = true ] && [ "$backend_changed" = false ]; t
 fi
 
 if [ "$scratch_manifest_changed" = true ] && [ "$backend_changed" = false ]; then
-  echo "▶ pre-commit: parquet scratch mount consistency"
+  echo "▶ pre-commit: deployment manifest guards"
   if ! ./gradlew test -PexcludeIntegration \
       --tests com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeperTest \
+      --tests com.bitbi.dfm.delta.application.ParquetScratchCeilingBudgetTest \
+      --tests com.bitbi.dfm.config.ContainerTimeZoneContractTest \
+      --tests com.bitbi.dfm.delta.application.S3OrphanSweepDeploymentTest \
       --no-daemon --console=plain; then
-    echo "✖ The scratch manifests and the pod-private claim disagree — commit blocked."
+    echo "✖ The manifests disagree with a decision a test holds — commit blocked."
     status=1
   fi
 fi
