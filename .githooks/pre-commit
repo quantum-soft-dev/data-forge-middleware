@@ -47,8 +47,8 @@ while IFS= read -r f; do
     k8s/*)
       # Decisions that live in the manifests and are asserted from tests: the pod-private scratch
       # claim (#141), the scratch ceilings under the volume (#138/#150), the UTC container zone
-      # (#280) and where the S3 orphan sweep may delete (#351). A manifest-only commit is exactly
-      # the one that can break them.
+      # (#280), where the S3 orphan sweep may delete (#351) and what the backend HPA scales on
+      # (#350). A manifest-only commit is exactly the one that can break them.
       scratch_manifest_changed=true ;;
     *.java|build.gradle.kts|settings.gradle.kts|gradle.properties|gradle/*|gradlew*)
       backend_changed=true ;;
@@ -78,6 +78,7 @@ if [ "$scratch_manifest_changed" = true ] && [ "$backend_changed" = false ]; the
       --tests com.bitbi.dfm.delta.application.ParquetScratchCeilingBudgetTest \
       --tests com.bitbi.dfm.config.ContainerTimeZoneContractTest \
       --tests com.bitbi.dfm.delta.application.S3OrphanSweepDeploymentTest \
+      --tests com.bitbi.dfm.config.HpaScalingPolicyDeploymentTest \
       --no-daemon --console=plain; then
     echo "✖ The manifests disagree with a decision a test holds — commit blocked."
     status=1

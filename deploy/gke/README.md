@@ -161,6 +161,47 @@ port-forward landed on another workload, or the image predates the meters), or a
 dropping them. It does *not* indicate a missing `micrometer-registry-prometheus`: without that
 dependency the endpoint is not mapped at all and the curl returns **404**, not an empty 200.
 
+## Scaling and pod priority
+
+`forge-backend-hpa` (`k8s/base/hpa.yaml`; dev and stage lower `minReplicas` to 1 and `maxReplicas`
+to 3) scales on **CPU utilization alone** (target 70 % of the request). Scale-up waits
+**3600 s** (`behavior.scaleUp.stabilizationWindowSeconds`), and scale-down is unchanged (300 s,
+one pod per 2 min). `HpaScalingPolicyDeploymentTest` holds these rules over every manifest under
+`k8s/` (issue #350):
+
+- **No memory metric.** The JVM's heap does not shrink after it grows. On dev the pod that built the
+  night's checkpoint held 1.5–1.76 GiB for the rest of the day, and an idle one held 0.65–0.7 GiB, so
+  a memory target measured the night's peak rather than load.
+- **The window is longer than the nightly checkpoint sweep.** The sweep starts at 02:00 and runs on
+  one pod at about one core. On dev it took 13–31 minutes over 18–25.09, growing with the site. With
+  the old 60 s window, the HPA added replicas at 02:01 almost every night. The added replicas did no
+  work: a replica started after 02:00 takes no part in that night's sweep, and a gRPC session stays
+  on the pod that opened it. Then scale-down removed pods at 02:19–02:36, sometimes mid-build. If a
+  later sweep runs longer than about 45 minutes, raise the window and the test's floor together.
+- **Cost of the window:** a real overload also waits an hour before a replica is added. The headroom
+  for ingest is `minReplicas` (2 in prod).
+
+**Resource requests (dev patch: 500m / 2Gi, limits 2000m / 3Gi) are left as they are.** Measured
+on dev: idle about 5m CPU and 0.65–0.7 GiB; during the sweep about 1–1.3 cores sustained, with
+peaks up to 2.2, taken from the burst limit; memory peaked at 1.76 GiB, under the request. Raising
+the CPU request to cover the sweep would reserve about two cores all day for 30 minutes of use
+(Autopilot bills by request).
+
+**No PriorityClass, deliberately.** Every preemption of a forge pod on dev in the 30 days before #350
+(five, 02.09–22.09) was caused by a GKE system pod, kube-dns or konnectivity-agent. The same pods
+preempted bitbi's `bitbi-api`, `psql-ro` and `pg-ci` as well. GKE runs them at
+`system-cluster-critical`, which is 2,000,000,000; a user PriorityClass is capped at 1,000,000,000.
+So no class of ours would have prevented any of these preemptions. A class on this shared cluster
+would only let forge preempt bitbi's pods. To find the preemptor behind an event:
+
+```bash
+gcloud logging read 'jsonPayload.reason="Preempted" AND jsonPayload.involvedObject.namespace="forge"' \
+  --project bitbi-dev --freshness=30d --format='value(timestamp,jsonPayload.involvedObject.name,jsonPayload.message)'
+# then, for the UID in "Preempted by pod <uid>":
+gcloud logging read 'jsonPayload.involvedObject.uid="<uid>"' --project bitbi-dev --freshness=30d --limit=1 \
+  --format='value(jsonPayload.involvedObject.namespace,jsonPayload.involvedObject.name)'
+```
+
 ## Placeholders to fill before a real deploy
 
 Overlay ConfigMaps contain `REPLACE_*` / `dev-dfm.us.auth0.com` placeholders for Auth0

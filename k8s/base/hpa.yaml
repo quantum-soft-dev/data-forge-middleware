@@ -1,3 +1,23 @@
+# What the backend scales on, and what it deliberately does not (issue #350). Held by
+# HpaScalingPolicyDeploymentTest; the measurements behind it are on #350 and in
+# docs/delta-client-v2-guide.md ("The nightly build does not scale the deployment").
+#
+# - CPU only. The JVM runs with a fixed maximum heap and does not give the heap back: the pod
+#   that built the night's checkpoint holds 1.5-1.76 GiB for the rest of the day, an idle one
+#   0.65-0.7 GiB. A memory target measures how large the heap once grew, not load. It scaled the
+#   deployment up on its own and held replicas for hours.
+# - Scale-up waits an hour. The 02:00 checkpoint sweep runs on ONE pod at about one core for
+#   13-31 minutes (dev, 18-25.09, growing with the site). A 60 s window added replicas at 02:01
+#   every night, and none of them helped: a replica started after 02:00 takes no part in that
+#   night's sweep, and a gRPC ingest session stays on the pod it was opened on, so a new replica
+#   only takes sessions opened after it is ready. The window must stay longer than the longest
+#   sweep; the test's floor is that sweep plus half again.
+#   The price: a real overload also waits the window before a replica is added. The headroom
+#   for ingest is minReplicas (2 in prod), not the scale-up.
+# - Scale-down is unchanged. Without the nightly scale-up there is no 02:2x scale-down killing
+#   pods mid-build.
+# - No PriorityClass: every preemption of a forge pod on dev was by a GKE system pod
+#   (system-cluster-critical, above any class of ours). See the test's Javadoc.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -17,15 +37,9 @@ spec:
         target:
           type: Utilization
           averageUtilization: 70
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 60
+      stabilizationWindowSeconds: 3600
       policies:
         - type: Pods
           value: 2

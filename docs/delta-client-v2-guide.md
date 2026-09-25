@@ -2312,6 +2312,34 @@ logs it at WARN. Batch retention is not under this claim. After #344 it re-locks
 first is deleting. The replica verdict for every `@Scheduled` task is kept in
 `ScheduledTaskInventoryTest`.
 
+### The nightly build does not scale the deployment (issue #350)
+
+The sweep above runs on **one** pod at about one core. On dev it took 13–31 minutes over
+18–25.09, and it grows with the site. The backend's HPA used to add replicas at 02:01 on every such
+night, with a CPU target of 70 % of a 500m request, a 60 s scale-up window, and a memory target as
+well. None of those replicas helped. The cron had already fired on the pods that existed at 02:00,
+and a replica that starts afterwards takes no part in that night's sweep (with #345 it would share
+the next night's). A gRPC ingest session stays on the pod it was opened on. Then scale-down removed
+pods between 02:19 and 02:36, sometimes mid-build. Every such pod paid a start of about 130 s,
+Spring plus Flyway, first.
+
+`k8s/base/hpa.yaml` now scales on **CPU alone**, and scale-up waits **3600 s**. The HPA adds a
+replica only if CPU has stayed above target for a whole hour, which is longer than any measured
+sweep with room for growth. The memory metric is gone because the heap does not shrink after it
+grows: the pod that built the night's checkpoint holds 1.5–1.76 GiB all day. A memory target
+therefore measured the night's peak, and it held extra replicas for hours. The price is that a
+real overload also waits the hour. The headroom for ingest is `minReplicas`, not the scale-up.
+`HpaScalingPolicyDeploymentTest` holds all three rules. If a sweep ever runs longer than about
+45 minutes, raise the window and the test's floor together: from then on, the build would scale
+the deployment again.
+
+**A pod can still die mid-build.** GKE's own system pods preempt it: every forge preemption on
+dev was by kube-dns or konnectivity-agent, which run at `system-cluster-critical`. No
+PriorityClass of ours outranks that, so none is declared. The details are in
+`deploy/gke/README.md` ("Scaling and pod priority"). Rollouts, OOM kills and node repairs also stop
+pods. A killed build costs its site one lease, and the next tick takes the site over, as described
+above.
+
 ### A forced rebuild says what it did (issue #186)
 
 `rebuild_requested` used to be the whole record of an operator's click: raised by the request,
