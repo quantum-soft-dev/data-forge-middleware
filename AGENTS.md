@@ -289,7 +289,7 @@ pages/{feature}/            # Route pages
   one, `ParquetScratchCeilingBudgetTest`, `ContainerTimeZoneContractTest` and the new test.
   **Not in the PR**: DoD item 3 (`reclaimed{prefix=checkpoints}` > 0 and `delete-failed` = 0 the
   night after the deploy) needs a `deploy-dev/*` tag, which is a human step. No production code,
-  REST, gRPC, proto, DTO, migration (**V58 is taken, V59 stays next**), `specs/NNN-*`, metric,
+  REST, gRPC, proto, DTO, migration (**V59 is taken, V60 stays next**), `specs/NNN-*`, metric,
   S3-key or frontend change. One configuration **value** changes, in one overlay. See
   `docs/delta-client-v2-guide.md` ("Objects no row references are reclaimed").
 - checkpoint-site-claim: One replica builds a site's checkpoint at a time (issue #345). The nightly
