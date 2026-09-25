@@ -1,10 +1,8 @@
 package com.bitbi.dfm.upload.presentation.dto;
 
-import com.fasterxml.jackson.annotation.JsonAnySetter;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 

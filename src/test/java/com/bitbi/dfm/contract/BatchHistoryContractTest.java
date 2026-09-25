@@ -1,7 +1,6 @@
 package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.auth.application.TokenService;
-import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;

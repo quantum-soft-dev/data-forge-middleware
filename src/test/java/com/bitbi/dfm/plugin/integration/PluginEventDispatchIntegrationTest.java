@@ -1,7 +1,6 @@
 package com.bitbi.dfm.plugin.integration;
 
 import com.bitbi.dfm.integration.AbstractIntegrationTest;
-import com.bitbi.dfm.plugin.application.PluginEventDispatcher;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.events.BatchEventListener;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
@@ -13,10 +12,6 @@ import org.springframework.test.context.jdbc.Sql;
 
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

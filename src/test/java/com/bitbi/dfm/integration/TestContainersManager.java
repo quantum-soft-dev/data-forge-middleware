@@ -6,7 +6,6 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
 import java.net.Socket;
-import java.net.URI;
 import java.time.Duration;
 
 

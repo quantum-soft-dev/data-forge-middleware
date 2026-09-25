@@ -1,6 +1,5 @@
 package com.bitbi.dfm.integration;
 
-import com.auth0.exception.Auth0Exception;
 import com.auth0.exception.APIException;
 import com.auth0.json.mgmt.users.User;
 import com.bitbi.dfm.account.application.AccountSyncService;

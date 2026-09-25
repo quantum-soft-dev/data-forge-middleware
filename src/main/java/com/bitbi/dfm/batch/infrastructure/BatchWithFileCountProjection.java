@@ -1,6 +1,5 @@
 package com.bitbi.dfm.batch.infrastructure;
 
-import org.springframework.beans.factory.annotation.Value;
 
 import java.time.LocalDateTime;
 import java.util.UUID;

@@ -5,7 +5,6 @@ import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.plugin.application.PluginApiKeyService;
 import com.bitbi.dfm.plugin.application.SqlChangesQueryService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
-import com.bitbi.dfm.plugin.domain.PluginApiKey;
 import com.bitbi.dfm.plugin.presentation.dto.TableDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.site.domain.Site;
