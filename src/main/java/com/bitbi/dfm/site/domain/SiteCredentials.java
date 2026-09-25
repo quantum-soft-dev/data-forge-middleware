@@ -2,7 +2,6 @@ package com.bitbi.dfm.site.domain;
 
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
-import java.security.MessageDigest;
 import java.util.Objects;
 import java.util.UUID;
 

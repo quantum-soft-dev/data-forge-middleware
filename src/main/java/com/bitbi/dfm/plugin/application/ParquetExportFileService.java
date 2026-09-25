@@ -3,7 +3,6 @@ package com.bitbi.dfm.plugin.application;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.plugin.application.ParquetExportCatalogQuery.CatalogPage;
-import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao;
 import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao.CatalogRow;
 import org.springframework.stereotype.Service;
 

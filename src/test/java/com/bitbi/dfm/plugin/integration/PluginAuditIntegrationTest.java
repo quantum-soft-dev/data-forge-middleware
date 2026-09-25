@@ -3,7 +3,6 @@ package com.bitbi.dfm.plugin.integration;
 import com.bitbi.dfm.integration.AbstractIntegrationTest;
 import com.bitbi.dfm.plugin.application.PluginActivationService;
 import com.bitbi.dfm.plugin.application.PluginAuditService;
-import com.bitbi.dfm.plugin.application.PluginEventDispatcher;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import org.junit.jupiter.api.*;

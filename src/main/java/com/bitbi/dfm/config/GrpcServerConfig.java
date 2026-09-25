@@ -2,7 +2,6 @@ package com.bitbi.dfm.config;
 
 import com.bitbi.dfm.delta.presentation.DeltaAuthInterceptor;
 import com.bitbi.dfm.delta.presentation.DeltaIngestionService;
-import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.ServerInterceptors;
 import org.slf4j.Logger;

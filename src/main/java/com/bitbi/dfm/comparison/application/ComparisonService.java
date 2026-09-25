@@ -2,7 +2,6 @@ package com.bitbi.dfm.comparison.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.comparison.domain.*;
 import com.bitbi.dfm.comparison.infrastructure.S3FileContentService;
 import com.bitbi.dfm.upload.domain.UploadedFile;
