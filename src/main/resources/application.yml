@@ -80,9 +80,10 @@ spring:
       # BackgroundConnectionDemandTest keeps every number below honest and fails when a new
       # background pool lands without this arithmetic being redone.
       #
-      # The audited background pools declare THIRTY-FIVE threads between them — the scheduler (7),
+      # The audited background pools declare THIRTY-SIX threads between them — the scheduler (7),
       # pluginExecutor (10), pluginExecutionExecutor (8), pluginAuditExecutor (2), the three queue
-      # workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) —
+      # workers (2 each), the forced-rebuild executor (1), the batch-parquet lease renewer (1) and
+      # the checkpoint site-claim lease renewer (1, #345) —
       # before a single HTTP or gRPC request asks for a connection, and both request layers are
       # themselves unbounded
       # (virtual-thread-per-request, and grpc-java's default cached pool). This pool is therefore
@@ -521,6 +522,19 @@ delta:
     # waited nine minutes and then ran is invisible there and never touches builds.deferred either.
     # 0 = do not wait at all.
     fold-wait-seconds: ${DELTA_CHECKPOINT_FOLD_WAIT_SECONDS:600}
+    # One replica visits a site's checkpoint at a time (issue #345). The cron fires on every replica
+    # at the same second; before this, two or three pods built the same site — the same frame
+    # uploaded once per pod, first builds ending on uk_checkpoint_site_table, incremental ones both
+    # completing and both pruning. A visit (build + prune, or a forced rebuild) takes a claim on the
+    # site's site_sync_state row, renewed every third of this lease while it runs and released at
+    # the end; a replica that finds the site claimed skips it silently. A pod that dies mid-build
+    # loses the site when the lease lapses. Liveness, not a cap on build length — a 30-minute build
+    # keeps its claim. Refused at startup below 1.
+    claim-lease-seconds: ${DELTA_CHECKPOINT_CLAIM_LEASE_SECONDS:600}
+    # How long a forced rebuild waits for a site another replica is visiting. The nightly sweep
+    # never waits (the other replica is doing the same work); a forced rebuild has no next tick, so
+    # it waits, then settles as DEFERRED and releases rebuild_requested. 0 = do not wait.
+    claim-wait-seconds: ${DELTA_CHECKPOINT_CLAIM_WAIT_SECONDS:600}
     # How many nights the tick keeps retrying a table that came out of a build with no snapshot
     # (issue #149). Since #128 such a row is retried by every scheduled build, and since #137 it
     # also puts its site on the tick's work list — so a table nothing can ever materialize (no

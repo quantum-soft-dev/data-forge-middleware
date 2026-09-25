@@ -146,7 +146,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V58**, next is **V59**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V59**, next is **V60**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **Follow-ups**: a finding out of scope first goes looking for an existing ticket on the same **theme** — open and closed, related-but-not-identical included. An open match gets the evidence as a comment, so the ticket grows into one run-sized problem instead of a sibling appearing. A closed match is **never reopened**: a stale observation (the fix is already in `develop`, the worktree is just older) needs nothing at all, and only a true regression — reproducing on current `origin/develop` — gets a new issue linking the old one and the fixing commit. A closed match carrying **`duplicate`** is the exception to "stale": it was closed by another ticket's work, which may still be open (three of the seventeen labelled closes are today), so read the absorber named in its closing comment and look at *its* state — and ask the search for labels, not just titles. Only when the theme has no ticket yet is one filed, framed as the theme (root cause / subsystem), and its body states three things before it is filed — the files it expects to touch, whether it needs a Flyway migration or a `specs/NNN-*` directory, and which open tickets live in those same files ("none found" is valid). `.github/ISSUE_TEMPLATE/task.yml` carries those three as required form fields; a ticket filed with `gh issue create --body` gets no form, so the same sections are written by hand. A keyword search *does* find these tickets — #190 and #200 both open with "SQL regeneration" — but nothing in the process asked anyone to run it, and the colliding pairs surfaced only because somebody read every open ticket in one sitting. A file list makes that check mechanical instead of something somebody has to think to do. `/github-issue-runner` reads those lines at step 2b where they exist, and still re-checks by grep. The full rule, the search method and the reasoning live in **`CLAUDE.md`** → "Follow-ups" and "Every follow-up says what it will touch"; this file is the condensed mirror.
 - **Absorbed tickets carry `duplicate`**: closing a ticket folded into another (`folds #NNN`) auto-moves its card to `Done` via project 16's enabled `Item closed` workflow, so `Done` mixes a ticket closed by its own PR with one closed by somebody else's — the 2026-08-19 pass read eight such closes (not all of them; see the census in `CLAUDE.md`), four with the absorber still open, the sharpest #200 (`priority: high`, unfixed) in `Done` under a blocked #190, indistinguishable from #143/#162/#204/#214 whose work really did land. Whoever closes a ticket as absorbed applies the **`duplicate`** label **and** comments naming the absorber and whether it is still open. The label means the durable fact *closed by another ticket's work, not its own PR* — not "still unfixed", a reading the closer cannot know and which decays (#200 was labelled as unfixed and #190 merged the next day) — so every absorbed close is labelled and the absorber's own state answers whether it shipped. The card stays in `Done`: a separate column would be overwritten by that same workflow on every close. `Done` minus `duplicate` is the work that closed on its own merits. Reasoning and the rejected options live in **`CLAUDE.md`** → "A ticket closed as absorbed carries `duplicate`"; this file is the condensed mirror.
 - **Closed tickets keep no `status: *` label**: the column is `Done`; the live labels are a state machine for open work. `gh issue list --label "status: in progress"` and `/merge`'s `--label "status: ready to merge"` are read across states often enough that a closed ticket wearing one is a wrong answer (#89 still read in progress a month after it shipped). Every close route strips every `status:*` actually present — query then remove, because `gh issue edit --remove-label` 404s on a label that is not on the issue, which is why `/merge` naming only `ready to merge` + `in review` was the defect. The backstop is `.github/workflows/strip-closed-status-labels.yml` (`issues: closed` + weekly sweep). A scheduled auto-strip is worth having here (the predicate is mechanical) and was declined as a journal guard on #205. Full rule in **`CLAUDE.md`** → "Status lives in two places".
@@ -260,9 +260,57 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V58**; next migration is **V59** (do not reuse numbers)
+- Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-site-claim: One replica builds a site's checkpoint at a time (issue #345). The nightly
+  cron fires on every replica at the same second, and the path's guards — `CheckpointScheduler`'s
+  `ReentrantLock` and the fold budget (#178) — are per JVM. On the test cluster, with HPA at three
+  replicas at night, three pods built one site's first checkpoint: the same 275 MB frame uploaded
+  three times, and two builds ending on `uk_checkpoint_site_table`, logged as a failure and
+  persisted as the site's `FAILED` abort before the winner published. On the following nights two
+  incremental builds of one site both completed without error, each pruning behind the other.
+  `CheckpointEpochGuard` compares the baseline epoch, which both builds share, not who owns the
+  site. **The owner's decision (option A on the ticket): a per-site claim with a lease.** The rejected
+  options were a session advisory lock (it holds a connection for minutes), ShedLock (too coarse,
+  `lockAtMostFor`, a dependency) and a dedicated pod (infrastructure, and two leaders during a
+  rollout). **V59** adds `site_sync_state.checkpoint_claim_token` / `checkpoint_claim_expires_at`.
+  Each is taken by one native upsert in its own short transaction, timed by the database's UTC clock
+  (#286), and renewed or released only by the holder's token. The upsert creates the row for a
+  site that has none, so no build runs unclaimed. **Neither column is mapped on the entity**: every
+  other writer of this row saves the whole entity, and a snapshot read before the claim would write
+  it back (#245). New `CheckpointSiteClaim` wraps a visit, so the claim lives **in the callers,
+  not in `CheckpointService`**. The claim then covers the prune that follows the build, is still
+  taken before the fold budget and every read, and `CheckpointServiceTest` runs untouched. The
+  scheduler uses `runIfFree`: a claimed site is skipped with no WARN, no abort, no spent attempt and
+  no prune, and one INFO line per pass counts the skips. So the replicas divide the sweep instead of
+  repeating it. A claim statement that throws costs that site, not the tick. The forced rebuild uses
+  `runWhenFree`, which waits up to new `delta.checkpoint.claim-wait-seconds` (600) and is
+  shutdown-aware. A spent wait settles as `DEFERRED` with its own text and releases the flag; a
+  shutdown keeps it (#162). After the wait the rebuild runs even if another replica has since
+  settled the flag — one redundant, serialized rebuild in the double-resume case, which is stated
+  rather than guarded. The lease — new `delta.checkpoint.claim-lease-seconds` (600, refused below 1
+  by name) — is renewed every third of its length on a daemon thread `checkpoint-site-claim-lease`,
+  the `batch-parquet-lease` precedent. It measures liveness, not build length (first builds take
+  10–30 minutes), and a pod killed mid-build by scale-down or preemption loses the site when the
+  lease lapses. It is a lease, not a fence: a holder stalled past the whole lease can overlap with
+  the replica that took the site over. That is the pre-#345 behaviour, correct and wasteful, and the
+  renewal that notices logs it at WARN. `BackgroundConnectionDemandTest` counts the new thread
+  (**35 → 36**, `Hold.SHORT`), and `ScheduledTaskInventoryTest` now gives every `@Scheduled` task a
+  replica verdict with its reason (`COORDINATED` / `IDEMPOTENT` / `POD_LOCAL`). It pins the two
+  coordinated tasks that carry state: the checkpoint tick takes the claim, and batch retention
+  re-locks each candidate `FOR UPDATE SKIP LOCKED` (#344), which is why it is not under this claim.
+  **Not taken, and recorded on the ticket**: clearing a stale `last_checkpoint_build_abort` on a
+  successful build. #224 deliberately keeps those columns as history once the pointer moves, and
+  pins that in `SiteSyncStateCheckpointBuildAbortTest`; the UI reads them only at pointer 0.
+  **Tests**: `CheckpointSiteClaimIntegrationTest` drives the real statements (foreign token cannot
+  renew or release, expired lease taken over, a whole-entity save leaves the claim, two racing
+  threads → one winner). It also covers the DoD scenario: a second `CheckpointScheduler` holds the
+  site while the application's own ticks, and the site is skipped without WARN, ERROR or abort, then
+  built once. Mutation-proven: letting a live claim be re-taken reddens five of its cases, and
+  building outside the claim reddens the three new `CheckpointSchedulerTest` cases. No REST, gRPC,
+  proto, DTO, metric, S3-key, `specs/NNN-*` or frontend change; **V59 is taken, V60 is next**. See
+  `docs/delta-client-v2-guide.md` ("One replica builds a site").
 - batch-delta-totals: A batch keeps its Delta v2 session totals, so Upload History and Batch Detail
   stop shrinking once retention prunes the segments they were computed from (issue #346, seen on
   `fyt-new` the morning after a wipe: an 87-table, 5 012 611-record snapshot read as 17 tables once

@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -52,6 +53,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       nothing here ever depended on one scheduler thread to serialize them.</li>
  *   <li><b>Does it hold its thread?</b> {@link Cost#LONG} tasks are the ones the pool has to be
  *       sized around; see the derivation beside the key in {@code application.yml}.</li>
+ *   <li><b>Is it safe on several replicas?</b> (issue #345) Every task fires on every pod, so each
+ *       carries a {@link Replicas} verdict with its reason. The first question is about threads in
+ *       one JVM; this one is about pods, and a per-JVM guard — the checkpoint scheduler's
+ *       {@code ReentrantLock} — answers only the first.</li>
  * </ol>
  */
 @DisplayName("Scheduled task inventory (#146)")
@@ -130,6 +135,133 @@ class ScheduledTaskInventoryTest {
         tasks.put("com.bitbi.dfm.delta.presentation.DeltaIngestionService#sweepOrphanedProvisionalSegments",
                 Cost.LONG);
         return tasks;
+    }
+
+    /**
+     * What happens when the same task fires on several replicas at once (issue #345).
+     *
+     * <p>A {@code @Scheduled} method runs on <b>every</b> replica — a cron at the same second on
+     * each — and the base deployment runs at least two (HPA scales further at night). Every task
+     * therefore has an answer to "is it safe on N replicas?", and before #345 nobody had asked: the
+     * nightly checkpoint build was built by two or three pods at once. The answer is one of three,
+     * and a task that has none is refused by {@link #shouldSayForEveryTaskWhetherItIsSafeOnSeveralReplicas}.</p>
+     */
+    private enum Replicas {
+
+        /** One replica does each unit of work, by a named mechanism. */
+        COORDINATED,
+
+        /**
+         * Several replicas may overlap, and the overlap is correct: the work is idempotent or
+         * conditional, so it costs duplicate work at most.
+         */
+        IDEMPOTENT,
+
+        /** The task works on this pod's own state (memory, local disk); other replicas are irrelevant. */
+        POD_LOCAL
+    }
+
+    /** The replica verdict and its reason, per task — the reason is the part a reviewer checks. */
+    private record ReplicaSafety(Replicas replicas, String why) {
+    }
+
+    private static final Map<String, ReplicaSafety> REPLICA_SAFETY = replicaSafety();
+
+    private static Map<String, ReplicaSafety> replicaSafety() {
+        Map<String, ReplicaSafety> tasks = new LinkedHashMap<>();
+        tasks.put("com.bitbi.dfm.delta.application.CheckpointScheduler#buildCheckpoints",
+                new ReplicaSafety(Replicas.COORDINATED, "per-site CheckpointSiteClaim with a lease "
+                        + "(#345) around the build and the prune; a claimed site is skipped"));
+        tasks.put("com.bitbi.dfm.delta.application.BatchParquetFinalizationWorker#sweep",
+                new ReplicaSafety(Replicas.COORDINATED, "batch advisory lock plus claim_token and a "
+                        + "renewed lease per artifact row (#036/#038/#040)"));
+        tasks.put("com.bitbi.dfm.delta.application.DeltaEgressWorker#sweep",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "FOR UPDATE SKIP LOCKED claim; since #164 the "
+                        + "lock is released before S3, so two replicas can render one segment to the "
+                        + "same keys, and the targeted mark (#245) is conditional"));
+        tasks.put("com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker#sweep",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "as egress, and uk_sql_gen_source_batch makes "
+                        + "the loser adopt the winner's generation (#246, sql.generation.claims.lost)"));
+        tasks.put("com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeper#sweep",
+                new ReplicaSafety(Replicas.POD_LOCAL, "the scratch directory is a pod-private "
+                        + "emptyDir (#131/#141)"));
+        tasks.put("com.bitbi.dfm.delta.application.DeltaS3OrphanSweeper#sweep",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "deletes only objects older than a day that no "
+                        + "row names; deliberately not serialized (#158) — an overlap is a duplicate "
+                        + "listing and idempotent deletes"));
+        tasks.put("com.bitbi.dfm.batch.application.BatchTimeoutScheduler#checkExpiredBatches",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "markBatchNotCompletedIfStillExpired is "
+                        + "conditional on the selected cutoff (030/T06); the loser counts a skip"));
+        tasks.put("com.bitbi.dfm.error.application.PartitionScheduler#createNextMonthPartition",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "CREATE TABLE IF NOT EXISTS"));
+        tasks.put("com.bitbi.dfm.error.application.PartitionScheduler#dropOldPartitions",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "DROP TABLE IF EXISTS"));
+        tasks.put("com.bitbi.dfm.plugin.application.DownloadLinkPurgeScheduler#purgeStaleLinks",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "DELETE by cutoff"));
+        tasks.put("com.bitbi.dfm.auth.application.RefreshTokenService#cleanupExpiredTokens",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "DELETE by cutoff"));
+        tasks.put("com.bitbi.dfm.deviceauth.application.DeviceAuthorizationService#cleanupExpired",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "UPDATE of expired rows by cutoff"));
+        tasks.put("com.bitbi.dfm.auth.config.Auth0Configuration#refreshTokenScheduled",
+                new ReplicaSafety(Replicas.POD_LOCAL, "refreshes this pod's in-memory M2M token"));
+        tasks.put("com.bitbi.dfm.delta.presentation.DeltaIngestionService#evictStaleStagedSessions",
+                new ReplicaSafety(Replicas.POD_LOCAL, "scans this pod's in-memory staged-session map; "
+                        + "a gRPC stream lives on the pod that accepted it"));
+        tasks.put("com.bitbi.dfm.delta.presentation.DeltaIngestionService#sweepOrphanedProvisionalSegments",
+                new ReplicaSafety(Replicas.IDEMPOTENT, "re-reads its rows in one transaction and both "
+                        + "callers swallow a lost race (see the class documentation above)"));
+        return tasks;
+    }
+
+    /**
+     * Batch retention is programmatic (see {@link #PROGRAMMATIC_TASK}). After #344 each candidate is
+     * re-locked with {@code FOR UPDATE SKIP LOCKED} inside the transaction that deletes it, so a
+     * second replica skips a batch the first is deleting.
+     */
+    private static final ReplicaSafety PROGRAMMATIC_TASK_REPLICAS = new ReplicaSafety(Replicas.COORDINATED,
+            "each candidate batch is re-locked FOR UPDATE SKIP LOCKED in the deleting transaction (#344)");
+
+    @Test
+    @DisplayName("every scheduled task says whether it is safe on several replicas, and how (#345)")
+    void shouldSayForEveryTaskWhetherItIsSafeOnSeveralReplicas() {
+        assertEquals(new TreeSet<>(ANNOTATED_TASKS.keySet()), new TreeSet<>(REPLICA_SAFETY.keySet()),
+                "every @Scheduled task runs on every replica at once. Say for the newcomer whether that "
+                        + "is safe — COORDINATED (name the mechanism), IDEMPOTENT (say why an overlap "
+                        + "is correct) or POD_LOCAL — before it ships; #345 is what an unasked question "
+                        + "here costs");
+        REPLICA_SAFETY.forEach((task, safety) -> assertFalse(safety.why().isBlank(),
+                task + " needs a reason, not only a verdict"));
+        assertFalse(PROGRAMMATIC_TASK_REPLICAS.why().isBlank());
+    }
+
+    @Test
+    @DisplayName("the checkpoint tick is coordinated by the per-site claim it is audited with (#345)")
+    void shouldCoordinateTheCheckpointTickThroughTheSiteClaim() {
+        boolean takesTheClaim = Arrays.stream(
+                        com.bitbi.dfm.delta.application.CheckpointScheduler.class.getDeclaredConstructors())
+                .map(Constructor::getParameterTypes)
+                .flatMap(Arrays::stream)
+                .anyMatch(com.bitbi.dfm.delta.application.CheckpointSiteClaim.class::equals);
+
+        assertEquals(Replicas.COORDINATED,
+                REPLICA_SAFETY.get("com.bitbi.dfm.delta.application.CheckpointScheduler#buildCheckpoints").replicas());
+        assertTrue(takesTheClaim, "CheckpointScheduler is audited as COORDINATED by CheckpointSiteClaim; "
+                + "without it every replica builds every site again (#345)");
+    }
+
+    @Test
+    @DisplayName("batch retention is coordinated by the SKIP LOCKED re-lock it is audited with (#344)")
+    void shouldCoordinateBatchRetentionThroughSkipLocked() throws NoSuchMethodException {
+        Method lock = com.bitbi.dfm.batch.infrastructure.JpaBatchRepository.class.getMethod(
+                "lockCleanupCandidate", UUID.class, UUID.class, java.time.LocalDateTime.class);
+        org.springframework.data.jpa.repository.Query query =
+                lock.getAnnotation(org.springframework.data.jpa.repository.Query.class);
+
+        assertEquals(Replicas.COORDINATED, PROGRAMMATIC_TASK_REPLICAS.replicas());
+        assertNotNull(query, "lockCleanupCandidate lost its @Query");
+        assertTrue(query.value().contains("FOR UPDATE SKIP LOCKED"),
+                "batch retention is audited as COORDINATED by FOR UPDATE SKIP LOCKED; without it two "
+                        + "replicas' retention passes contend for the same batches");
     }
 
     @Test

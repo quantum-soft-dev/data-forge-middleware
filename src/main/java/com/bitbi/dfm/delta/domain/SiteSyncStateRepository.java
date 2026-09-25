@@ -95,4 +95,38 @@ public interface SiteSyncStateRepository {
      * @return site identifiers with {@code rebuild_requested = true}
      */
     List<UUID> findSiteIdsWithRebuildRequested();
+
+    /**
+     * Take the site's checkpoint claim for {@code token} if it is free or its lease has lapsed
+     * (issue #345). One statement in its own short transaction, timed by the database's clock so
+     * replicas whose clocks disagree still agree on who holds the site. A site with no sync-state
+     * row yet gets one, so the claim covers every site a build can visit.
+     *
+     * @param siteId       site identifier
+     * @param token        this visit's token; the only value that can later renew or release it
+     * @param leaseSeconds how long the claim holds without a renewal
+     * @return 1 when this token now holds the site, 0 when another live claim does
+     */
+    int claimCheckpointSite(UUID siteId, UUID token, long leaseSeconds);
+
+    /**
+     * Extend a claim this token still holds (issue #345). A token whose claim was taken over after
+     * its lease lapsed changes nothing.
+     *
+     * @param siteId       site identifier
+     * @param token        the holder's token
+     * @param leaseSeconds the new lease, counted from now
+     * @return 1 when renewed, 0 when this token no longer holds the site
+     */
+    int renewCheckpointSiteClaim(UUID siteId, UUID token, long leaseSeconds);
+
+    /**
+     * Free the site if this token still holds it (issue #345). A foreign or superseded token
+     * changes nothing, so a late release cannot free a claim somebody else has since taken.
+     *
+     * @param siteId site identifier
+     * @param token  the holder's token
+     * @return 1 when released, 0 when this token no longer held the site
+     */
+    int releaseCheckpointSiteClaim(UUID siteId, UUID token);
 }

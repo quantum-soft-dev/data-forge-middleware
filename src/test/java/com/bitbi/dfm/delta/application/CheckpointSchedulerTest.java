@@ -7,8 +7,16 @@ import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -38,9 +46,95 @@ class CheckpointSchedulerTest {
         }
     };
     private static final int MAX_MATERIALIZE_ATTEMPTS = 3;
+    /**
+     * Issue #345. Grants every site by default, and records whether the visit's work ran inside
+     * the claim — so the build and the prune can be required to happen while the site is held.
+     */
+    private final CheckpointSiteClaim siteClaim = mock(CheckpointSiteClaim.class);
+    private final Set<UUID> claimedElsewhere = new HashSet<>();
+    private volatile UUID insideClaimOf;
+
+    {
+        when(siteClaim.runIfFree(any(), any())).thenAnswer(invocation -> {
+            UUID siteId = invocation.getArgument(0);
+            if (claimedElsewhere.contains(siteId)) {
+                return Optional.empty();
+            }
+            Supplier<?> work = invocation.getArgument(1);
+            insideClaimOf = siteId;
+            try {
+                return Optional.of(work.get());
+            } finally {
+                insideClaimOf = null;
+            }
+        });
+    }
+
     private final CheckpointScheduler scheduler = new CheckpointScheduler(
             checkpointService, retentionService, segmentRepository, checkpointRepository,
-            new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, syncStateService);
+            new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal, syncStateService,
+            siteClaim);
+
+    @Test
+    void aSiteAnotherReplicaIsVisitingIsSkippedWithoutBuildPruneOrAbort() {
+        // Issue #345. The other replica is doing exactly this work, so the skip is the correct
+        // outcome: no build (the frame and the snapshots would be uploaded twice), no prune (both
+        // replicas pruned behind each other on the test cluster), and nothing recorded — before the
+        // claim, the loser of a first build ended on uk_checkpoint_site_table and persisted it as
+        // this site's FAILED abort, minutes before the winner published the checkpoint.
+        UUID elsewhere = UUID.randomUUID();
+        UUID mine = UUID.randomUUID();
+        claimedElsewhere.add(elsewhere);
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(elsewhere, mine));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService, never()).buildCheckpoint(eq(elsewhere), anyBoolean());
+        verify(retentionService, never()).prune(elsewhere);
+        verify(syncStateService, never()).recordCheckpointBuildAbort(eq(elsewhere), any(), any());
+        verify(checkpointService).buildCheckpoint(eq(mine), anyBoolean());
+        verify(retentionService).prune(mine);
+    }
+
+    @Test
+    void theBuildAndThePruneBothRunWhileTheSiteIsClaimed() {
+        // Issue #345: the prune follows the build in the same visit and deletes below the pointer
+        // the build just moved, so it is the claim's business as much as the build is.
+        UUID site = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(site));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
+        List<UUID> heldDuring = new ArrayList<>();
+        when(checkpointService.buildCheckpoint(eq(site), anyBoolean())).thenAnswer(invocation -> {
+            heldDuring.add(insideClaimOf);
+            return Map.of();
+        });
+        when(retentionService.prune(site)).thenAnswer(invocation -> {
+            heldDuring.add(insideClaimOf);
+            return 0;
+        });
+
+        scheduler.buildCheckpoints();
+
+        assertThat(heldDuring).containsExactly(site, site);
+    }
+
+    @Test
+    void aClaimThatCannotBeTakenCostsOneSiteNotTheTick() {
+        // The claim is one statement against the database. If it throws, that site is not visited
+        // this tick — and nothing about the site is concluded, so no abort is persisted either.
+        UUID broken = UUID.randomUUID();
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(broken, ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
+        doThrow(new IllegalStateException("pool exhausted")).when(siteClaim).runIfFree(eq(broken), any());
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService, never()).buildCheckpoint(eq(broken), anyBoolean());
+        verify(syncStateService, never()).recordCheckpointBuildAbort(eq(broken), any(), any());
+        verify(checkpointService).buildCheckpoint(eq(ok), anyBoolean());
+    }
 
     @Test
     void buildsAndPrunesEachSite() {
