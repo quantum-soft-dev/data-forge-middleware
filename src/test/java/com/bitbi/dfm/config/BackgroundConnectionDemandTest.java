@@ -211,6 +211,7 @@ class BackgroundConnectionDemandTest {
         constructions.put("com/bitbi/dfm/delta/application/BatchParquetFinalizationWorker.java", 1);
         constructions.put("com/bitbi/dfm/plugin/application/DeltaSqlSweepWorker.java", 1);
         constructions.put("com/bitbi/dfm/delta/application/BatchParquetFinalizationService.java", 1);
+        constructions.put("com/bitbi/dfm/delta/application/CheckpointSiteClaim.java", 1);
         // Not a pool: one CompletableFuture.runAsync that names pluginExecutionExecutor explicitly,
         // which is the form that keeps work off ForkJoinPool.commonPool. Recorded so a second
         // hand-off has to justify its executor rather than inherit the common pool silently.
@@ -226,6 +227,14 @@ class BackgroundConnectionDemandTest {
      */
     private static final Consumer BATCH_PARQUET_LEASE =
             new Consumer(1, Hold.SHORT, "one advisory-locked UPDATE every lease-seconds/3");
+
+    /**
+     * The lease-renewal thread of {@code CheckpointSiteClaim} (issue #345) — one daemon thread, for
+     * the same reason as the one above: it keeps a replica's claim on a site alive while a checkpoint
+     * visit runs, one conditional UPDATE every {@code delta.checkpoint.claim-lease-seconds / 3}.
+     */
+    private static final Consumer CHECKPOINT_SITE_CLAIM_LEASE =
+            new Consumer(1, Hold.SHORT, "one conditional UPDATE every claim-lease-seconds/3");
 
     /**
      * Slots the modelled background peak is required to leave for request threads.
@@ -277,7 +286,7 @@ class BackgroundConnectionDemandTest {
      * documentation above and in the derivation beside the key; recomputed by
      * {@link #theAuditedTotalIsWhatItSays}.
      */
-    static final int AUDITED_BACKGROUND_THREADS = 35;
+    static final int AUDITED_BACKGROUND_THREADS = 36;
 
     // ---------------------------------------------------------------------------------------
     // The two bounds
@@ -411,8 +420,8 @@ class BackgroundConnectionDemandTest {
         assertEquals(POOL_CONSTRUCTIONS, discovered,
                 "a thread pool is constructed somewhere this audit does not know about. Not every "
                         + "pool is a @Bean — DeltaEgressWorker, BatchParquetFinalizationWorker, "
-                        + "DeltaSqlSweepWorker and the batch-parquet lease renewer all build their "
-                        + "own — so this scan is the backstop for the bean scan above");
+                        + "DeltaSqlSweepWorker and the batch-parquet and checkpoint site-claim lease "
+                        + "renewers all build their own — so this scan is the backstop for the bean scan above");
     }
 
     @Test
@@ -446,6 +455,9 @@ class BackgroundConnectionDemandTest {
         }
         if (BATCH_PARQUET_LEASE.hold() == hold) {
             total += BATCH_PARQUET_LEASE.threads();
+        }
+        if (CHECKPOINT_SITE_CLAIM_LEASE.hold() == hold) {
+            total += CHECKPOINT_SITE_CLAIM_LEASE.threads();
         }
         return total;
     }

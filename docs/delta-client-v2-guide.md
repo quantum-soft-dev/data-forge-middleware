@@ -1727,9 +1727,10 @@ catalog-watermark write on every poll of every worker.
 ## The connection pool is smaller than the threads that can ask it for a connection
 
 That is deliberate (issue **#161**), and worth knowing before reading a `connection-timeout` in the
-logs as a bug. The audited background pools declare **35** threads between them — the scheduler (7),
+logs as a bug. The audited background pools declare **36** threads between them — the scheduler (7),
 `pluginExecutor` (10), `pluginExecutionExecutor` (8), `pluginAuditExecutor` (2), the three queue
-workers (2 each), the forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a
+workers (2 each), the forced-rebuild executor (1), the batch-parquet lease renewer (1) and the
+checkpoint site-claim lease renewer (1, #345) — before a
 single HTTP or gRPC request asks for one, and both request layers are unbounded
 (virtual-thread-per-request, and grpc-java's default cached pool).
 `spring.datasource.hikari.maximum-pool-size` is **10**.
