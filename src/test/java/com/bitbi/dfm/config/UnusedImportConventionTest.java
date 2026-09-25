@@ -2,6 +2,7 @@ package com.bitbi.dfm.config;
 
 import com.bitbi.dfm.testsupport.RunOwnedScratch;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -25,6 +26,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * qualified name (the character before it is {@code '.'}) is not a use — that is how
  * {@code import …OAuth2Error} survived a scan that treated {@code new org….OAuth2Error}
  * as a reference.</p>
+ *
+ * <p>The walk over the live tree holds today's files; {@link Lexer} holds the scanner
+ * itself over synthetic sources (issue #357). The dangerous mutations of the scanner —
+ * a comment no longer blanked, a literal swallowed with the code after it, the tail of a
+ * qualified name read as a use — all make it report <em>less</em>, so the live tree stays
+ * green under them and only a synthetic case can go red.</p>
  */
 class UnusedImportConventionTest {
 
@@ -51,7 +58,7 @@ class UnusedImportConventionTest {
                 .isEmpty();
     }
 
-    private static List<String> unusedIn(String relative, String source) {
+    static List<String> unusedIn(String relative, String source) {
         String body = stripComments(source);
         String[] lines = body.split("\n", -1);
         StringBuilder outsideImports = new StringBuilder();
@@ -156,6 +163,157 @@ class UnusedImportConventionTest {
             return Files.readString(path);
         } catch (IOException e) {
             throw new IllegalStateException("cannot read " + path, e);
+        }
+    }
+
+    /**
+     * The scanner over synthetic sources (issue #357). Each fixture is built line by line
+     * from string literals rather than from a text block: a text-block line reading
+     * {@code import a.b.Widget;} would strip to an import line of this very file and the
+     * walk above would report it.
+     */
+    @Nested
+    @DisplayName("lexer over synthetic sources")
+    class Lexer {
+
+        private static final String FILE = "p/C.java";
+
+        @Test
+        @DisplayName("an import named only in a // comment is unused")
+        void shouldReportImportNamedOnlyInLineComment() {
+            String source = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "class C {",
+                    "    // a Widget used to live here",
+                    "}");
+
+            assertThat(unusedIn(FILE, source)).containsExactly(FILE + ": Widget (a.b.Widget)");
+        }
+
+        @Test
+        @DisplayName("an import followed by a // comment on its own line is still an import")
+        void shouldReadImportWithTrailingLineCommentAsImport() {
+            String source = source(
+                    "package p;",
+                    "import a.b.Gadget; // kept for later",
+                    "class C {}");
+
+            assertThat(unusedIn(FILE, source)).containsExactly(FILE + ": Gadget (a.b.Gadget)");
+        }
+
+        @Test
+        @DisplayName("an import named only in a block or Javadoc comment is unused")
+        void shouldReportImportNamedOnlyInBlockComment() {
+            String source = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "import a.b.Gadget;",
+                    "/**",
+                    " * Replaces {@link Widget}.",
+                    " */",
+                    "class C { /* Gadget */ }");
+
+            assertThat(unusedIn(FILE, source)).containsExactly(
+                    FILE + ": Widget (a.b.Widget)",
+                    FILE + ": Gadget (a.b.Gadget)");
+        }
+
+        @Test
+        @DisplayName("an import line inside a block comment is not an import, and the line count is kept")
+        void shouldNotReadImportInsideBlockCommentAsImport() {
+            String source = source(
+                    "package p;",
+                    "/*",
+                    "import a.b.Gadget;",
+                    "*/",
+                    "class C {}");
+
+            assertThat(unusedIn(FILE, source)).isEmpty();
+            assertThat(stripComments(source).split("\n", -1)).hasSameSizeAs(source.split("\n", -1));
+        }
+
+        @Test
+        @DisplayName("string, character and text-block literals come back whole, comment markers and quotes inside them included")
+        void shouldKeepLiteralsWhole() {
+            String source = source(
+                    "class C {",
+                    "    String s = \"// not a comment /* nor this */\";",
+                    "    String q = \"quote \\\" // still text\";",
+                    "    char c = '\"';",
+                    "    char d = '\\'';",
+                    "    char e = '/';",
+                    "    String t = \"\"\"",
+                    "        a \" b \"\" c // d /* e */",
+                    "        \"\"\";",
+                    "}");
+
+            assertThat(stripComments(source)).isEqualTo(source);
+        }
+
+        @Test
+        @DisplayName("a literal does not swallow the code after it on the same line")
+        void shouldNotSwallowCodeAfterLiteral() {
+            String source = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "import a.b.Gadget;",
+                    "class C {",
+                    "    String s = \"http://example\"; Widget w;",
+                    "    char q = '\"'; String u = \"// x\"; Gadget g;",
+                    "}");
+
+            assertThat(unusedIn(FILE, source)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the tail of a fully qualified name is not a use")
+        void shouldNotCountQualifiedNameTailAsUse() {
+            String unused = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "class C { Object o = new a.b.Widget(); }");
+            String used = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "class C { Widget w = new a.b.Widget(); }");
+
+            assertThat(unusedIn(FILE, unused)).containsExactly(FILE + ": Widget (a.b.Widget)");
+            assertThat(unusedIn(FILE, used)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a name only inside a literal counts as a use — the recorded false negative, pinned rather than fixed")
+        void shouldCountNameInsideLiteralAsUse() {
+            String source = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "import a.b.Gadget;",
+                    "class C {",
+                    "    String s = \"Widget\";",
+                    "    String t = \"\"\"",
+                    "        Gadget",
+                    "        \"\"\";",
+                    "}");
+
+            assertThat(unusedIn(FILE, source)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a plain and a static import are used by their simple name, and an unnamed one is reported")
+        void shouldReportOnlyTheImportNothingNames() {
+            String source = source(
+                    "package p;",
+                    "import a.b.Widget;",
+                    "import a.b.Gadget;",
+                    "import static a.b.Util.helper;",
+                    "class C { Widget w = helper(); }");
+
+            assertThat(unusedIn(FILE, source)).containsExactly(FILE + ": Gadget (a.b.Gadget)");
+        }
+
+        private static String source(String... lines) {
+            return String.join("\n", lines) + "\n";
         }
     }
 }
