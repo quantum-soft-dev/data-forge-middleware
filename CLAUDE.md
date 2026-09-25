@@ -713,6 +713,54 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-site-claim: One replica builds a site's checkpoint at a time (issue #345). The nightly
+  cron fires on every replica at the same second, and the path's guards — `CheckpointScheduler`'s
+  `ReentrantLock` and the fold budget (#178) — are per JVM. On the test cluster, with HPA at three
+  replicas at night, three pods built one site's first checkpoint: the same 275 MB frame uploaded
+  three times, and two builds ending on `uk_checkpoint_site_table`, logged as a failure and
+  persisted as the site's `FAILED` abort before the winner published. On the following nights two
+  incremental builds of one site both completed without error, each pruning behind the other.
+  `CheckpointEpochGuard` compares the baseline epoch, which both builds share, not who owns the
+  site. **The owner's decision (option A on the ticket): a per-site claim with a lease.** The rejected
+  options were a session advisory lock (it holds a connection for minutes), ShedLock (too coarse,
+  `lockAtMostFor`, a dependency) and a dedicated pod (infrastructure, and two leaders during a
+  rollout). **V59** adds `site_sync_state.checkpoint_claim_token` / `checkpoint_claim_expires_at`.
+  Each is taken by one native upsert in its own short transaction, timed by the database's UTC clock
+  (#286), and renewed or released only by the holder's token. The upsert creates the row for a
+  site that has none, so no build runs unclaimed. **Neither column is mapped on the entity**: every
+  other writer of this row saves the whole entity, and a snapshot read before the claim would write
+  it back (#245). New `CheckpointSiteClaim` wraps a visit, so the claim lives **in the callers,
+  not in `CheckpointService`**. The claim then covers the prune that follows the build, is still
+  taken before the fold budget and every read, and `CheckpointServiceTest` runs untouched. The
+  scheduler uses `runIfFree`: a claimed site is skipped with no WARN, no abort, no spent attempt and
+  no prune, and one INFO line per pass counts the skips. So the replicas divide the sweep instead of
+  repeating it. A claim statement that throws costs that site, not the tick. The forced rebuild uses
+  `runWhenFree`, which waits up to new `delta.checkpoint.claim-wait-seconds` (600) and is
+  shutdown-aware. A spent wait settles as `DEFERRED` with its own text and releases the flag; a
+  shutdown keeps it (#162). After the wait the rebuild runs even if another replica has since
+  settled the flag — one redundant, serialized rebuild in the double-resume case, which is stated
+  rather than guarded. The lease — new `delta.checkpoint.claim-lease-seconds` (600, refused below 1
+  by name) — is renewed every third of its length on a daemon thread `checkpoint-site-claim-lease`,
+  the `batch-parquet-lease` precedent. It measures liveness, not build length (first builds take
+  10–30 minutes), and a pod killed mid-build by scale-down or preemption loses the site when the
+  lease lapses. It is a lease, not a fence: a holder stalled past the whole lease can overlap with
+  the replica that took the site over. That is the pre-#345 behaviour, correct and wasteful, and the
+  renewal that notices logs it at WARN. `BackgroundConnectionDemandTest` counts the new thread
+  (**35 → 36**, `Hold.SHORT`), and `ScheduledTaskInventoryTest` now gives every `@Scheduled` task a
+  replica verdict with its reason (`COORDINATED` / `IDEMPOTENT` / `POD_LOCAL`). It pins the two
+  coordinated tasks that carry state: the checkpoint tick takes the claim, and batch retention
+  re-locks each candidate `FOR UPDATE SKIP LOCKED` (#344), which is why it is not under this claim.
+  **Not taken, and recorded on the ticket**: clearing a stale `last_checkpoint_build_abort` on a
+  successful build. #224 deliberately keeps those columns as history once the pointer moves, and
+  pins that in `SiteSyncStateCheckpointBuildAbortTest`; the UI reads them only at pointer 0.
+  **Tests**: `CheckpointSiteClaimIntegrationTest` drives the real statements (foreign token cannot
+  renew or release, expired lease taken over, a whole-entity save leaves the claim, two racing
+  threads → one winner). It also covers the DoD scenario: a second `CheckpointScheduler` holds the
+  site while the application's own ticks, and the site is skipped without WARN, ERROR or abort, then
+  built once. Mutation-proven: letting a live claim be re-taken reddens five of its cases, and
+  building outside the claim reddens the three new `CheckpointSchedulerTest` cases. No REST, gRPC,
+  proto, DTO, metric, S3-key, `specs/NNN-*` or frontend change; **V59 is taken, V60 is next**. See
+  `docs/delta-client-v2-guide.md` ("One replica builds a site").
 - batch-delta-totals: A batch keeps its Delta v2 session totals, so Upload History and Batch Detail
   stop shrinking once retention prunes the segments they were computed from (issue #346, seen on
   `fyt-new` the morning after a wipe: an 87-table, 5 012 611-record snapshot read as 17 tables once

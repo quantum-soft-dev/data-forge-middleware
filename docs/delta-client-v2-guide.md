@@ -1572,9 +1572,10 @@ per build) plus one Parquet row-group buffer per open writer (`DELTA_PARQUET_ROW
 16 MiB) — and it is the one that fails as an eviction-like `OOMKilled` rather than as a skip. See
 "The first bound is heap" above.
 
-There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
-its own — and so is the scratch budget, which is why the volume it is measured against must be
-pod-private. #128 also raised how often large files are written, since a scheduled build now
+Replicas do not build the same site at once — since #345 a site's visit is claimed across pods
+(see "One replica builds a site" below) — but they do build *different* sites at once, so "one site
+at a time" is per pod: each replica runs its own share of the sweep — and so is the scratch budget,
+which is why the volume it is measured against must be pod-private. #128 also raised how often large files are written, since a scheduled build now
 rematerializes every table whose snapshot is missing and a forced rebuild rewrites all of them.
 
 **Orphans outlive a container restart.** When scratch lived in the container's writable layer, a
@@ -2268,6 +2269,49 @@ re-driven on startup, so the "Rebuild queued" chip can no longer stick forever. 
 calls `rebuildFromFrame`: it rematerializes every table from the existing frame even
 when there are no new segments, and it does not move the checkpoint pointer.
 
+### One replica builds a site (issue #345)
+
+The nightly cron (`delta.checkpoint.cron`) fires on **every** replica at the same second, and the
+guards the checkpoint path had — the scheduler's own lock and the fold budget (#178) — are per JVM.
+Nothing kept the pods apart. On the test cluster, with HPA taking the deployment to three replicas
+at night, three pods built the same first checkpoint of a 5-million-row site. The same 275 MB frame
+was uploaded three times, and two of the builds ended on `uk_checkpoint_site_table`, logged as a
+failure and persisted as the site's `FAILED` abort before the winner published. On the following
+nights two *incremental* builds of one site both ran to completion without any error, each pruning
+behind the other. The result was correct every time — the pointer is monotonic and the S3 keys are
+deterministic — but the work, the scratch and the fold budget were spent once per pod, and the
+losing first build read as an incident.
+
+**Each site's visit is now claimed.** Before the scheduler reads anything about a site, it takes a
+claim on the site's `site_sync_state` row (V59: `checkpoint_claim_token`,
+`checkpoint_claim_expires_at`). It then builds the checkpoint and prunes the changelog behind it, and
+releases the claim. A replica that finds the site claimed **skips it silently**: no WARN, no
+`last_checkpoint_build_abort`, no spent `materialize_attempts`, no prune. The other replica is doing
+exactly that work. One INFO line per pass counts the skips. The replicas therefore divide the sites
+between them, and the sweep gets shorter instead of repeated. A forced rebuild takes the same claim.
+Because it has no next tick to fall back on, it **waits** for the claim for up to
+`delta.checkpoint.claim-wait-seconds` (default **600**), and after that settles as `DEFERRED` with its
+own message (see the table below).
+
+**The claim is a lease, and it is renewed.** One conditional statement takes it, in its own short
+transaction, timed by the database's clock. No connection is held across the visit, which is #164's
+rule — the rejected alternative, a session-level advisory lock, would have held one for a 30-minute
+build. While the visit runs, a daemon thread renews the lease every third of
+`delta.checkpoint.claim-lease-seconds` (default **600**; below 1 the application refuses to start).
+So the lease measures liveness, not build length: a 30-minute first build keeps its claim. A pod
+that dies mid-build — scale-down and preemption do this at night — loses the site when the lease
+lapses, and the next tick on any replica takes it over. Only the token that holds the claim can
+renew or release it, so a pod that was merely paused cannot free a site somebody else has since
+taken. A site with no sync-state row yet gets one from the claim, so no build runs unclaimed.
+
+**What it does not do.** It is a lease, not a fence. A holder stalled for longer than the whole lease
+(a stop-the-world pause, or a database it cannot reach to renew) can have its site taken over, and
+then the two visits overlap — the pre-#345 behaviour, correct and wasteful. The renewal that notices
+logs it at WARN. Batch retention is not under this claim. After #344 it re-locks each candidate
+`FOR UPDATE SKIP LOCKED` in the transaction that deletes it, so a second replica skips a batch the
+first is deleting. The replica verdict for every `@Scheduled` task is kept in
+`ScheduledTaskInventoryTest`.
+
 ### A forced rebuild says what it did (issue #186)
 
 `rebuild_requested` used to be the whole record of an operator's click: raised by the request,
@@ -2293,6 +2337,7 @@ both sync-state projections as `lastRebuildOutcome`, `lastRebuildOutcomeAt` and
 | The rebuild queue would not take it | `FAILED` — the executor's own refusal, quoted | released | ask again |
 | S3 would not say whether the frame is there (#157) | `FRAME_UNAVAILABLE` | released | restore the bucket policy or IAM grant (`delta.s3.read-denied`), then ask again |
 | Another build held the fold budget (#178) | `DEFERRED` | released | ask again once the nightly build has finished, or raise `delta.checkpoint.fold-wait-seconds` |
+| Another replica held the site for the whole of `delta.checkpoint.claim-wait-seconds` (#345) | `DEFERRED` — naming the replica | released | ask again once that visit has finished |
 | A wipe or re-baseline replaced the baseline under it (#136/#142) | `DISCARDED` | released | ask again if the rebuild is still wanted, against the new baseline |
 | The site has no frame and no segments | `NOTHING_TO_REBUILD` | released | nothing to do: the site has no checkpoint history to rebuild from |
 | The process is shutting down (#162) | **none written** | **kept** | nothing — the next process re-drives it at startup |
