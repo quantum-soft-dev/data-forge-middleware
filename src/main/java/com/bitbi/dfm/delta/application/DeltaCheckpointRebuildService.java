@@ -21,7 +21,8 @@ import java.util.concurrent.RejectedExecutionException;
  * {@code rebuild_requested} flag (surfaced in the UI as "Rebuild queued"), runs
  * {@link CheckpointService#rebuildFromFrame} on a dedicated single-thread executor so
  * forced rebuilds serialize — with each other by that executor, and with the nightly sweep by
- * {@link CheckpointFoldBudget}, since one JVM's heap cannot hold two folds (issue #178) — and
+ * {@link CheckpointFoldBudget}, since one JVM's heap cannot hold two folds (issue #178), and with
+ * every other replica's visit to the same site by {@link CheckpointSiteClaim} (issue #345) — and
  * always clears the flag when the attempt finishes. An idle
  * site is rematerialized from the existing frame even when there are no new segments
  * (issue #128). The checkpoint pointer is monotonic
@@ -72,19 +73,37 @@ public class DeltaCheckpointRebuildService {
             "The rebuild did not get the process's fold budget, so nothing was folded and nothing "
             + "was recorded. Request it again.";
 
+    /**
+     * Verdict text for a rebuild that waited out another replica's visit to the same site
+     * (issue #345). The same "ask again" as the fold-budget deferral, and for the same reason —
+     * nothing re-drives a held flag — but naming the replica, since raising
+     * {@code delta.checkpoint.fold-wait-seconds} would not help.
+     */
+    private static final String CLAIMED_ELSEWHERE_MESSAGE =
+            "Another replica was building or rebuilding this site's checkpoint for the whole of "
+            + "delta.checkpoint.claim-wait-seconds, so nothing was folded and nothing was recorded "
+            + "here. Request the rebuild again once that visit has finished.";
+
+    private static final String CLAIM_WAIT_ENDED_MESSAGE =
+            "The rebuild's wait for this site's checkpoint claim was interrupted, so nothing was "
+            + "folded and nothing was recorded. Request it again.";
+
     private final DeltaSyncStateService syncStateService;
     private final CheckpointService checkpointService;
     private final ApplicationShutdownSignal shutdownSignal;
     private final Executor rebuildExecutor;
+    private final CheckpointSiteClaim siteClaim;
 
     public DeltaCheckpointRebuildService(DeltaSyncStateService syncStateService,
                                          CheckpointService checkpointService,
                                          ApplicationShutdownSignal shutdownSignal,
-                                         @Qualifier("deltaRebuildExecutor") Executor rebuildExecutor) {
+                                         @Qualifier("deltaRebuildExecutor") Executor rebuildExecutor,
+                                         CheckpointSiteClaim siteClaim) {
         this.syncStateService = syncStateService;
         this.checkpointService = checkpointService;
         this.shutdownSignal = shutdownSignal;
         this.rebuildExecutor = rebuildExecutor;
+        this.siteClaim = siteClaim;
     }
 
     /**
@@ -172,7 +191,13 @@ public class DeltaCheckpointRebuildService {
         String message = "the rebuild ended with an error the service could not classify; "
                 + "see the pod log";
         try {
-            checkpointService.rebuildFromFrame(siteId);
+            // Issue #345: under the same per-site claim as the nightly visit, so a rebuild never
+            // runs beside another replica's build of the site — including the rebuild the other
+            // replica's own resumePendingRebuilds() started for the same flag. Waiting rather than
+            // skipping, because this path has no next tick. Once the wait ends the rebuild runs
+            // even if the other replica has meanwhile settled the flag: one redundant rebuild,
+            // serialized, which is the harmless direction to be wrong in.
+            siteClaim.runWhenFree(siteId, () -> checkpointService.rebuildFromFrame(siteId));
             keepFlagForARetry = shutdownSignal.isShuttingDown();
             outcome = CheckpointRebuildOutcome.COMPLETED;
             message = null;
@@ -216,6 +241,19 @@ public class DeltaCheckpointRebuildService {
                     + "nothing to rebuild its checkpoints from.";
             log.warn("Forced checkpoint rebuild for site {} had nothing to rebuild: {}",
                     siteId, e.getMessage());
+        } catch (CheckpointSiteClaim.SiteClaimedElsewhereException e) {
+            // Issue #345, settled exactly like the fold-budget deferral below and for its reasons:
+            // a shutdown keeps the flag for resumePendingRebuilds() (#162), anything else releases
+            // it, because nothing re-drives a held flag here.
+            keepFlagForARetry = shutdownSignal.isShuttingDown();
+            outcome = CheckpointRebuildOutcome.DEFERRED;
+            message = e.waitWasSpent() ? CLAIMED_ELSEWHERE_MESSAGE : CLAIM_WAIT_ENDED_MESSAGE;
+            if (keepFlagForARetry) {
+                logShutdown(siteId);
+            } else {
+                log.warn("Forced checkpoint rebuild for site {} did not run: {}. The flag is "
+                        + "released — request the rebuild again", siteId, e.getMessage());
+            }
         } catch (CheckpointFoldBudget.BuildDeferredException e) {
             // Two different endings share this exception, and settling them alike would lose the
             // operator's request (raised in review of #178). A shutdown — or an interrupt — ends

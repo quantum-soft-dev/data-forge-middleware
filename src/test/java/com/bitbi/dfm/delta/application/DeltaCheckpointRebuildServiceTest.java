@@ -52,9 +52,77 @@ class DeltaCheckpointRebuildServiceTest {
         }
     };
 
+    /** Issue #345: grants the site at once unless a test says otherwise, and runs the work inline. */
+    private final CheckpointSiteClaim siteClaim = mock(CheckpointSiteClaim.class);
+    private volatile boolean insideClaim;
+
+    {
+        when(siteClaim.runWhenFree(any(), any())).thenAnswer(invocation -> {
+            java.util.function.Supplier<?> work = invocation.getArgument(1);
+            insideClaim = true;
+            try {
+                return work.get();
+            } finally {
+                insideClaim = false;
+            }
+        });
+    }
+
+    @Test
+    void theForcedRebuildRunsWhileTheSiteIsClaimed() {
+        // Issue #345: resumePendingRebuilds() fires on every replica at startup, so two pods used
+        // to rebuild the same flagged site side by side, and a click during the nightly sweep
+        // rebuilt a site another pod was building. The claim is what keeps them apart.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        java.util.concurrent.atomic.AtomicBoolean heldDuringBuild = new java.util.concurrent.atomic.AtomicBoolean();
+        when(checkpointService.rebuildFromFrame(SITE)).thenAnswer(invocation -> {
+            heldDuringBuild.set(insideClaim);
+            return Map.of();
+        });
+
+        assertTrue(service.requestRebuild(SITE));
+
+        assertTrue(heldDuringBuild.get(), "the rebuild must run inside the site's claim");
+        verify(syncStateService).recordRebuildOutcome(eq(SITE), eq(CheckpointRebuildOutcome.COMPLETED), isNull());
+    }
+
+    @Test
+    void aSiteAnotherReplicaHeldForTheWholeWaitSettlesAsDeferredAndReleasesTheFlag() {
+        // Issue #345. Nothing re-drives a held flag (#157, #178): the nightly tick never calls
+        // rebuildFromFrame, and requestRebuild short-circuits while the flag is set. So a rebuild
+        // that waited out another replica's visit is settled like the fold-budget deferral —
+        // released, with text that names the replica rather than the fold budget.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        doThrow(new CheckpointSiteClaim.SiteClaimedElsewhereException(SITE, 600_000L, false))
+                .when(siteClaim).runWhenFree(eq(SITE), any());
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(checkpointService, never()).rebuildFromFrame(any());
+        assertThat(recordedMessage(CheckpointRebuildOutcome.DEFERRED))
+                .containsIgnoringCase("another replica")
+                .contains("delta.checkpoint.claim-wait-seconds")
+                .doesNotContain("fold budget");
+    }
+
+    @Test
+    void aShutdownDuringTheClaimWaitKeepsTheFlagForTheNextProcess() {
+        // #162's rule on the new wait: a rollout ending it is not a verdict, and the flag is what
+        // resumePendingRebuilds() re-drives in the next pod.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        doAnswer(invocation -> {
+            shuttingDown = true;
+            throw new CheckpointSiteClaim.SiteClaimedElsewhereException(SITE, 600_000L, true);
+        }).when(siteClaim).runWhenFree(eq(SITE), any());
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(syncStateService, never()).recordRebuildOutcome(any(), any(), any());
+    }
+
     /** Direct executor: the async hop runs inline so the full lifecycle is observable. */
     private final DeltaCheckpointRebuildService service = new DeltaCheckpointRebuildService(
-            syncStateService, checkpointService, shutdownSignal, Runnable::run);
+            syncStateService, checkpointService, shutdownSignal, Runnable::run, siteClaim);
 
     private String recordedMessage(CheckpointRebuildOutcome outcome) {
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
@@ -246,7 +314,7 @@ class DeltaCheckpointRebuildServiceTest {
             throw new RejectedExecutionException("queue full");
         };
         DeltaCheckpointRebuildService rejectingService = new DeltaCheckpointRebuildService(
-                syncStateService, checkpointService, shutdownSignal, rejecting);
+                syncStateService, checkpointService, shutdownSignal, rejecting, siteClaim);
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
 
         assertThrows(RejectedExecutionException.class, () -> rejectingService.requestRebuild(SITE));
@@ -270,7 +338,7 @@ class DeltaCheckpointRebuildServiceTest {
             throw new RejectedExecutionException("executor not accepting further tasks");
         };
         DeltaCheckpointRebuildService rejectingService = new DeltaCheckpointRebuildService(
-                syncStateService, checkpointService, shutdownSignal, rejecting);
+                syncStateService, checkpointService, shutdownSignal, rejecting, siteClaim);
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
         shuttingDown = true;
 
@@ -305,7 +373,7 @@ class DeltaCheckpointRebuildServiceTest {
             throw new RejectedExecutionException("queue full");
         };
         DeltaCheckpointRebuildService rejectingService = new DeltaCheckpointRebuildService(
-                syncStateService, checkpointService, shutdownSignal, rejecting);
+                syncStateService, checkpointService, shutdownSignal, rejecting, siteClaim);
         when(syncStateService.findSitesWithPendingRebuild()).thenReturn(List.of(SITE));
 
         assertDoesNotThrow(rejectingService::resumePendingRebuilds);
