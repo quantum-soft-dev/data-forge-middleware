@@ -247,6 +247,10 @@ tasks.named<Test>("test") {
     // the same reasoning — a script-only commit must not leave `test` UP-TO-DATE.
     inputs.files("scripts/board.sh")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // WaveScriptTest runs scripts/wave.sh, the arithmetic of /wave — the pool, the ceiling of three and
+    // the overlap keys read from «Что тронет». Same reasoning: a script-only commit must run it.
+    inputs.files("scripts/wave.sh")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // IssueBaseBranchScriptTest also reads the issue forms, which teach a migration ticket the exact
     // declaration the resolver accepts (#310) — the same reasoning again, for a forms-only commit.
     inputs.dir(".github/ISSUE_TEMPLATE")

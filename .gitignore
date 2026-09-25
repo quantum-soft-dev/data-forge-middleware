@@ -60,8 +60,11 @@ jacoco/
 # Claude
 .claude/settings.local.json
 
-# per-issue git worktrees (/github-issue, /github-issue-runner)
+# per-issue git worktrees (/github-issue, /github-issue-runner; /task and /wave use .claude/worktrees)
 .worktrees/
+.claude/worktrees/
+# /wave journal (scripts/wave.sh) — lives in the main checkout only
+.claude/wave/
 
 # Gemini
 .gemini/settings.json
