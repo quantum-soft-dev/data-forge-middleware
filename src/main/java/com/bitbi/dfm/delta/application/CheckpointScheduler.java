@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
@@ -20,9 +21,14 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * Periodically materializes checkpoints for sites with changelog data (Delta Client v2 — 022).
  *
- * <p>An in-JVM lock prevents a slow run from overlapping the next cron tick. This guards a single
- * instance only; in a multi-instance deployment run this scheduler on one instance (or add a
- * distributed lock such as ShedLock) so two instances do not build the same site concurrently.</p>
+ * <p>An in-JVM lock prevents a slow run from overlapping the next cron tick on this replica. The
+ * tick fires on <b>every</b> replica at the same second, and replicas are kept apart per site
+ * rather than per tick (issue #345): each visit — the build and the prune that follows it — runs
+ * under {@link CheckpointSiteClaim}, a lease on the site's {@code site_sync_state} row. A replica
+ * that finds a site claimed skips it silently, so the replicas divide the sites between them and
+ * the nightly sweep gets shorter rather than duplicated. Nothing here needs running on one
+ * instance any more; a ShedLock-style lock on the whole tick was rejected because it would
+ * serialize the sweep onto one pod and hold its lock for the whole night.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -48,6 +54,7 @@ public class CheckpointScheduler {
     private final CheckpointRetryProperties retryProperties;
     private final ApplicationShutdownSignal shutdownSignal;
     private final DeltaSyncStateService syncStateService;
+    private final CheckpointSiteClaim siteClaim;
     private final ReentrantLock buildLock = new ReentrantLock();
 
     public CheckpointScheduler(CheckpointService checkpointService,
@@ -56,7 +63,8 @@ public class CheckpointScheduler {
                                CheckpointRepository checkpointRepository,
                                CheckpointRetryProperties retryProperties,
                                ApplicationShutdownSignal shutdownSignal,
-                               DeltaSyncStateService syncStateService) {
+                               DeltaSyncStateService syncStateService,
+                               CheckpointSiteClaim siteClaim) {
         this.checkpointService = checkpointService;
         this.retentionService = retentionService;
         this.segmentRepository = segmentRepository;
@@ -64,6 +72,7 @@ public class CheckpointScheduler {
         this.retryProperties = retryProperties;
         this.shutdownSignal = shutdownSignal;
         this.syncStateService = syncStateService;
+        this.siteClaim = siteClaim;
     }
 
     @Scheduled(cron = CRON_PROPERTY)
@@ -119,6 +128,7 @@ public class CheckpointScheduler {
      */
     private List<UUID> visit(Collection<UUID> siteIds) {
         List<UUID> deferred = new ArrayList<>();
+        int visitedElsewhere = 0;
         boolean foldBudgetIsContended = false;
         for (UUID siteId : siteIds) {
             // The sweep is the outer half of the same decision CheckpointService makes between
@@ -129,87 +139,136 @@ public class CheckpointScheduler {
                 log.info("Ending the checkpoint tick: the application is shutting down");
                 return List.of();
             }
+            boolean mayWait = !foldBudgetIsContended;
+            Optional<SiteVisit> visit;
             try {
-                checkpointService.buildCheckpoint(siteId, !foldBudgetIsContended);
-                foldBudgetIsContended = false;
-            } catch (CheckpointFoldBudget.BuildDeferredException e) {
-                // Another build held the process's fold budget (issue #178) — a forced rebuild
-                // beside this sweep, in practice. The site was not visited, so retention is
-                // skipped with it (the pointer did not move), and the tick carries on without
-                // waiting again: the loud, bounded version of a sweep silently stalled behind
-                // one build. Only the spent wait is a WARN; the probes that follow it would
-                // otherwise be hundreds of lines about one collision.
-                foldBudgetIsContended = true;
+                // Issue #345: taken before anything about the site is read — the fold budget, the
+                // sync state and the segment list all come after it, inside the build — and held
+                // across the prune that follows the build.
+                visit = siteClaim.runIfFree(siteId, () -> visitClaimed(siteId, mayWait));
+            } catch (RuntimeException e) {
+                // Only the claim statement itself can land here: visitClaimed catches everything
+                // the build and the prune throw, and a failed release is logged by the claim. The
+                // site was not visited and nothing about it was learned, so no abort is recorded —
+                // the next tick asks again.
+                log.warn("Could not claim site {} for this tick's checkpoint visit: {}",
+                        siteId, e.getMessage());
+                continue;
+            }
+            if (visit.isEmpty()) {
+                // Another replica is visiting this site right now — the same build and the same
+                // prune this one would do. Skipped without a WARN, an abort or a spent attempt:
+                // nothing failed, and the other replica's outcome is the site's outcome. The fold
+                // budget latch is untouched, since this replica learned nothing about its own heap.
+                visitedElsewhere++;
+                log.debug("Site {} is being visited by another replica; skipping it this tick", siteId);
+                continue;
+            }
+            foldBudgetIsContended = visit.get() == SiteVisit.DEFERRED;
+            if (foldBudgetIsContended) {
                 deferred.add(siteId);
-                if (e.waitWasSpent()) {
-                    log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
-                } else {
-                    log.debug("Deferring site {} this tick: {}", siteId, e.getMessage());
-                }
-                // A deferral cut short by shutdown has not finished (#162). A non-spent probe is
-                // not an attempt — the rest of the pass skipped the wait on purpose (#178) and
-                // the retry pass still owes the site a real one. Only a spent wait is "a
-                // deferral past fold-wait-seconds", which is the abort #224 persists.
-                if (e.waitWasSpent()) {
-                    recordCheckpointBuildAbort(siteId, CheckpointBuildAbort.DEFERRED, e.getMessage());
-                }
-                continue;
-            } catch (CheckpointService.FramePresenceUnknownException e) {
-                // Not a failure of this site: S3 would not say whether its seed frame is there,
-                // so the build declined to conclude anything (issue #157). Logged apart from
-                // the catch below because during a read outage this fires for every site in the
-                // tick, and calling that "build/retention failed" would send an operator
-                // looking at the sites rather than at the bucket policy. Retention is skipped
-                // with it — the pointer did not move, so there is nothing new to prune.
-                //
-                // The latch is cleared here and in the catch below for the same reason it is
-                // cleared on success (raised in review): both of these are thrown from *inside* the
-                // build, so the site did take the budget — the collision is demonstrably over, and
-                // leaving the latch set would make the rest of the pass probe without waiting for
-                // no reason. During an S3 read outage this branch fires for every site.
-                foldBudgetIsContended = false;
-                log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
-                recordCheckpointBuildAbort(siteId, CheckpointBuildAbort.FRAME_UNAVAILABLE, e.getMessage());
-                continue;
-            } catch (CheckpointService.BuildDiscardedException e) {
-                // The site's baseline was replaced under the build (#136/#142) — a wipe or a
-                // re-baseline, both routine. It used to reach here as a silent empty fold, and it
-                // is thrown since #186 only so the *forced* path can tell it from a build that
-                // published something; the line it logs must not read as a failure.
-                //
-                // One thing *does* change and is deliberate (raised in review): retention no longer
-                // runs for this site in this tick, where the empty fold used to fall through to it.
-                // That matches the two branches above — this build moved no pointer, so there is
-                // nothing new to prune — and today it is a no-op either way, since both triggers
-                // imply a wipe or a re-baseline that has just zeroed last_checkpoint_seq. Stated
-                // rather than left implicit, because a future EpochChangedException raised while
-                // the pointer still stands would otherwise skip a prune that had work to do; the
-                // next tick does it regardless. The latch is cleared as above — the build did hold
-                // the budget.
-                foldBudgetIsContended = false;
-                log.info("Skipping site {} this tick: {}", siteId, e.getMessage());
-                continue;
-            } catch (RuntimeException e) {
-                foldBudgetIsContended = false;
-                log.warn("Checkpoint build failed for site {}: {}", siteId, e.getMessage());
-                recordCheckpointBuildAbort(siteId, classifyAbort(e), e.getMessage());
-                continue;
             }
-            try {
-                retentionService.prune(siteId);
-            } catch (RuntimeException e) {
-                // Prune is not a first-checkpoint abort: the build already returned. A throw
-                // here used to share the catch above, so a retention failure on a site still
-                // at lastCheckpointSeq == 0 (a shutdown-ended build returns an empty fold
-                // and does not throw, #162) would have been persisted as FAILED.
-                log.warn("Checkpoint retention failed for site {}: {}", siteId, e.getMessage());
-            }
+        }
+        if (visitedElsewhere > 0) {
+            log.info("{} of {} site(s) were being visited by another replica and were skipped in this pass",
+                    visitedElsewhere, siteIds.size());
         }
         if (!deferred.isEmpty()) {
             log.warn("{} of {} site(s) were deferred behind the checkpoint fold budget in this pass",
                     deferred.size(), siteIds.size());
         }
         return deferred;
+    }
+
+    /**
+     * Build and prune one site, with its claim already held (issue #345).
+     *
+     * @param siteId  the site
+     * @param mayWait whether this build may wait for the process's fold budget (issue #178)
+     * @return whether the build was deferred behind the fold budget, which is what the pass's latch
+     *         and its retry list are made of
+     */
+    private SiteVisit visitClaimed(UUID siteId, boolean mayWait) {
+        try {
+            checkpointService.buildCheckpoint(siteId, mayWait);
+        } catch (CheckpointFoldBudget.BuildDeferredException e) {
+            // Another build held the process's fold budget (issue #178) — a forced rebuild
+            // beside this sweep, in practice. The site was not visited, so retention is
+            // skipped with it (the pointer did not move), and the tick carries on without
+            // waiting again: the loud, bounded version of a sweep silently stalled behind
+            // one build. Only the spent wait is a WARN; the probes that follow it would
+            // otherwise be hundreds of lines about one collision.
+            if (e.waitWasSpent()) {
+                log.warn("Deferring site {} this tick: {}", siteId, e.getMessage());
+            } else {
+                log.debug("Deferring site {} this tick: {}", siteId, e.getMessage());
+            }
+            // A deferral cut short by shutdown has not finished (#162). A non-spent probe is
+            // not an attempt — the rest of the pass skipped the wait on purpose (#178) and
+            // the retry pass still owes the site a real one. Only a spent wait is "a
+            // deferral past fold-wait-seconds", which is the abort #224 persists.
+            if (e.waitWasSpent()) {
+                recordCheckpointBuildAbort(siteId, CheckpointBuildAbort.DEFERRED, e.getMessage());
+            }
+            return SiteVisit.DEFERRED;
+        } catch (CheckpointService.FramePresenceUnknownException e) {
+            // Not a failure of this site: S3 would not say whether its seed frame is there,
+            // so the build declined to conclude anything (issue #157). Logged apart from
+            // the catch below because during a read outage this fires for every site in the
+            // tick, and calling that "build/retention failed" would send an operator
+            // looking at the sites rather than at the bucket policy. Retention is skipped
+            // with it — the pointer did not move, so there is nothing new to prune.
+            //
+            // The latch is cleared here and in the catch below for the same reason it is
+            // cleared on success (raised in review): both of these are thrown from *inside* the
+            // build, so the site did take the budget — the collision is demonstrably over, and
+            // leaving the latch set would make the rest of the pass probe without waiting for
+            // no reason. During an S3 read outage this branch fires for every site.
+            log.warn("Skipping site {} this tick: {}", siteId, e.getMessage());
+            recordCheckpointBuildAbort(siteId, CheckpointBuildAbort.FRAME_UNAVAILABLE, e.getMessage());
+            return SiteVisit.VISITED;
+        } catch (CheckpointService.BuildDiscardedException e) {
+            // The site's baseline was replaced under the build (#136/#142) — a wipe or a
+            // re-baseline, both routine. It used to reach here as a silent empty fold, and it
+            // is thrown since #186 only so the *forced* path can tell it from a build that
+            // published something; the line it logs must not read as a failure.
+            //
+            // One thing *does* change and is deliberate (raised in review): retention no longer
+            // runs for this site in this tick, where the empty fold used to fall through to it.
+            // That matches the two branches above — this build moved no pointer, so there is
+            // nothing new to prune — and today it is a no-op either way, since both triggers
+            // imply a wipe or a re-baseline that has just zeroed last_checkpoint_seq. Stated
+            // rather than left implicit, because a future EpochChangedException raised while
+            // the pointer still stands would otherwise skip a prune that had work to do; the
+            // next tick does it regardless. The latch is cleared as above — the build did hold
+            // the budget.
+            log.info("Skipping site {} this tick: {}", siteId, e.getMessage());
+            return SiteVisit.VISITED;
+        } catch (RuntimeException e) {
+            log.warn("Checkpoint build failed for site {}: {}", siteId, e.getMessage());
+            recordCheckpointBuildAbort(siteId, classifyAbort(e), e.getMessage());
+            return SiteVisit.VISITED;
+        }
+        try {
+            retentionService.prune(siteId);
+        } catch (RuntimeException e) {
+            // Prune is not a first-checkpoint abort: the build already returned. A throw
+            // here used to share the catch above, so a retention failure on a site still
+            // at lastCheckpointSeq == 0 (a shutdown-ended build returns an empty fold
+            // and does not throw, #162) would have been persisted as FAILED.
+            log.warn("Checkpoint retention failed for site {}: {}", siteId, e.getMessage());
+        }
+        return SiteVisit.VISITED;
+    }
+
+    /** How a claimed visit ended, as far as the pass's fold-budget latch is concerned. */
+    private enum SiteVisit {
+
+        /** The build took the fold budget, whatever it then did; the collision, if any, is over. */
+        VISITED,
+
+        /** The build did not get the fold budget (issue #178); the retry pass owes it one. */
+        DEFERRED
     }
 
     /**
