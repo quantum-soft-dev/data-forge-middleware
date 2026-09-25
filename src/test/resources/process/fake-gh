@@ -46,6 +46,7 @@ if [[ "$endpoint" == graphql ]]; then
     *'items(first'*) fixture "list-${cursor:-first}.json" | answer ;;
     *projectItems*) fixture "lookup-$number.json" | answer ;;
     *'node(id'*) fixture verify.json | answer ;;
+    *rateLimit*) printf '{"data":{"rateLimit":{"remaining":%s}}}' "$(fixture budget.txt 4000)" | answer ;;
     *) refuse "unexpected GraphQL query" "$query" ;;
   esac
   exit 0
@@ -57,7 +58,14 @@ case "$method $endpoint" in
   "GET repos/"*"/issues/"*"/labels"*)
     n=${endpoint#*/issues/}; n=${n%%/*}
     fixture "labels-$n.json" '[]' | answer ;;
-  "GET repos/"*"/issues?"*) fixture blocked.json '[]' | answer ;;
+  "GET repos/"*"/issues?"*labels=*) fixture blocked.json '[]' | answer ;;
+  "GET repos/"*"/issues?state=closed"*) fixture closed.json '[]' | answer ;;
+  "GET repos/"*"/issues?"*) fixture open.json '[]' | answer ;;
+  "GET repos/"*"/pulls?"*) fixture pulls.json '[]' | answer ;;
+  "GET repos/"*"/pulls/"*)
+    n=${endpoint#*/pulls/}; n=${n%%[/?]*}
+    fixture "pull-$n.json" | answer ;;
+  "GET repos/"*"/branches?"*) fixture branches.json '[]' | answer ;;
   "GET repos/"*"/issues/"*)
     n=${endpoint#*/issues/}; n=${n%%[/?]*}
     fixture "issue-$n.json" | answer ;;

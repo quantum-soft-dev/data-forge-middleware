@@ -184,6 +184,121 @@ class BoardScriptTest {
         assertThat(result.graphqlCalls()).isEmpty();
     }
 
+    @Test
+    @DisplayName("lists every card, closed and column-less included, one GraphQL call per page")
+    void shouldListEveryCardAcrossPages() throws Exception {
+        write("list-first.json", listPage(true, "c1", """
+                {"fieldValueByName":{"name":"Done"},"content":{"number":11,"title":"eleven","state":"CLOSED"}},
+                {"fieldValueByName":null,"content":{"number":14,"title":"no column","state":"OPEN"}},
+                {"fieldValueByName":{"name":"Ready"},"content":{}}"""));
+        write("list-c1.json", listPage(false, null, """
+                {"fieldValueByName":{"name":"Ready"},"content":{"number":13,"title":"thirteen","state":"OPEN"}}"""));
+
+        Result result = run("items");
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isZero();
+        assertThat(result.stdout()).isEqualTo("#11\tDone\tCLOSED\televen\n#14\t-\tOPEN\tno column\n#13\tReady\tOPEN\tthirteen\n");
+        assertThat(result.graphqlCalls()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("sets Size with three GraphQL calls and touches no label")
+    void shouldSetSizeWithoutTouchingLabels() throws Exception {
+        lookup(42, "item-42", """
+                [{"id":"opt-xs","name":"XS"},{"id":"opt-s","name":"S"},{"id":"opt-m","name":"M"}]""");
+        write("verify.json", verify("S"));
+
+        Result result = run("field", "42", "Size", "S");
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isZero();
+        assertThat(result.stdout()).isEqualTo("#42 Size → S\n");
+        assertThat(result.graphqlCalls()).hasSize(3);
+        assertThat(result.callsContaining("fieldName=Size")).isNotEmpty();
+        assertThat(result.callsContaining("updateProjectV2ItemFieldValue")).singleElement()
+                .satisfies(call -> assertThat(call).contains("option=opt-s"));
+        assertThat(result.calls()).noneMatch(call -> call.contains("/labels"));
+    }
+
+    @Test
+    @DisplayName("field refuses Status and Priority before any call — both have their own path")
+    void shouldRefuseStatusAndPriorityAsFields() throws Exception {
+        Result status = run("field", "42", "Status", "Done");
+        Result priority = run("field", "42", "Priority", "P1");
+
+        assertThat(status.exitCode()).isNotZero();
+        assertThat(status.stderr()).contains("board.sh status");
+        assertThat(priority.exitCode()).isNotZero();
+        assertThat(priority.stderr()).contains("priority:");
+        assertThat(priority.calls()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("sweep reports every kind of drift, reads ready-to-merge as In Review, and changes nothing")
+    void shouldReportDriftWithoutChangingAnything() throws Exception {
+        write("open.json", """
+                [{"number":60,"title":"stale","body":"Blocked by #40","assignees":[],"labels":[{"name":"status: blocked"}]},
+                 {"number":61,"title":"manual","body":"no deps","assignees":[],"labels":[{"name":"status: blocked"}]},
+                 {"number":62,"title":"drifted","body":"","assignees":[],"labels":[{"name":"status: ready"}]},
+                 {"number":63,"title":"awaiting merge","body":"","assignees":[{"login":"a"}],"labels":[{"name":"status: ready to merge"}]},
+                 {"number":64,"title":"abandoned","body":"","assignees":[],"labels":[{"name":"status: in progress"}]},
+                 {"number":65,"title":"backlog","body":"","assignees":[],"labels":[]},
+                 {"number":66,"title":"a PR","pull_request":{"url":"x"},"labels":[{"name":"status: ready"}]}]""");
+        write("closed.json", """
+                [{"number":40,"labels":[]},
+                 {"number":41,"labels":[{"name":"status: in review"}]},
+                 {"number":42,"labels":[{"name":"status: ready"}]}]""");
+        write("list-first.json", listPage(false, null, """
+                {"fieldValueByName":{"name":"Blocked"},"content":{"number":60,"title":"stale","state":"OPEN"}},
+                {"fieldValueByName":{"name":"Blocked"},"content":{"number":61,"title":"manual","state":"OPEN"}},
+                {"fieldValueByName":{"name":"Backlog"},"content":{"number":62,"title":"drifted","state":"OPEN"}},
+                {"fieldValueByName":{"name":"In Review"},"content":{"number":63,"title":"awaiting merge","state":"OPEN"}},
+                {"fieldValueByName":{"name":"In Progress"},"content":{"number":64,"title":"abandoned","state":"OPEN"}},
+                {"fieldValueByName":{"name":"Backlog"},"content":{"number":65,"title":"backlog","state":"OPEN"}},
+                {"fieldValueByName":{"name":"Done"},"content":{"number":40,"title":"done","state":"CLOSED"}},
+                {"fieldValueByName":{"name":"In Review"},"content":{"number":41,"title":"closed late","state":"CLOSED"}}"""));
+
+        Result result = run("sweep");
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isZero();
+        assertThat(result.stdout())
+                .contains("STALE_BLOCK\t#60\t")
+                .contains("MANUAL_BLOCK\t#61\t")
+                .contains("COLUMN\t#62\tколонка Backlog ≠ метка [status: ready]\tReady")
+                .contains("ABANDONED\t#64\t")
+                .contains("CLOSED\t#41\t").contains("\tDone\n")
+                .contains("CLOSED\t#42\tзакрыта, колонка нет на доске, метки [status: ready]\tснять метки")
+                .doesNotContain("#63").doesNotContain("#65").doesNotContain("#66").doesNotContain("#40\t");
+        assertThat(result.callsContaining("mutation")).isEmpty();
+        assertThat(result.restCalls("DELETE")).isEmpty();
+        assertThat(result.restCalls("POST")).isEmpty();
+        assertThat(result.graphqlCalls()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("sweep --fix repairs a column by its label and skips a ticket that moved since the snapshot")
+    void shouldFixByLabelAndSkipWhatChanged() throws Exception {
+        write("open.json", """
+                [{"number":62,"title":"drifted","body":"","assignees":[],"labels":[{"name":"status: ready"}]},
+                 {"number":67,"title":"moved meanwhile","body":"","assignees":[],"labels":[{"name":"status: ready"}]}]""");
+        write("list-first.json", listPage(false, null, """
+                {"fieldValueByName":{"name":"Backlog"},"content":{"number":62,"title":"drifted","state":"OPEN"}},
+                {"fieldValueByName":{"name":"Backlog"},"content":{"number":67,"title":"moved meanwhile","state":"OPEN"}}"""));
+        write("issue-62.json", "{\"number\":62,\"state\":\"open\",\"labels\":[{\"name\":\"status: ready\"}]}");
+        write("issue-67.json", "{\"number\":67,\"state\":\"open\",\"labels\":[{\"name\":\"status: in progress\"}]}");
+        lookup(62, "item-62", OPTIONS);
+        write("labels-62.json", "[{\"name\":\"status: ready\"}]");
+        write("verify.json", verify("Ready"));
+
+        Result result = run("sweep", "--fix");
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isZero();
+        assertThat(result.stdout()).contains("#62 → Ready  [status: ready]")
+                .contains("#67 пропущена: изменилась после сверки")
+                .contains("исправлено 1, пропущено как изменившиеся 1");
+        assertThat(result.callsContaining("updateProjectV2ItemFieldValue")).singleElement()
+                .satisfies(call -> assertThat(call).contains("item=item-62").contains("option=opt-ready"));
+    }
+
     private void lookup(int issue, String item, String options) throws Exception {
         String nodes = item == null ? "" : "{\"id\":\"" + item + "\",\"project\":{\"number\":16}}";
         write("lookup-" + issue + ".json", """
@@ -215,6 +330,10 @@ class BoardScriptTest {
                 .redirectOutput(stdout.toFile())
                 .redirectError(stderr.toFile());
         Map<String, String> env = builder.environment();
+        // The pre-commit hook exports GIT_DIR/GIT_INDEX_FILE; `sweep` would then read the real
+        // repository's branches and worktrees (the #297 hazard IssueFindScriptTest records).
+        env.keySet().removeIf(key -> key.startsWith("GIT_"));
+        env.put("BOARD_GIT_ROOT", work.resolve("not-a-repository").toString());
         env.put("PATH", bin + File.pathSeparator + env.getOrDefault("PATH", "/usr/bin:/bin"));
         env.put("FAKE_GH_DIR", fixtures.toString());
         env.put("FAKE_GH_LOG", log.toString());

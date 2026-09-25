@@ -280,9 +280,10 @@ alone, so their absence is not a failure. `./gradlew test -PexcludeIntegration` 
 write off a red check without checking which test it is.
 
 The merge into `develop` never happens without a human go-ahead — but the go-ahead can be given by
-invoking a command as well as by answering a question, and **two** commands carry it: the
-per-run `/github-issue-runner` (below) and the per-issue **`/task <n>`**, whose step 6 merges its
-own PR because typing the command *is* the authorization for that one issue. Both still verify
+invoking a command as well as by answering a question, and **three** commands carry it: the
+per-run `/github-issue-runner` and the per-wave **`/wave`** (both below) and the per-issue
+**`/task <n>`**, whose step 6 merges its
+own PR because typing the command *is* the authorization for that one issue. All three still verify
 every readiness condition; the authorization removes the question, not the checks. `/github-issue`
 does **not** carry it: it stops at readiness and hands the decision over.
 
@@ -451,8 +452,8 @@ says nothing about *which* ticket survives, which stays a judgement about where 
 
 `/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
 up to **three** issues in flight and picks up the next as a slot frees. Invoking it gives the
-merge go-ahead **for that run** — one of the two standing exceptions to the per-PR gate above, the
-other being `/task <n>`, which carries it for a single issue. Nothing else
+merge go-ahead **for that run** — one of the standing exceptions to the per-PR gate above, beside
+`/wave` (same shape, below) and `/task <n>`, which carries it for a single issue. Nothing else
 relaxes: every readiness condition and every `/merge` check is still verified, merges stay
 serialized one at a time, the dispatcher writes no code itself, and an executor's report is
 re-verified against GitHub before anything is merged.
@@ -483,6 +484,45 @@ for a later run, never additions to the current window. The run scripts are
 `nonconcurrent` (one shared docker-compose stack and a fixed 8080), so only one workspace can hold
 the live stand at a time — sequence the tasks that need it.
 
+**`/wave [N]` is the autonomous dispatcher, with the arithmetic in a script** (ported from zmanly,
+where it replaced exactly this kind of prose-only planning). `.claude/commands/wave.md` is the
+coordinator: it runs in the main checkout, starts one `task-runner` subagent
+(`.claude/agents/task-runner.md`) per ticket in `.claude/worktrees/<n>-<slug>`, reviews with the three
+lenses, merges one at a time through `scripts/pr-merge.sh` and **refills** a freed slot instead of
+waiting for the whole window. It carries the merge go-ahead for its wave, like `/github-issue-runner`,
+and the same ceiling of **three**; the runner keeps mode A (human workspaces under Conductor), and the
+two never run at once. What the prose above asks the dispatcher to infer, `scripts/wave.sh` computes:
+
+- `plan [N]` / `refill` pick from the pool by milestone → `priority:*` label → tickets unblocked →
+  `Size:` line in the body → number, and never put side by side two tickets sharing a **key** read
+  from the «Что тронет» section: each file name (accumulating `docs/`, `CLAUDE.md`, `AGENTS.md`,
+  `README.md`, `specs/**/tasks.md` excluded), plus `flyway`, `specs` and `proto` — the three
+  collisions git cannot see — and `stand` for `frontend/`, `docker-compose*`, `local-dev/` (the live
+  stand is one per machine). A ticket without the section gets `files?`: two such tickets never share
+  a wave, and the coordinator re-checks the one it takes by grep, because silence is not "no overlap".
+  Keys of tickets already `In Progress`/`In Review` are taken. Each candidate's base comes from
+  `scripts/issue-base.sh` over the body (0 points), and a refusal keeps it out. Dependencies that no
+  `Blocked by` states are still the coordinator's reading.
+- `begin`/`add`/`mark`/`status`/`end` keep a journal (`.claude/wave/current.tsv` of the main checkout,
+  outside git) of where each ticket **should** stand; an unclosed journal blocks a new wave until the
+  human picks `/wave resume` or `end --interrupted`. `verify` compares it with the board, the
+  `status: *` labels (`status: ready to merge` counts as the `In Review` column), the issue state and
+  the PR.
+- `health [--kill]` finds what sends no notification — a background wait loop or `gh … --watch` older
+  than an hour, a dev server left in a removed worktree, a leftover worktree of a closed ticket, a
+  ticket with no activity, a red or slow CI — and kills only the first three kinds; the coordinator
+  schedules it hourly with `CronCreate` for the life of the wave. Docker, Gradle daemons and the main
+  checkout's processes are never touched.
+
+Rules the wave adds, all learned in zmanly: the coordinator is the **only** one moving the wave's
+cards (an executor reports `want_status`, never calls `board.sh status` on its own ticket), **assigns
+before it moves** (board automation reacts to events and can overwrite a transition made first),
+re-reads the column `board.sh` prints after every transition and retries once, and never leaves a card
+`In Progress` without a live executor. A PR that fell behind its base is rebased by its executor
+before merge — including **renumbering its Flyway migration** when a neighbour took the number.
+`WaveScriptTest` holds the script (pool, ceiling, keys, slot arithmetic, verify) against the same
+stand-in `gh` as `BoardScriptTest`.
+
 #### Board identifiers — the single source, do not copy them elsewhere
 
 Project **16** `Data Forge Middleware — Sprints`, owner `quantum-soft-dev`.
@@ -502,6 +542,10 @@ scripts/board.sh status <n> "<column>"     # card + status label, adds to the bo
 scripts/board.sh list <column> [<column>…] # open issues in those columns, 1 GraphQL point per 100 cards
 scripts/board.sh unblock <closed-n>        # Ready for tickets whose every "Blocked by" is closed
 scripts/board.sh show <n>                  # REST, no GraphQL
+scripts/board.sh items                     # every card, open and closed: "#n<TAB>column<TAB>OPEN|CLOSED<TAB>title"
+scripts/board.sh field <n> Size <XS…XL>    # the Size field; Priority here is the `priority: *` label, not a field
+scripts/board.sh sweep [--fix]             # whole-board drift report; --fix repairs the unambiguous kinds
+scripts/wave.sh budget                     # GraphQL points left (1 point) — not `gh api rate_limit`
 ```
 
 `board.sh` resolves the project, the `Status` field and the option ids **by name on every call**,
@@ -525,7 +569,12 @@ the live limit (issue #311):
 | `gh project item-list 16 --limit 100` | ~40 |
 | `gh pr checks`, `gh issue view`, `gh issue list --json body` | ~1 |
 | `scripts/board.sh status` (lookup + mutation + re-read) | **3**; **4** the one time an issue is added to the board |
-| `scripts/board.sh list` | 1 per 100 cards |
+| `scripts/board.sh list`, `scripts/board.sh items` | 1 per 100 cards |
+| `scripts/board.sh field` (Size) | **3**; **4** the one time an issue is added to the board |
+| `scripts/board.sh sweep` | `items` (1 per 100 cards); `--fix` 3 more per repair |
+| `scripts/wave.sh plan` / `refill` | `items` + 1 for the budget read; `refill` with no free slot — 0 |
+| `scripts/wave.sh verify` | `items` |
+| `scripts/wave.sh health`, `scripts/wave.sh budget` | 0 / 1 |
 | `scripts/board.sh show`, any `gh api repos/…` | 0 (REST has its own pool) |
 
 The `board.sh` before #311 spent **~500 points on one transition** — `item-list --limit 500` to find
@@ -533,10 +582,26 @@ the card, `field-list`, and `item-list` again to verify — and `unblock` repeat
 ticket, so closing #298 and unblocking #299–#301 cost ~2000. The rules that follow from the table:
 move cards only with `board.sh`; read columns with `board.sh list`, never `gh project item-list`;
 prefer REST (`gh api repos/…`) for labels, comments, assignees and closing; poll CI with
-`gh pr checks --watch --interval 60`, not 10–20 s; and read `gh api rate_limit` (free) before a burst
-instead of retrying into an exhausted limit. `BoardScriptTest` holds `board.sh` to it: the script is
+`gh pr checks --watch --interval 60`, not 10–20 s; and read the remaining budget with
+`scripts/wave.sh budget` (the `rateLimit` of GraphQL itself, 1 point) before a burst instead of
+retrying into an exhausted limit. **Not `gh api rate_limit`**: it is free, and it lies for GraphQL —
+zmanly measured it reporting `used: 0` while `rateLimit` had already charged 41 points, so an agent
+reading it would start a burst into an exhausted hour. The earlier wording of this rule recommended
+exactly that call. `BoardScriptTest` holds `board.sh` to it: the script is
 run against a stand-in `gh` that refuses anything but `gh api`, and a transition is pinned at three
 GraphQL calls.
+
+**Labels move only through `board.sh`.** A direct `gh api …/labels` on a `status: *` label moves the
+label and not the column, and the board starts lying silently (zmanly, 2026-09-23: a wave's labels
+moved, its cards stayed, one ticket never reached the board at all). A refusal of `board.sh` is a stop
+and a report to the human — it means the environment is broken — never a workaround by hand. Drift
+that happened anyway (a blocker closed without `unblock`, a column overwritten by the board's own
+`Pull request linked to issue` / `Item added to project` workflows, a ticket abandoned `In Progress`)
+is found by **`scripts/board.sh sweep`**, which reports `STALE_BLOCK`, `MANUAL_BLOCK`, `COLUMN`,
+`ABANDONED` and `CLOSED`; `--fix` repairs the first, third and last — the column **by the label**,
+since the pipeline sets the label and automation overwrites the column — after re-reading each ticket,
+so a transition another session made after the snapshot is not rolled back. Abandoned tickets and
+manual blocks are never repaired: from outside nobody can tell whether a session is still on them.
 
 **Status lives in two places and both must be moved on every transition:** the Kanban board
 (Projects v2 `Status`, project **16**) and the repo `status: *` labels. The ticket walks the
@@ -713,6 +778,37 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- wave-dispatcher: `/wave` — an autonomous dispatcher whose planning is a script, and the board and
+  budget rules that came with it, ported from zmanly and bent to this repository (issue #358). **What ships**:
+  `.claude/commands/wave.md` (coordinator), `.claude/agents/task-runner.md` (one executor per ticket,
+  a `WAVE-RESULT` block as its only answer), `scripts/wave.sh` (plan/refill/begin/add/mark/status/
+  verify/end/budget/health) and three new `scripts/board.sh` commands — `items`, `field <n> Size`,
+  `sweep [--fix]`. **Bent, not copied**: the ceiling stays **three** (this file's rule for the runner;
+  zmanly runs four); the pool is `Backlog` + `Ready` with any milestone (zmanly takes `Ready` with a
+  milestone only); priority is the `priority: *` label (this board's `Priority` is not a single-select
+  field, so `field` refuses it by name); overlap keys come from the «Что тронет» section of the body —
+  file names plus `flyway`/`specs`/`proto`/`stand` — because this repository has no `mod:*` labels and
+  its three invisible collisions are exactly those; each ticket's base is `issue-base.sh`'s answer and a
+  migration ticket is closed explicitly after merge; merge goes through `pr-merge.sh`; the three lenses
+  are `review-correctness`/`review-contracts`/`review-architecture`, and the other review surfaces
+  (`reviewThreads`, `PENDING`, `CHANGES_REQUESTED`) are checked before merge; a rebase renumbers a
+  Flyway migration a neighbour took. `sweep` reads `status: ready to merge` as the `In Review` column
+  and `--fix` restores that label rather than stripping it. **Rules corrected on the way**: the GraphQL
+  budget section recommended `gh api rate_limit` before a burst, which zmanly measured reporting
+  `used: 0` after 41 points were charged — replaced by `scripts/wave.sh budget`; `/task` now reads a
+  block in three cases (open blocker / manual label / stale label → `unblock`), assigns **before** it
+  moves a card and re-reads the printed column, returns the card to `Blocked`/`Ready` before reporting
+  any stop, and looks for an existing worktree under `.claude/worktrees/` (where `EnterWorktree`
+  creates it) as well as `.worktrees/`. `.claude/worktrees/` and `.claude/wave/` are ignored. **Tests**:
+  `BoardScriptTest` gains `items`, `field` (and its refusals), `sweep` report-only and `--fix`
+  (column by label; a ticket that moved since the snapshot is skipped); new `WaveScriptTest` pins the
+  pool and its order, overlap by file, by `flyway` and by `stand`, keys held by work in progress,
+  `files?` serialization, a refused base, the ceiling, the budget exit, the journal's slot arithmetic
+  and `verify`. Mutation-proven: dropping the `flyway` key reddens two wave cases, mapping
+  `ready to merge` to another column reddens the sweep case. `scripts/wave.sh` is a declared input of
+  `test` and a branch of the pre-commit hook. No production code, REST, gRPC, proto, DTO, migration
+  (**V60 stays next**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change. See
+  `docs/cr-wave-dispatcher.md`.
 - s3-orphan-dev-deleting: The S3 orphan sweep (#158) deletes on dev instead of only reporting
   (issue #351). It had run in dry run since #158 shipped, and each night about 88 more objects piled
   up under `checkpoints/{fyt-new}/`: one whole superseded generation, 87 snapshots plus a ~275 MB
