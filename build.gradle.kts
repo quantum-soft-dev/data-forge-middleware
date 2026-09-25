@@ -223,6 +223,11 @@ tasks.withType<Test> {
 tasks.named<Test>("test") {
     inputs.files("AGENTS.md", "CLAUDE.md")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // GradleWrapperJdkTest reads the wrapper URL (#352). An unused import does not change
+    // bytecode, but compileJava still rewrites the class; the properties file does not, so
+    // without this input a wrapper-only commit leaves `test` UP-TO-DATE.
+    inputs.file("gradle/wrapper/gradle-wrapper.properties")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir("src/main/resources/db/migration")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // ParquetScratchOrphanSweeperTest asserts that the manifests declare the scratch pod-private

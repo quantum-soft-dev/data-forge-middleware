@@ -7,7 +7,6 @@ import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.account.presentation.dto.AccountDetailDto;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
-import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**

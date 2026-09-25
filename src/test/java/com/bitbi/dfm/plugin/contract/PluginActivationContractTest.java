@@ -3,7 +3,6 @@ package com.bitbi.dfm.plugin.contract;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.plugin.application.PluginActivationService;
 import com.bitbi.dfm.plugin.application.PluginActivationService.ActivationResult;
-import com.bitbi.dfm.plugin.application.PluginDataValidator;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
@@ -19,7 +18,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;

@@ -2,7 +2,6 @@ package com.bitbi.dfm.contract;
 
 import com.auth0.client.mgmt.ManagementAPI;
 import com.auth0.client.mgmt.UsersEntity;
-import com.auth0.exception.Auth0Exception;
 import com.auth0.json.mgmt.users.User;
 import com.auth0.net.Request;
 import com.bitbi.dfm.account.application.AccountSyncService;
@@ -18,20 +17,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 
-import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 import static org.hamcrest.Matchers.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**

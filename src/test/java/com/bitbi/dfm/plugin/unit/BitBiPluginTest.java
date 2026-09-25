@@ -1,9 +1,6 @@
 package com.bitbi.dfm.plugin.unit;
 
-import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.application.BitBiPlugin;
-import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.PluginEvent;
 import com.bitbi.dfm.plugin.domain.PluginEventType;
@@ -11,13 +8,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 

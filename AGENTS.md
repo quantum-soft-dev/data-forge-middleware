@@ -263,6 +263,22 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- gradle-wrapper-jdk-25: The Gradle wrapper is **9.8.0**, because 9.0 cannot start on JDK 25
+  (issue #352). Java 25 support in Gradle begins at 9.1.0; this repository compiles on
+  Java 25 and the machine that opened the project had no older JDK, so IntelliJ refused
+  every `oracle-25*` path it checked. Boot 4.1 accepts the whole 9.x line. `build.gradle.kts`
+  gains one test input, `gradle/wrapper/gradle-wrapper.properties`, so a wrapper-only edit re-runs
+  `test`. The only Gradle 9.8 diagnostic that appears is
+  `Configuration.setVisible` from `com.google.protobuf` 0.9.6, scheduled for removal in
+  Gradle 11 — not project code, left alone (#304 chose that plugin).
+  `javac` 25 dropped `-Xlint:unused`, so 91 unused imports in 62 files were invisible to
+  the compile. They are deleted, and `UnusedImportConventionTest` fails when a non-star
+  import's simple name is not an identifier in the file (a hit that is only the tail of a
+  fully qualified name does not count). `GradleWrapperJdkTest` fails when the wrapper is
+  below 9.1.0. Unused locals and library deprecations stay: the compiler no longer lists
+  the first, and the second includes the bucket4j `Refill` #299 left on purpose.
+  No REST, gRPC, proto, DTO, migration (**V60 stays free**), `specs/NNN-*`, configuration-key,
+  metric, S3-key or frontend change.
 - checkpoint-site-claim: One replica builds a site's checkpoint at a time (issue #345). The nightly
   cron fires on every replica at the same second, and the path's guards — `CheckpointScheduler`'s
   `ReentrantLock` and the fold budget (#178) — are per JVM. On the test cluster, with HPA at three
