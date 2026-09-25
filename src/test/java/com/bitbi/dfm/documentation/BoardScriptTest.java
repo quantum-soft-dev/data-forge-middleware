@@ -299,6 +299,32 @@ class BoardScriptTest {
                 .satisfies(call -> assertThat(call).contains("item=item-62").contains("option=opt-ready"));
     }
 
+    @Test
+    @DisplayName("sweep --fix puts a ready-to-merge ticket in In Review and keeps its label")
+    void shouldFixAReadyToMergeColumnWithoutDroppingItsLabel() throws Exception {
+        write("open.json", """
+                [{"number":68,"title":"awaiting merge","body":"","assignees":[{"login":"a"}],"labels":[{"name":"status: ready to merge"}]}]""");
+        write("list-first.json", listPage(false, null, """
+                {"fieldValueByName":{"name":"In Progress"},"content":{"number":68,"title":"awaiting merge","state":"OPEN"}}"""));
+        write("issue-68.json", "{\"number\":68,\"state\":\"open\",\"labels\":[{\"name\":\"status: ready to merge\"}]}");
+        lookup(68, "item-68", OPTIONS);
+        write("labels-68.json", "[{\"name\":\"enhancement\"},{\"name\":\"status: ready to merge\"}]");
+        write("verify.json", verify("In Review"));
+
+        Result result = run("sweep", "--fix");
+
+        assertThat(result.exitCode()).as("stderr: %s", result.stderr()).isZero();
+        assertThat(result.stdout())
+                .contains("COLUMN\t#68\tколонка In Progress ≠ метка [status: ready to merge]\tIn Review")
+                .contains("#68 → In Review  [status: ready to merge]")
+                .contains("исправлено 1, пропущено как изменившиеся 0");
+        assertThat(result.callsContaining("updateProjectV2ItemFieldValue")).singleElement()
+                .satisfies(call -> assertThat(call).contains("item=item-68").contains("option=opt-review"));
+        assertThat(result.restCalls("DELETE")).as("the ready-to-merge label must stay").isEmpty();
+        assertThat(result.restCalls("POST")).singleElement()
+                .satisfies(call -> assertThat(call).contains("labels[]=status: ready to merge"));
+    }
+
     private void lookup(int issue, String item, String options) throws Exception {
         String nodes = item == null ? "" : "{\"id\":\"" + item + "\",\"project\":{\"number\":16}}";
         write("lookup-" + issue + ".json", """
