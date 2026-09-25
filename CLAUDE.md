@@ -778,6 +778,30 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- wave-board-script-coverage: The three branches of the process scripts no test reached are pinned
+  (issue #360, MINORs from the correctness review of PR #359). **`wave.sh health`** runs on a process
+  fixture through its two substitution points (`DFM_HEALTH_PS`, `DFM_HEALTH_CWD`) and a temporary
+  `DFM_MAIN_ROOT`: a wait loop and a CI watch at the threshold or past it (`etime` in all three `ps`
+  shapes, days included) and a server in a deleted worktree or in one whose issue is closed are
+  reported; a younger loop, another project's loop, a server in an open worktree or in the main copy,
+  a Gradle or Kotlin daemon and docker are not; `task_active` keeps a row alive by a fresh worktree
+  file or a fresh transcript and reports the rest `STALLED`. **`--kill` is tested on real throwaway
+  `sleep` processes** whose PIDs the fixture names under each kind's command line, because it is the
+  one branch that acts on the machine and a PID taken on trust proves nothing either way: the three
+  killable kinds die, the main copy's servers, an open worktree's server, both daemons and docker
+  survive, and a leftover worktree and a stalled row are still reported rather than printed as killed
+  (the report fixture's own PIDs sit above every `pid_max`, so a misfired kill hits nothing). **The
+  `specs` and `proto` overlap keys** now have their positive path: two tickets taking a `specs/NNN-*`
+  number, two declaring `delta-ingestion.proto`, and one naming the file, never share a wave; the three
+  flags written on one line raise only the one that says yes — the `[^:\n]*` of `yes()` against a
+  lazy `.*?` that would reach the neighbour's «да». **`board.sh sweep --fix`** on a `COLUMN` whose label
+  is `status: ready to merge` moves the card to `In Review` and keeps the label. Mutation-proven, 17
+  mutations each reddening its test (among them: the `Ready To Merge` target dropped, the specs key
+  and either proto branch removed, `yes()` made lazy, days ignored in `etime`, `>=` made `>`, the
+  daemon/docker skip removed, the main-copy guard removed, `kill_tree` not called, `--kill` applied to
+  findings with no process). Tests only: no production code, script, REST, gRPC, proto, DTO, migration
+  (**V59 is taken, V60 stays next**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend
+  change.
 - conflict-marker-guard: A line a merge conflict left behind fails the build (issue #342). A diff3
   ancestor line (`|||||||` and a sha) reached `develop` twice inside the two journals — found by
   review of #212 and again by the #305 sync — and nothing could have caught it: the compiler does not
