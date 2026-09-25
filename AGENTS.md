@@ -265,6 +265,16 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- conflict-marker-guard: A line a merge conflict left behind fails the build (issue #342) — a diff3
+  `|||||||` line had reached `develop` twice inside the two journals, invisible to every gate.
+  `ConflictMarkerLineTest` reads every file `git ls-files` lists (binary skipped as git does) and
+  fails naming `file:line` for a column-0 `<<<<<<<`, `|||||||` or `>>>>>>>` followed by a space or the
+  end of the line, or a line that is exactly `=======` — no tracked file uses a seven-character
+  setext underline, so that one is caught alone; lengthen the underline if a heading ever trips it.
+  The same `git ls-files` list is a lazy input of `test`, so a docs-only commit no longer leaves the
+  task UP-TO-DATE, and the pre-commit hook now runs `com.bitbi.dfm.documentation.*` for any path
+  outside the backend, frontend and manifest branches. Mutation: `||||||| abc` in the journal reddens
+  it. No production code, migration (**V60 stays next**) or contract change.
 - hpa-nightly-scaling: The backend's HPA no longer scales on the nightly checkpoint sweep, and the
   backend deliberately carries no PriorityClass (issue #350). **Measured on dev** (Autopilot, Cloud
   Logging and Monitoring, 16–25.09) before anything was decided: the 02:00 sweep runs on **one** pod
