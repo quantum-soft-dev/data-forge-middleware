@@ -228,7 +228,9 @@ tasks.named<Test>("test") {
     // ParquetScratchOrphanSweeperTest asserts that the manifests declare the scratch pod-private
     // exactly while they mount it on the emptyDir (#141) — the configmap keys, the deployment's
     // volume, and no overlay quietly overriding either. Without this input a commit that touches
-    // only k8s/ leaves `test` UP-TO-DATE and the guard never runs.
+    // only k8s/ leaves `test` UP-TO-DATE and the guard never runs. The same holds for every other
+    // guard over the manifests — ParquetScratchCeilingBudgetTest (#138/#150),
+    // ContainerTimeZoneContractTest (#280) and S3OrphanSweepDeploymentTest (#351).
     inputs.dir("k8s")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // IssueBaseBranchScriptTest runs scripts/issue-base.sh, the one reading of an issue's

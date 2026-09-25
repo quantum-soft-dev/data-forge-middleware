@@ -2849,6 +2849,24 @@ on by default because an orphan is resolved by nothing else. A non-positive age 
 startup, but only while the sweep is enabled: a rollback that still crash-loops the pod on the value
 it is rolling back would not be one.
 
+**Where it deletes today (issue #351).** On **dev** the dry run is off
+(`DELTA_S3_ORPHAN_DRY_RUN: "false"` in `k8s/overlays/dev/configmap-patch.yaml`). Its report was read
+against the bucket before the flag was set. On 2026-09-25 the sweep reported 352 candidates, and all
+of them were superseded checkpoint generations of one site: four `seq` sets of 87 snapshots plus a
+frame each, every one below the committed pointer and older than the window. The live generation
+was in none of the samples. The site's changelog retention, which uses the same batched
+`DeleteObjects` call, had left exactly its audit window of segment objects, which shows the call
+removes what it is handed on that bucket (GCS through its S3 interop). A deleting night therefore
+reads as `delta.s3-orphan.reclaimed{prefix=checkpoints}` around 88 per advancing build of a large
+site, the whole superseded generation, with `delete-failed` at 0. `reclaim-unknown-sites` stays
+`false`: a prefix with no site row stays held back and is removed by hand once it is known to belong
+to that stand. **Stage and prod still report only.** Each turns deleting on as its own decision,
+once its own dry-run pass has been read the same way. `S3OrphanSweepDeploymentTest` holds all three
+facts, so any manifest that changes them has to change the test with it. One shape in a report is
+expected and is not a leak. A site that was wiped or re-baselined keeps an older epoch's generation
+whose `seq` is *above* the restarted pointer, and the `seq >= pointer` guard shields it until the
+counters pass that sequence. On dev that is 98 small objects at `seq=439699` of one site.
+
 **Detaching a key is now a destructive act with a one-day fuse.** When a table cannot be
 materialized on an advancing seq, `abandonStaleSnapshot` nulls `s3_key_parquet`, and the last good
 object at the previous seq used to stay in the bucket — 404 for consumers, but still there for an
