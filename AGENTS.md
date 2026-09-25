@@ -265,6 +265,40 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- hpa-nightly-scaling: The backend's HPA no longer scales on the nightly checkpoint sweep, and the
+  backend deliberately carries no PriorityClass (issue #350). **Measured on dev** (Autopilot, Cloud
+  Logging and Monitoring, 16–25.09) before anything was decided: the 02:00 sweep runs on **one** pod
+  at about one core for 13–31 minutes, growing with the site, with peaks of 2.2. The HPA (CPU 70 %
+  of the request, memory 80 %, a 60 s scale-up window) added replicas at 02:01 on almost every night
+  and removed them at 02:19–02:36, sometimes mid-build. A replica started after 02:00 takes no part
+  in that night's sweep, and a gRPC session stays on the pod that opened it, so those replicas did
+  nothing. The builder pod's memory stays at 1.5–1.76 GiB for the rest of the day, since the heap does
+  not shrink (an idle pod holds 0.65–0.7 GiB). That memory scaled the deployment up on 17.09, and it
+  timed every scale-down of the week. **`k8s/base/hpa.yaml`** drops the memory metric and raises
+  `behavior.scaleUp.stabilizationWindowSeconds` from 60 to **3600**. For scale-up the HPA takes the
+  lowest recommendation in the window, so it adds a replica only after a whole hour above target. The
+  price, written beside the key, is that a real overload waits the hour too. The ingest headroom is
+  `minReplicas` (2 in prod), which the ticket had already ruled must stay. Scale-down is unchanged.
+  **Rejected**: raising the CPU request to cover the sweep (about two cores reserved all day for 30
+  minutes of use; Autopilot bills by request) and raising the utilization target (dev's single
+  replica runs the sweep at 200 %, so a target above that is one real load never reaches).
+  **No PriorityClass, and the evidence settled the ticket's open question.** All five forge
+  preemptions in 30 days, and bitbi's twelve, were by GKE system pods: kube-dns, konnectivity-agent
+  and gmp-operator. GKE runs these at `system-cluster-critical` (2e9), and a user class is capped at
+  1e9. A class of ours would have prevented none of the preemptions. On the cluster shared with
+  bitbi, its only effect would be to let forge preempt bitbi. The dev patch's requests (500m/2Gi,
+  limits 2000m/3Gi) stay: they cover idle and the memory peak, and the sweep uses the burst limit.
+  **Guard**: `HpaScalingPolicyDeploymentTest` (fast gate, every file under `k8s/`). The backend HPA
+  has only a `Resource/cpu` metric, and the base declares exactly that one. Every declared scale-up
+  window is at least 1.5 x the longest measured sweep (2790 s), and the base must declare one.
+  No manifest declares a `PriorityClass` or a `priorityClassName`. Mutation-proven: a memory metric
+  in the dev patch, a 1800 s window in the base, a 60 s window in the stage patch and a
+  `priorityClassName` on the Deployment each redden their own case. The pre-commit hook's `k8s/*`
+  branch runs it. All three overlays render with `kubectl kustomize`. **Not in the PR**: the DoD's
+  night on dev after the deploy needs a `deploy-dev/*` tag, a human step. No production code, REST,
+  gRPC, proto, DTO, migration (**V60 stays next**), `specs/NNN-*`, configuration-key, metric, S3-key
+  or frontend change. See `deploy/gke/README.md` ("Scaling and pod priority") and
+  `docs/delta-client-v2-guide.md` ("The nightly build does not scale the deployment").
 - unused-import-lexer-cases: The unused-import scanner's lexer has tests of its own, on synthetic
   sources (issue #357, a MINOR from the architecture review of PR #354). `UnusedImportConventionTest`
   (#352) replaces the `-Xlint:unused` that `javac` 25 no longer accepts, and its one test walked the
