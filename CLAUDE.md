@@ -149,7 +149,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V59**, next is **V60**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V59**, next is **V60**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -778,6 +778,34 @@ pages/{feature}/            # Route pages
 - Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
 
 ## Recent Changes
+- conflict-marker-guard: A line a merge conflict left behind fails the build (issue #342). A diff3
+  ancestor line (`|||||||` and a sha) reached `develop` twice inside the two journals — found by
+  review of #212 and again by the #305 sync — and nothing could have caught it: the compiler does not
+  read markdown and `AgentJournalConsistencyTest` reads entry slugs, which a marker line is not. The
+  journals are merged by hand on every conflict between two PRs, so twice in a month is a mechanism.
+  **`ConflictMarkerLineTest`** (package `documentation`) reads every file `git ls-files` lists — the
+  index, so a file staged a moment ago is read by the hook, and not a directory walk, which in the
+  main checkout would descend into `.claude/worktrees/` (other worktrees, possibly mid-conflict) and
+  `node_modules` — skips binary ones the way git does (a NUL in the first 8000 bytes), and fails
+  naming `file:line` for a column-0 line of seven `<`, `|` or `>` followed by a space or the end of
+  the line, or a line that is exactly `=======`. The last is legal Markdown (a setext underline),
+  which is why the ticket asked to look first: no tracked file carries it (the underlines in
+  `docs/device-flow-client-guide.md` and `specs/` are longer), so it is caught alone — a lone
+  leftover `=======` is as real as #305's lone `|||||||`, and a seven-character heading that trips it
+  is fixed by lengthening the underline. A second case requires `CLAUDE.md` and `AGENTS.md` among the
+  files read, so a git that answered nothing cannot read as a clean tree; five synthetic cases pin
+  the recogniser (every marker, CRLF, a longer run, indentation, a binary file). **Inputs**: the same
+  `git ls-files` list is declared on `test` through a lazy `providers.exec`, so it is resolved only
+  when `test` is (the Dockerfile's `build -x test` has no `.git`) and a failing git yields no inputs
+  rather than a failed configuration. Proven both ways: before it, a marker appended to
+  `docs/bitbi-integration.md` left `:test` UP-TO-DATE — the #298/#311 trap; with it the task ran and
+  named `docs/bitbi-integration.md:1490`. Mutation: `||||||| abc` under "Recent Changes" in
+  `CLAUDE.md` reddens the scan (`CLAUDE.md:781`). **Pre-commit**: a commit touching only `docs/`,
+  `specs/`, `.claude/`, `README.md` or configuration used to run no gradle at all; any path outside
+  the backend, frontend and manifest branches now runs `com.bitbi.dfm.documentation.*` (the variable
+  is renamed `documentation_changed`, since it no longer means migration guidance). Test, build
+  script and hook only: no production code, REST, gRPC, proto, DTO, migration (**V59 is taken, V60
+  stays next**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change.
 - hpa-nightly-scaling: The backend's HPA no longer scales on the nightly checkpoint sweep, and the
   backend deliberately carries no PriorityClass (issue #350). **Measured on dev** (Autopilot, Cloud
   Logging and Monitoring, 16–25.09) before anything was decided: the 02:00 sweep runs on **one** pod

@@ -263,6 +263,20 @@ tasks.named<Test>("test") {
     // dispatcher (#332), against a stand-in gh. Same reasoning as the three above.
     inputs.files("scripts/pr-merge.sh")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // ConflictMarkerLineTest reads every file `git ls-files` lists (#342), so the same list is an
+    // input — otherwise a commit touching only docs/ or specs/ leaves `test` UP-TO-DATE and a
+    // leftover merge-conflict line rides through. Lazy: it is resolved only when `test` is, so
+    // `./gradlew build -x test` in the Dockerfile, where there is no .git, never runs git; and a
+    // failing git yields no inputs rather than a failed configuration — the test then fails itself.
+    inputs.files(
+        providers.exec {
+            commandLine("git", "ls-files", "-z")
+            isIgnoreExitValue = true
+        }.standardOutput.asText.map { listed ->
+            listed.split('\u0000').filter { it.isNotEmpty() }.map { file(it) }.filter { it.isFile }
+        }
+    ).withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("trackedFiles")
 
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
