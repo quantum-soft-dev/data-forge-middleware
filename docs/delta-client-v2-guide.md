@@ -1873,7 +1873,21 @@ What reads what:
 | started before V58 (`total_records IS NULL`) | its segments, as before |
 
 V58 backfills the finished batches that still had published segments when it ran; a batch already
-pruned keeps what remained, since the loss happened before the migration. A batch that a pre-V58
+pruned keeps what remained, since the loss happened before the migration.
+
+**V60 repairs the snapshots among them from their Parquet artifacts (issue #349).** The records of a
+pruned batch were never lost, only their count: each completed batch keeps one
+`batch_parquet_artifacts` row per table with the exact `row_count` and seq range, and retention does
+not delete those rows. A finished `FULL_SNAPSHOT` batch is all INSERTs by contract, so V60 rebuilds
+its totals table by table — a table with a `READY` artifact takes its `row_count` as inserts, a table
+whose artifact never became `READY` keeps what its remaining segments recorded (and is absent if
+none remain) — and the seq range spans both. It writes a batch only when the result describes at
+least as many records and tables as V58 stored and differs from it, so a batch whose segments were
+never pruned is left as it was, and one with no segment left becomes tracked. What V60 deliberately
+does **not** repair: a `DELTA` or `CONTINUOUS` batch (an artifact's `row_count` counts every
+operation, and SQL cannot split it into inserts, updates and deletes), and a batch with no recorded
+`session_mode` (started before V47, so not proven a snapshot). Those keep V58's totals, or their
+segment read if V58 found none. A batch that a pre-V58
 pod started during the rolling deploy is not tracked (counting only its later segments would store a
 partial total that reads as the whole) and stays on the segment read. One visible difference: a
 finished session that recorded no segment now shows its `mode` in the detail, where it showed none.

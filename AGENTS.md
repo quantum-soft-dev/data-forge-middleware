@@ -146,7 +146,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V59**, next is **V60**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V60**, next is **V61**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
 - **Follow-ups**: a finding out of scope first goes looking for an existing ticket on the same **theme** — open and closed, related-but-not-identical included. An open match gets the evidence as a comment, so the ticket grows into one run-sized problem instead of a sibling appearing. A closed match is **never reopened**: a stale observation (the fix is already in `develop`, the worktree is just older) needs nothing at all, and only a true regression — reproducing on current `origin/develop` — gets a new issue linking the old one and the fixing commit. A closed match carrying **`duplicate`** is the exception to "stale": it was closed by another ticket's work, which may still be open (three of the seventeen labelled closes are today), so read the absorber named in its closing comment and look at *its* state — and ask the search for labels, not just titles. Only when the theme has no ticket yet is one filed, framed as the theme (root cause / subsystem), and its body states three things before it is filed — the files it expects to touch, whether it needs a Flyway migration or a `specs/NNN-*` directory, and which open tickets live in those same files ("none found" is valid). `.github/ISSUE_TEMPLATE/task.yml` carries those three as required form fields; a ticket filed with `gh issue create --body` gets no form, so the same sections are written by hand. A keyword search *does* find these tickets — #190 and #200 both open with "SQL regeneration" — but nothing in the process asked anyone to run it, and the colliding pairs surfaced only because somebody read every open ticket in one sitting. A file list makes that check mechanical instead of something somebody has to think to do. `/github-issue-runner` reads those lines at step 2b where they exist, and still re-checks by grep. The full rule, the search method and the reasoning live in **`CLAUDE.md`** → "Follow-ups" and "Every follow-up says what it will touch"; this file is the condensed mirror.
 - **Absorbed tickets carry `duplicate`**: closing a ticket folded into another (`folds #NNN`) auto-moves its card to `Done` via project 16's enabled `Item closed` workflow, so `Done` mixes a ticket closed by its own PR with one closed by somebody else's — the 2026-08-19 pass read eight such closes (not all of them; see the census in `CLAUDE.md`), four with the absorber still open, the sharpest #200 (`priority: high`, unfixed) in `Done` under a blocked #190, indistinguishable from #143/#162/#204/#214 whose work really did land. Whoever closes a ticket as absorbed applies the **`duplicate`** label **and** comments naming the absorber and whether it is still open. The label means the durable fact *closed by another ticket's work, not its own PR* — not "still unfixed", a reading the closer cannot know and which decays (#200 was labelled as unfixed and #190 merged the next day) — so every absorbed close is labelled and the absorber's own state answers whether it shipped. The card stays in `Done`: a separate column would be overwritten by that same workflow on every close. `Done` minus `duplicate` is the work that closed on its own merits. Reasoning and the rejected options live in **`CLAUDE.md`** → "A ticket closed as absorbed carries `duplicate`"; this file is the condensed mirror.
 - **Closed tickets keep no `status: *` label**: the column is `Done`; the live labels are a state machine for open work. `gh issue list --label "status: in progress"` and `/merge`'s `--label "status: ready to merge"` are read across states often enough that a closed ticket wearing one is a wrong answer (#89 still read in progress a month after it shipped). Every close route strips every `status:*` actually present — query then remove, because `gh issue edit --remove-label` 404s on a label that is not on the issue, which is why `/merge` naming only `ready to merge` + `in review` was the defect. The backstop is `.github/workflows/strip-closed-status-labels.yml` (`issues: closed` + weekly sweep). A scheduled auto-strip is worth having here (the predicate is mechanical) and was declined as a journal guard on #205. Full rule in **`CLAUDE.md`** → "Status lives in two places".
@@ -262,9 +262,41 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
+- Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- batch-totals-from-artifacts: A snapshot batch whose segments were pruned before V58 gets its totals
+  back from its completed-batch Parquet artifacts (issue #349). V58 (#346) backfilled a finished
+  batch from the segments still present, so a batch retention had already thinned kept what remained —
+  on dev `fyt-new`'s 17.09 FULL_SNAPSHOT would have read 363 259 records in 13 tables instead of
+  5 012 611 in 87 — and a batch with no segment left stayed untracked and showed nothing. The records
+  were never lost, only their count: `batch_parquet_artifacts` keeps one row per table with the exact
+  `row_count` and (V51) seq range, and retention does not touch it. **V60** rebuilds the totals from
+  there. **Three decisions, taken by the owner on the ticket** with the rejected options: `DELTA` and
+  `CONTINUOUS` are **not** touched — an artifact's `row_count` counts every operation, SQL cannot
+  split it into inserts/updates/deletes, and `table_stats` has no slot for "unknown", so the options
+  were a lie on screen, a Batch Detail listing fewer tables than its own count, a DTO/Zod contract
+  change for a one-off backfill, or a Java migration reading Parquet from S3 that ties startup to the
+  bucket; on dev their segments are still intact and oldest-first pruning reaches them only after the
+  snapshot's last ones, so V58 captures them whole if the V58 deploy lands first. A table whose
+  artifact never became `READY` (`ABANDONED`, or still queued) is **merged**: it keeps what its
+  remaining segments recorded and is absent with none, while `READY` tables take `row_count` as
+  inserts. A batch with no `session_mode` (started before V47) is **skipped**, not proven a snapshot.
+  Two guards make the rewrite safe to run over every batch: it never lowers what V58 stored (records
+  and tables), and it writes only when the result differs, so a batch whose segments were never
+  pruned is not written at all. `IN_PROGRESS` batches are left to their segment read, as V58 left
+  them. **Tests**: `BatchTotalsFromArtifactsMigrationIntegrationTest` migrates a database of its own in
+  the shared PostgreSQL server — V60 is a statement over every batch, and run against the shared test
+  database it would rewrite and lock other classes' rows — replaying the history production lived:
+  rows written at V57, segments pruned by deleting their rows, V58's real backfill, then V60. Eight
+  scenarios (partly and fully pruned snapshot, intact snapshot, DELTA, no mode, merge with
+  `ABANDONED`, running snapshot, artifacts below the segments); "untouched" is asserted on the row's
+  `xmin`, since equal values cannot tell a rewrite from none. Mutation-proven one guard at a time:
+  dropping the mode filter reddens the DELTA and no-mode cases, a READY-only merge the `ABANDONED`
+  case, dropping `IS DISTINCT FROM` the intact case, dropping the never-lower guard its case, dropping
+  the status filter the running case — each alone. No application code, REST, gRPC, proto, DTO,
+  configuration-key, metric, S3-key or frontend change; **V60 is taken, V61 is next**. See
+  `docs/delta-client-v2-guide.md` ("A batch's history outlives its segments").
 - wave-board-script-coverage: The three branches of the process scripts no test reached are pinned
   (issue #360, MINORs from the correctness review of PR #359). **`wave.sh health`** runs on a process
   fixture through its two substitution points (`DFM_HEALTH_PS`, `DFM_HEALTH_CWD`) and a temporary
