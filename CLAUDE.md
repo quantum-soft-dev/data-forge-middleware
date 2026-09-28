@@ -149,7 +149,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V59**, next is **V60**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V60**, next is **V61**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -775,9 +775,41 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V59**; next migration is **V60** (do not reuse numbers)
+- Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- batch-totals-from-artifacts: A snapshot batch whose segments were pruned before V58 gets its totals
+  back from its completed-batch Parquet artifacts (issue #349). V58 (#346) backfilled a finished
+  batch from the segments still present, so a batch retention had already thinned kept what remained —
+  on dev `fyt-new`'s 17.09 FULL_SNAPSHOT would have read 363 259 records in 13 tables instead of
+  5 012 611 in 87 — and a batch with no segment left stayed untracked and showed nothing. The records
+  were never lost, only their count: `batch_parquet_artifacts` keeps one row per table with the exact
+  `row_count` and (V51) seq range, and retention does not touch it. **V60** rebuilds the totals from
+  there. **Three decisions, taken by the owner on the ticket** with the rejected options: `DELTA` and
+  `CONTINUOUS` are **not** touched — an artifact's `row_count` counts every operation, SQL cannot
+  split it into inserts/updates/deletes, and `table_stats` has no slot for "unknown", so the options
+  were a lie on screen, a Batch Detail listing fewer tables than its own count, a DTO/Zod contract
+  change for a one-off backfill, or a Java migration reading Parquet from S3 that ties startup to the
+  bucket; on dev their segments are still intact and oldest-first pruning reaches them only after the
+  snapshot's last ones, so V58 captures them whole if the V58 deploy lands first. A table whose
+  artifact never became `READY` (`ABANDONED`, or still queued) is **merged**: it keeps what its
+  remaining segments recorded and is absent with none, while `READY` tables take `row_count` as
+  inserts. A batch with no `session_mode` (started before V47) is **skipped**, not proven a snapshot.
+  Two guards make the rewrite safe to run over every batch: it never lowers what V58 stored (records
+  and tables), and it writes only when the result differs, so a batch whose segments were never
+  pruned is not written at all. `IN_PROGRESS` batches are left to their segment read, as V58 left
+  them. **Tests**: `BatchTotalsFromArtifactsMigrationIntegrationTest` migrates a database of its own in
+  the shared PostgreSQL server — V60 is a statement over every batch, and run against the shared test
+  database it would rewrite and lock other classes' rows — replaying the history production lived:
+  rows written at V57, segments pruned by deleting their rows, V58's real backfill, then V60. Eight
+  scenarios (partly and fully pruned snapshot, intact snapshot, DELTA, no mode, merge with
+  `ABANDONED`, running snapshot, artifacts below the segments); "untouched" is asserted on the row's
+  `xmin`, since equal values cannot tell a rewrite from none. Mutation-proven one guard at a time:
+  dropping the mode filter reddens the DELTA and no-mode cases, a READY-only merge the `ABANDONED`
+  case, dropping `IS DISTINCT FROM` the intact case, dropping the never-lower guard its case, dropping
+  the status filter the running case — each alone. No application code, REST, gRPC, proto, DTO,
+  configuration-key, metric, S3-key or frontend change; **V60 is taken, V61 is next**. See
+  `docs/delta-client-v2-guide.md` ("A batch's history outlives its segments").
 - wave-board-script-coverage: The three branches of the process scripts no test reached are pinned
   (issue #360, MINORs from the correctness review of PR #359). **`wave.sh health`** runs on a process
   fixture through its two substitution points (`DFM_HEALTH_PS`, `DFM_HEALTH_CWD`) and a temporary
