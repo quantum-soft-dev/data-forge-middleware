@@ -778,6 +778,40 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- batch-table-stats-serializable: A batch with stored Delta totals can be deleted again (issue #366,
+  a regression of #346). `BatchTableStats` — the value type of the `batches.table_stats` JSONB map
+  V58 added — was not `Serializable`, and hypersistence-utils 3.15 clones a JSON attribute that is
+  neither a `String` nor a `JsonNode` by Java serialization. Hibernate clones it on **`em.remove`**,
+  whose deleted state is a deep copy, so every `batchRepository.deleteById` of a batch holding at
+  least one table's totals failed with `NonSerializableObjectException` while loading, changing and
+  flushing the same batch worked — which is why the seal-by-seal writer of #346 was green and the
+  nightly retention on dev was not (`errors=1` on 29.09, the batch kept, and with it its segments,
+  SQL generations and batch Parquet: #344's class of accumulation). Three paths were broken: batch
+  retention (`BatchRetentionTransaction`), the admin batch delete (`BatchDeletionService`, a 500) and
+  site deletion (`SiteService.deleteSite`, rolled back). JPQL bulk deletes were not (the site history
+  wipe's `deleteBySiteId` passed). Almost every batch is affected: each post-V58 Delta batch records
+  totals, and V58/V60 backfilled them onto finished ones; an empty map serializes fine. **The fix is
+  `implements Serializable`**, the #302 fix for `TableChangeStats` verbatim; the record and the JSON
+  shape are unchanged (Jackson writes it by its components), so no migration (**V61 stays next**).
+  **Tests**, red first with the production error: `BatchRetentionIntegrationTest` deletes an expired
+  batch with totals through `runCleanup` as the scheduler does, and new
+  `BatchWithDeltaTotalsDeletionIntegrationTest` covers `BatchDeletionService.deleteBatch` and
+  `SiteService.deleteSite`; the totals are seeded by SQL in V58's shape, which is what the backfill
+  left on production rows. The existing fixtures never filled `table_stats`, and #346's tests never
+  deleted a batch — the gap between them was the bug. **Guard**:
+  `JsonbAttributeSerializableConventionTest` (fast gate) scans every `@Entity`/`@Embeddable`/
+  `@MappedSuperclass` under `com.bitbi.dfm`, takes each attribute whose `@Type` is a hypersistence
+  JSON type and walks its generic type: a `Map`/`Collection`/array is a container and its arguments
+  are walked; any other class must be concrete and `Serializable`, and a class of this application is
+  walked field by field, since serialization needs the whole graph. `Object` is accepted (untyped
+  JSON binds to serializable JDK types; code putting a non-serializable object into such a map by hand
+  is the stated gap), a type variable or wildcard is refused. It fails closed — the scan must find
+  `Batch.tableStats`, `ChangelogSegment.stats` and `SiteSchema.schemaData` — and its walker has cases
+  of its own over synthetic types. Mutation: without `Serializable` on `BatchTableStats` the guard
+  names `Batch.tableStats` and the three integration tests fail with the production message. The DoD's
+  last item — the next nightly retention on dev reporting `errors=0` and batch `2713ce91…` gone —
+  needs a `deploy-dev/*` tag, a human step. No REST, gRPC, proto, DTO, migration, `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - batch-totals-from-artifacts: A snapshot batch whose segments were pruned before V58 gets its totals
   back from its completed-batch Parquet artifacts (issue #349). V58 (#346) backfilled a finished
   batch from the segments still present, so a batch retention had already thinned kept what remained —

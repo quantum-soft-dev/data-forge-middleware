@@ -170,6 +170,24 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    @DisplayName("Deletes an expired batch that carries stored Delta totals (issue #366)")
+    void deletesAnExpiredBatchWithStoredDeltaTotals() {
+        UUID accountId = seedAccount();
+        UUID siteId = seedSite(accountId);
+        seedCheckpoint(siteId);
+        UUID batchId = seedBatch(accountId, siteId, "COMPLETED",
+                LocalDateTime.now(ZoneOffset.UTC).minusDays(60));
+        seedDeltaTotals(batchId);
+
+        BatchCleanupSummary summary = batchRetentionService.runCleanup(
+                new BatchCleanupRequest(siteId, null, null, null, 100, false));
+
+        assertThat(summary.errors()).isEmpty();
+        assertThat(summary.deletedBatches()).isEqualTo(1);
+        assertThat(batchRepository.existsById(batchId)).isFalse();
+    }
+
+    @Test
     @DisplayName("Does not delete a batch referenced as plugin baseline_batch_id")
     void keepsAPluginBaselineBatch() {
         UUID accountId = seedAccount();
@@ -337,6 +355,18 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                 batchId, siteId, accountId, status, "path/" + batchId + "/", 0, 0, false, startedAt,
                 "IN_PROGRESS".equals(status) ? null : startedAt.plusMinutes(5));
         return batchId;
+    }
+
+    /**
+     * Stores non-empty Delta totals the way V58/V60 and every post-V58 session leave them: removing
+     * such a batch through JPA deep-copies {@code table_stats}, which is where #366 failed.
+     */
+    private void seedDeltaTotals(UUID batchId) {
+        jdbcTemplate.update("""
+                UPDATE batches SET total_records = 3, table_count = 1, first_seq = 1, last_seq = 3,
+                    table_stats = '{"orders":{"inserts":2,"updates":1,"deletes":0}}'::jsonb
+                WHERE id = ?
+                """, batchId);
     }
 
     private void seedUploadedFile(UUID batchId) {
