@@ -4,6 +4,7 @@ import com.bitbi.dfm.delta.application.ChangelogFold.FoldedRow;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
+import com.google.protobuf.ByteString;
 
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -221,11 +222,12 @@ final class ChangelogMerge {
             Map<String, Value> merged = new LinkedHashMap<>(base.getDataMap());
             merged.putAll(row.data());
             // The frame's key, not the update's: the fold merges into a row that already carries
-            // its key columns and never rewrites them, so neither does this.
-            out.accept(insert(table, base.getKeyMap(), merged));
+            // its key columns and never rewrites them, so neither does this. The frame's row hash
+            // for the same reason — an UPDATE keeps the hash of the row it lands on (#369).
+            out.accept(insert(table, base.getKeyMap(), merged, RowHash.of(base)));
             return;
         }
-        out.accept(insert(table, row.key(), row.data()));
+        out.accept(insert(table, row.key(), row.data(), row.rowHash()));
     }
 
     /**
@@ -242,10 +244,10 @@ final class ChangelogMerge {
                     // prior row.
                     Map<String, Value> seeded = new LinkedHashMap<>(row.key());
                     seeded.putAll(row.data());
-                    out.accept(insert(table, row.key(), seeded));
+                    out.accept(insert(table, row.key(), seeded, row.rowHash()));
                     return;
                 }
-                out.accept(insert(table, row.key(), row.data()));
+                out.accept(insert(table, row.key(), row.data(), row.rowHash()));
             });
         });
     }
@@ -288,12 +290,16 @@ final class ChangelogMerge {
      * One frame record. The sequence number is left unset: a frame's seq is frame-local and
      * {@link CheckpointFrameWriter} numbers the records it writes.
      */
-    private static ChangeRecord insert(String table, Map<String, Value> key, Map<String, Value> data) {
-        return ChangeRecord.newBuilder()
+    private static ChangeRecord insert(String table, Map<String, Value> key, Map<String, Value> data,
+                                       ByteString rowHash) {
+        ChangeRecord.Builder record = ChangeRecord.newBuilder()
                 .setTable(table)
                 .setOp(Op.INSERT)
                 .putAllKey(key)
-                .putAllData(data)
-                .build();
+                .putAllData(data);
+        if (rowHash != null) {
+            record.setRowHash(rowHash);
+        }
+        return record.build();
     }
 }

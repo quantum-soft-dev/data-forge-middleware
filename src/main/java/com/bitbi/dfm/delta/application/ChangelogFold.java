@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Value;
+import com.google.protobuf.ByteString;
 
 import java.io.Serial;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -161,12 +163,20 @@ public final class ChangelogFold {
          * which is what an INSERT carrying its key columns (the normal shape) gives.
          */
         private final Value[] keyOnly;
+        /**
+         * The client's row identity (issue #369), or {@code null} for a row whose record carried
+         * none. Set by the record that created the row and kept through its {@code UPDATE}s, the
+         * way the client keeps a baseline row's hash until the row is deleted.
+         */
+        private final ByteString rowHash;
 
-        private FoldedRow(FoldedTable table, String[] keyNames, Value[] values, Value[] keyOnly) {
+        private FoldedRow(FoldedTable table, String[] keyNames, Value[] values, Value[] keyOnly,
+                          ByteString rowHash) {
             this.table = table;
             this.keyNames = keyNames;
             this.values = values;
             this.keyOnly = keyOnly;
+            this.rowHash = rowHash;
         }
 
         /** The row's key columns (drives row identity), reconstructed from what the row holds. */
@@ -177,6 +187,15 @@ public final class ChangelogFold {
         /** The row's current column values. */
         public Map<String, Value> data() {
             return new DataView();
+        }
+
+        /**
+         * The client's 32-byte row hash, or {@code null} when the row has none (issue #369).
+         *
+         * @return the hash the row's creating record carried, or {@code null}
+         */
+        public ByteString rowHash() {
+            return rowHash;
         }
 
         private Value valueAt(int position) {
@@ -195,17 +214,19 @@ public final class ChangelogFold {
         public boolean equals(Object other) {
             return other instanceof FoldedRow row
                     && key().equals(row.key())
-                    && data().equals(row.data());
+                    && data().equals(row.data())
+                    && Objects.equals(rowHash, row.rowHash);
         }
 
         @Override
         public int hashCode() {
-            return 31 * key().hashCode() + data().hashCode();
+            return 31 * (31 * key().hashCode() + data().hashCode()) + Objects.hashCode(rowHash);
         }
 
         @Override
         public String toString() {
-            return "FoldedRow{key=" + key() + ", data=" + data() + "}";
+            return "FoldedRow{key=" + key() + ", data=" + data()
+                    + (rowHash == null ? "" : ", rowHash=" + RowHash.hex(rowHash)) + "}";
         }
 
         private final class DataView extends AbstractMap<String, Value> {
@@ -415,7 +436,7 @@ public final class ChangelogFold {
                 Value[] values = valuesOf(table, recordData, NO_VALUES);
                 String[] keyNames = table.keyNamesFor(recordKey);
                 FoldedRow row = new FoldedRow(table, keyNames, values,
-                        keyOnly(table, keyNames, recordKey, values));
+                        keyOnly(table, keyNames, recordKey, values), RowHash.of(record));
                 FoldedRow replaced = table.put(identity, row);
                 // The replaced row is weighed only when there was one: on a first INSERT — every
                 // record of a seed frame — this is a single pass over the new row.
@@ -434,16 +455,18 @@ public final class ChangelogFold {
                     Value[] values = valuesOf(table, recordData, valuesOf(table, recordKey, NO_VALUES));
                     String[] keyNames = table.keyNamesFor(recordKey);
                     FoldedRow row = new FoldedRow(table, keyNames, values,
-                            keyOnly(table, keyNames, recordKey, values));
+                            keyOnly(table, keyNames, recordKey, values), RowHash.of(record));
                     table.put(identity, row);
                     return shared + estimatedRetainedBytes(identity, row);
                 }
                 long shared = declareAll(table, recordData.keySet());
                 Value[] values = valuesOf(table, recordData, existing.values);
-                // The row was already there and keeps the *same* key names and key-only values, so
-                // identity and key all cancel: only the values array can have changed. Weighing the
-                // whole row twice here would double the accounting's cost on the commonest record.
-                FoldedRow row = new FoldedRow(table, existing.keyNames, values, existing.keyOnly);
+                // The row was already there and keeps the *same* key names, key-only values and row
+                // hash (issue #369: an UPDATE does not re-identify a row), so identity, key and hash
+                // all cancel: only the values array can have changed. Weighing the whole row twice
+                // here would double the accounting's cost on the commonest record.
+                FoldedRow row = new FoldedRow(table, existing.keyNames, values, existing.keyOnly,
+                        existing.rowHash);
                 table.put(identity, row);
                 return shared + valuesBytes(values) - valuesBytes(existing.values);
             }
@@ -485,7 +508,7 @@ public final class ChangelogFold {
         Value[] values = valuesOf(table, recordData, NO_VALUES);
         String[] keyNames = table.keyNamesFor(recordKey);
         FoldedRow row = new FoldedRow(table, keyNames, values,
-                keyOnly(table, keyNames, recordKey, values));
+                keyOnly(table, keyNames, recordKey, values), RowHash.of(record));
         table.put(identity, row);
         return shared + estimatedRetainedBytes(identity, row);
     }
@@ -607,7 +630,8 @@ public final class ChangelogFold {
      * int, double, boolean or NULL lives inside the wrapper. Column <em>names</em> are not counted
      * here at all: they belong to the table, and {@link #sharedEstimatedRetainedBytes} counts them
      * once (issue #290). Key columns are counted once — the values the row's data already carries,
-     * plus the side array for any it does not.</p>
+     * plus the side array for any it does not. And the client's row hash, for a row that has one:
+     * 72 bytes, object and payload (issue #369).</p>
      *
      * <p><b>Where it under-counts</b>, so a deployment that matches can lower its budget rather than
      * be surprised: a character costs one byte here, which is what compact strings give for Latin-1
@@ -620,7 +644,8 @@ public final class ChangelogFold {
      * @return estimated retained bytes
      */
     static long estimatedRetainedBytes(String identity, FoldedRow row) {
-        return ROW_BYTES + stringBytes(identity) + valuesBytes(row.values) + keyOnlyBytes(row.keyOnly);
+        return ROW_BYTES + stringBytes(identity) + valuesBytes(row.values) + keyOnlyBytes(row.keyOnly)
+                + rowHashBytes(row.rowHash);
     }
 
     /**
@@ -634,10 +659,18 @@ public final class ChangelogFold {
     }
 
     /**
-     * {@link FoldedRow} (four references), its values array header, and the {@code LinkedHashMap}
-     * entry plus table slot that hold the row.
+     * {@link FoldedRow} (five references — a 12-byte header plus 20 is 32 bytes, the same object the
+     * four-reference row padded up to, so the row hash of issue #369 costs no header bytes), its
+     * values array header, and the {@code LinkedHashMap} entry plus table slot that hold the row.
      */
     private static final long ROW_BYTES = 112L;
+
+    /**
+     * A row hash: the {@link ByteString} object (header, memoized hash, array reference) and its
+     * {@code byte[]} header; the {@value RowHash#LENGTH} payload bytes are added on top. Only a row
+     * that has one pays it (issue #369).
+     */
+    private static final long ROW_HASH_BYTES = 24L + 16L;
 
     /** One reference in a row's values array. */
     private static final long SLOT_BYTES = 4L;
@@ -671,6 +704,10 @@ public final class ChangelogFold {
             }
         }
         return bytes;
+    }
+
+    private static long rowHashBytes(ByteString rowHash) {
+        return rowHash == null ? 0L : ROW_HASH_BYTES + rowHash.size();
     }
 
     private static long keyOnlyBytes(Value[] keyOnly) {
@@ -797,7 +834,7 @@ public final class ChangelogFold {
                         "Fold state for table " + table + " was not built by ChangelogFold");
             }
             rows.forEach((identity, row) -> copiedTable.put(identity,
-                    new FoldedRow(copiedTable, row.keyNames, row.values, row.keyOnly)));
+                    new FoldedRow(copiedTable, row.keyNames, row.values, row.keyOnly, row.rowHash)));
             copy.put(table, copiedTable);
         });
         return copy;

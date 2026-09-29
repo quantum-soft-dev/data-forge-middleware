@@ -116,6 +116,32 @@ class ParquetSchemaMapperTest {
         assertEquals(Schema.Type.LONG, delta.getField("_seq").schema().getType());
     }
 
+    /**
+     * Issue #369: both artifacts end with {@code _row_hash}, a nullable string, and it is appended —
+     * every column a reader knew keeps its position.
+     */
+    @Test
+    void bothArtifactsEndWithANullableRowHashColumnAndMoveNoOtherColumn() {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("name", "varchar(50)", true)),
+                List.of("id"), List.of());
+
+        Schema checkpoint = ParquetSchemaMapper.toAvroSchema("t", schema);
+        Schema delta = ParquetSchemaMapper.toDeltaAvroSchema("t", schema);
+
+        assertEquals(List.of("id", "name", "_row_hash"),
+                checkpoint.getFields().stream().map(Schema.Field::name).toList());
+        assertEquals(List.of("_op", "_seq", "_changed", "id", "name", "_row_hash"),
+                delta.getFields().stream().map(Schema.Field::name).toList());
+        for (Schema avro : List.of(checkpoint, delta)) {
+            Schema.Field rowHash = avro.getField(ParquetSchemaMapper.ROW_HASH_COLUMN);
+            assertEquals(Schema.Type.UNION, rowHash.schema().getType(), "an older client's row has none");
+            assertEquals(Schema.Type.STRING, branch(avro, "_row_hash").getType(), "hex, not fixed(32)");
+            assertEquals(org.apache.avro.JsonProperties.NULL_VALUE, rowHash.defaultVal());
+        }
+    }
+
     @Test
     void unknownTypeFallsBackToString() {
         TableSchema schema = new TableSchema(List.of(

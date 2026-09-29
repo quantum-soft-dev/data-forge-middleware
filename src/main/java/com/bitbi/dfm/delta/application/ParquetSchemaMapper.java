@@ -25,6 +25,13 @@ public final class ParquetSchemaMapper {
 
     private static final String NAMESPACE = "com.bitbi.dfm.delta.egress";
 
+    /**
+     * The service column carrying the client's row identity (issue #369): 64 lowercase hex
+     * characters, or null for a row whose record carried no hash — every row an older client wrote.
+     * It is the <em>last</em> field of every artifact, so adding it moved no existing column.
+     */
+    public static final String ROW_HASH_COLUMN = "_row_hash";
+
     private ParquetSchemaMapper() {
     }
 
@@ -37,22 +44,25 @@ public final class ParquetSchemaMapper {
      * {@code INSERT} can omit a declared column. A REQUIRED field turns either into the loss of
      * the table's snapshot (issue #237).</p>
      *
+     * <p>The declared columns are followed by {@link #ROW_HASH_COLUMN} (issue #369).</p>
+     *
      * @param tableName   table name (a valid PG / Avro identifier)
      * @param tableSchema the stored schema
      * @return an Avro record schema
      */
     public static Schema toAvroSchema(String tableName, TableSchema tableSchema) {
-        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size());
+        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size() + 1);
         for (ColumnDefinition column : tableSchema.columns()) {
             fields.add(nullableColumn(column));
         }
+        fields.add(rowHashColumn());
         return Schema.createRecord(tableName, null, NAMESPACE, false, fields);
     }
 
     /**
      * Build the Avro record schema for a delta Parquet file: non-null {@code _op} and {@code _seq}
      * first, then every declared column as a nullable union via {@link #nullableColumn} (shared
-     * with {@link #toAvroSchema}). A keyed DELETE carries only its key columns and a keyed UPDATE
+     * with {@link #toAvroSchema}), then {@link #ROW_HASH_COLUMN}. A keyed DELETE carries only its key columns and a keyed UPDATE
      * only its after-image.
      *
      * @param tableName   table name (a valid PG / Avro identifier)
@@ -60,7 +70,7 @@ public final class ParquetSchemaMapper {
      * @return an Avro record schema for delta rows
      */
     public static Schema toDeltaAvroSchema(String tableName, TableSchema tableSchema) {
-        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size() + 3);
+        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size() + 4);
         fields.add(new Schema.Field("_op", Schema.create(Schema.Type.STRING), null, null));
         fields.add(new Schema.Field("_seq", Schema.create(Schema.Type.LONG), null, null));
         // _changed disambiguates a null cell in an UPDATE: a comma-separated list of the columns
@@ -72,7 +82,18 @@ public final class ParquetSchemaMapper {
         for (ColumnDefinition column : tableSchema.columns()) {
             fields.add(nullableColumn(column));
         }
+        fields.add(rowHashColumn());
         return Schema.createRecord(tableName, null, NAMESPACE, false, fields);
+    }
+
+    /**
+     * {@link #ROW_HASH_COLUMN}, a {@code [null, string]} union with a null default — appended after
+     * the declared columns rather than beside {@code _op}/{@code _seq}/{@code _changed}, so a reader
+     * that addresses columns by position sees every column it knew where it was (issue #369).
+     */
+    private static Schema.Field rowHashColumn() {
+        Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.STRING));
+        return new Schema.Field(ROW_HASH_COLUMN, union, null, Schema.Field.NULL_DEFAULT_VALUE);
     }
 
     /**

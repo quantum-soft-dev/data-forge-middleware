@@ -68,13 +68,18 @@ public final class CheckpointFrame {
                     throw new NoSuchElementException();
                 }
                 FoldedRow row = rows.next();
-                return ChangeRecord.newBuilder()
+                ChangeRecord.Builder record = ChangeRecord.newBuilder()
                         .setTable(table)
                         .setOp(Op.INSERT)
                         .setSeq(++seq)
                         .putAllKey(row.key())
-                        .putAllData(row.data())
-                        .build();
+                        .putAllData(row.data());
+                // Issue #369: the frame is the next build's seed, so a hash left out here is gone
+                // from the site for good — the same way source_ts is.
+                if (row.rowHash() != null) {
+                    record.setRowHash(row.rowHash());
+                }
+                return record.build();
             }
         };
     }

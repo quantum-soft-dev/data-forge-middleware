@@ -7,6 +7,7 @@ import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import com.bitbi.dfm.delta.application.RowHash;
 import com.bitbi.dfm.delta.application.SessionTotals;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
 import com.bitbi.dfm.delta.grpc.v2.*;
@@ -392,6 +393,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private boolean rebaseline;
             /** Bounds the "records with no open session" warning to one per stream. */
             private boolean reportedRecordsWithNoSession;
+            /** Bounds the malformed-{@code row_hash} warning to one per session (issue #369). */
+            private boolean reportedMalformedRowHash;
             private int sinceAck;
             /** Wall-clock of the last continuous seal, for the time-based seal trigger. */
             private long lastSealMillis = System.currentTimeMillis();
@@ -447,6 +450,21 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 } catch (ChangeRecordValidator.InvalidChangeException e) {
                     emitError(ErrorCode.SCHEMA_MISMATCH, e.getMessage(), RecoveryAction.NEED_REBASELINE);
                     return;
+                }
+                if (RowHash.isMalformed(change)) {
+                    // Issue #369: a row_hash that is not 32 bytes is not a row hash. There is no
+                    // ErrorCode for it and the shipped client never sends one, so the value is
+                    // dropped and the record is staged as an older client's would be. Once per
+                    // session: a client that gets it wrong gets it wrong on every record.
+                    if (!reportedMalformedRowHash) {
+                        reportedMalformedRowHash = true;
+                        logger.warn("Delta row_hash ignored, expected {} bytes but got {}: siteId={}, "
+                                        + "batchId={}, table={}, seq={} (further ones in this session "
+                                        + "are dropped silently)",
+                                RowHash.LENGTH, change.getRowHash().size(), siteId, batchId,
+                                change.getTable(), change.getSeq());
+                    }
+                    change = RowHash.dropMalformed(change);
                 }
                 switch (buffer.accept(change)) {
                     case DUPLICATE -> {
@@ -592,6 +610,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onSessionStart(SessionStart start) {
+                reportedMalformedRowHash = false;
                 logger.info("Delta session start: siteId={}, mode={}, firstSeq={}, schemaVersion={}, "
                                 + "generation={}",
                         siteId, start.getMode(), start.getFirstSeq(), start.getSchemaVersion(),

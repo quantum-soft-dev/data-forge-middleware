@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
+import com.google.protobuf.ByteString;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -64,15 +65,21 @@ final class CheckpointFrameWriter implements AutoCloseable {
 
     /** Write one row into the frame. */
     void accept(ChangeRecord record) {
+        ChangeRecord.Builder row = ChangeRecord.newBuilder()
+                .setTable(record.getTable())
+                .setOp(Op.INSERT)
+                .setSeq(++records)
+                .putAllKey(record.getKeyMap())
+                .putAllData(record.getDataMap());
+        // Issue #369: carried for both producers — the bootstrap passes the client's record
+        // through, the merge its own re-emission of a row. Read through RowHash so a frame only
+        // ever holds a real hash or none.
+        ByteString rowHash = RowHash.of(record);
+        if (rowHash != null) {
+            row.setRowHash(rowHash);
+        }
         try {
-            ChangeRecord.newBuilder()
-                    .setTable(record.getTable())
-                    .setOp(Op.INSERT)
-                    .setSeq(++records)
-                    .putAllKey(record.getKeyMap())
-                    .putAllData(record.getDataMap())
-                    .build()
-                    .writeDelimitedTo(gz);
+            row.build().writeDelimitedTo(gz);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to write the checkpoint frame", e);
         }
