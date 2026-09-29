@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.application;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
+import com.google.protobuf.ByteString;
 import org.apache.avro.Conversions;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
@@ -33,6 +34,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Renders a checkpoint table's folded state to a typed Parquet snapshot for Power BI egress
@@ -83,11 +85,42 @@ public final class ParquetCheckpointWriter {
     public static DecimalDegradeTally writeParquet(Path output, String tableName, TableSchema tableSchema,
                                     Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes,
                                     ScratchLease lease) {
-        Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
+        return writeParquet(output, tableName, tableSchema, rows, row -> row, row -> null,
+                maxBytes, rowGroupBytes, lease);
+    }
+
+    /**
+     * {@link #writeParquet(Path, String, TableSchema, Iterable, long, long, ScratchLease)} over rows
+     * of any shape, each read for its cells and for the client's row hash (issue #369) — the form the
+     * folded path uses, whose rows are {@link ChangelogFold.FoldedRow}s.
+     *
+     * @param cells   a row's column → wire value (present columns only; absent = null cell)
+     * @param rowHash a row's 32-byte hash, or {@code null} for none
+     */
+    static <R> DecimalDegradeTally writeParquet(Path output, String tableName, TableSchema tableSchema,
+                                                Iterable<R> rows,
+                                                Function<? super R, Map<String, Value>> cells,
+                                                Function<? super R, ByteString> rowHash,
+                                                long maxBytes, long rowGroupBytes, ScratchLease lease) {
+        Iterable<Map<String, Value>> cellRows = () -> {
+            java.util.Iterator<R> source = rows.iterator();
+            return new java.util.Iterator<>() {
+                @Override
+                public boolean hasNext() {
+                    return source.hasNext();
+                }
+
+                @Override
+                public Map<String, Value> next() {
+                    return cells.apply(source.next());
+                }
+            };
+        };
+        Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), cellRows);
         DecimalDegradeTally nonFinite;
         try (OpenTable table = openTable(output, tableName, tableSchema, avro, maxBytes, rowGroupBytes, lease)) {
-            for (Map<String, Value> row : rows) {
-                table.write(row);
+            for (R row : rows) {
+                table.write(cells.apply(row), rowHash.apply(row));
             }
             nonFinite = table.tally();
         }
@@ -154,8 +187,13 @@ public final class ParquetCheckpointWriter {
         }
 
         void write(Map<String, Value> row) {
+            write(row, null);
+        }
+
+        /** Write one row with the client's row hash (issue #369), {@code null} for none. */
+        void write(Map<String, Value> row, ByteString rowHash) {
             try {
-                writer.write(toRecord(avro, tableSchema, row, nonFinite));
+                writer.write(toRecord(avro, tableSchema, row, rowHash, nonFinite));
                 rowCount++;
             } catch (IOException e) {
                 throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
@@ -369,12 +407,16 @@ public final class ParquetCheckpointWriter {
     }
 
     private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, Map<String, Value> row,
-                                          DecimalDegradeTally nonFinite) {
+                                          ByteString rowHash, DecimalDegradeTally nonFinite) {
         GenericRecord record = new GenericData.Record(avro);
         for (ColumnDefinition column : tableSchema.columns()) {
             Schema fieldType = branch(avro.getField(column.name()).schema());
             Value cell = row.get(column.name());
             record.put(column.name(), coerceValue(cell, fieldType, nonFinite));
+        }
+        // Every schema ParquetSchemaMapper builds has the column; a caller-built one may not.
+        if (avro.getField(ParquetSchemaMapper.ROW_HASH_COLUMN) != null) {
+            record.put(ParquetSchemaMapper.ROW_HASH_COLUMN, RowHash.hex(rowHash));
         }
         return record;
     }

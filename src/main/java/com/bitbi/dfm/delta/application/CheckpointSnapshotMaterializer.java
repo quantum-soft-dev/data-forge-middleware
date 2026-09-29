@@ -5,7 +5,6 @@ import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
-import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
@@ -140,8 +139,8 @@ final class CheckpointSnapshotMaterializer {
                 java.util.concurrent.atomic.AtomicReference<DecimalDegradeTally> nonFinite = new java.util.concurrent.atomic.AtomicReference<>();
                 metrics.timeCheckpointPhase("parquet", () ->
                         nonFinite.set(ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
-                                dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes(),
-                                lease)));
+                                rows.values(), FoldedRow::data, FoldedRow::rowHash, maxTempBytes,
+                                parquetProperties.rowGroupBytes(), lease)));
 
                 publishTable(siteId, checkpoint, tableName, seq, snapshot, nonFinite.get(), epoch);
             } catch (RuntimeException e) {
@@ -172,14 +171,6 @@ final class CheckpointSnapshotMaterializer {
             return;
         }
         reapTablesAbsentFromTheFold(siteId, state, epoch);
-    }
-
-    /**
-     * A lazily iterated view of one table's folded rows — the writer traverses it (twice at most,
-     * for the decimal envelope) instead of receiving a materialized copy of the state.
-     */
-    private static Iterable<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
-        return () -> rows.values().stream().map(FoldedRow::data).iterator();
     }
 
     // --- from a local frame file --------------------------------------------------------------
@@ -314,7 +305,7 @@ final class CheckpointSnapshotMaterializer {
                     return;
                 }
                 try {
-                    snapshot.writer.write(record.getDataMap());
+                    snapshot.writer.write(record.getDataMap(), RowHash.of(record));
                 } catch (RuntimeException e) {
                     if (isScratchBudgetRefusal(e)) {
                         throw scratchDirectoryFull(siteId, record.getTable(), e);

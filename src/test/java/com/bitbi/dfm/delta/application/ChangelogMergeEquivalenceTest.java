@@ -15,6 +15,7 @@ import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Issue #293, the acceptance criterion in one assertion: the frame the merge writes holds the rows
@@ -38,6 +39,7 @@ class ChangelogMergeEquivalenceTest {
         List<ChangeRecord> delta = deltaHistory();
 
         assertEquals(byTable(foldedFrame(baseline, delta)), byTable(mergedFrame(baseline, delta)));
+        assertCarriesRowHashes(mergedFrame(baseline, delta));
     }
 
     @Test
@@ -62,6 +64,7 @@ class ChangelogMergeEquivalenceTest {
         }
 
         assertEquals(byTable(foldedFrame(baseline, delta)), byTable(mergedFrame(baseline, delta)));
+        assertCarriesRowHashes(mergedFrame(baseline, delta));
     }
 
     @Test
@@ -194,10 +197,19 @@ class ChangelogMergeEquivalenceTest {
      * content, which is what matters: a record's column <em>order</em> is read by nothing —
      * a snapshot is written against the declared schema and a re-fold looks columns up by name.
      */
-    private record Row(Map<String, Value> key, Map<String, Value> data) {
+    private record Row(Map<String, Value> key, Map<String, Value> data, ByteString rowHash) {
 
         static final java.util.Comparator<Row> BY_KEY =
                 java.util.Comparator.comparing(row -> row.key().toString());
+    }
+
+    /**
+     * Equality alone cannot tell "both carry the hash" from "both dropped it" — this can (#369).
+     */
+    private static void assertCarriesRowHashes(List<ChangeRecord> frame) {
+        long hashed = frame.stream().filter(record -> !record.getRowHash().isEmpty()).count();
+        assertTrue(hashed > 0 && hashed < frame.size(),
+                "the fixture must yield rows with and without a hash, got " + hashed + " of " + frame.size());
     }
 
     private static Map<String, List<Row>> byTable(List<ChangeRecord> frame) {
@@ -205,19 +217,33 @@ class ChangelogMergeEquivalenceTest {
         for (ChangeRecord record : frame) {
             assertEquals(Op.INSERT, record.getOp(), "a frame is an all-INSERT changelog");
             byTable.computeIfAbsent(record.getTable(), table -> new ArrayList<>())
-                    .add(new Row(record.getKeyMap(), record.getDataMap()));
+                    .add(new Row(record.getKeyMap(), record.getDataMap(), record.getRowHash()));
         }
         return byTable;
     }
 
     // --- record builders -----------------------------------------------------------------------
 
+    /**
+     * Issue #369: most records carry a row hash of their own, so the comparison above covers where
+     * it ends up as well as the columns. Every third one carries none (an older client), and every
+     * fifth UPDATE carries one — undefined by the contract, and ignored by both paths the same way:
+     * an UPDATE of an existing row keeps that row's hash.
+     */
     private static ChangeRecord rec(String table, Op op, Map<String, Value> key, Map<String, Value> data) {
-        return ChangeRecord.newBuilder()
+        int n = RECORDS.incrementAndGet();
+        ChangeRecord.Builder record = ChangeRecord.newBuilder()
                 .setTable(table).setOp(op).setSeq(1)
-                .putAllKey(key).putAllData(data)
-                .build();
+                .putAllKey(key).putAllData(data);
+        boolean hashed = op == Op.UPDATE ? n % 5 == 0 : n % 3 != 0;
+        if (hashed) {
+            record.setRowHash(RowHashTest.hashOf(n));
+        }
+        return record.build();
     }
+
+    private static final java.util.concurrent.atomic.AtomicInteger RECORDS =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     private static Map<String, Value> key(long id) {
         return Map.of("id", Value.newBuilder().setIntValue(id).build());

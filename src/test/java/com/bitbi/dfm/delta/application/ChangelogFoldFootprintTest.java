@@ -138,6 +138,60 @@ class ChangelogFoldFootprintTest {
         assertEquals(walked, total, "the running total must equal what the fold actually holds");
     }
 
+    /**
+     * Issue #369: a row that carries the client's hash costs its 72 bytes — the {@code ByteString},
+     * its array header and the 32 payload bytes — and nothing else; a row without one costs what it
+     * did. An UPDATE keeps the hash, so it adds nothing; the DELETE gives it back.
+     */
+    @Test
+    void aRowHashCostsSeventyTwoBytesOnTheRowThatCarriesIt() {
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        ChangelogFold.apply(state, wideInsert(0));
+
+        long without = ChangelogFold.apply(state, wideInsert(1));
+        long with = ChangelogFold.apply(state, withHash(wideInsert(2)));
+
+        assertEquals(72L, with - without, "the hash is the only difference between the two rows");
+        FoldedRow hashed = state.get("wide").values().stream().skip(2).findFirst().orElseThrow();
+        assertEquals(RowHash.LENGTH, hashed.rowHash().size());
+
+        long update = ChangelogFold.apply(state, ChangeRecord.newBuilder()
+                .setTable("wide").setOp(Op.UPDATE).putKey("id", intValue(2))
+                .putData("c03", stringValue("v" + String.format("%07d", 2)))
+                .build());
+        assertEquals(0L, update, "a same-width UPDATE keeps the hash and changes nothing it weighs");
+
+        long delete = ChangelogFold.apply(state, ChangeRecord.newBuilder()
+                .setTable("wide").setOp(Op.DELETE).putKey("id", intValue(2)).build());
+        assertEquals(-with, delete, "a DELETE refunds the row, hash included");
+    }
+
+    /** The walk above, over rows with hashes — a hash left out of either side would split them. */
+    @Test
+    void theRunningTotalStillAgreesWhenRowsCarryHashes() {
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        long total = 0L;
+        for (int row = 0; row < 50; row++) {
+            ChangeRecord insert = wideInsert(row);
+            total += ChangelogFold.apply(state, row % 2 == 0 ? withHash(insert) : insert);
+        }
+        total += ChangelogFold.apply(state, withHash(wideInsert(3)));
+        total += ChangelogFold.apply(state, wideInsert(4));
+
+        long walked = 0L;
+        for (Map<String, FoldedRow> table : state.values()) {
+            walked += ChangelogFold.sharedEstimatedRetainedBytes(table);
+            for (Map.Entry<String, FoldedRow> row : table.entrySet()) {
+                walked += ChangelogFold.estimatedRetainedBytes(row.getKey(), row.getValue());
+            }
+        }
+        assertEquals(walked, total);
+    }
+
+    private static ChangeRecord withHash(ChangeRecord record) {
+        return record.toBuilder().setRowHash(RowHashTest.hashOf((int) record.getSeq())).build();
+    }
+
     private static ChangeRecord wideInsert(int row) {
         ChangeRecord.Builder builder = ChangeRecord.newBuilder()
                 .setTable("wide").setOp(Op.INSERT).setSeq(row + 1)

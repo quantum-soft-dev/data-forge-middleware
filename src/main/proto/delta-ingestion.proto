@@ -145,6 +145,11 @@ message ChangeRecord {
   map<string, Value>        key       = 4; // PK values; for keyless tables = all columns
   map<string, Value>        data      = 5; // INSERT: full row; UPDATE: changed cols; DELETE: empty
   google.protobuf.Timestamp source_ts = 6; // source commit time (optional)
+  // Client-assigned identity of the row within `table` (dbf-data-extractor#156/#157): the 32-byte
+  // SHA-256 of the client's canonical row form. Opaque to the server — never recomputed or
+  // verified. Stable for the same row across runs; a DELETE carries the value its INSERT carried.
+  // Empty = absent (older client). Additive: `key` keeps the full row and stays authoritative.
+  bytes                     row_hash  = 7;
 }
 
 enum Op {

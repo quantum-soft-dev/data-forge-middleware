@@ -778,6 +778,55 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- changerecord-row-hash: The client's row identity travels from the wire to every artifact a row is
+  written into (issue #369, the server half of dbf-data-extractor #157). `ChangeRecord` gains
+  **`bytes row_hash = 7`** — field 7 was free on both sides — the 32-byte SHA-256 of the client's
+  canonical row form, which it already computes as the key of its keyless diff. **Opaque**: never
+  recomputed or verified. **Additive**: `key` keeps the full row and stays authoritative, so the fold
+  identity, the delta `DELETE` rows and the Bit BI SQL `WHERE` are unchanged. One reader decides what
+  counts as a hash, new `RowHash`: exactly 32 bytes is present, empty is an older client (and every
+  existing segment and frame), anything else is **dropped at ingestion** before the record is staged,
+  with one WARN per session and the session committing — there is no `ErrorCode` for it and the
+  shipped client never sends one. It is **not** part of `content_hash` (`ChangelogContentHash` names
+  its fields explicitly), so a client that already sends one gets the same hash. **Where it goes**:
+  the segment byte for byte; the fold (`FoldedRow.rowHash` — set by the creating record, kept by an
+  `UPDATE`, which never re-identifies a row, gone with the `DELETE`; a seeded `UPDATE` takes its own,
+  empty from the shipped client), charged **72 bytes** in `estimatedRetainedBytes` (`ByteString` 24,
+  array header 16, payload 32) while the fifth reference fits the 32-byte object the four-reference
+  row already padded to, so `ROW_BYTES` stays 112 and `max-fold-bytes` is not under-counted (#290);
+  every frame producer — `CheckpointFrame` (fold), `CheckpointFrameWriter` (streamed bootstrap #292
+  and merge #293) and `ChangelogMerge` (a patched row keeps the **frame row's** hash, as the fold keeps
+  it on an `UPDATE`; a replaced, re-created or new row carries the delta row's), since a frame is the
+  next build's seed and a hash dropped there is gone for good, the way `source_ts` is; and a trailing
+  nullable **`_row_hash`** column, **64 lowercase hex characters** (owner's decision — the client's
+  own form, BI-friendly, twice the bytes of `fixed(32)`), in the delta file, the completed-batch file
+  and — also the owner's call — the checkpoint `snapshot.parquet` that Bit BI's `/files` and Parquet
+  Export's `type=checkpoint` serve, from both snapshot paths (folded rows and a frame re-read).
+  **One call taken here**: the column is **appended** after the declared columns rather than placed
+  beside `_op`/`_seq`/`_changed` as the ticket sketched, so no column a positional reader knew moves;
+  a by-name reader must tolerate one extra `_`-prefixed column, and a declared column named
+  `_row_hash` would collide with it as one named `_op` already would. **Not done, deliberately**:
+  folding keyless tables by the hash (a client defect would merge rows silently, and a mixed history
+  needs a fallback identity — #290's reasoning) and addressing Bit BI SQL by it (DDL in the mirror).
+  **Tests**: `RowHashTest`; `DeltaIngestionRowHashContractTest` (older client unchanged, 32 bytes
+  staged as sent, 31/64/1 bytes dropped with exactly one WARN while the session commits against a
+  `content_hash` computed without the field); `RowHashPropagationTest` (codec, content hash, fold
+  rules, all frame producers including a partitioned merge and a re-created row, a pre-#369 frame
+  re-folding, the three Parquet artifacts and egress through the codec); `ChangelogMergeEquivalenceTest`
+  now compares the hash too and requires the fixture to yield rows with and without one, since
+  equality alone cannot tell "both carry it" from "both dropped it"; `ChangelogFoldFootprintTest`
+  (+72 bytes, a same-width `UPDATE` weighs nothing, the `DELETE` refunds it); `ParquetSchemaMapperTest`;
+  `DeltaSqlGenerationRowHashTest` (the SQL is byte-identical with and without the field); and
+  `CheckpointRowHashIntegrationTest` on LocalStack for the streamed bootstrap, the merge and a folded
+  first build, frame and snapshot both. **Mutation-proven**, 14 ways, each reddening its tests: the
+  hash dropped from `CheckpointFrame` (8), `CheckpointFrameWriter` (1), the merge's patched row (6),
+  the fold's `UPDATE` (8), the footprint (1), each of the two delta renderers (2 + 2), the snapshot
+  renderer (2), the ingestion drop and its once-per-session flag (1 + 1), the field fed into the
+  content hash (3), `RowHash.of` accepting any length (3), and each of the materializer's two snapshot
+  paths (1 + 1, integration). No REST, DTO, migration (**V61 stays next**), configuration-key, metric,
+  S3-key or frontend change; one proto field, and the Parquet schema of all three artifacts gains a
+  column. See `docs/delta-client-v2-guide.md` ("`row_hash`"), `docs/cr-delta-client-v2.md` (§6, OQ-1),
+  `specs/043-row-hash/`.
 - sql-null-where: A Bit BI DELETE or UPDATE whose key holds a NULL reaches its row (issue #370).
   `SqlStatementGenerator` built every WHERE condition as `col = <literal>`, and a NULL value
   rendered the literal `NULL` — `col = NULL`, which SQL never evaluates as true, so the statement

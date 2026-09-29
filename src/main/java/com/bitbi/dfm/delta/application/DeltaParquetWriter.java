@@ -39,7 +39,9 @@ import java.util.function.Consumer;
  * rows their key + changed columns. {@code _changed} lists the columns an UPDATE actually carried,
  * so a consumer distinguishes a null cell that means "set to NULL" (column listed) from one that
  * means "unchanged" (not listed); it is null for INSERT (full row) and DELETE (key only). Consumers
- * apply the files sequentially by seq — a FULL_SNAPSHOT segment (all INSERT) is a full table.</p>
+ * apply the files sequentially by seq — a FULL_SNAPSHOT segment (all INSERT) is a full table.
+ * The last column, {@code _row_hash}, is the client's row identity as lowercase hex — the same value
+ * on a row's INSERT and its DELETE — and null for any record that carried none (issue #369).</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -96,6 +98,7 @@ public final class DeltaParquetWriter {
                 row.put(column.name(), ParquetCheckpointWriter.coerceValue(
                         cells.get(column.name()), avro.getField(column.name()).schema(), nonFinite));
             }
+            row.put(ParquetSchemaMapper.ROW_HASH_COLUMN, RowHash.hex(RowHash.of(change)));
             rows.add(row);
         }
         // After the write, not before it: a failed write is caught by DeltaEgressService, which
@@ -395,6 +398,9 @@ public final class DeltaParquetWriter {
             row.put(column.name(), ParquetCheckpointWriter.coerceValue(
                     value, avro.getField(column.name()).schema(), nonFinite));
         }
+        // Issue #369: an INSERT carries its row's hash and a DELETE the same one; an UPDATE and
+        // every record an older client sent carry none, which is a null cell.
+        row.put(ParquetSchemaMapper.ROW_HASH_COLUMN, RowHash.hex(RowHash.of(change)));
         return row;
     }
 

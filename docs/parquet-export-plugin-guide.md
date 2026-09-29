@@ -171,6 +171,18 @@ A scheduled job deletes consumed/expired `download_links` rows older than the re
   after activation is enough for a primary load. `type=checkpoint` remains for emergency
   rebuilds.
 
+## File columns
+
+Every file type — `batch`, `delta` and `checkpoint` — carries the site's declared columns, and
+`batch`/`delta` files carry the service columns `_op`, `_seq` and `_changed` in front of them. Since
+issue #369 **every** file also ends with **`_row_hash`**: the source client's identifier of the row
+within its table, as 64 lowercase hex characters, or null when the client did not send one. In a
+`batch` or `delta` file an `INSERT` and the `DELETE` of the same row carry the same value and an
+`UPDATE` carries none; in a `checkpoint` snapshot it is the hash of the record that created the row.
+Expect nulls for rows written before the source client started sending the field. A reader that maps
+columns by name must tolerate this extra `_`-prefixed column; one that maps by position is unaffected,
+since it is the last column. See `docs/delta-client-v2-guide.md` ("`row_hash`").
+
 ## Operational notes
 
 - **Anonymous download route**: `/download/{token}` has no application-level rate limit (the
