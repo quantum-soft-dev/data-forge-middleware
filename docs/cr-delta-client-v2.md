@@ -206,7 +206,7 @@ checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet     # Parquet floor (Pow
 
 ## 6. Change record & keys
 
-Each `ChangeRecord` carries `table`, `op`, `seq`, `key`, `data`, `source_ts` (see [proto](../src/main/proto/delta-ingestion.proto)).
+Each `ChangeRecord` carries `table`, `op`, `seq`, `key`, `data`, `source_ts` and, since issue #369, an optional `row_hash` (see [proto](../src/main/proto/delta-ingestion.proto)).
 
 - **INSERT** — `data` = full row; `key` = PK values.
 - **UPDATE** — `key` = PK; `data` = changed columns only (after-image).
@@ -218,6 +218,7 @@ Most tables have a declared PK. For tables **without** one, `primary_key` is emp
 
 1. **No `UPDATE` is possible.** Any field change re-keys the row, so it is expressed as `DELETE`(old full row) + `INSERT`(new full row). The client MUST NOT emit `UPDATE` for keyless tables; the server rejects it.
 2. **Identical duplicate rows are ambiguous** under a full-row key (two byte-identical rows are indistinguishable). See Open Question OQ-1 — pending whether such duplicates occur; if they do, a row-multiplicity counter is required.
+3. **Client row identity (`row_hash`, field 7, issue #369).** The client may send the 32-byte SHA-256 of its canonical row form: on `INSERT` the row's hash, on `DELETE` the same value its `INSERT` carried; `UPDATE` leaves it empty. It is opaque to the server (never recomputed or verified), empty means absent (older client), any other length is ignored with one WARN per session, and it is not part of `content_hash`. It is **additive**: `key` still carries the full row and stays authoritative — the fold identity, the delta Parquet `DELETE` rows and the Bit BI SQL `WHERE` do not change. The server carries it through segments and checkpoint frames and writes it as the trailing `_row_hash` column (64 lowercase hex characters, null when absent) of every Parquet artifact. Folding keyless tables by `row_hash` instead of the full row is deliberately **not** done: a client defect would silently merge rows, and mixed histories (rows without a hash) would need a fallback identity.
 
 ### Value typing
 
@@ -445,7 +446,7 @@ At current scale the bandwidth delta over HTTP/2 + compressed JSONL is modest; g
 
 ## 18. Open questions / deferred decisions
 
-- **OQ-1 (keyless duplicates): RESOLVED — no.** The client guarantees it sends only unique deltas. **Tables with a primary/unique key** get the full `INSERT/UPDATE/DELETE` set (UPDATE = changed columns matched by key); for DBF tables UPDATEs are rare but supported when a key is declared. **Keyless tables** (all-fields key) do a set comparison and emit **only INSERT / DELETE** (a row that no longer matches → DELETE, a new row → INSERT) — **no UPDATE** (confirms §6). Full-row key is treated as unique → **no row-multiplicity counter needed**.
+- **OQ-1 (keyless duplicates): RESOLVED — no.** The client guarantees it sends only unique deltas. **Tables with a primary/unique key** get the full `INSERT/UPDATE/DELETE` set (UPDATE = changed columns matched by key); for DBF tables UPDATEs are rare but supported when a key is declared. **Keyless tables** (all-fields key) do a set comparison and emit **only INSERT / DELETE** (a row that no longer matches → DELETE, a new row → INSERT) — **no UPDATE** (confirms §6). Full-row key is treated as unique → **no row-multiplicity counter needed**. *Addendum (issue #369):* the client's set comparison is keyed by a SHA-256 of the row, and it now sends that hash as `ChangeRecord.row_hash` so consumers get a stable row identifier (`_row_hash` in Parquet); the full-row `key` remains the server's identity (§6, item 3).
 - **OQ-2 (seq granularity):** per-site `seq` (chosen — simpler continuity) vs per-table `seq` (more parallelism). Revisit if per-table throughput becomes a bottleneck.
 - **OQ-3 (site ingestion flag): RESOLVED.** Add a site field **`client_api_version`** (`V1` = legacy HTTP `/api/dfc`, `V2` = Delta gRPC). **`V2` is the default** for new sites; existing sites are **backfilled to `V1`** in the V29 migration so the legacy path keeps working. `site_type` (DBF / POSTGRES_CDC — data semantics) is orthogonal and unchanged.
 - **OQ-4 (checkpoint cadence):** default frequencies for the table checkpoint vs the Power BI floor; tune against real data volumes.

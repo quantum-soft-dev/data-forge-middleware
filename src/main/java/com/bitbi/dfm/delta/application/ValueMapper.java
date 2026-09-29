@@ -184,7 +184,8 @@ public final class ValueMapper {
      * <p>The union of {@link #isNonFiniteDecimal(Value)} and {@link #isMalformedDecimal(Value)}, and
      * the predicate a caller wants when the distinction between "absent", "SQL NULL" and "we lost
      * it" decides correctness rather than reporting — the key columns of a CDC statement, where a
-     * degraded value silently produces a {@code WHERE col = NULL} that matches no row.</p>
+     * degraded value would render as {@code WHERE col IS NULL} (issue #370) and address every row
+     * whose key really is NULL instead of the one it names.</p>
      *
      * @param value the wire value
      * @return {@code true} for a present decimal this pipeline cannot store

@@ -352,7 +352,14 @@ curl -X GET https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/sites/{siteId}/files/
 ```
 
 A table appears here only once its checkpoint snapshot is materialized, which requires the source
-client to have submitted a schema for it. A site that never ingested through Delta answers with its
+client to have submitted a schema for it.
+
+**Columns.** A snapshot holds the table's declared columns and, since issue #369, one more as its
+**last** column: `_row_hash`, the source client's row identifier (64 lowercase hex characters, or
+null when the client sent none — every row until the client is updated). It is not a column of the
+mirrored source table: a client creating or loading the mirror table from the snapshot must skip it,
+or add it as a nullable text column of its own. The SQL stream does not use it — `DELETE`/`UPDATE`
+still address rows by their key columns. A site that never ingested through Delta answers with its
 historical uploaded files instead, in their original formats.
 
 ### Get SQL Changes

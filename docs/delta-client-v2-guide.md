@@ -273,6 +273,7 @@ message ChangeRecord {
   map<string, Value> key       = 4;  // PK values (all columns for keyless tables)
   map<string, Value> data      = 5;
   google.protobuf.Timestamp source_ts = 6; // optional source commit time
+  bytes              row_hash  = 7;  // optional client row identity (issue #369), see below
 }
 ```
 
@@ -281,6 +282,32 @@ message ChangeRecord {
 | `INSERT` | PK values | **full row** |
 | `UPDATE` | PK values | **changed columns only** (after-image) |
 | `DELETE` | PK values | empty (tombstone) |
+
+### `row_hash` — the client's row identity (issue #369)
+
+`row_hash` is an **optional, opaque** identifier of the row within `table`: the 32-byte SHA-256 of
+the client's canonical row form (`dbf-data-extractor` computes it for its keyless diff and keeps it
+in its `state.db`). The server never recomputes or verifies it. The rules:
+
+- **Exactly 32 bytes**, sent as raw `bytes` (34 bytes on the wire, not 66 for hex). The row's
+  identity is the pair `(table, row_hash)`; the table name is not part of the hash.
+- **`INSERT`** carries the row's hash; **`DELETE`** carries **the same value its `INSERT` carried**.
+  `UPDATE` does not define it — leave it empty; an `UPDATE` never changes a row's hash on the server
+  either. Identical in `DELTA`, `FULL_SNAPSHOT` and `CONTINUOUS`.
+- **Empty = absent.** An older client sends nothing and is accepted exactly as before; so are old
+  segments and checkpoint frames.
+- **Any other length is ignored**, not rejected: the value is dropped before the record is staged,
+  the session commits, and the server logs one WARN per session (`Delta row_hash ignored, expected 32
+  bytes …`). There is no `ErrorCode` for it.
+- **`key` stays authoritative.** For a keyless table `key` is still the full row: the checkpoint
+  fold's identity, the `DELETE` rows of the delta Parquet and the Bit BI SQL `WHERE` all keep using
+  it. `row_hash` is additive.
+- **Not part of `content_hash`** — the [integrity hash](#content_hash-optional-integrity-check) is
+  computed exactly as before, so a client that already sends one gets the same result.
+
+Where it ends up: the changelog segment (byte for byte), the checkpoint reload frame (kept through
+every rebuild — see [egress](#what-the-server-produces-egress)) and a trailing **`_row_hash`** column
+in every Parquet artifact.
 
 ### Value typing
 
@@ -322,6 +349,9 @@ A table with an **empty `primary_key`** is *keyless*: the **entire set of column
 
 - **Never emit `UPDATE`.** Any field change re-keys the row — express it as `DELETE`(old full row) + `INSERT`(new full row). The server **rejects** `UPDATE` for keyless tables.
 - Send the full row in both `key` and `data` for `INSERT`; the full old row in `key` for `DELETE`.
+- Optionally send the row's [`row_hash`](#row_hash--the-clients-row-identity-issue-369) on both —
+  the same value on the `DELETE` as on its `INSERT`. It is carried to every artifact as `_row_hash`
+  but does **not** replace `key`: the full row in `key` is still what identifies the row.
 
 Tables with a declared primary key use the normal `INSERT`/`UPDATE`/`DELETE` semantics above.
 
@@ -555,8 +585,8 @@ You don't write these — they're how downstream tools read your data:
 - **Realtime analytics consumers** keep reading a **sequential segment Parquet stream** per table:
   `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (zero-padded sequences — listing order is
   apply order). Each file is one committed session segment: typed columns from your submitted schema
-  (all nullable) plus service columns `_op` (`INSERT`/`UPDATE`/`DELETE`), `_seq`, and `_changed`.
-  `DELETE` rows carry the key columns. **`_changed`** disambiguates a null cell in an `UPDATE`: it is
+  (all nullable) plus service columns `_op` (`INSERT`/`UPDATE`/`DELETE`), `_seq`, and `_changed`
+  before them and **`_row_hash`** after them. `DELETE` rows carry the key columns. **`_changed`** disambiguates a null cell in an `UPDATE`: it is
   a comma-separated list of the columns the `UPDATE` actually carried, so for an `UPDATE` a null cell
   in a **listed** column means *set to SQL NULL* and a null cell in an **unlisted** column means
   *unchanged* (keep the prior value); it is null for `INSERT` (full row) and `DELETE` (key only).
@@ -578,7 +608,20 @@ You don't write these — they're how downstream tools read your data:
   bounded by open writers × one Parquet row-group buffer rather than batch rows.
   `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` is enforced per artifact during the write; an artifact that
   crosses it is abandoned on its first deterministic attempt rather than fully rewritten on every
-  retry.
+  retry. Its columns are the delta file's, `_row_hash` last.
+- **`_row_hash` (issue #369)** is the last column of **every** Parquet artifact — the delta file, the
+  completed-batch file and the checkpoint `snapshot.parquet` below: the client's
+  [`row_hash`](#row_hash--the-clients-row-identity-issue-369) as **64 lowercase hex characters**, the
+  way the client's own `state.db` shows it, and **null** for a row whose record carried none (every
+  row an older client wrote, and every `UPDATE` row of a delta file). In a delta or batch file an
+  `INSERT` and its later `DELETE` carry the same value. In a snapshot it is the hash of the record that
+  created the row, kept through the row's `UPDATE`s — the checkpoint frame carries it from build to
+  build on every path (the fold, the streamed bootstrap of #292 and the merge of #293), so a hash sent
+  once is not lost by a later rebuild. It is **appended** after the declared columns rather than placed
+  beside `_op`/`_seq`/`_changed`, so no column a reader already knew moved; a reader that maps columns
+  by name must tolerate one more `_`-prefixed column. Until a site's client sends the field — and
+  until each row has been re-sent once, e.g. by one `FULL_SNAPSHOT` — expect nulls. A declared column
+  named `_row_hash` would collide with it, as one named `_op` already would.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
