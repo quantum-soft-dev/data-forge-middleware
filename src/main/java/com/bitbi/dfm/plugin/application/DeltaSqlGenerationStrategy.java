@@ -140,12 +140,13 @@ public class DeltaSqlGenerationStrategy {
         reportUnrepresentableDecimals(record, tableName);
         String unaddressableKey = unaddressableKeyReason(record, schema);
         if (unaddressableKey != null) {
-            // A key column this pipeline cannot represent addresses no row: rendered as SQL the
-            // WHERE clause becomes `col = NULL`, which is never true, so an UPDATE or DELETE would
-            // be emitted, applied, match nothing, and leave the Bit BI mirror silently diverged
-            // (issue #215, review round 1). Skipping is lossy in the same way -- but loudly, and
-            // without writing a statement that claims to have done something.
-            log.warn("Table '{}' seq {}: {} record skipped -- {}, so its SQL would address no row",
+            // A key column this pipeline cannot represent cannot address its own row: the value
+            // degrades to NULL. When #215 added this skip, the WHERE clause then read `col = NULL`,
+            // never true, so the statement applied and matched nothing. Since #370 a NULL renders
+            // `col IS NULL`, which is worse here: it matches every row whose key really is NULL, so
+            // an UPDATE or DELETE aimed at the NaN row would reach somebody else's. Skipping is
+            // lossy -- but loudly, and without writing a statement that touches the wrong row.
+            log.warn("Table '{}' seq {}: {} record skipped -- {}, so its SQL cannot address its own row",
                     tableName, record.getSeq(), record.getOp(), unaddressableKey);
             meterRegistry.counter("sql.generation.delta.records.skipped.unrepresentable_key").increment();
             return null;

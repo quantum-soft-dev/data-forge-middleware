@@ -22,6 +22,9 @@ public class SqlStatementGenerator {
 
     private static final String END_OF_COMMAND_FORMAT = "--- END OF COMMAND \"%s.csv:%d\" ---";
 
+    /** SQL NULL as both formatters render it; see {@link #wherePredicate}. */
+    private static final String SQL_NULL = "NULL";
+
     /**
      * Pattern for valid PostgreSQL identifiers (table/column names).
      * Allows: letters, digits, underscores. Must start with letter or underscore.
@@ -143,7 +146,7 @@ public class SqlStatementGenerator {
             if (!diff.changedColumns().containsKey(column)) {
                 String value = entry.getValue();
                 DbfColumnType type = columnTypes.getOrDefault(column, DbfColumnType.CHARACTER);
-                whereClause.add(column + " = " + formatValue(value, type));
+                whereClause.add(wherePredicate(column, formatValue(value, type)));
             }
         }
         sql.append(whereClause);
@@ -164,11 +167,37 @@ public class SqlStatementGenerator {
             String column = entry.getKey();
             String value = entry.getValue();
             DbfColumnType type = columnTypes.getOrDefault(column, DbfColumnType.CHARACTER);
-            whereClause.add(column + " = " + formatValue(value, type));
+            whereClause.add(wherePredicate(column, formatValue(value, type)));
         }
         sql.append(whereClause);
 
         return sql.toString();
+    }
+
+    /**
+     * One condition of a WHERE clause: {@code column IS NULL} when the rendered value is SQL
+     * {@code NULL}, {@code column = <literal>} otherwise.
+     *
+     * <p>{@code col = NULL} is never true in SQL, so an UPDATE or DELETE carrying one applied
+     * without error and matched no row. A keyless table sends the whole row as its key, so one NULL
+     * column was enough, and the Bit BI mirror kept a row its source had deleted (issue #370). The
+     * rule applies to both paths — a DBF cell {@link #formatValue} renders as {@code NULL} and a
+     * CDC / Delta v2 value {@link #formatJsonValue} renders as {@code NULL} — and only to the WHERE
+     * clause: {@code SET col = NULL} is an assignment and stays as it is.</p>
+     *
+     * <p>{@code IS NULL} only where the value is NULL, rather than {@code IS NOT DISTINCT FROM} on
+     * every column: the second is one rule for both cases, but PostgreSQL does not use a btree index
+     * for it, and every non-NULL comparison would pay for the rare NULL one.</p>
+     *
+     * <p>Keyed on the rendered literal rather than on the raw value, because the two formatters
+     * disagree about what an empty value is: a DBF {@code INTEGER} / {@code CURRENCY} cell renders
+     * {@code 0}, and its INSERT wrote the same {@code 0}, so {@code = 0} is what addresses the row.
+     * No branch of either formatter returns a bare {@code NULL} for anything but SQL NULL — a string
+     * spelling {@code NULL} comes back quoted — so the comparison cannot mistake one for the
+     * other.</p>
+     */
+    private String wherePredicate(String column, String literal) {
+        return SQL_NULL.equals(literal) ? column + " IS NULL" : column + " = " + literal;
     }
 
     /**
@@ -193,7 +222,7 @@ public class SqlStatementGenerator {
         // Handle empty values
         if (value == null || value.isEmpty()) {
             if (type.isEmptyNull()) {
-                return "NULL";
+                return SQL_NULL;
             } else {
                 return "0"; // INTEGER and CURRENCY types
             }
@@ -319,7 +348,7 @@ public class SqlStatementGenerator {
         for (Map.Entry<String, Object> entry : record.key().entrySet()) {
             String column = entry.getKey();
             validateIdentifier(column, "Column name");
-            whereClause.add(column + " = " + formatJsonValue(entry.getValue()));
+            whereClause.add(wherePredicate(column, formatJsonValue(entry.getValue())));
         }
         sql.append(whereClause);
 
@@ -339,7 +368,7 @@ public class SqlStatementGenerator {
         for (Map.Entry<String, Object> entry : record.key().entrySet()) {
             String column = entry.getKey();
             validateIdentifier(column, "Column name");
-            whereClause.add(column + " = " + formatJsonValue(entry.getValue()));
+            whereClause.add(wherePredicate(column, formatJsonValue(entry.getValue())));
         }
         sql.append(whereClause);
 
@@ -377,7 +406,7 @@ public class SqlStatementGenerator {
      */
     private String formatJsonValue(Object value) {
         if (value == null) {
-            return "NULL";
+            return SQL_NULL;
         }
         if (value instanceof java.math.BigDecimal decimal) {
             return decimal.toPlainString();

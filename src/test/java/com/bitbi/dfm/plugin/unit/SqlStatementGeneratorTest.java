@@ -759,7 +759,8 @@ class SqlStatementGeneratorTest {
         /**
          * The quoted form is what makes a non-finite key usable rather than skippable: PostgreSQL
          * compares {@code NaN} equal to itself, so {@code col = 'NaN'} addresses the row — where
-         * the {@code col = NULL} that the {@code numeric} degradation would produce matches none.
+         * the NULL that the {@code numeric} degradation would produce addresses the wrong one
+         * ({@code col IS NULL} since #370, every row whose key really is NULL).
          */
         @Test
         @DisplayName("should address a NaN key in the WHERE clause")
@@ -846,6 +847,117 @@ class SqlStatementGeneratorTest {
         void shouldQuoteNonDecimalTokens() {
             assertThat(insertSql("0x10", DbfColumnType.INTEGER)).contains("'0x10'");
             assertThat(insertSql("NaNish", DbfColumnType.FLOAT)).contains("'NaNish'");
+        }
+    }
+
+    /**
+     * A NULL in a WHERE clause is a comparison, not an assignment: {@code col = NULL} is never true
+     * in SQL, so a DELETE or UPDATE carrying one applied without error and touched no row, leaving
+     * the Bit BI mirror silently diverged (issue #370). The predicate is {@code col IS NULL} where
+     * the value is NULL and {@code col = <literal>} everywhere else, so an index on the column stays
+     * usable for the common case; {@code SET col = NULL} is an assignment and stays as it was.
+     */
+    @Nested
+    @DisplayName("NULL in a WHERE clause (issue #370)")
+    class NullInWhereClause {
+
+        private JsonlChangeRecord cdc(String op, Map<String, Object> key, Map<String, Object> data) {
+            return new JsonlChangeRecord(op, key, data, 7);
+        }
+
+        @Test
+        @DisplayName("should render a NULL key column of a CDC DELETE as IS NULL")
+        void shouldRenderNullKeyOfCdcDeleteAsIsNull() {
+            Map<String, Object> key = new LinkedHashMap<>();
+            key.put("id", 1L);
+            key.put("d", null);
+            key.put("name", "Alice");
+
+            String sql = generator.generateFromJsonl(cdc(JsonlChangeRecord.OP_DELETE, key, null), "docs");
+
+            assertThat(sql).contains("DELETE FROM docs WHERE id = 1 AND d IS NULL AND name = 'Alice'");
+            assertThat(sql).doesNotContain("= NULL");
+        }
+
+        @Test
+        @DisplayName("should render a NULL key column of a CDC UPDATE as IS NULL and keep SET = NULL")
+        void shouldRenderNullKeyOfCdcUpdateAsIsNullAndKeepSetNull() {
+            Map<String, Object> key = new LinkedHashMap<>();
+            key.put("id", 1L);
+            key.put("d", null);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("note", null);
+            data.put("name", "Bob");
+
+            String sql = generator.generateFromJsonl(cdc(JsonlChangeRecord.OP_UPDATE, key, data), "docs");
+
+            assertThat(sql).contains("UPDATE docs SET note = NULL, name = 'Bob' WHERE id = 1 AND d IS NULL");
+            assertThat(sql).doesNotContain("d = NULL");
+        }
+
+        @Test
+        @DisplayName("should keep a string that spells NULL as a quoted literal compared with =")
+        void shouldKeepQuotedNullSpellingAsEquality() {
+            Map<String, Object> key = new LinkedHashMap<>();
+            key.put("name", "NULL");
+
+            String sql = generator.generateFromJsonl(cdc(JsonlChangeRecord.OP_DELETE, key, null), "docs");
+
+            assertThat(sql).contains("WHERE name = 'NULL'");
+            assertThat(sql).doesNotContain("IS NULL");
+        }
+
+        @Test
+        @DisplayName("should render an empty NULL-rendering DBF cell of a DELETE as IS NULL")
+        void shouldRenderEmptyDbfCellOfDeleteAsIsNull() {
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            values.put("born", "");
+            values.put("name", "");
+            values.put("qty", "");
+            CsvRowDiff diff = CsvRowDiff.deleted(4, values);
+            Map<String, DbfColumnType> types = Map.of(
+                    "id", DbfColumnType.INTEGER,
+                    "born", DbfColumnType.DATE,
+                    "name", DbfColumnType.CHARACTER,
+                    "qty", DbfColumnType.INTEGER);
+
+            String sql = generator.generate(diff, "people", types);
+
+            // An empty INTEGER cell renders 0 in the INSERT as well, so `= 0` addresses the row.
+            assertThat(sql).contains("DELETE FROM people WHERE id = 1 AND born IS NULL AND name IS NULL AND qty = 0");
+            assertThat(sql).doesNotContain("= NULL");
+        }
+
+        @Test
+        @DisplayName("should render an empty NULL-rendering DBF cell of an UPDATE as IS NULL and keep SET = NULL")
+        void shouldRenderEmptyDbfCellOfUpdateAsIsNullAndKeepSetNull() {
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            values.put("born", "");
+            values.put("note", "");
+            CsvRowDiff diff = CsvRowDiff.modified(5, values, Map.of("note", "old"));
+            Map<String, DbfColumnType> types = Map.of(
+                    "id", DbfColumnType.INTEGER,
+                    "born", DbfColumnType.DATE,
+                    "note", DbfColumnType.CHARACTER);
+
+            String sql = generator.generate(diff, "people", types);
+
+            assertThat(sql).contains("UPDATE people SET note = NULL WHERE id = 1 AND born IS NULL");
+            assertThat(sql).doesNotContain("born = NULL");
+        }
+
+        @Test
+        @DisplayName("should keep NULL in INSERT values")
+        void shouldKeepNullInInsertValues() {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("id", 1L);
+            data.put("d", null);
+
+            String sql = generator.generateFromJsonl(cdc(JsonlChangeRecord.OP_INSERT, null, data), "docs");
+
+            assertThat(sql).contains("VALUES (1, NULL)");
         }
     }
 }

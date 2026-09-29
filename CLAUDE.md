@@ -778,6 +778,42 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- sql-null-where: A Bit BI DELETE or UPDATE whose key holds a NULL reaches its row (issue #370).
+  `SqlStatementGenerator` built every WHERE condition as `col = <literal>`, and a NULL value
+  rendered the literal `NULL` — `col = NULL`, which SQL never evaluates as true, so the statement
+  applied without an error and changed no row. A keyless table sends the whole row as its key, so
+  one NULL column was enough (on DBF an empty or zero date arrives as NULL), and the mirror kept
+  rows its source had deleted, or collected a duplicate when a row was deleted and re-inserted with
+  a changed value. **The fix is one helper for all four WHERE clauses** (DBF UPDATE/DELETE, CDC /
+  Delta v2 UPDATE/DELETE): `col IS NULL` where the rendered value is SQL NULL, `col = <literal>`
+  everywhere else. **`IS NULL` only where the value is NULL, not `IS NOT DISTINCT FROM` on every
+  column** — the ticket's own preference: one rule for both cases, but PostgreSQL does not index
+  it, and every non-NULL comparison would pay for the rare NULL one. The helper keys on the
+  *rendered* literal rather than the raw value, because an empty DBF Integer/Currency cell renders
+  `0` and its INSERT wrote the same `0`, so `= 0` is what addresses the row; no formatter branch
+  returns a bare `NULL` for anything else (a string spelling `NULL` comes back quoted, pinned).
+  `SET col = NULL` and `VALUES (…, NULL)` are assignments and unchanged. A nullable column in a
+  unique key takes the same rule, since the key is whatever the client sends. **One neighbouring
+  reason had to be rewritten, not the code**: `DeltaSqlGenerationStrategy` skips a record whose key
+  holds a decimal it cannot represent (#215), justified by "the degraded NULL renders `col = NULL`
+  and matches nothing"; after this fix it would render `col IS NULL` and reach every row whose key
+  really is NULL, so the skip stays and its comment, the WARN (`… cannot address its own row`) and
+  the guide say why. **Tests**, red first: `SqlStatementGeneratorTest.NullInWhereClause` (CDC
+  DELETE and UPDATE, DBF DELETE and UPDATE with empty Date/Character cells and an Integer staying
+  `= 0`, `SET = NULL` kept, a quoted `'NULL'` string still compared with `=`),
+  `DeltaSqlGenerationStrategyTest` (a keyless DELETE and a nullable unique key, through the
+  strategy — the #263 lesson), `DbfSqlGenerationStrategyTest.NullInWhereClause` (a deleted row
+  through the diff, types from the `TableSchema`), and `BitBiSqlNullPredicateIntegrationTest`,
+  which applies the generated INSERT → UPDATE → DELETE to session-private `TEMP` tables in the test
+  PostgreSQL and asserts the row is changed and removed while a row whose column is set survives
+  (semantics, not text). Mutation: `wherePredicate` put back to `col = <literal>` reddens seven unit
+  tests and all three integration cases. **Files already delivered are not rewritten** —
+  `/sql-changes` returns the stored objects, so a diverged mirror is repaired by `reinit`. One
+  stale sentence is left on purpose: `ValueMapper.isUnrepresentable`'s Javadoc still says the
+  degraded key "produces a `WHERE col = NULL`"; it is a delta class and the parallel #369 edits that
+  package. No REST, gRPC, proto, DTO, migration (**V61 stays next**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change. See `docs/bitbi-integration.md` ("NULL in a
+  WHERE Clause").
 - batch-table-stats-serializable: A batch with stored Delta totals can be deleted again (issue #366,
   a regression of #346). `BatchTableStats` — the value type of the `batches.table_stats` JSONB map
   V58 added — was not `Serializable`, and hypersistence-utils 3.15 clones a JSON attribute that is
