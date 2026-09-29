@@ -200,4 +200,42 @@ class DbfSqlGenerationStrategyTest {
             assertThat(result.sqlContent()).contains("VALUES (1, 'NaN')");
         }
     }
+
+    /**
+     * Through the strategy, with the types it takes from the {@code TableSchema}: a row deleted at
+     * the source whose date cell was empty is rendered with {@code born IS NULL}, the predicate that
+     * reaches the row its INSERT created with a NULL date (issue #370). An empty integer cell stays
+     * {@code = 0}, because its INSERT wrote {@code 0}.
+     */
+    @Nested
+    @DisplayName("NULL in a WHERE clause (issue #370)")
+    class NullInWhereClause {
+
+        @Test
+        @DisplayName("should render the empty date of a deleted row as IS NULL")
+        void shouldRenderEmptyDateOfDeletedRowAsIsNull() throws Exception {
+            UploadedFile current = mockFile("people.csv", "account/site/b2/people.csv");
+            UploadedFile previous = mock(UploadedFile.class);
+            when(previous.getS3Key()).thenReturn("account/site/b1/people.csv");
+            when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(
+                    csv("id,born,qty\n2,2020-01-01,5\n"),
+                    csv("id,born,qty\n1,,\n2,2020-01-01,5\n"));
+            TableSchema people = schema(col("id", "integer"), col("born", "date"), col("qty", "integer"));
+
+            SqlGenerationResult result = strategy.generate(new SqlGenerationContext(
+                    batchId, siteId, List.of(current), Map.of("people.csv", previous), Map.of("people", people)));
+
+            assertThat(result).isNotNull();
+            assertThat(result.sqlContent())
+                    .contains("DELETE FROM people WHERE id = 1 AND born IS NULL AND qty = 0")
+                    .doesNotContain("= NULL");
+            assertThat(result.stats().deletes()).isEqualTo(1);
+        }
+
+        private ResponseInputStream<GetObjectResponse> csv(String content) {
+            return new ResponseInputStream<>(
+                    GetObjectResponse.builder().build(),
+                    new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
 }

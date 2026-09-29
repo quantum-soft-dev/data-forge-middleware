@@ -512,6 +512,33 @@ Anything else in a numeric column — including a SQL fragment such as
 `0); DROP TABLE customers; --` — is quoted and escaped, the same as a Character cell. A non-finite
 token (`NaN`, `Infinity`) is quoted as described below rather than emitted raw.
 
+### NULL in a WHERE Clause
+
+A value that renders as SQL `NULL` is compared with **`IS NULL`** in the WHERE clause of an UPDATE
+or a DELETE, on both paths — a DBF/CSV cell of a type whose empty string becomes NULL (table above),
+and a CDC / Delta v2 key column the client sent as NULL:
+
+```sql
+DELETE FROM people WHERE name = 'Alice' AND born IS NULL;
+UPDATE items SET note = NULL WHERE code = 'A1' AND branch IS NULL;
+```
+
+Every other value is compared with `=`, so an index on the column stays usable. `SET col = NULL`
+and `VALUES (..., NULL)` are assignments and keep the bare `NULL`. An empty **Integer** or
+**Currency** cell is rendered `0` in the INSERT as well, so it is compared as `= 0`.
+
+Before issue #370 the WHERE clause read `col = NULL`, which SQL never evaluates as true: the
+statement applied without an error and changed **no row**. A table without a primary or unique key
+is addressed by its whole row, so one NULL column was enough — typical for DBF, where an empty or
+zero date arrives as NULL — and the mirror kept rows the source had deleted, or collected a
+duplicate when a row was deleted and inserted again with a changed value. A key column that may
+hold NULL (a nullable column in a unique key) is covered by the same rule.
+
+**Files already delivered are not rewritten.** `GET /sql-changes` returns the stored objects, so a
+batch generated before the fix comes back byte-identical, still carrying `= NULL`. A mirror that
+applied such files and may have diverged is repaired by a **reinit** (a fresh baseline), not by
+fetching the SQL again.
+
 ### Non-finite Numbers in Generated SQL
 
 `NaN`, `Infinity` and `-Infinity` are emitted as **quoted** literals (`'NaN'`, `'Infinity'`,
