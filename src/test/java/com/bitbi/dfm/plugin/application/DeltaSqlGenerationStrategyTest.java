@@ -101,10 +101,10 @@ class DeltaSqlGenerationStrategyTest {
     }
 
     /**
-     * A key column this pipeline cannot represent addresses no row. Rendered as SQL the WHERE clause
-     * becomes {@code col = NULL}, which is never true, so the statement would be emitted, applied,
-     * match nothing, and leave the Bit BI mirror silently diverged — worse than the throw #215
-     * removed, because that at least was loud. The record is skipped instead (review round 1).
+     * A key column this pipeline cannot represent cannot address its own row: the value degrades to
+     * NULL. When #215 added the skip, the WHERE clause then read {@code col = NULL}, never true, so
+     * the statement applied and matched nothing; since #370 it would read {@code col IS NULL} and
+     * reach every row whose key really is NULL. The record is skipped instead (review round 1).
      *
      * <p>{@code NaN} is a usable primary key at the source: PostgreSQL compares it equal to itself.</p>
      */
@@ -120,12 +120,78 @@ class DeltaSqlGenerationStrategyTest {
 
         // The strategy answers null when a batch yields no statements at all, which is what a
         // batch whose only record was skipped produces -- and is the point: no DELETE is emitted,
-        // so nothing claims to address a row the key cannot identify, and no `= NULL` predicate
+        // so nothing claims to address a row the key cannot identify, and no NULL predicate
         // reaches the mirror.
         assertThat(result)
                 .as("the record is skipped, so this batch produces no SQL rather than SQL that "
                         + "matches nothing")
                 .isNull();
+    }
+
+    private static Value sqlNull() {
+        return Value.newBuilder().setIsNull(true).build();
+    }
+
+    private static Map<String, Value> ordered(Object... pairs) {
+        Map<String, Value> map = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < pairs.length; i += 2) {
+            map.put((String) pairs[i], (Value) pairs[i + 1]);
+        }
+        return map;
+    }
+
+    /**
+     * A keyless table: the client sends the whole row as the key, so a single NULL column used to
+     * turn the DELETE into {@code d = NULL}, which PostgreSQL never evaluates as true — the
+     * statement applied and removed nothing (issue #370). Rendered through the strategy, not only
+     * the generator (the #263 lesson): the key map is what the strategy hands over, and it is the
+     * strategy's ValueMapper that turns {@code is_null} into the null the generator sees.
+     */
+    @Test
+    @DisplayName("should render a NULL column of a keyless DELETE as IS NULL (issue #370)")
+    void shouldRenderNullColumnOfKeylessDeleteAsIsNull() throws IOException {
+        TableSchema keyless = new TableSchema(List.of(
+                new TableSchema.ColumnDefinition("name", "varchar", true),
+                new TableSchema.ColumnDefinition("born", "date", true)),
+                List.of(), List.of());
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("people", Op.DELETE, 1, ordered("name", str("Alice"), "born", sqlNull()), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")),
+                Map.of("people", keyless), Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .contains("DELETE FROM people WHERE name = 'Alice' AND born IS NULL")
+                .doesNotContain("= NULL");
+        assertThat(result.stats().deletes()).isEqualTo(1);
+    }
+
+    /**
+     * A unique key may contain a nullable column; the rule is the same one, since the key is
+     * whatever the client sends as {@code key} (issue #370). The SET side keeps {@code = NULL}.
+     */
+    @Test
+    @DisplayName("should render a NULL column of a nullable unique key as IS NULL, SET = NULL unchanged (issue #370)")
+    void shouldRenderNullUniqueKeyColumnAsIsNull() throws IOException {
+        TableSchema withUniqueKey = new TableSchema(List.of(
+                new TableSchema.ColumnDefinition("code", "varchar", false),
+                new TableSchema.ColumnDefinition("branch", "varchar", true),
+                new TableSchema.ColumnDefinition("note", "varchar", true)),
+                List.of(), List.of(new TableSchema.UniqueKeyDefinition("uk_code_branch", List.of("code", "branch"))));
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("items", Op.UPDATE, 1, ordered("code", str("A1"), "branch", sqlNull()),
+                        Map.of("note", sqlNull())),
+                record("items", Op.DELETE, 2, ordered("code", str("A1"), "branch", sqlNull()), Map.of())));
+
+        SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 2, "DELTA")),
+                Map.of("items", withUniqueKey), Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .contains("UPDATE items SET note = NULL WHERE code = 'A1' AND branch IS NULL")
+                .contains("DELETE FROM items WHERE code = 'A1' AND branch IS NULL")
+                .doesNotContain("branch = NULL");
     }
 
     @Test

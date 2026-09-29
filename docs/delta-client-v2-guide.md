@@ -1466,9 +1466,9 @@ cell as SQL NULL and logs per cell at DEBUG, so the series undercounts the total
 one source cell was degraded.
 
 **In the Bit BI SQL stream a `decimal_value` key column is the exception — the record is skipped,
-not degraded.** A value that cannot be represented cannot address a row, so the WHERE clause would
-render as `col = NULL`, which is never true: the statement would be emitted, applied, match nothing, and leave
-the mirror silently diverged. Such a record is dropped with a WARN and
+not degraded.** A value that cannot be represented cannot address its own row: degraded to SQL NULL,
+the WHERE clause would render as `col IS NULL` (issue #370) and reach every row whose key really is
+NULL instead — before #370 it read `col = NULL` and matched nothing. Such a record is dropped with a WARN and
 `sql.generation.delta.records.skipped.unrepresentable_key`.
 
 That exception is **the SQL path's alone.** Both Parquet writers write a key cell NULL like any
