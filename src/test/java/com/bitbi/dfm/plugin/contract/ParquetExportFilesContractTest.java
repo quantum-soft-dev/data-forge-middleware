@@ -80,16 +80,20 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
         return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.DELTA,
                 100L, 250L, null, PRODUCED_AT, "orders_seq100-250.parquet",
                 "egress/" + SITE_ID + "/orders/delta/seq=100-250.parquet",
-                null, null, null);
+                null, null, null, null);
     }
 
     private static final UUID ARTIFACT_ID = UUID.fromString("0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 
     private ParquetFileItem batchItem(String status, String s3Key) {
+        return batchItem(status, s3Key, "delta");
+    }
+
+    private ParquetFileItem batchItem(String status, String s3Key, String sessionMode) {
         UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
         return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.BATCH,
                 100L, 250L, null, PRODUCED_AT, "orders_batch" + batchId + ".parquet",
-                s3Key, batchId, status, ARTIFACT_ID);
+                s3Key, batchId, status, ARTIFACT_ID, sessionMode);
     }
 
     @Test
@@ -289,8 +293,38 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
 
         WireJson.assertMatches("{\"files\":[{\"siteId\":\"" + SITE_ID + "\",\"siteDomain\":\"shop.example.com\","
                 + "\"table\":\"orders\",\"type\":\"delta\",\"batchId\":null,\"artifactId\":null,\"status\":null,"
-                + "\"firstSeq\":100,\"lastSeq\":250,\"seq\":null,\"producedAt\":\"2026-07-20T10:00:00\","
+                + "\"sessionMode\":null,\"firstSeq\":100,\"lastSeq\":250,\"seq\":null,\"producedAt\":\"2026-07-20T10:00:00\","
                 + "\"fileName\":\"orders_seq100-250.parquet\",\"downloadUrl\":\"<string>\","
+                + "\"linkExpiresAt\":\"<local-date-time>\"}],\"size\":50,\"hasMore\":false,\"nextCursor\":null}",
+                body);
+    }
+
+    /**
+     * Issue #378: a batch file carries the session mode of its batch, so a consumer can tell a
+     * {@code full_snapshot} — which replaces the site's tables — from a delta. Pinned on the whole
+     * body, like the delta form above, so the new member's name, place and value form are one fact.
+     */
+    @Test
+    @DisplayName("#378: a batch file's body carries sessionMode, pinned whole")
+    void shouldKeepTheBatchListingWireFormWithSessionMode() throws Exception {
+        ParquetFileItem item = batchItem("ready", "egress/orders.parquet", "full_snapshot");
+        DownloadLink link = DownloadLink.register(ACCOUNT_PLUGIN_ID, item.s3Key(), item.fileName(),
+                Duration.ofHours(1));
+        when(fileService.listFiles(eq(ACCOUNT_ID), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(new FileListing(List.of(item), 50, false, null));
+        when(downloadLinkService.registerLinks(ACCOUNT_PLUGIN_ID, List.of(item)))
+                .thenReturn(List.of(link));
+
+        String body = mockMvc.perform(get(FILES_PATH)
+                        .header("Authorization", basicAuth("pex_testLogin001:goodPassword")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        WireJson.assertMatches("{\"files\":[{\"siteId\":\"" + SITE_ID + "\",\"siteDomain\":\"shop.example.com\","
+                + "\"table\":\"orders\",\"type\":\"batch\",\"batchId\":\"" + item.batchId() + "\","
+                + "\"artifactId\":\"" + ARTIFACT_ID + "\",\"status\":\"ready\",\"sessionMode\":\"full_snapshot\","
+                + "\"firstSeq\":100,\"lastSeq\":250,\"seq\":null,\"producedAt\":\"2026-07-20T10:00:00\","
+                + "\"fileName\":\"" + item.fileName() + "\",\"downloadUrl\":\"<string>\","
                 + "\"linkExpiresAt\":\"<local-date-time>\"}],\"size\":50,\"hasMore\":false,\"nextCursor\":null}",
                 body);
     }

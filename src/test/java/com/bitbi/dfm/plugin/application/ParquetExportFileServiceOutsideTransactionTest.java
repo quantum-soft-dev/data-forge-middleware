@@ -76,7 +76,7 @@ class ParquetExportFileServiceOutsideTransactionTest {
         CatalogRow row = new CatalogRow(SITE_ID, "shop.example.com", "orders",
                 ParquetExportFileService.FileType.DELTA, 1L, 2L, null, T1,
                 S3CheckpointStorage.deltaKey(SITE_ID, "orders", 1L, 2L),
-                null, null, null);
+                null, null, null, null);
         when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(),
                 isNull(), isNull(), eq(3))).thenReturn(List.of(row));
 

@@ -2,6 +2,8 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.delta.application.BatchParquetFinalizationService;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.DeltaRebaselineService;
+import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
 import com.bitbi.dfm.delta.application.DeltaParquetProperties;
 import com.bitbi.dfm.delta.application.ParquetCheckpointWriter;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
@@ -12,7 +14,9 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao;
 import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.site.application.SiteService;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.conf.PlainParquetConfiguration;
@@ -31,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -44,6 +49,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -56,6 +62,8 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     private static final UUID SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
     private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    /** The account owning SITE_ID in test-data.sql. */
+    private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
     @TempDir
     Path tempDir;
@@ -89,6 +97,18 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private ParquetExportCatalogDao catalogDao;
+
+    @Autowired
+    private DeltaRebaselineService rebaselineService;
+
+    @Autowired
+    private DeltaSiteWipeService wipeService;
+
+    @Autowired
+    private SiteService siteService;
 
     @BeforeEach
     void setUp() {
@@ -180,6 +200,156 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "SELECT updated_at::text FROM batch_parquet_artifacts WHERE id = ?",
                 String.class, dead.getId())).isEqualTo(watermarkAfter);
+    }
+
+    /**
+     * Issue #378, end to end: a site's two batches queued in the inconvenient order — the later
+     * DELTA's rows ahead of the earlier FULL_SNAPSHOT's in the claim ordering, which is what a
+     * snapshot still building or cooling down after a failure amounts to. The worker must still
+     * publish the snapshot first, so the Parquet Export catalog, which orders by ready_at, lists
+     * it first and a client following {@code lastSeq <= applied_seq -> skip} never skips it.
+     */
+    @Test
+    @DisplayName("a site's batches are published, and listed, in batch order whatever the queue order")
+    void publishesASitesBatchesInBatchOrder() {
+        UUID snapshot = insertBatch(LocalDateTime.of(2026, 9, 30, 10, 0), "FULL_SNAPSHOT");
+        UUID delta = insertBatch(LocalDateTime.of(2026, 9, 30, 11, 0), "DELTA");
+        segmentService.persist(SITE_ID, snapshot, "FULL_SNAPSHOT", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Ann"))),
+                record("orders", Op.INSERT, 2L, 10L, data("id", intValue(10L), "description", stringValue("First")))));
+        segmentService.persist(SITE_ID, delta, "DELTA", 3L, List.of(
+                record("customers", Op.UPDATE, 3L, 1L, data("name", stringValue("Anne"))),
+                record("orders", Op.DELETE, 4L, 10L, Map.of())));
+        assertThat(finalizationService.enqueueBatch(delta)).isEqualTo(2);
+        assertThat(finalizationService.enqueueBatch(snapshot)).isEqualTo(2);
+        // The delta's rows sort first in the claim ordering (updated_at, created_at, table_name).
+        jdbc.update("UPDATE batch_parquet_artifacts SET updated_at = TIMESTAMP '2000-01-01 00:00:00', "
+                + "created_at = TIMESTAMP '2000-01-01 00:00:00' WHERE batch_id = ?", delta);
+
+        drainQueue();
+
+        List<BatchParquetArtifact> snapshotRows = artifactRepository.findByBatchId(snapshot);
+        List<BatchParquetArtifact> deltaRows = artifactRepository.findByBatchId(delta);
+        assertThat(snapshotRows).hasSize(2)
+                .allMatch(artifact -> artifact.getStatus() == BatchParquetArtifactStatus.READY);
+        assertThat(deltaRows).hasSize(2)
+                .allMatch(artifact -> artifact.getStatus() == BatchParquetArtifactStatus.READY);
+        LocalDateTime lastSnapshotReady = snapshotRows.stream().map(BatchParquetArtifact::getReadyAt)
+                .max(LocalDateTime::compareTo).orElseThrow();
+        LocalDateTime firstDeltaReady = deltaRows.stream().map(BatchParquetArtifact::getReadyAt)
+                .min(LocalDateTime::compareTo).orElseThrow();
+        assertThat(firstDeltaReady).as("the delta is published only after the whole snapshot")
+                .isAfter(lastSnapshotReady);
+
+        List<ParquetExportCatalogDao.CatalogRow> listed = catalogDao.findBatchFiles(
+                ACCOUNT_ID, LocalDateTime.of(2000, 1, 1, 0, 0), SITE_ID, null, null, null, 100);
+        assertThat(listed).extracting(ParquetExportCatalogDao.CatalogRow::batchId,
+                        ParquetExportCatalogDao.CatalogRow::sessionMode)
+                .containsExactly(tuple(snapshot, "full_snapshot"), tuple(snapshot, "full_snapshot"),
+                        tuple(delta, "delta"), tuple(delta, "delta"));
+    }
+
+    /**
+     * Issue #378, re-baseline: the snapshot's commit discards the old baseline's segments, so an
+     * artifact of an older batch still waiting in the queue can only end ABANDONED (#244). It must
+     * still reach the catalog <em>before</em> the snapshot that repairs the chain — a consumer then
+     * reads "chain broken" and, right after it, the {@code full_snapshot} that opens a new epoch,
+     * instead of the snapshot followed by a stale abandonment.
+     */
+    @Test
+    @DisplayName("a re-baseline abandons the old batch's queued artifacts ahead of the snapshot")
+    void aRebaselineListsTheAbandonedOldBatchBeforeTheSnapshot() {
+        UUID old = insertBatch(LocalDateTime.of(2026, 9, 30, 10, 0), "DELTA");
+        UUID snapshot = insertBatch(LocalDateTime.of(2026, 9, 30, 11, 0), "FULL_SNAPSHOT");
+        segmentService.persist(SITE_ID, old, "DELTA", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Ann"))),
+                record("orders", Op.INSERT, 2L, 10L, data("id", intValue(10L), "description", stringValue("First")))));
+        assertThat(finalizationService.enqueueBatch(old)).isEqualTo(2);
+        // The snapshot session's SessionEnd commit: the real reset discards the old baseline, then
+        // the snapshot's own segment is written above it.
+        rebaselineService.reset(SITE_ID, 3L);
+        segmentService.persist(SITE_ID, snapshot, "FULL_SNAPSHOT", 3L, List.of(
+                record("customers", Op.INSERT, 3L, 1L, data("id", intValue(1L), "name", stringValue("Anne"))),
+                record("orders", Op.INSERT, 4L, 11L, data("id", intValue(11L), "description", stringValue("Second")))));
+        assertThat(finalizationService.enqueueBatch(snapshot)).isEqualTo(2);
+        // The snapshot's rows sort first in the claim ordering.
+        jdbc.update("UPDATE batch_parquet_artifacts SET updated_at = TIMESTAMP '2000-01-01 00:00:00', "
+                + "created_at = TIMESTAMP '2000-01-01 00:00:00' WHERE batch_id = ?", snapshot);
+
+        drainQueue();
+
+        List<ParquetExportCatalogDao.CatalogRow> listed = catalogDao.findBatchFiles(
+                ACCOUNT_ID, LocalDateTime.of(2000, 1, 1, 0, 0), SITE_ID, null, null, null, 100);
+        assertThat(listed).extracting(ParquetExportCatalogDao.CatalogRow::batchId,
+                        ParquetExportCatalogDao.CatalogRow::status,
+                        ParquetExportCatalogDao.CatalogRow::sessionMode)
+                .containsExactly(
+                        tuple(old, "abandoned", "delta"), tuple(old, "abandoned", "delta"),
+                        tuple(snapshot, "ready", "full_snapshot"), tuple(snapshot, "ready", "full_snapshot"));
+    }
+
+    /**
+     * Issue #378, wipe: the wipe takes the old batches and their artifacts with it, and the new
+     * epoch's snapshot starts again at seq 1. The listing shows that snapshot alone, marked
+     * {@code full_snapshot}, so a consumer whose watermark is far above seq 1 can still tell it must
+     * not be skipped.
+     */
+    @Test
+    @DisplayName("after a wipe the new epoch's snapshot is listed alone, as a full_snapshot from seq 1")
+    void afterAWipeTheNewSnapshotIsListedAlone() {
+        UUID old = insertBatch(LocalDateTime.of(2026, 9, 30, 10, 0), "DELTA");
+        segmentService.persist(SITE_ID, old, "DELTA", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Ann"))),
+                record("orders", Op.INSERT, 2L, 10L, data("id", intValue(10L), "description", stringValue("First")))));
+        assertThat(finalizationService.enqueueBatch(old)).isEqualTo(2);
+        drainQueue();
+        assertThat(catalogDao.findBatchFiles(ACCOUNT_ID, LocalDateTime.of(2000, 1, 1, 0, 0),
+                SITE_ID, null, null, null, 100)).extracting(ParquetExportCatalogDao.CatalogRow::batchId)
+                .containsOnly(old);
+        // A live session is refused by the wipe; the seed leaves one open.
+        jdbc.update("""
+                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+                WHERE site_id = ? AND status = 'IN_PROGRESS'
+                """, SITE_ID);
+
+        wipeService.wipe(siteService.getSite(SITE_ID), DeltaSiteWipeService.Initiator.ADMIN);
+        declareSchemas();
+        UUID snapshot = insertBatch(LocalDateTime.of(2026, 9, 30, 12, 0), "FULL_SNAPSHOT");
+        segmentService.persist(SITE_ID, snapshot, "FULL_SNAPSHOT", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Anne"))),
+                record("orders", Op.INSERT, 2L, 11L, data("id", intValue(11L), "description", stringValue("Second")))));
+        assertThat(finalizationService.enqueueBatch(snapshot)).isEqualTo(2);
+        drainQueue();
+
+        List<ParquetExportCatalogDao.CatalogRow> listed = catalogDao.findBatchFiles(
+                ACCOUNT_ID, LocalDateTime.of(2000, 1, 1, 0, 0), SITE_ID, null, null, null, 100);
+        assertThat(listed).hasSize(2).allSatisfy(row -> {
+            assertThat(row.batchId()).isEqualTo(snapshot);
+            assertThat(row.status()).isEqualTo("ready");
+            assertThat(row.sessionMode()).isEqualTo("full_snapshot");
+        });
+        // The artifact's range is its batch's segment range: the new epoch starts again at seq 1.
+        assertThat(listed).extracting(ParquetExportCatalogDao.CatalogRow::firstSeq)
+                .containsOnly(1L);
+    }
+
+    private void drainQueue() {
+        int iterations = 0;
+        while (finalizationService.finalizeNext()) {
+            assertThat(++iterations).as("the queue drains").isLessThan(20);
+        }
+    }
+
+    private UUID insertBatch(LocalDateTime startedAt, String sessionMode) {
+        UUID batchId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
+                                     total_size, has_errors, started_at, created_at, completed_at,
+                                     session_mode)
+                VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, ?, ?, ?, ?)
+                """, batchId, ACCOUNT_ID, SITE_ID, "issue-378/" + batchId + "/", startedAt, startedAt,
+                startedAt.plusMinutes(5), sessionMode);
+        return batchId;
     }
 
     private String catalogWatermark() {

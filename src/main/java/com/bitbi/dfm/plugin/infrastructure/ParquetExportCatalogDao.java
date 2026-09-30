@@ -37,11 +37,15 @@ import java.util.UUID;
 @Repository
 public class ParquetExportCatalogDao {
 
-    /** One catalog row. Batch rows set {@code batchId}/{@code status}/{@code artifactId}. */
+    /**
+     * One catalog row. Batch rows set {@code batchId}/{@code status}/{@code artifactId}, and
+     * {@code sessionMode} when the batch recorded one (V47): lower-cased
+     * {@code full_snapshot}/{@code delta}/{@code continuous}, null otherwise (issue #378).
+     */
     public record CatalogRow(UUID siteId, String siteDomain, String table, FileType type,
                              Long firstSeq, Long lastSeq, Long seq,
                              LocalDateTime producedAt, String s3Key,
-                             UUID batchId, String status, UUID artifactId) {
+                             UUID batchId, String status, UUID artifactId, String sessionMode) {
     }
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -81,7 +85,7 @@ public class ParquetExportCatalogDao {
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.DELTA, rs.getLong("first_seq"), rs.getLong("last_seq"), null,
                 rs.getObject("produced_at", LocalDateTime.class), rs.getString("s3_key"),
-                null, null, null));
+                null, null, null, null));
     }
 
     /**
@@ -110,7 +114,7 @@ public class ParquetExportCatalogDao {
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.CHECKPOINT, null, null, rs.getLong("seq"),
                 rs.getObject("produced_at", LocalDateTime.class), rs.getString("s3_key"),
-                null, null, null));
+                null, null, null, null));
     }
 
     /**
@@ -118,6 +122,12 @@ public class ParquetExportCatalogDao {
      * {@code (produced_at, s3_key)}. Each status is a limited UNION ALL branch so the
      * {@code READY} index {@code (ready_at, s3_key)} and the {@code ABANDONED}
      * index {@code (updated_at, 'abandoned/' || id)} can serve the page.
+     *
+     * <p>Within one site this order is batch order (issue #378): the build queue publishes a
+     * later batch only after every table of the earlier ones is {@code READY} or
+     * {@code ABANDONED}, and {@code ready_at}/{@code updated_at} come from one monotonic
+     * watermark. The session mode is joined from {@code batches} so a consumer can tell a
+     * {@code full_snapshot}, which replaces the site's tables, from a delta.</p>
      */
     public List<CatalogRow> findBatchFiles(UUID accountId, LocalDateTime since, UUID siteId,
                                            String table, LocalDateTime cursorAt, String cursorKey,
@@ -129,7 +139,7 @@ public class ParquetExportCatalogDao {
         }
         StringBuilder sql = new StringBuilder("""
                 SELECT f.site_id, f.domain, f.table_name, f.batch_id, f.status, f.artifact_id,
-                       f.first_seq, f.last_seq, f.produced_at, f.s3_key
+                       f.session_mode, f.first_seq, f.last_seq, f.produced_at, f.s3_key
                 FROM (
                 """);
         appendBatchBranch(sql, params, siteId, table, cursorAt != null,
@@ -148,7 +158,7 @@ public class ParquetExportCatalogDao {
                 FileType.BATCH, rs.getObject("first_seq", Long.class), rs.getObject("last_seq", Long.class),
                 null, rs.getObject("produced_at", LocalDateTime.class), rs.getString("s3_key"),
                 rs.getObject("batch_id", UUID.class), rs.getString("status"),
-                rs.getObject("artifact_id", UUID.class)));
+                rs.getObject("artifact_id", UUID.class), rs.getString("session_mode")));
     }
 
     private static void appendBatchBranch(StringBuilder sql, MapSqlParameterSource params,
@@ -157,11 +167,13 @@ public class ParquetExportCatalogDao {
                                           String selectKey) {
         sql.append("                (SELECT a.site_id, st.domain, a.table_name, a.batch_id,\n")
                 .append("                        LOWER(a.status) AS status, a.id AS artifact_id,\n")
+                .append("                        LOWER(b.session_mode) AS session_mode,\n")
                 .append("                        a.first_seq, a.last_seq,\n")
                 .append("                        ").append(atColumn).append(" AS produced_at,\n")
                 .append("                        ").append(selectKey).append(" AS s3_key\n")
                 .append("                 FROM batch_parquet_artifacts a\n")
                 .append("                 JOIN sites st ON st.id = a.site_id\n")
+                .append("                 JOIN batches b ON b.id = a.batch_id\n")
                 .append("                 WHERE st.account_id = :accountId\n")
                 .append("                   AND a.status = '").append(status).append("'\n")
                 .append("                   AND ").append(atColumn).append(" > :since\n");

@@ -57,6 +57,19 @@ public interface JpaBatchParquetArtifactRepository
      * immediately, and that status is what keeps other workers off the row until its lease expires.
      * The failure backoff doubles per attempt (capped) so a transient outage gets a wide window
      * while a deterministic failure still uses its attempts up quickly.
+     *
+     * <p>The head of the queue is per site, in batch order (issue #378). A row is a candidate only
+     * while no table of an <em>earlier</em> batch of its site is unfinished ({@code PENDING},
+     * {@code BUILDING} or {@code FAILED}); earlier means {@code (batches.started_at, batches.id)},
+     * since a site has one active batch at a time and so its sessions start in seq order. Without
+     * it a quick DELTA was built and published while the FULL_SNAPSHOT before it was still
+     * building or cooling down after a failure, the Parquet Export catalog listed the DELTA
+     * first, and a client following {@code lastSeq <= applied_seq -> skip} then skipped the
+     * snapshot for good. {@code ABANDONED} is terminal and does not hold the site back — blocking
+     * behind it would stop the site for ever. The earliest unfinished batch of a site is never
+     * held back by this rule, so it cannot deadlock; other sites are built in parallel as before.
+     * The {@code batches} join lives inside the subquery so the outer statement stays on one
+     * table and {@code FOR UPDATE SKIP LOCKED} locks artifact rows only.</p>
      */
     @Override
     @Query(value = """
@@ -67,6 +80,14 @@ public interface JpaBatchParquetArtifactRepository
                       AND active.status = 'BUILDING'
                       AND active.updated_at >= CAST(:now AS timestamp) - make_interval(secs =>
                           CAST(:leaseSeconds AS double precision)))
+              AND NOT EXISTS (
+                    SELECT 1 FROM batch_parquet_artifacts earlier
+                    JOIN batches earlier_batch ON earlier_batch.id = earlier.batch_id
+                    JOIN batches candidate_batch ON candidate_batch.id = candidate.batch_id
+                    WHERE earlier.site_id = candidate.site_id
+                      AND earlier.status IN ('PENDING', 'BUILDING', 'FAILED')
+                      AND (earlier_batch.started_at, earlier_batch.id)
+                          < (candidate_batch.started_at, candidate_batch.id))
               AND (candidate.status = 'PENDING'
                OR (candidate.status = 'FAILED' AND candidate.updated_at
                        < CAST(:now AS timestamp) - make_interval(secs =>

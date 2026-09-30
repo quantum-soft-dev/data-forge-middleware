@@ -301,6 +301,151 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
                 .anyMatch(claimed -> claimed.getId().equals(artifact.getId()));
     }
 
+    // ---- Issue #378: the queue's head is per site, in batch order ----------------------------
+    //
+    // A later batch of a site must not be built — and therefore published to the Parquet Export
+    // catalog — while any table of an earlier batch of that site is still unfinished. Batch order is
+    // (batches.started_at, batches.id): a site has one active batch at a time, so the order sessions
+    // started in is their seq order.
+
+    /** A second site of the same account (test-data.sql), for the per-site half of the rule. */
+    private static final UUID OTHER_SITE_ID = UUID.fromString("0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7");
+
+    @Test
+    void anEarlierBatchStillBuildingHoldsBackTheNextBatchOfItsSite() {
+        UUID earlier = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact building = BatchParquetArtifact.pending(earlier, SITE_ID, "orders");
+        building.markBuilding();
+        repository.save(building);
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertFalse(isClaimed(next, now, 0, 3600),
+                "the delta must not be built while the snapshot before it is still building");
+
+        building.markReady("egress/orders.parquet", 3, 100, "abc");
+        repository.save(building);
+
+        assertTrue(isClaimed(next, now, 0, 3600),
+                "once every table of the earlier batch is published the next batch is the head");
+    }
+
+    @Test
+    void anEarlierBatchWaitingOutItsBackoffHoldsBackTheNextBatchOfItsSite() {
+        UUID earlier = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact failed = BatchParquetArtifact.pending(earlier, SITE_ID, "orders");
+        failed.markBuilding();
+        failed.markFailed("s3 unavailable");
+        repository.save(failed);
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertFalse(isClaimed(failed, now, 3600, 3600), "the failure is still cooling down");
+        assertFalse(isClaimed(next, now, 3600, 3600),
+                "a later batch must not overtake an earlier one that is waiting to be retried");
+        assertTrue(isClaimed(failed, now, 0, 3600),
+                "the earlier batch itself is the head of its site and stays claimable");
+        assertFalse(isClaimed(next, now, 0, 3600),
+                "and the later one keeps waiting while the earlier one is retried");
+    }
+
+    @Test
+    void anAbandonedEarlierBatchNoLongerHoldsTheSiteBack() {
+        UUID earlier = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact abandoned = BatchParquetArtifact.pending(earlier, SITE_ID, "orders");
+        abandoned.markBuilding();
+        abandoned.markAbandoned("no declared schema");
+        repository.save(abandoned);
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+
+        assertTrue(isClaimed(next, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600),
+                "ABANDONED is terminal: blocking behind it would stop the site for ever");
+    }
+
+    @Test
+    void oneTableOfAnEarlierBatchStillUnfinishedHoldsTheWholeNextBatch() {
+        UUID earlier = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact published = BatchParquetArtifact.pending(earlier, SITE_ID, "orders");
+        published.markBuilding();
+        published.markReady("egress/orders.parquet", 3, 100, "abc");
+        repository.save(published);
+        BatchParquetArtifact straggler = BatchParquetArtifact.pending(earlier, SITE_ID, "customers");
+        straggler.markBuilding();
+        repository.save(straggler);
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+
+        assertFalse(isClaimed(next, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600),
+                "the batch is the unit of order, not the table");
+    }
+
+    @Test
+    void anotherSiteIsBuiltWhileTheFirstSiteIsHeldBack() {
+        UUID earlier = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        UUID otherSiteBatch = insertBatch(OTHER_SITE_ID, LocalDateTime.of(2026, 9, 30, 12, 0));
+        BatchParquetArtifact building = BatchParquetArtifact.pending(earlier, SITE_ID, "orders");
+        building.markBuilding();
+        repository.save(building);
+        BatchParquetArtifact heldBack = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        BatchParquetArtifact otherSite = repository.save(
+                BatchParquetArtifact.pending(otherSiteBatch, OTHER_SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertFalse(isClaimed(heldBack, now, 0, 3600));
+        assertTrue(isClaimed(otherSite, now, 0, 3600),
+                "the head of the queue is per site, not global");
+    }
+
+    @Test
+    void aLaterBatchStillUnfinishedDoesNotHoldBackAnEarlierOne() {
+        // The shape an admin requeue (039) or a lazy backfill leaves: the earlier batch becomes
+        // PENDING again while its successor is also unfinished. The earlier batch is the head.
+        UUID earlier = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact laterRow = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        BatchParquetArtifact earlierRow = repository.save(
+                BatchParquetArtifact.pending(earlier, SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertTrue(isClaimed(earlierRow, now, 0, 3600));
+        assertFalse(isClaimed(laterRow, now, 0, 3600));
+    }
+
+    @Test
+    void batchesStartedAtTheSameInstantAreOrderedByTheirId() {
+        LocalDateTime startedAt = LocalDateTime.of(2026, 9, 30, 10, 0);
+        UUID low = UUID.fromString("00000000-0000-0000-0000-000000000378");
+        UUID high = UUID.fromString("ffffffff-0000-0000-0000-000000000378");
+        insertBatch(high, SITE_ID, startedAt);
+        insertBatch(low, SITE_ID, startedAt);
+        BatchParquetArtifact highRow = repository.save(BatchParquetArtifact.pending(high, SITE_ID, "orders"));
+        BatchParquetArtifact lowRow = repository.save(BatchParquetArtifact.pending(low, SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertTrue(isClaimed(lowRow, now, 0, 3600), "a tie is broken deterministically");
+        assertFalse(isClaimed(highRow, now, 0, 3600), "and never lets both through at once");
+    }
+
+    private UUID insertBatch(UUID siteId, LocalDateTime startedAt) {
+        return insertBatch(UUID.randomUUID(), siteId, startedAt);
+    }
+
+    private UUID insertBatch(UUID batchId, UUID siteId, LocalDateTime startedAt) {
+        jdbc.update("""
+                INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
+                                     total_size, has_errors, started_at, created_at, completed_at,
+                                     session_mode)
+                VALUES (?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', ?, 'COMPLETED', ?, 0, 0, false,
+                        ?, ?, ?, 'DELTA')
+                """, batchId, siteId, "issue-378/" + batchId + "/", startedAt, startedAt,
+                startedAt.plusMinutes(5));
+        return batchId;
+    }
+
     @Test
     void insertPendingIfAbsentIsIdempotentUnderTheUniqueIndex() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
