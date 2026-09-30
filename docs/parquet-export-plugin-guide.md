@@ -179,9 +179,20 @@ issue #369 **every** file also ends with **`_row_hash`**: the source client's id
 within its table, as 64 lowercase hex characters, or null when the client did not send one. In a
 `batch` or `delta` file an `INSERT` and the `DELETE` of the same row carry the same value and an
 `UPDATE` carries none; in a `checkpoint` snapshot it is the hash of the record that created the row.
-Expect nulls for rows written before the source client started sending the field. A reader that maps
-columns by name must tolerate this extra `_`-prefixed column; one that maps by position is unaffected,
-since it is the last column. See `docs/delta-client-v2-guide.md` ("`row_hash`").
+Expect nulls for rows written before the source client started sending the field — the `INSERT` of
+such a row is null while its later `DELETE` may carry a hash.
+
+**`_row_hash` is not a unique key.** In the source client's `track_duplicates` mode a row present
+several times in a keyless table goes out as several `INSERT` rows of a `batch` or `delta` file with
+one hash (and a change in its multiplicity as several `INSERT`s or `DELETE`s with that hash), so
+deduplicating or collapsing rows by `_row_hash` drops copies that still exist at the source. The
+server does not rely on its uniqueness either. Do not use it as a primary key, a join key that
+assumes one row per value, or a `DISTINCT`/`GROUP BY` to remove duplicates; treat a null as
+"unknown", never as a value shared by the rows that have it.
+
+It is the **last** column by design (the owner's decision on #373): a reader that maps columns by
+name must tolerate this extra `_`-prefixed column; one that maps by position is unaffected. See
+`docs/delta-client-v2-guide.md` ("`row_hash`").
 
 ## Operational notes
 

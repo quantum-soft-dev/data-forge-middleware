@@ -359,7 +359,12 @@ client to have submitted a schema for it.
 null when the client sent none — every row until the client is updated). It is not a column of the
 mirrored source table: a client creating or loading the mirror table from the snapshot must skip it,
 or add it as a nullable text column of its own. The SQL stream does not use it — `DELETE`/`UPDATE`
-still address rows by their key columns. A site that never ingested through Delta answers with its
+still address rows by their key columns. **It is not a guaranteed unique key**: in the source
+client's `track_duplicates` mode the hash names a row's content rather than one copy of it, so several
+records of a keyless table carry one value, and the server itself never relies on its uniqueness. A
+mirror must not declare it `UNIQUE` or a primary key, and must not deduplicate or collapse rows by it.
+A null means the hash is unknown, not that the rows holding it are one row. See
+`docs/delta-client-v2-guide.md` ("`row_hash`"). A site that never ingested through Delta answers with its
 historical uploaded files instead, in their original formats.
 
 ### Get SQL Changes

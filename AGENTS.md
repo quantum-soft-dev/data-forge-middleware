@@ -265,6 +265,30 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- row-hash-docs: The `row_hash` documentation says the three things the client's change request says
+  and #369's text did not (issue #373, documentation only). The client's CR —
+  `dbf-data-extractor/documents/cr-row-hash-server.ru.md`, updated after #369 was implemented — was
+  checked against `develop` and the server already behaves as it asks; what was missing were the
+  clarifications a data consumer needs. **A row inserted before the field existed** has no hash on
+  the server, yet its `DELETE` may carry one (CR §2, §3.3), so a `DELETE` is matched by `key` and the
+  hash on it is extra information, not a matching condition — the proto comment on
+  `ChangeRecord.row_hash` gains that clause (comment lines only: a comment is not in the descriptor,
+  so the client's `DeltaWireContractTests` and every field number and type are untouched), and the
+  guide says it beside the rule it qualifies. **`(table, row_hash)` is not unique** under the
+  client's off-normal `[ingestion.keyless] track_duplicates = true` (CR §3.2), where the hash names a
+  row's content and N copies go out as N `INSERT`s with one hash; the server never relied on
+  uniqueness (identity stays the full `key`), but the guide called the pair the row's identity
+  without a caveat and the consumer guides said nothing, so a Bit BI or Parquet Export user could
+  take `_row_hash` for a unique key and collapse copies that still exist. The Parquet Export and Bit
+  BI guides now say it is not a unique key, must not be deduplicated or collapsed on, and is null for
+  rows written before the client sends it; `docs/cr-delta-client-v2.md` (+ `.ru.md`) adds the caveat
+  to OQ-1, whose "full-row key is treated as unique" that mode contradicts. **`_row_hash` stays the
+  last column** of every Parquet artifact — the owner's decision of 2026-09-29, now stated as one,
+  against CR §4.5's sketch of placing it beside `_op`/`_seq`/`_changed`; the CR is to be corrected on
+  the client side. The CR is linked from the guide, `docs/cr-delta-client-v2.md` and
+  `specs/043-row-hash/spec.md`. No code, test, REST, gRPC field, DTO, migration (**V61 stays next**),
+  `specs/NNN-*` number, configuration-key, metric, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("`row_hash`").
 - changerecord-row-hash: The client's row identity travels from the wire to every artifact a row is
   written into (issue #369, the server half of dbf-data-extractor #157). `ChangeRecord` gains
   **`bytes row_hash = 7`** — field 7 was free on both sides — the 32-byte SHA-256 of the client's

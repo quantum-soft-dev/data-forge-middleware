@@ -2,6 +2,8 @@
 
 **Issue**: [#369](https://github.com/quantum-soft-dev/data-forge-middleware/issues/369)
 **Client counterpart**: dbf-data-extractor #156 (hash stability), #157 (sending it)
+**Client CR**: [`documents/cr-row-hash-server.ru.md`](https://github.com/quantum-soft-dev/dbf-data-extractor/blob/develop/documents/cr-row-hash-server.ru.md) in `dbf-data-extractor`
+**Documentation follow-up**: [#373](https://github.com/quantum-soft-dev/data-forge-middleware/issues/373)
 **Status**: implemented
 
 ## Problem
@@ -15,8 +17,13 @@ identifier of a row within a table: a keyless table's identity is the whole row
 
 `ChangeRecord.row_hash = 7` (`bytes`), opaque to the server:
 
-- exactly 32 bytes; the row identity is `(table, row_hash)`;
+- exactly 32 bytes; the row identity is `(table, row_hash)` — unique within a table in the client's
+  normal mode, **not** under `[ingestion.keyless] track_duplicates = true`, where one hash names a
+  row's content and N copies go out as N `INSERT`s with it (CR §3.2); the server never relies on
+  uniqueness;
 - `INSERT` — the row's hash; `DELETE` — the value its `INSERT` carried; `UPDATE` — undefined, empty;
+- a row inserted before the field existed has no hash on the server while its `DELETE` may carry
+  one (CR §2, §3.3), so a `DELETE` is matched by `key` and its hash is not a matching condition;
 - identical in `DELTA`, `FULL_SNAPSHOT`, `CONTINUOUS`;
 - empty = absent (older client, older segments and frames) — accepted as before;
 - any other length is dropped at ingestion with one WARN per session; the session commits;
@@ -40,8 +47,9 @@ identifier of a row within a table: a keyless table's identity is the whole row
 2. In `snapshot.parquet` from the start, not only in delta/batch files.
 3. Wrong length: ignore with WARN, do not fail the session (no `ErrorCode` for it).
 
-Taken during implementation: `_row_hash` is **appended** after the declared columns rather than
-placed beside `_op`/`_seq`/`_changed`, so no column a positional reader knew moves.
+Taken during implementation and confirmed by the owner on 2026-09-29 (#373): `_row_hash` is
+**appended** after the declared columns rather than placed beside `_op`/`_seq`/`_changed` as CR §4.5
+sketches, so no column a positional reader knew moves. The CR is to be corrected on the client side.
 
 ## Out of scope
 
