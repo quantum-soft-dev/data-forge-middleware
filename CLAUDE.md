@@ -778,6 +778,57 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- batch-parquet-site-order: A site's completed-batch Parquet files are built, published and listed
+  in batch order, so a DELTA can no longer be listed before the FULL_SNAPSHOT it follows (issue
+  #378, seen 30.09 on a site whose large snapshot was still building when the next small delta was
+  built). `JpaBatchParquetArtifactRepository.findNextRetryable` barred only a second worker on the
+  **same** batch; nothing held a site's later batch behind an earlier one, so with
+  `delta.batch-parquet.max-concurrent=2` the delta was built and published first. The Parquet Export
+  catalog orders batch files by `ready_at`, and the guide's `lastSeq <= applied_seq -> skip` then
+  made the consumer skip the snapshot for good. A snapshot in `FAILED` backoff (up to ~1 h) opened
+  the same hole. **Option A of the ticket**: the queue's head is per site, the shape egress and
+  delta-SQL have had since #243. A row is claimable only while no table of an **earlier** batch of
+  its site is `PENDING`/`BUILDING`/`FAILED`; earlier means `(batches.started_at, batches.id)`, since
+  a site has one active batch at a time. The `batches` joins sit inside the `NOT EXISTS`, so the
+  outer statement stays on one table and `FOR UPDATE SKIP LOCKED` locks no `batches` row. The
+  earliest unfinished batch of a site is never held back, so the rule cannot deadlock. Every table
+  of batch N is terminal before batch N+1 is claimed, and `ready_at`/`updated_at` come from one
+  monotonic watermark, so the catalog's order within a site **is** batch order: the catalog, its
+  cursor and `since` are unchanged. **Rejected**, as recorded on the ticket: B, a separate
+  publication boundary (a migration and new publish logic for no gain, since a delta cannot be
+  applied before its snapshot anyway), and D, ordering the catalog by seq (an artifact that became
+  `READY` later would land behind the client's cursor and never appear). **Decided while working,
+  as the ticket asked**: `ABANDONED` stays terminal and lets later batches through, because blocking
+  behind it would stop the site for ever. A re-baseline makes this the common case: its commit
+  discards the old segments, so an old artifact still queued ends `ABANDONED` (#244), and it now
+  reaches the catalog **before** the snapshot. The tables of one batch are still published one
+  transaction each: a sweep can see part of a batch, but never a later batch before the rest of it.
+  An admin requeue (039) or an owner-download lazy backfill still returns an old batch after its
+  successors; the requeued batch becomes its site's head again. **Contract, additive**:
+  `ParquetFileResponseDto.sessionMode` (after `status`), `LOWER(batches.session_mode)` from V47:
+  `full_snapshot`/`delta`/`continuous`; null for delta and checkpoint files and for a batch with no
+  mode. **Guide**: the consumer's watermark is a pair (epoch, seq). The first file of a new
+  `batchId` with `sessionMode = full_snapshot` clears all the site's tables and is never skipped by
+  `lastSeq`. `abandoned` means "chain broken, wait for the next `full_snapshot` or reload from
+  `type=checkpoint`", not "stop for ever". The guide shows re-baseline, wipe (seq restarts at 1) and
+  a client resending a snapshot from seq 1. An explicit epoch field in the listing (needs V61) and
+  refusing a seq rollback without a new `generation` were not taken, per the ticket. **Tests**:
+  `BatchParquetArtifactRepositoryIntegrationTest` covers the real SQL. An earlier batch
+  `BUILDING` with a live lease, or `FAILED` in backoff, holds the next batch back; one unfinished
+  table holds the whole next batch; `READY`/`ABANDONED` release it; another site is built meanwhile;
+  a later unfinished batch does not hold an earlier one back; a `started_at` tie is broken by id.
+  `BatchParquetFinalizationIntegrationTest` covers the whole worker: two batches queued in the
+  inconvenient order are published and listed through `ParquetExportCatalogDao.findBatchFiles`
+  snapshot first; a real `DeltaRebaselineService.reset` lists the old batch `abandoned` ahead of the
+  `full_snapshot`; after a real wipe the new seq-1 snapshot is listed alone as `full_snapshot`.
+  `ParquetExportFilesContractTest` pins the batch body whole through `WireJson`, and
+  `ParquetExportIntegrationTest` covers `sessionMode` from the table, null without it and on
+  delta/checkpoint files. **Mutation-proven**: removing the head-of-queue condition reddens eight
+  tests (six repository cases, the order case and the re-baseline case); dropping `FAILED` from the
+  unfinished set reddens the backoff case. No REST route, gRPC, proto, migration (**V61 stays
+  next**), `specs/NNN-*`, configuration-key, metric, S3-key or frontend change; one additive DTO
+  field. See `docs/parquet-export-plugin-guide.md` ("Order, epochs and what to skip") and
+  `docs/cr-unified-batch-parquet.md` ("Durability and retries").
 - site-delete-delta-history: Deleting a site with Delta v2 history works, and takes its objects with
   it (issue #367, found working #366). `SiteService.deleteSite` predated Delta v2: it deleted
   uploaded files, error logs and batches one by one and knew nothing of changelog segments, so every

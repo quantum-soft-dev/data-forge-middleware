@@ -102,6 +102,7 @@ Response (one entry per file; a fresh one-time link is registered per **download
       "batchId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "artifactId": "0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       "status": "ready",
+      "sessionMode": "delta",
       "firstSeq": 100, "lastSeq": 250, "seq": null,
       "producedAt": "2026-07-27T10:16:00",
       "fileName": "orders_batcha1b2c3d4-e5f6-7890-abcd-ef1234567890.parquet",
@@ -113,7 +114,10 @@ Response (one entry per file; a fresh one-time link is registered per **download
 }
 ```
 
-Batch rows also carry `batchId`, `artifactId` and `status` (`ready` or `abandoned`). An
+Batch rows also carry `batchId`, `artifactId`, `status` (`ready` or `abandoned`) and
+`sessionMode` — the kind of session the batch was: `full_snapshot` (the whole site, replacing it),
+`delta` or `continuous`. `sessionMode` is null for `type=delta` and `type=checkpoint` files and for
+a batch started before the server recorded modes (V47). An
 `abandoned` table exhausted its build attempts: `downloadUrl` and `linkExpiresAt` are null
 and no `download_links` row is created. Alert and ask an operator to
 `POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue`
@@ -121,12 +125,53 @@ using the `artifactId` from this listing.
 `PENDING` / `BUILDING` / `FAILED` rows are omitted; they appear later as `ready` (or
 `abandoned`).
 
-Skip applies only to downloadable rows: `status=ready`, `type=delta`, and `type=checkpoint`.
-`lastSeq <= applied_seq → skip` is unchanged for those. `status=abandoned` must **always** be
-surfaced — it is an alert, not a file the watermark can swallow, even when sibling READY
-tables already cover the same `lastSeq`. `lastSeq == null` means the range is unknown —
-**never skip** that file (in JavaScript `null <= n` is `true`). Abandoned rows keep a stored
-range when one was published; they do not fall back to live changelog segments.
+### Order, epochs and what to skip (`type=batch`, issue #378)
+
+**The order the server guarantees.** Within one site, batch files are listed in **batch order**:
+a batch's tables get their `producedAt` only after every table of every earlier batch of that
+site is `ready` or `abandoned`. Walking the listing by `producedAt` + `nextCursor` therefore
+delivers batch N before batch N+1 — a quick delta can no longer overtake the large snapshot
+before it. What is **not** guaranteed:
+
+- **One batch in one sweep.** A batch's tables are published one by one, so a sweep can see only
+  part of a batch. The rest arrives in a later sweep with a later `producedAt` — but never after
+  a file of a later batch of the same site.
+- **An old batch returning late.** An operator's requeue of an `abandoned` artifact, or a batch
+  built on demand long after it finished, is listed after its successors. See `abandoned` below.
+- **Order across sites.** Each site is ordered on its own.
+- **`type=delta` / `type=checkpoint`.** Unchanged; this section is about batch files.
+
+**The watermark is a pair (epoch, seq), not one seq.** A site's seq does not only grow: a history
+wipe restarts it at 1, and a client that lost its journal may resend a snapshot from seq 1. A
+consumer that compares `lastSeq` alone skips everything after such a restart. So:
+
+1. **A `full_snapshot` opens a new epoch.** The first file you see of a *new* `batchId` with
+   `sessionMode = full_snapshot` means: clear **all** tables of that site, start the seq count
+   inside this batch, and apply this file and every later file of the same `batchId` as they
+   arrive (they may come in later sweeps). A table that gets no file from the snapshot stays
+   empty — correct: an empty or dropped source table produces none.
+2. **A `full_snapshot` is never skipped by `lastSeq`.**
+3. **Within an epoch, `lastSeq <= applied_seq → skip`** — for downloadable rows only
+   (`status=ready`). `lastSeq == null` means the range is unknown — **never skip** that file (in
+   JavaScript `null <= n` is `true`).
+4. **`status=abandoned` means the chain is broken**, not "stop for ever". Always surface it as an
+   alert (it is not a file the watermark can swallow, even when sibling ready tables cover the same
+   `lastSeq`), stop applying the site's deltas, and wait for the next `full_snapshot` — or reload
+   the site from `type=checkpoint`. An operator's requeue of that artifact repairs the owner's
+   download, but it returns *after* its successors and does not re-thread a chain the consumer has
+   already stopped; resume at a snapshot. Abandoned rows keep a stored range when one was
+   published; they do not fall back to live changelog segments.
+
+The same three situations, as a consumer sees them:
+
+| Situation | What the listing shows | What the consumer does |
+|---|---|---|
+| **Re-baseline** (the server asked for one, or the client decided): seq continues | The old batch's tables not yet built when the snapshot committed as `abandoned`, **then** the snapshot's tables as `ready`, `sessionMode = full_snapshot`, seq above the old | Alert and stop on `abandoned`; on the `full_snapshot` clear the site, apply it, resume. Rows deleted at the source are gone, because the tables were cleared |
+| **History wipe** (#89): seq restarts at 1 | The old batches are gone from the listing (the wipe deletes them). The new snapshot arrives with `sessionMode = full_snapshot` and `firstSeq = 1`, far below your `applied_seq` | Rule 2: do not skip it. Clear the site, apply, and compare later deltas inside the new epoch |
+| **Client lost its journal** and resends a `FULL_SNAPSHOT` from seq 1 without a wipe | Same as the wipe, except older batches stay listed behind you | Same as the wipe. Stay on `type=batch`: a `type=delta` file name is built from its seq range and cannot tell the two epochs apart |
+
+A consumer that already skipped a snapshot under the old `lastSeq`-only rule recovers by reloading
+the site's tables from `type=checkpoint`.
 
 `nextCursor` is non-null exactly when `hasMore` is `true`.
 
