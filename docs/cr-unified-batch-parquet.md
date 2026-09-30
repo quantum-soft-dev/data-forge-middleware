@@ -58,6 +58,45 @@ real: a process that dies mid-build (an OOM on a large batch, a pod eviction) ha
 incremented `attempt_count` durable, so the most expensive failure class cannot loop forever. It
 also keeps the long S3 work off a database connection.
 
+**The head of the queue is per site, in batch order (issue #378).** A row is claimable only while
+no table of an *earlier* batch of the same site is unfinished (`PENDING`, `BUILDING` or `FAILED`).
+Earlier means `(batches.started_at, batches.id)`: a site has one active batch at a time, so the
+order its sessions started in is their seq order. It is the shape the per-segment egress and
+delta-SQL queues have had since #243, applied to batches. Without it the two workers of
+`delta.batch-parquet.max-concurrent` built a quick DELTA while the FULL_SNAPSHOT before it was
+still building (or cooling down after a failure, up to about an hour), published it first, and the
+Parquet Export catalog — which orders by `ready_at` — listed the DELTA ahead of its snapshot; a
+consumer following `lastSeq <= applied_seq -> skip` then skipped the snapshot for good. With the
+rule, every table of batch N reaches `READY` or `ABANDONED` before any table of batch N+1 is
+claimed, and since `ready_at`/`updated_at` come from one monotonic watermark, the catalog order
+within a site *is* batch order — the catalog, its cursor and `since` did not change. What the rule
+deliberately does not do:
+
+- **`ABANDONED` does not hold the site back.** It is terminal; blocking behind it would stop the
+  site for ever. The consumer reads it as "chain broken" (see the Parquet Export guide). A
+  re-baseline makes this the common case: its commit discards the old batches' segments, so an
+  old artifact still queued can only end `ABANDONED` (#244) — and it now reaches the catalog
+  *before* the snapshot that repairs the chain.
+- **Tables of one batch are still published one transaction each**, so a listing can see part of
+  a batch; the rest arrives with a later `ready_at`, but never after a file of a later batch of
+  the site. Publishing a whole batch atomically was not needed for the order guarantee.
+- **Out-of-order arrivals that remain, by construction:** an admin requeue of an `ABANDONED` row
+  (039) and the owner-download lazy backfill of a batch that has no rows put an *old* batch back
+  into the catalog after its successors. The requeued batch does become the head of its site
+  again, so the site's later unfinished batches wait for it.
+- **Different sites** are built in parallel exactly as before.
+
+The earliest unfinished batch of a site is never held back by the rule, so it cannot deadlock.
+No migration, and the cost does not grow with a site's history. The subquery's status predicate is
+exactly the predicate of the partial claim index `idx_batch_parquet_artifacts_claim`, so PostgreSQL
+reads `earlier` from that index — unfinished rows only — and filters the site from it; `READY` and
+`ABANDONED` rows are never visited. Measured with `EXPLAIN (ANALYZE, BUFFERS)` on PostgreSQL 16:
+one site with 100 000 `READY` rows (2 000 batches of 50 tables), an earlier batch `BUILDING` and
+an 87-table batch held back behind it — the claim query ran in 0.27 ms, 970 shared buffers, all of
+them over the 88 unfinished rows. A partial `(site_id)` index over the same statuses gave the same
+plan cost, so it was not added. The scan is bounded by the queue's depth, like the claim query
+itself.
+
 Each table claim mints a `claim_token`, and the batch owner renews every lease (`updated_at`) every third of
 `delta.batch-parquet.lease-seconds` (default 30 min) while it builds. The lease therefore bounds
 *worker death*, not how long a build may legitimately take — without the renewal it would be a hard

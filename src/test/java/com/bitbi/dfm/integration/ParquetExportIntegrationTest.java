@@ -441,6 +441,40 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
         assertEquals(2, pages);
     }
 
+    /**
+     * Issue #378: a batch file carries its batch's session mode, lower-cased, so a consumer can
+     * see that a {@code full_snapshot} replaces the site's tables. A batch that recorded no mode
+     * (started before V47) and a non-batch file both answer null.
+     */
+    @Test
+    @DisplayName("Should carry the batch's session mode on batch files and null elsewhere")
+    void shouldCarryTheSessionModeOfTheBatch() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "READY",
+                "egress/orders.parquet", 100L, 250L,
+                "2026-07-27 10:16:00", "2026-07-27 10:16:00");
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].type").value("batch"))
+                .andExpect(jsonPath("$.files[0].sessionMode").value(org.hamcrest.Matchers.nullValue()));
+
+        jdbc.update("UPDATE batches SET session_mode = 'FULL_SNAPSHOT' WHERE id = ?", batchId);
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].sessionMode").value("full_snapshot"));
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()).param("type", "delta"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].type").value("delta"))
+                .andExpect(jsonPath("$.files[0].sessionMode").value(org.hamcrest.Matchers.nullValue()));
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()).param("type", "checkpoint"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].type").value("checkpoint"))
+                .andExpect(jsonPath("$.files[0].sessionMode").value(org.hamcrest.Matchers.nullValue()));
+    }
+
     /** Perform a listing and return the first file's one-time download URL. */
     private String firstDownloadUrl() throws Exception {
         MvcResult result = mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth())

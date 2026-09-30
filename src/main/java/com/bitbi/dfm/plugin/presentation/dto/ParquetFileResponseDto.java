@@ -13,6 +13,9 @@ import java.util.UUID;
  * @param batchId     batch files: owning batch; null for delta/checkpoint
  * @param artifactId  batch files: manifest row id for admin requeue; null otherwise
  * @param status      batch files: {@code ready} or {@code abandoned}; null otherwise
+ * @param sessionMode batch files: the session the batch was — {@code full_snapshot} (replaces the
+ *                    site's tables), {@code delta} or {@code continuous}; null for delta/checkpoint
+ *                    files and for a batch that recorded no mode (issue #378)
  * @param firstSeq    delta/batch files: first sequence; null for checkpoints
  * @param lastSeq     delta/batch files: last sequence; null for checkpoints
  * @param seq         checkpoint files: materialized sequence; null otherwise
@@ -25,6 +28,7 @@ public record ParquetFileResponseDto(
         UUID batchId,
         UUID artifactId,
         String status,
+        String sessionMode,
         Long firstSeq,
         Long lastSeq,
         Long seq,
@@ -37,7 +41,7 @@ public record ParquetFileResponseDto(
         return new ParquetFileResponseDto(
                 item.siteId(), item.siteDomain(), item.table(),
                 item.type().name().toLowerCase(java.util.Locale.ROOT),
-                item.batchId(), item.artifactId(), item.status(),
+                item.batchId(), item.artifactId(), item.status(), item.sessionMode(),
                 item.firstSeq(), item.lastSeq(), item.seq(),
                 item.producedAt(), item.fileName(),
                 downloadUrl, link == null ? null : link.getExpiresAt());

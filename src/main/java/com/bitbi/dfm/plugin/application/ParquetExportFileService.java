@@ -35,11 +35,11 @@ public class ParquetExportFileService {
 
     public enum FileType { DELTA, CHECKPOINT, BATCH }
 
-    /** One catalogued Parquet file. Batch files carry batchId/status/artifactId. */
+    /** One catalogued Parquet file. Batch files carry batchId/status/artifactId/sessionMode. */
     public record ParquetFileItem(UUID siteId, String siteDomain, String table, FileType type,
                                   Long firstSeq, Long lastSeq, Long seq,
                                   LocalDateTime producedAt, String fileName, String s3Key,
-                                  UUID batchId, String status, UUID artifactId) {
+                                  UUID batchId, String status, UUID artifactId, String sessionMode) {
     }
 
     public record FileListing(List<ParquetFileItem> files, int size, boolean hasMore, String nextCursor) {
@@ -101,6 +101,6 @@ public class ParquetExportFileService {
         String s3Key = "abandoned".equals(row.status()) ? null : row.s3Key();
         return new ParquetFileItem(row.siteId(), row.siteDomain(), row.table(), row.type(),
                 row.firstSeq(), row.lastSeq(), row.seq(), row.producedAt(), fileName, s3Key,
-                row.batchId(), row.status(), row.artifactId());
+                row.batchId(), row.status(), row.artifactId(), row.sessionMode());
     }
 }

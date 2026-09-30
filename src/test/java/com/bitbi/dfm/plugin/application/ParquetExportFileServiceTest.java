@@ -55,19 +55,20 @@ class ParquetExportFileServiceTest {
         return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.DELTA,
                 firstSeq, lastSeq, null, producedAt,
                 S3CheckpointStorage.deltaKey(SITE_ID, table, firstSeq, lastSeq),
-                null, null, null);
+                null, null, null, null);
     }
 
     private CatalogRow checkpointRow(String table, long seq, LocalDateTime producedAt) {
         return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.CHECKPOINT,
                 null, null, seq, producedAt, "checkpoints/" + SITE_ID + "/" + table + "/seq=" + seq
-                + "/snapshot.parquet", null, null, null);
+                + "/snapshot.parquet", null, null, null, null);
     }
 
     private CatalogRow batchRow(String table, String status, long firstSeq, long lastSeq,
                                 LocalDateTime producedAt, String s3Key) {
         return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.BATCH,
-                firstSeq, lastSeq, null, producedAt, s3Key, BATCH_ID, status, UUID.randomUUID());
+                firstSeq, lastSeq, null, producedAt, s3Key, BATCH_ID, status, UUID.randomUUID(),
+                "full_snapshot");
     }
 
     @Test
@@ -85,6 +86,7 @@ class ParquetExportFileServiceTest {
         assertEquals(BATCH_ID, batch.batchId());
         assertNotNull(batch.artifactId());
         assertEquals("ready", batch.status());
+        assertEquals("full_snapshot", batch.sessionMode(), "the session mode travels with the row");
         assertEquals("orders_batch" + BATCH_ID + ".parquet", batch.fileName());
         assertEquals(100L, batch.firstSeq());
         assertEquals(250L, batch.lastSeq());
