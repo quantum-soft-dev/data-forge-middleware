@@ -287,13 +287,32 @@ message ChangeRecord {
 
 `row_hash` is an **optional, opaque** identifier of the row within `table`: the 32-byte SHA-256 of
 the client's canonical row form (`dbf-data-extractor` computes it for its keyless diff and keeps it
-in its `state.db`). The server never recomputes or verifies it. The rules:
+in its `state.db`). The server never recomputes or verifies it. The client's change request is
+[`documents/cr-row-hash-server.ru.md`](https://github.com/quantum-soft-dev/dbf-data-extractor/blob/develop/documents/cr-row-hash-server.ru.md)
+in `dbf-data-extractor` (tracked there as #156; sending the field is #157); the "CR §…" references
+below are to that document. The rules:
 
 - **Exactly 32 bytes**, sent as raw `bytes` (34 bytes on the wire, not 66 for hex). The row's
-  identity is the pair `(table, row_hash)`; the table name is not part of the hash.
-- **`INSERT`** carries the row's hash; **`DELETE`** carries **the same value its `INSERT` carried**.
-  `UPDATE` does not define it — leave it empty; an `UPDATE` never changes a row's hash on the server
-  either. Identical in `DELTA`, `FULL_SNAPSHOT` and `CONTINUOUS`.
+  identity is the pair `(table, row_hash)`; the table name is not part of the hash. The pair is
+  unique within a table in the client's normal mode, but **not** under `track_duplicates` (below).
+- **`INSERT`** carries the row's hash; **`DELETE`** carries **the same value its `INSERT` carried**,
+  taken from the client's baseline rather than recomputed from the current data. `UPDATE` does not
+  define it — leave it empty; an `UPDATE` never changes a row's hash on the server either. Identical
+  in `DELTA`, `FULL_SNAPSHOT` and `CONTINUOUS`.
+- **A row inserted before the field existed has no hash on the server, yet its `DELETE` may carry
+  one** (CR §2, §3.3): the row came from an older client, or was sent before the client was updated,
+  and the `DELETE` comes from a client that now sends the field. So a `DELETE` is matched by `key`,
+  never by `row_hash` — on a `DELETE` the hash is extra information, not a matching condition. A
+  `DELETE` whose hash differs from the stored row's, or whose row has none, removes that row all the
+  same.
+- **`(table, row_hash)` is not unique under `[ingestion.keyless] track_duplicates = true`** (CR §3.2).
+  That client mode is off-normal and off by default, and it contradicts OQ-1 of
+  [the Delta v2 CR](./cr-delta-client-v2.md#18-open-questions--deferred-decisions). In it the hash
+  names a row's **content**, not one copy of it: a row present N times goes out as N `INSERT`s with
+  one hash, and later runs send the change in multiplicity as k `INSERT`s or k `DELETE`s with that
+  same hash. The server does not rely on uniqueness — identity stays the full `key` — so it behaves
+  there exactly as it did before the field existed. A consumer must not rely on it either:
+  collapsing rows by `_row_hash` would drop copies that still exist at the source.
 - **Empty = absent.** An older client sends nothing and is accepted exactly as before; so are old
   segments and checkpoint frames.
 - **Any other length is ignored**, not rejected: the value is dropped before the record is staged,
@@ -307,7 +326,8 @@ in its `state.db`). The server never recomputes or verifies it. The rules:
 
 Where it ends up: the changelog segment (byte for byte), the checkpoint reload frame (kept through
 every rebuild — see [egress](#what-the-server-produces-egress)) and a trailing **`_row_hash`** column
-in every Parquet artifact.
+in every Parquet artifact — the **last** column, by the owner's decision rather than beside
+`_op`/`_seq`/`_changed` as CR §4.5 sketches (see [egress](#what-the-server-produces-egress)).
 
 ### Value typing
 
@@ -614,12 +634,18 @@ You don't write these — they're how downstream tools read your data:
   [`row_hash`](#row_hash--the-clients-row-identity-issue-369) as **64 lowercase hex characters**, the
   way the client's own `state.db` shows it, and **null** for a row whose record carried none (every
   row an older client wrote, and every `UPDATE` row of a delta file). In a delta or batch file an
-  `INSERT` and its later `DELETE` carry the same value. In a snapshot it is the hash of the record that
-  created the row, kept through the row's `UPDATE`s — the checkpoint frame carries it from build to
-  build on every path (the fold, the streamed bootstrap of #292 and the merge of #293), so a hash sent
-  once is not lost by a later rebuild. It is **appended** after the declared columns rather than placed
-  beside `_op`/`_seq`/`_changed`, so no column a reader already knew moved; a reader that maps columns
-  by name must tolerate one more `_`-prefixed column. Until a site's client sends the field — and
+  `INSERT` and its later `DELETE` carry the same value — except for a row inserted before the client
+  sent the field, whose `INSERT` has null and whose `DELETE` may already carry a hash. In a snapshot
+  it is the hash of the record that created the row, kept through the row's `UPDATE`s — the
+  checkpoint frame carries it from build to build on every path (the fold, the streamed bootstrap of
+  #292 and the merge of #293), so a hash sent once is not lost by a later rebuild. **It is not a
+  unique key**: under the client's `track_duplicates` mode several rows of one table share a value
+  ([above](#row_hash--the-clients-row-identity-issue-369)), so do not deduplicate or collapse rows by
+  it — the server itself identifies a row by its key columns (the whole row, for a keyless table).
+  **Its position is the owner's decision** (2026-09-29, issue #373): it is **appended** after the
+  declared columns rather than placed beside `_op`/`_seq`/`_changed` as the client's CR §4.5
+  sketches, so no column a reader already knew moved; a reader that maps columns by name must
+  tolerate one more `_`-prefixed column. Until a site's client sends the field — and
   until each row has been re-sent once, e.g. by one `FULL_SNAPSHOT` — expect nulls. A declared column
   named `_row_hash` would collide with it, as one named `_op` already would.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
