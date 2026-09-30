@@ -87,8 +87,15 @@ deliberately does not do:
 - **Different sites** are built in parallel exactly as before.
 
 The earliest unfinished batch of a site is never held back by the rule, so it cannot deadlock.
-No migration: the site filter is served by `idx_batch_parquet_artifacts_site`, and the unfinished
-rows it scans are few.
+No migration, and the cost does not grow with a site's history. The subquery's status predicate is
+exactly the predicate of the partial claim index `idx_batch_parquet_artifacts_claim`, so PostgreSQL
+reads `earlier` from that index — unfinished rows only — and filters the site from it; `READY` and
+`ABANDONED` rows are never visited. Measured with `EXPLAIN (ANALYZE, BUFFERS)` on PostgreSQL 16:
+one site with 100 000 `READY` rows (2 000 batches of 50 tables), an earlier batch `BUILDING` and
+an 87-table batch held back behind it — the claim query ran in 0.27 ms, 970 shared buffers, all of
+them over the 88 unfinished rows. A partial `(site_id)` index over the same statuses gave the same
+plan cost, so it was not added. The scan is bounded by the queue's depth, like the claim query
+itself.
 
 Each table claim mints a `claim_token`, and the batch owner renews every lease (`updated_at`) every third of
 `delta.batch-parquet.lease-seconds` (default 30 min) while it builds. The lease therefore bounds

@@ -117,7 +117,9 @@ Response (one entry per file; a fresh one-time link is registered per **download
 Batch rows also carry `batchId`, `artifactId`, `status` (`ready` or `abandoned`) and
 `sessionMode` — the kind of session the batch was: `full_snapshot` (the whole site, replacing it),
 `delta` or `continuous`. `sessionMode` is null for `type=delta` and `type=checkpoint` files and for
-a batch started before the server recorded modes (V47). An
+a batch started before the server recorded modes (V47). The values are lower-case on this
+endpoint, like `type` and `status` — the owner/admin Delta Sync API spells the same modes in
+upper case (`FULL_SNAPSHOT`), so do not share a case-sensitive enum between the two. An
 `abandoned` table exhausted its build attempts: `downloadUrl` and `linkExpiresAt` are null
 and no `download_links` row is created. Alert and ask an operator to
 `POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue`
@@ -138,6 +140,11 @@ before it. What is **not** guaranteed:
   a file of a later batch of the same site.
 - **An old batch returning late.** An operator's requeue of an `abandoned` artifact, or a batch
   built on demand long after it finished, is listed after its successors. See `abandoned` below.
+- **A batch whose build was never queued.** A batch's work rows are created right after its
+  session commits; if that step is lost (the process dies at that instant), the batch holds no
+  place in the queue, later batches are built past it, and it appears only if something builds it
+  later (an owner download does). This is a known gap of the queue, not of this listing
+  (#380).
 - **Order across sites.** Each site is ordered on its own.
 - **`type=delta` / `type=checkpoint`.** Unchanged; this section is about batch files.
 
@@ -149,7 +156,10 @@ consumer that compares `lastSeq` alone skips everything after such a restart. So
    `sessionMode = full_snapshot` means: clear **all** tables of that site, start the seq count
    inside this batch, and apply this file and every later file of the same `batchId` as they
    arrive (they may come in later sweeps). A table that gets no file from the snapshot stays
-   empty — correct: an empty or dropped source table produces none.
+   empty — correct: an empty or dropped source table produces none. *New* means a `batchId` you
+   have never seen, as `ready` or as `abandoned`: keep the set of snapshot `batchId`s seen per
+   site. A requeued old snapshot returning `ready` after its successors has been seen before, as
+   `abandoned`, and must not clear the site again.
 2. **A `full_snapshot` is never skipped by `lastSeq`.**
 3. **Within an epoch, `lastSeq <= applied_seq → skip`** — for downloadable rows only
    (`status=ready`). `lastSeq == null` means the range is unknown — **never skip** that file (in
@@ -168,7 +178,7 @@ The same three situations, as a consumer sees them:
 |---|---|---|
 | **Re-baseline** (the server asked for one, or the client decided): seq continues | The old batch's tables not yet built when the snapshot committed as `abandoned`, **then** the snapshot's tables as `ready`, `sessionMode = full_snapshot`, seq above the old | Alert and stop on `abandoned`; on the `full_snapshot` clear the site, apply it, resume. Rows deleted at the source are gone, because the tables were cleared |
 | **History wipe** (#89): seq restarts at 1 | The old batches are gone from the listing (the wipe deletes them). The new snapshot arrives with `sessionMode = full_snapshot` and `firstSeq = 1`, far below your `applied_seq` | Rule 2: do not skip it. Clear the site, apply, and compare later deltas inside the new epoch |
-| **Client lost its journal** and resends a `FULL_SNAPSHOT` from seq 1 without a wipe | Same as the wipe, except older batches stay listed behind you | Same as the wipe. Stay on `type=batch`: a `type=delta` file name is built from its seq range and cannot tell the two epochs apart |
+| **Client lost its journal** and resends a `FULL_SNAPSHOT` from seq 1 without a wipe | Same as the wipe, except older batches stay listed behind you | Same as the wipe. Stay on `type=batch`: a `type=delta` file name is built from its seq range, so a restarted range reuses the old names and an old file is overwritten — a `type=delta` consumer cannot tell the two epochs apart |
 
 A consumer that already skipped a snapshot under the old `lastSeq`-only rule recovers by reloading
 the site's tables from `type=checkpoint`.
