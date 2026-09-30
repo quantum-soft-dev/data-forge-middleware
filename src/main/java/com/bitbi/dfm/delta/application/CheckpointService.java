@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -678,10 +679,21 @@ public class CheckpointService {
             // the frame is the input re-emitted. Taken before foldSite because the fold is the one
             // thing this path removes; it writes nothing durable until it knows the contract held,
             // so a violation simply falls through to the general path below.
-            if (streamingBootstrap && !haveFrame && checkpointSeq == 0 && !newSegments.isEmpty()
-                    && newSegments.stream().allMatch(CheckpointService::isFullSnapshot)) {
-                Map<String, Map<String, FoldedRow>> streamed =
-                        buildFromSnapshotStream(siteId, newSegments, epoch);
+            //
+            // Issue #374 widened "entire history" to "a FULL_SNAPSHOT prefix and whatever came after
+            // it". A client sends a DELTA every day and the build runs once a night, so a snapshot
+            // taken in the daytime is almost never alone by 02:00 — and with one DELTA behind it the
+            // site used to be folded whole, refused with fold_too_large, and refused again every
+            // night after as the history grew. The owner's answer is two ticks: stream the prefix
+            // alone, park the pointer at its last seq, and leave the tail as segments for the next
+            // build, which has a frame by then and merges it (#293). Nothing new is folded to get
+            // there; the price, taken knowingly, is one night of checkpoint lag on the tail.
+            List<ChangelogSegment> snapshot = streamingBootstrap && !haveFrame && checkpointSeq == 0
+                    ? streamableSnapshot(newSegments)
+                    : List.of();
+            if (!snapshot.isEmpty()) {
+                Map<String, Map<String, FoldedRow>> streamed = buildFromSnapshotStream(
+                        siteId, snapshot, newSegments.size() - snapshot.size(), epoch);
                 if (streamed != null) {
                     return streamed;
                 }
@@ -690,8 +702,9 @@ public class CheckpointService {
             // The nightly steady state (issue #293): there is a seed frame, so the site does not
             // have to be in heap to be re-emitted — the delta is folded and the frame is streamed
             // past it. What is left below is the build that has no frame to stream: a bootstrap
-            // whose history is not one whole FULL_SNAPSHOT session, which has no base to join
-            // against and folds its own records, exactly as it always did.
+            // whose history neither is one FULL_SNAPSHOT session nor begins with one (#374), or
+            // whose snapshot broke the INSERT-only contract, which has no base to join against and
+            // folds its own records, exactly as it always did.
             if (streamingMerge && haveFrame) {
                 return buildByMerge(siteId, idlePass, checkpointSeq, epoch, newSegments);
             }
@@ -712,6 +725,69 @@ public class CheckpointService {
 
     private static boolean isFullSnapshot(ChangelogSegment segment) {
         return FULL_SNAPSHOT_MODE.equals(segment.getMode());
+    }
+
+    /**
+     * The segments a first build may stream without folding, or none.
+     *
+     * <p>A history that is entirely {@code FULL_SNAPSHOT} is streamed whole, exactly as issue #292
+     * decided. Otherwise it is the {@link #snapshotPrefix snapshot prefix} of issue #374, and the
+     * rest is left for the next build's merge.</p>
+     */
+    private static List<ChangelogSegment> streamableSnapshot(List<ChangelogSegment> segments) {
+        if (!segments.isEmpty() && segments.stream().allMatch(CheckpointService::isFullSnapshot)) {
+            return segments;
+        }
+        return snapshotPrefix(segments);
+    }
+
+    /**
+     * The {@code FULL_SNAPSHOT} prefix of a first build's history, or an empty list when the history
+     * does not split cleanly into a prefix and a tail (issue #374).
+     *
+     * <p>The prefix is the leading run of segments of <b>one</b> {@code FULL_SNAPSHOT} batch,
+     * contiguous among themselves ({@code firstSeq == previous lastSeq + 1}) and first in the
+     * history. The tail is everything else, and it must be non-empty, hold no {@code FULL_SNAPSHOT}
+     * segment of any batch, and start strictly after the prefix. Any other shape — a history that
+     * does not begin with the snapshot, a gap or an overlap inside it, a second snapshot, a snapshot
+     * interrupted and resumed, a tail segment whose seqs fall inside the prefix — answers empty, and
+     * the build takes the path it took before #374.</p>
+     *
+     * <p>"First in the history" rather than "starting at seq 1", deliberately: after a wipe the
+     * snapshot does start at 1, but {@code SiteSyncState.resetForRebaseline} keeps the applied
+     * watermark, so a re-baseline's snapshot starts wherever the old history ended. At pointer 0 with
+     * no frame the build loads the whole committed set, so the first segment loaded is the start of
+     * the history either way. The #292 path never required seq 1 either.</p>
+     *
+     * <p>Why the split is lossless: the frame written from the prefix is the fold of the prefix,
+     * and the next build merges the tail into it — {@link ChangelogMerge} is equivalent to folding
+     * the tail on top of that frame, which is folding the whole history in order. That equivalence
+     * is only true when every tail record comes after every prefix record, which is what the
+     * seq checks above hold.</p>
+     */
+    static List<ChangelogSegment> snapshotPrefix(List<ChangelogSegment> segments) {
+        if (segments.isEmpty() || !isFullSnapshot(segments.get(0))) {
+            return List.of();
+        }
+        UUID batch = segments.get(0).getBatchId();
+        int end = 1;
+        while (end < segments.size() && isFullSnapshot(segments.get(end))
+                && Objects.equals(batch, segments.get(end).getBatchId())) {
+            if (segments.get(end).getFirstSeq() != segments.get(end - 1).getLastSeq() + 1) {
+                return List.of();
+            }
+            end++;
+        }
+        if (end == segments.size()) {
+            return List.of();
+        }
+        long prefixEnd = segments.get(end - 1).getLastSeq();
+        for (ChangelogSegment segment : segments.subList(end, segments.size())) {
+            if (isFullSnapshot(segment) || segment.getFirstSeq() <= prefixEnd) {
+                return List.of();
+            }
+        }
+        return List.copyOf(segments.subList(0, end));
     }
 
     /**
@@ -803,13 +879,20 @@ public class CheckpointService {
      * row-group buffers and the repeated-key hash set — none of which grows with the site's rows
      * except the last, at eight bytes each.</p>
      *
+     * <p>Since issue #374 {@code segments} may be only the {@code FULL_SNAPSHOT} prefix of the
+     * history, {@code tailSegments} counting what follows it. The pointer then stops at the prefix's
+     * last seq and the tail is left as segments above it: the next build has a frame and merges them
+     * ({@link #buildByMerge}). Neither build folds the site.</p>
+     *
      * <p><b>Returns {@code null} to mean "not this way after all"</b>: the wire contract turned out
-     * not to hold for this input, nothing durable has been written, and the caller folds instead.
+     * not to hold for this input, nothing durable has been written, and the caller folds instead —
+     * the whole history, a tail included.
      * That is the whole of the fallback, and it is why the frame is written locally before anything
      * is uploaded.</p>
      */
     private Map<String, Map<String, FoldedRow>> buildFromSnapshotStream(UUID siteId,
                                                                         List<ChangelogSegment> segments,
+                                                                        int tailSegments,
                                                                         SiteEpoch epoch) {
         long seq = segments.get(segments.size() - 1).getLastSeq();
         scratch.prepareDirectory();
@@ -842,6 +925,13 @@ public class CheckpointService {
                     + "table(s), {} pass(es) over the local frame with {} snapshot writer(s), "
                     + "no fold", siteId, seq, manifest.records(), manifest.tables().size(), passes,
                     snapshotWriters);
+            if (tailSegments > 0) {
+                // Issue #374: the snapshot was not alone. Said once, so an operator reading a site
+                // whose pointer stopped short of its applied seq knows the gap is by design and
+                // closes on the next tick.
+                log.info("Left {} segment(s) above seq {} of site {} for the next build to merge "
+                        + "into this frame", tailSegments, seq, siteId);
+            }
 
             epochGuard.inEpoch(siteId, epoch, () -> syncStateService.recordCheckpoint(siteId, seq));
             publishCheckpointRecorded(siteId, seq, epoch);
