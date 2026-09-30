@@ -1109,6 +1109,34 @@ written locally first. A hash collision reads as a repeat and does the same thin
 (`delta.checkpoint.streaming-bootstrap`, default **true**) turns the whole path off without shipping
 code — it is the rollback, not the safety.
 
+**A snapshot with a tail behind it is built in two ticks (issue #374).** "Whole history is one
+`FULL_SNAPSHOT` session" turned out to be the rare case: the client sends a DELTA every day and the
+build runs once a night at `delta.checkpoint.cron`, so a snapshot finished in the daytime almost
+always has a DELTA (or CONTINUOUS seals) behind it by 02:00. Such a site used to leave the streamed
+path, be folded whole and be refused with `fold_too_large` — every night, since its history only
+grows, with the pointer at zero, retention frozen and the site showing "Checkpoint failed". Now the
+first build splits the history:
+
+- the **prefix** is the leading run of segments of **one** `FULL_SNAPSHOT` batch, contiguous among
+  themselves and first in the history — after a wipe that is seq 1, after a re-baseline it is
+  wherever the old history ended, since a re-baseline keeps the applied watermark;
+- the **tail** is everything after it: non-empty, holding no `FULL_SNAPSHOT` segment of any batch,
+  and starting strictly after the prefix's last seq.
+
+The first build streams the prefix exactly as above and parks the pointer at the **snapshot's**
+last seq, logging how many segments it left above it. The tail stays as segments, and the next
+build — which now has a frame — merges it like any incremental build (the next section), hash
+partitioning included when the tail outgrows the budget. Neither build folds the site. The price,
+taken knowingly: for one night the checkpoint lags by the tail, so `delta.seq.lag` shows it and
+retention keeps it. Any other shape — a history that does not begin with the snapshot, a gap or
+overlap inside the prefix, two snapshot batches, a snapshot interrupted by its tail and resumed, a
+tail segment whose seqs fall inside the prefix — takes the path it took before; and a prefix that
+breaks the INSERT-only contract falls back to folding the **whole** history, tail included, just as
+a snapshot alone does. `delta.checkpoint.streaming-bootstrap=false` turns this off with the rest.
+`CheckpointSnapshotPrefixIntegrationTest` holds it on LocalStack under the same 65 536-byte budget:
+after the second build the frame and every `snapshot.parquet` equal the fold of the whole history,
+for a DELTA tail and for a CONTINUOUS tail of two seals.
+
 Three things to know before tuning it. The unit is an **estimate** — a coarse per-row object-graph
 figure (the row's array of values, the values themselves, the row's identity string, plus the
 table's column names counted once — issue #290), not the records'

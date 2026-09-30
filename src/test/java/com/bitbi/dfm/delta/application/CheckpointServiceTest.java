@@ -2760,6 +2760,304 @@ class CheckpointServiceTest {
         verify(syncStateService, never()).recordCheckpoint(eq(SITE), anyLong());
     }
 
+    // --- issue #374: a first build whose history is a FULL_SNAPSHOT followed by a tail ----------
+    //
+    // The owner's variant 2, "two ticks": the first build streams the snapshot prefix alone (#292)
+    // and parks the pointer at its last seq; the tail stays as segments and the next build merges it
+    // (#293). Neither build folds the site, so a budget the snapshot could never fit is no obstacle.
+
+    /** The snapshot prefix: two seals of one {@code FULL_SNAPSHOT} batch, 1..1000 and 1001..2000. */
+    private static final int PREFIX_ROWS = 2_000;
+    private static final UUID SNAPSHOT_BATCH = UUID.randomUUID();
+    private static final UUID TAIL_BATCH = UUID.randomUUID();
+
+    private ChangelogSegment snapshotSegment(long firstSeq, long lastSeq, String s3Key) {
+        return segmentOf(SNAPSHOT_BATCH, firstSeq, lastSeq, s3Key, "FULL_SNAPSHOT");
+    }
+
+    private static ChangelogSegment segmentOf(UUID batch, long firstSeq, long lastSeq, String s3Key, String mode) {
+        return ChangelogSegment.create(SITE, batch, firstSeq, lastSeq, lastSeq - firstSeq + 1,
+                "hash", s3Key, mode, Map.of());
+    }
+
+    /** Customers {@code from..to}, one INSERT each, at seq equal to the id. */
+    private static List<ChangeRecord> snapshotRecords(long from, long to) {
+        List<ChangeRecord> records = new ArrayList<>();
+        for (long id = from; id <= to; id++) {
+            records.add(record("customers", id, id, "name-" + id));
+        }
+        return records;
+    }
+
+    /**
+     * The tail the ticket names: an INSERT replacing a snapshot row, an UPDATE patching one, a
+     * DELETE removing one, and a row the snapshot never had.
+     */
+    private static List<ChangeRecord> tailRecords() {
+        long seq = PREFIX_ROWS;
+        return List.of(
+                record("customers", ++seq, 1, "replaced"),
+                update("customers", ++seq, 2, "patched"),
+                deletion("customers", ++seq, 3),
+                record("customers", ++seq, 50_000, "brand new"));
+    }
+
+    private List<ChangeRecord> stubSnapshotPrefix() {
+        List<ChangeRecord> first = snapshotRecords(1, 1_000);
+        List<ChangeRecord> second = snapshotRecords(1_001, PREFIX_ROWS);
+        stubSegmentRecords("s3/snap-a", first);
+        stubSegmentRecords("s3/snap-b", second);
+        List<ChangeRecord> all = new ArrayList<>(first);
+        all.addAll(second);
+        return all;
+    }
+
+    /** A DELTA tail in one segment, or a CONTINUOUS one sealed in two. */
+    private List<ChangelogSegment> stubTail(String mode, List<ChangeRecord> tail) {
+        long first = PREFIX_ROWS + 1L;
+        long last = PREFIX_ROWS + (long) tail.size();
+        if ("CONTINUOUS".equals(mode)) {
+            int half = tail.size() / 2;
+            stubSegmentRecords("s3/seal-1", tail.subList(0, half));
+            stubSegmentRecords("s3/seal-2", tail.subList(half, tail.size()));
+            return List.of(
+                    segmentOf(TAIL_BATCH, first, first + half - 1, "s3/seal-1", mode),
+                    segmentOf(TAIL_BATCH, first + half, last, "s3/seal-2", mode));
+        }
+        stubSegmentRecords("s3/tail", tail);
+        return List.of(segmentOf(TAIL_BATCH, first, last, "s3/tail", mode));
+    }
+
+    private void stubPrefixAndTail(String mode, List<ChangeRecord> tail) {
+        List<ChangelogSegment> segments = new ArrayList<>(List.of(
+                snapshotSegment(1, 1_000, "s3/snap-a"),
+                snapshotSegment(1_001, PREFIX_ROWS, "s3/snap-b")));
+        segments.addAll(stubTail(mode, tail));
+        stubSiteSegments(segments);
+        when(syncStateService.getSyncState(SITE)).thenReturn(
+                new SyncStateView(PREFIX_ROWS + (long) tail.size(), 0L, 1, false, false, 0L, 0L));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+    }
+
+    /** The next night: the pointer where the first build parked it, the frame it uploaded. */
+    private void stubSecondTick(long pointer, long appliedSeq, byte[] frame) {
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(appliedSeq, pointer, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, pointer)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(pointer, frame);
+    }
+
+    /**
+     * A frame's rows by table, in order, as {@code op|key|data} — the equality rule of
+     * {@code ChangelogMergeEquivalenceTest}: the rows, their values and the per-table order, but
+     * not the interleaving between tables or the frame-local seq.
+     */
+    private static Map<String, List<String>> frameByTable(List<ChangeRecord> frame) {
+        Map<String, List<String>> byTable = new java.util.LinkedHashMap<>();
+        for (ChangeRecord record : frame) {
+            byTable.computeIfAbsent(record.getTable(), table -> new ArrayList<>())
+                    .add(record.getOp() + "|" + record.getKeyMap() + "|" + record.getDataMap());
+        }
+        return byTable;
+    }
+
+    private static Map<String, List<String>> foldOfTheWholeHistory(List<ChangeRecord> history) {
+        return frameByTable(CheckpointFrame.toRecords(ChangelogFold.fold(Map.of(), history)));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"DELTA", "CONTINUOUS"})
+    void aSnapshotFollowedByATailIsBuiltInTwoTicksWithoutFoldingTheSite(String tailMode) {
+        // The ticket's red test: a budget the snapshot's fold could never fit, and a first build
+        // that finishes anyway. Before #374 this history left the streamed path the moment one
+        // segment was not a FULL_SNAPSHOT, and the general fold was refused with fold_too_large —
+        // every night, since the history only grows.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        List<ChangeRecord> history = new ArrayList<>(stubSnapshotPrefix());
+        List<ChangeRecord> tail = tailRecords();
+        history.addAll(tail);
+        stubPrefixAndTail(tailMode, tail);
+        long tailEnd = PREFIX_ROWS + (long) tail.size();
+
+        // Tick 1: the prefix alone, streamed; the pointer parks at the snapshot's end.
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq((long) PREFIX_ROWS), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, PREFIX_ROWS);
+        verify(syncStateService, never()).recordCheckpoint(SITE, tailEnd);
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+        verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
+        assertEquals(foldOfTheWholeHistory(history.subList(0, PREFIX_ROWS)),
+                frameByTable(ChangelogCodec.parse(lastFrameBytes)),
+                "the first frame is the snapshot, which is the fold of the prefix");
+
+        // Tick 2: the ordinary merge of #293 applies the tail on top of that frame.
+        stubSecondTick(PREFIX_ROWS, tailEnd, lastFrameBytes);
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(tailEnd), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, tailEnd);
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+        assertEquals(foldOfTheWholeHistory(history), frameByTable(ChangelogCodec.parse(lastFrameBytes)),
+                "after the merge the frame is the fold of the whole history");
+    }
+
+    /** A tail row updated, deleted or replaced shows in the snapshot written from the merged frame. */
+    @Test
+    void theSecondTickPublishesSnapshotsOfTheWholeHistory() {
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubSnapshotPrefix();
+        List<ChangeRecord> tail = tailRecords();
+        stubPrefixAndTail("DELTA", tail);
+        service.buildCheckpoint(SITE);
+        stubSecondTick(PREFIX_ROWS, PREFIX_ROWS + (long) tail.size(), lastFrameBytes);
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository, atLeastOnce()).save(saved.capture());
+        Checkpoint last = saved.getAllValues().get(saved.getAllValues().size() - 1);
+        assertEquals(PREFIX_ROWS + (long) tail.size(), last.getSeq());
+        assertEquals((long) PREFIX_ROWS, last.getRowCount(),
+                "2000 snapshot rows, one deleted by the tail and one added by it");
+    }
+
+    /**
+     * Histories the prefix rule does not cover keep today's path — the general fold — and are
+     * refused under a budget the fold cannot fit, exactly as before #374. Each case is one way the
+     * split could be wrong: a tail segment starting inside the prefix, a second snapshot batch, a
+     * snapshot interrupted and resumed, a gap inside the prefix, a history with no snapshot at all
+     * (all INSERTs, so only the mode tells it from one), and a history that does not start with the
+     * snapshot.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.MethodSource("unsplittableHistories")
+    void aHistoryThePrefixRuleDoesNotCoverKeepsTheGeneralFold(String description,
+                                                              List<ChangelogSegment> segments) {
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubSnapshotPrefix();
+        stubSegmentRecords("s3/tail", tailRecords());
+        stubSegmentRecords("s3/other", snapshotRecords(1, 2));
+        stubSiteSegments(segments);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE),
+                description + ": must reach the general fold");
+        verify(checkpointStorage, never()).uploadFrame(eq(SITE), anyLong(), any(Path.class));
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+    }
+
+    static Stream<org.junit.jupiter.params.provider.Arguments> unsplittableHistories() {
+        UUID otherSnapshot = UUID.randomUUID();
+        return Stream.of(
+                org.junit.jupiter.params.provider.Arguments.of("a tail segment inside the prefix", List.of(
+                        segmentOf(SNAPSHOT_BATCH, 1, 1_000, "s3/snap-a", "FULL_SNAPSHOT"),
+                        segmentOf(SNAPSHOT_BATCH, 1_001, PREFIX_ROWS, "s3/snap-b", "FULL_SNAPSHOT"),
+                        segmentOf(TAIL_BATCH, 1_500, 1_503, "s3/tail", "DELTA"))),
+                org.junit.jupiter.params.provider.Arguments.of("two FULL_SNAPSHOT batches", List.of(
+                        segmentOf(SNAPSHOT_BATCH, 1, 1_000, "s3/snap-a", "FULL_SNAPSHOT"),
+                        segmentOf(otherSnapshot, 1_001, PREFIX_ROWS, "s3/snap-b", "FULL_SNAPSHOT"),
+                        segmentOf(TAIL_BATCH, PREFIX_ROWS + 1, PREFIX_ROWS + 4, "s3/tail", "DELTA"))),
+                org.junit.jupiter.params.provider.Arguments.of("a snapshot interleaved with its tail", List.of(
+                        segmentOf(SNAPSHOT_BATCH, 1, 1_000, "s3/snap-a", "FULL_SNAPSHOT"),
+                        segmentOf(TAIL_BATCH, 1_001, 1_004, "s3/tail", "DELTA"),
+                        segmentOf(SNAPSHOT_BATCH, 1_005, PREFIX_ROWS + 4, "s3/snap-b", "FULL_SNAPSHOT"))),
+                org.junit.jupiter.params.provider.Arguments.of("a gap inside the prefix", List.of(
+                        segmentOf(SNAPSHOT_BATCH, 1, 1_000, "s3/snap-a", "FULL_SNAPSHOT"),
+                        segmentOf(SNAPSHOT_BATCH, 1_002, PREFIX_ROWS, "s3/snap-b", "FULL_SNAPSHOT"),
+                        segmentOf(TAIL_BATCH, PREFIX_ROWS + 1, PREFIX_ROWS + 4, "s3/tail", "DELTA"))),
+                org.junit.jupiter.params.provider.Arguments.of("no snapshot at all", List.of(
+                        segmentOf(TAIL_BATCH, 1, 1_000, "s3/snap-a", "DELTA"),
+                        segmentOf(TAIL_BATCH, 1_001, PREFIX_ROWS, "s3/snap-b", "DELTA"))),
+                org.junit.jupiter.params.provider.Arguments.of("a history that does not start with the snapshot",
+                        List.of(
+                                segmentOf(TAIL_BATCH, 1, 2, "s3/other", "DELTA"),
+                                segmentOf(SNAPSHOT_BATCH, 3, 1_002, "s3/snap-a", "FULL_SNAPSHOT"),
+                                segmentOf(SNAPSHOT_BATCH, 1_003, PREFIX_ROWS + 2, "s3/snap-b", "FULL_SNAPSHOT"),
+                                segmentOf(TAIL_BATCH, PREFIX_ROWS + 3, PREFIX_ROWS + 6, "s3/tail", "DELTA"))));
+    }
+
+    /**
+     * The #292 guard still decides for the prefix: a key repeated inside the snapshot is one row
+     * through the fold and would be two in a streamed frame, so the build falls back to folding the
+     * whole history — tail included — and the pointer goes to the tail's end in one build.
+     */
+    @Test
+    void aPrefixThatBreaksTheSnapshotContractFallsBackToFoldingTheWholeHistory() {
+        stubSnapshotPrefix();
+        stubSegmentRecords("s3/snap-b", List.of(
+                record("customers", 1_001, 1, "Ann again"),
+                record("customers", 1_002, 1_002, "name-1002")));
+        List<ChangeRecord> tail = tailRecords();
+        stubPrefixAndTail("DELTA", tail);
+        long tailEnd = PREFIX_ROWS + (long) tail.size();
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertFalse(state.isEmpty(), "the returned fold proves the build folded");
+        verify(metrics).recordCheckpointFoldBytes(anyLong());
+        verify(checkpointStorage, never()).uploadFrame(eq(SITE), eq((long) PREFIX_ROWS), any(Path.class));
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(tailEnd), any(Path.class));
+        verify(syncStateService).recordCheckpoint(SITE, tailEnd);
+    }
+
+    /** The rollback: with the flag off the whole history is folded in one build, as before #374. */
+    @Test
+    void theFlagSendsASnapshotWithATailBackToTheFold() {
+        streamingBootstrap = false;
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE);
+        stubSnapshotPrefix();
+        List<ChangeRecord> tail = tailRecords();
+        stubPrefixAndTail("DELTA", tail);
+        long tailEnd = PREFIX_ROWS + (long) tail.size();
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(PREFIX_ROWS, state.get("customers").size(), "with the flag off the build folds");
+        verify(syncStateService).recordCheckpoint(SITE, tailEnd);
+        verify(syncStateService, never()).recordCheckpoint(SITE, PREFIX_ROWS);
+    }
+
+    /**
+     * A tail too large for the budget is the merge's problem on the second tick, and the merge
+     * partitions it (#293) rather than refusing it with fold_too_large.
+     */
+    @Test
+    void aTailLargerThanTheBudgetIsPartitionedByTheSecondTick() {
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, DELTA_ONLY_BUDGET);
+        stubSnapshotPrefix();
+        List<ChangeRecord> tail = new ArrayList<>();
+        for (int at = 1; at <= PREFIX_ROWS; at++) {
+            tail.add(record("customers", PREFIX_ROWS + at, 1_000_000L + at, "wide-" + at));
+        }
+        stubPrefixAndTail("DELTA", tail);
+        long tailEnd = PREFIX_ROWS + (long) tail.size();
+
+        service.buildCheckpoint(SITE);
+        verify(syncStateService).recordCheckpoint(SITE, PREFIX_ROWS);
+        stubSecondTick(PREFIX_ROWS, tailEnd, lastFrameBytes);
+        service.buildCheckpoint(SITE);
+
+        verify(metrics).checkpointBuildPartitioned();
+        verify(metrics, never()).checkpointBuildAborted(anyString());
+        verify(syncStateService).recordCheckpoint(SITE, tailEnd);
+        assertEquals(2 * PREFIX_ROWS, ChangelogCodec.parse(lastFrameBytes).size(),
+                "every snapshot row and every tail row reaches the merged frame");
+    }
+
+    /** An UPDATE carrying only the columns it changes, as a client sends one. */
+    private static ChangeRecord update(String table, long seq, long id, String name) {
+        Value idVal = Value.newBuilder().setIntValue(id).build();
+        return ChangeRecord.newBuilder()
+                .setTable(table)
+                .setOp(Op.UPDATE)
+                .setSeq(seq)
+                .putKey("id", idVal)
+                .putData("name", Value.newBuilder().setStringValue(name).build())
+                .build();
+    }
+
     private void recordUploads(String s3Key) {
         when(checkpointStorage.uploadParquet(eq(SITE), any(), anyLong(), any(Path.class)))
                 .thenAnswer(invocation -> {

@@ -778,6 +778,48 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- snapshot-prefix-bootstrap: A site's first checkpoint streams its `FULL_SNAPSHOT` even when a DELTA
+  or CONTINUOUS tail already sits behind it, in two ticks (issue #374). #292's streamed bootstrap was
+  chosen only when the **whole** history was `FULL_SNAPSHOT`, and #293's merge needs a frame, so a
+  snapshot with one DELTA behind it and no frame was folded whole — and the client sends a DELTA every
+  day while the build runs at 02:00, so for a real site #292 practically never applied. Seen on dev:
+  `fyt-new` (`c6e351ce…`) after the 28.09 wipe, a daytime FULL_SNAPSHOT (seq 1 → 5 020 646) plus the
+  day's DELTA, and the first build refused with `fold_too_large` at 1 207 959 669 bytes against a
+  1 207 959 552-byte budget — every night after as the history grows, pointer 0, retention frozen,
+  "Checkpoint failed" in the UI. **The owner's variant 2, "two ticks"**, over one build that would
+  merge the local prefix frame against the tail at once (two frames on scratch, a change to the
+  #193/#296 reserve): the first build streams the prefix alone exactly as #292 does and parks the
+  pointer at the **snapshot's** last seq; the tail stays as segments and the next build, which now has
+  a frame, merges it (#293, hash partitioning included). The accepted price is one night of checkpoint
+  lag on the tail, visible in `delta.seq.lag` and in retention. **The split** (`snapshotPrefix`): the
+  leading run of segments of **one** `FULL_SNAPSHOT` batch, contiguous among themselves and first in
+  the loaded history; a non-empty tail with no `FULL_SNAPSHOT` segment of any batch, each starting
+  strictly after the prefix's last seq. Anything else — no snapshot at the head, a gap inside the
+  prefix, two snapshot batches, a snapshot interrupted by its tail and resumed, a tail segment inside
+  the prefix — takes the pre-#374 path unchanged, and a history that is all `FULL_SNAPSHOT` still takes
+  #292's branch as before. **One reading of the ticket was taken rather than inherited**: it asked for
+  a prefix "contiguous from seq 1", and that is read as "first in the history", because
+  `SiteSyncState.resetForRebaseline` keeps `lastAppliedSeq`, so a re-baseline's snapshot starts
+  wherever the old history ended and a literal seq-1 rule would have left re-baselined sites in the
+  same trap; at pointer 0 without a frame the build loads the whole committed set, so the first
+  segment is the start either way (#292 never required seq 1 either). A prefix that breaks the
+  INSERT-only contract falls back to folding the **whole** history, tail included, in one build.
+  `delta.checkpoint.streaming-bootstrap=false` turns it off with the rest of #292. The scratch reserve
+  is unchanged — the prefix build is #292's shape exactly. **Tests**, red first on
+  `FoldTooLargeException`: `CheckpointServiceTest` (DELTA and CONTINUOUS tails at a 64 KiB budget —
+  tick 1 streams the prefix with no fold sample and the frame equal to the prefix's fold, tick 2
+  merges to the fold of the whole history by `ChangelogMergeEquivalenceTest`'s rule; the published
+  row count; six unsplittable histories each still refused by the general fold; the contract
+  fallback; the flag; a tail over budget partitioned on tick 2) and
+  `CheckpointSnapshotPrefixIntegrationTest` on LocalStack (both tail modes: pointer at the snapshot's
+  end after tick 1, then frame and every `snapshot.parquet` equal to the fold of the whole history).
+  **Mutation-proven**, six ways, each reddening its own case: the prefix branch removed (four unit
+  cases, both integration cases), the overlap check, the no-snapshot-in-tail check (two cases), the
+  one-batch check, the contiguity check, and the snapshot-at-the-head check. The DoD's night on dev
+  (`c6e351ce…` building its 87 checkpoints) needs a `deploy-dev/*` tag, a human step. No REST, gRPC,
+  proto, DTO, migration (**V61 stays next**), `specs/NNN-*`, configuration-key, metric, S3-key or
+  frontend change. See `docs/delta-client-v2-guide.md` ("A snapshot with a tail behind it is built in
+  two ticks").
 - row-hash-docs: The `row_hash` documentation says the three things the client's change request says
   and #369's text did not (issue #373, documentation only). The client's CR —
   `dbf-data-extractor/documents/cr-row-hash-server.ru.md`, updated after #369 was implemented — was
