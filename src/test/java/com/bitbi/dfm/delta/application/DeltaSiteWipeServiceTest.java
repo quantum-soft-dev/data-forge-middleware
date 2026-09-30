@@ -11,6 +11,7 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
+import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
@@ -83,10 +84,14 @@ class DeltaSiteWipeServiceTest {
 
     @BeforeEach
     void setUp() {
+        // The real purge over the same mocks: the order it deletes in is still this wipe's order.
+        DeltaSiteHistoryPurge purge = new DeltaSiteHistoryPurge(batchRepository, uploadedFileRepository,
+                sqlGenerationRepository, baselineRepository, accountPluginRepository, segmentRepository,
+                checkpointRepository, artifactRepository, errorLogRepository, s3FileStorageService,
+                checkpointStorage, mock(S3ChangelogSegmentStorage.class));
         service = new DeltaSiteWipeService(directTransactionTemplate(), syncStateRepository, batchRepository,
-                uploadedFileRepository, sqlGenerationRepository, baselineRepository, accountPluginRepository,
-                segmentRepository, checkpointRepository, artifactRepository, errorLogRepository, siteSchemaService,
-                s3FileStorageService, checkpointStorage, adminActionLogRepository, BATCH_TIMEOUT_MINUTES);
+                purge, siteSchemaService, s3FileStorageService, checkpointStorage, adminActionLogRepository,
+                BATCH_TIMEOUT_MINUTES);
 
         when(syncStateRepository.findBySiteIdForUpdate(SITE_ID))
                 .thenReturn(Optional.of(SiteSyncState.initial(SITE_ID)));

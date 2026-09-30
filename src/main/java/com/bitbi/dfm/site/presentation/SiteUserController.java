@@ -267,7 +267,9 @@ public class SiteUserController {
     @DeleteMapping("/{siteId}")
     @Operation(
             summary = "Delete a site",
-            description = "Permanently deletes a site and all associated data (batches, uploads, error logs)."
+            description = "Permanently deletes a site and all of its history — batches, uploads, error logs, Delta "
+                    + "changelog segments, checkpoints, batch Parquet artifacts, plugin SQL and the sync "
+                    + "state — and, once that has committed, the site's stored objects."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Site deleted successfully"),

@@ -1,24 +1,26 @@
 package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.auth.application.RefreshTokenService;
-import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
-import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteHistoryPurge;
 import com.bitbi.dfm.site.domain.SiteRepository;
-import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -47,16 +49,7 @@ class SiteServiceTest {
     private SiteRepository siteRepository;
 
     @Mock
-    private BatchRepository batchRepository;
-
-    @Mock
-    private ErrorLogRepository errorLogRepository;
-
-    @Mock
-    private UploadedFileRepository uploadedFileRepository;
-
-    @Mock
-    private S3FileStorageService s3FileStorageService;
+    private SiteHistoryPurge historyPurge;
 
     @Mock
     private DeviceAuthorizationRepository deviceAuthorizationRepository;
@@ -76,9 +69,38 @@ class SiteServiceTest {
     void setUp() {
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
-        siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
-                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository,
-                                      refreshTokenService, siteSchemaService);
+        siteService = new SiteService(siteRepository, historyPurge, deviceAuthorizationRepository,
+                                      refreshTokenService, siteSchemaService, flaggingTransactionTemplate());
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearAmbientTransaction() {
+        TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+
+    /**
+     * A template whose transaction is visible to {@code isActualTransactionActive()} while the
+     * callback runs and gone once it has committed or rolled back — enough to tell, from inside a
+     * mock, which side of the commit a call happened on.
+     */
+    private static TransactionTemplate flaggingTransactionTemplate() {
+        return new TransactionTemplate(new PlatformTransactionManager() {
+            @Override
+            public TransactionStatus getTransaction(TransactionDefinition definition) {
+                TransactionSynchronizationManager.setActualTransactionActive(true);
+                return new SimpleTransactionStatus();
+            }
+
+            @Override
+            public void commit(TransactionStatus status) {
+                TransactionSynchronizationManager.setActualTransactionActive(false);
+            }
+
+            @Override
+            public void rollback(TransactionStatus status) {
+                TransactionSynchronizationManager.setActualTransactionActive(false);
+            }
+        });
     }
 
     @Test
@@ -237,29 +259,59 @@ class SiteServiceTest {
     }
 
     @Test
-    @DisplayName("deleteSite - Should hard delete site with cascade deletion of all related data")
-    void deleteSite_ShouldHardDeleteWithCascade() {
-        // Given
+    @DisplayName("deleteSite - purges the history and the site in one transaction, the objects after it")
+    void deleteSite_PurgesHistoryThenSiteThenObjects() {
         Site mockSite = mock(Site.class);
         when(mockSite.getSiteName()).thenReturn("test.example.com");
         when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
+        List<String> keys = List.of("delta/" + siteId + "/segments/a.pb.gz", "acct/site/file.csv");
+        List<String> transactionSeenBy = new ArrayList<>();
+        when(historyPurge.purgeRows(siteId)).thenAnswer(inv -> {
+            transactionSeenBy.add("purgeRows=" + TransactionSynchronizationManager.isActualTransactionActive());
+            return new SiteHistoryPurge.PurgedHistory(1, 1, 0, 1, 0, 0, 10L, false, keys);
+        });
+        doAnswer(inv -> {
+            transactionSeenBy.add("siteRow=" + TransactionSynchronizationManager.isActualTransactionActive());
+            return null;
+        }).when(siteRepository).deleteById(siteId);
+        doAnswer(inv -> {
+            transactionSeenBy.add("objects=" + TransactionSynchronizationManager.isActualTransactionActive());
+            return null;
+        }).when(historyPurge).deleteObjectsOfDeletedSite(siteId, keys);
 
-        // Mock batches
-        Page<Batch> emptyBatchPage = new PageImpl<>(List.of());
-        when(batchRepository.findBySiteId(siteId, Pageable.unpaged())).thenReturn(emptyBatchPage);
-
-        // Mock error logs
-        when(errorLogRepository.findBySiteId(siteId)).thenReturn(List.of());
-
-        // When
         siteService.deleteSite(siteId);
 
-        // Then
-        verify(siteRepository).findById(siteId);
-        verify(batchRepository).findBySiteId(siteId, Pageable.unpaged());
-        verify(errorLogRepository).findBySiteId(siteId);
-        verify(deviceAuthorizationRepository).deleteBySiteId(siteId);
-        verify(siteRepository).deleteById(siteId);
+        org.mockito.InOrder order = inOrder(historyPurge, deviceAuthorizationRepository, siteSchemaService,
+                siteRepository);
+        order.verify(historyPurge).purgeRows(siteId);
+        order.verify(deviceAuthorizationRepository).deleteBySiteId(siteId);
+        order.verify(siteSchemaService).deleteSchema(siteId);
+        order.verify(siteRepository).deleteById(siteId);
+        order.verify(historyPurge).deleteObjectsOfDeletedSite(siteId, keys);
+        // The rows inside the transaction, the object walk with none open (issue #367 review).
+        assertThat(transactionSeenBy).containsExactly("purgeRows=true", "siteRow=true", "objects=false");
+    }
+
+    @Test
+    @DisplayName("deleteSite - a failed purge deletes neither the site nor any object")
+    void deleteSite_FailedPurgeDeletesNothingElse() {
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(mock(Site.class)));
+        when(historyPurge.purgeRows(siteId)).thenThrow(new IllegalStateException("FK"));
+
+        assertThatThrownBy(() -> siteService.deleteSite(siteId)).hasMessage("FK");
+
+        verify(siteRepository, never()).deleteById(any());
+        verify(historyPurge, never()).deleteObjectsOfDeletedSite(any(), any());
+    }
+
+    @Test
+    @DisplayName("deleteSite - refuses a caller's transaction, since its object walk must run with none open")
+    void deleteSite_RefusesACallersTransaction() throws Exception {
+        Transactional transactional = SiteService.class.getMethod("deleteSite", UUID.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.propagation()).isEqualTo(Propagation.NEVER);
     }
 
     @Test

@@ -265,6 +265,57 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- site-delete-delta-history: Deleting a site with Delta v2 history works, and takes its objects with
+  it (issue #367, found working #366). `SiteService.deleteSite` predated Delta v2: it deleted
+  uploaded files, error logs and batches one by one and knew nothing of changelog segments, so every
+  site with a committed segment was refused — `changelog_segments.batch_id` (V30) has no
+  `ON DELETE` action, and `account_plugins.baseline_batch_id` (V25) is `ON DELETE RESTRICT` — and
+  the site's `delta/{siteId}/segments/`, `checkpoints/{siteId}/` and `egress/{siteId}/` objects were
+  never deleted, which the orphan sweep then leaves alone for ever (a prefix with no `sites` row is
+  held back unless `reclaim-unknown-sites`). The integration test reproduced it before the fix, on
+  the baseline FK first. **The wipe was reused in part, not whole**: its transactional core (steps
+  3–10 — collect keys, plugin SQL, delta baselines, segments, checkpoints, batch Parquet, error
+  logs, detach baseline batches, bulk-delete batches) moved unchanged into
+  `delta/application/DeltaSiteHistoryPurge.purgeRows`, `@Transactional(MANDATORY)`, which both the
+  wipe and the delete call, so the two lists cannot drift apart again; the wipe's lock,
+  live-session guard, epoch reset and `SITE_HISTORY_WIPE` audit describe keeping a site and stay in
+  the wipe. **`SiteService` reaches it through a port, `site/domain/SiteHistoryPurge`** (review
+  round 1): `delta.application` already depends on `site.application`, so naming the delta class
+  from `site` would close a package cycle. **Two phases, not one transaction** (also round 1): the
+  first cut deleted objects in an `afterCommit` callback, where the connection is still bound, so
+  the prefix walk — as long as the site's history — held it on the request thread, the
+  #147/#164/#234 hold. `deleteSite` is now `@Transactional(NEVER)`: a `TransactionTemplate` deletes
+  the history, device authorizations, the schema and the site row (sync state and refresh tokens
+  by cascade), and only after it returns does `deleteObjectsOfDeletedSite` — which refuses an
+  active transaction — delete the exact keys the rows named, then the three prefixes a page at a
+  time, with no time cut-off (the site row is gone, so nothing can name those objects) and nothing
+  thrown: what it cannot reach is logged as left behind. The walk stays **synchronous on the
+  request thread, deliberately**: a page of heap, about `2 x N / 1000` S3 calls for N objects
+  (some 64 for a year of an 87-table site's superseded checkpoints), no connection held, on a rare
+  operator action whose caller waits anyway — a background executor would add a pool to the
+  connection-demand audit for no saving. That also fixes an older inversion: uploaded files' objects were deleted inside the
+  transaction, before the commit, so a rolled-back delete left rows pointing at deleted files. The
+  delete does not refuse a live session (the session's next commit fails on the missing batch or
+  site). `ON DELETE CASCADE` on `changelog_segments.batch_id` was weighed and not taken — every batch
+  delete would silently take segments with pending queue work, which #212 made explicit — so **no
+  migration (V61 stays next)**. `SiteService` swaps four constructor dependencies for the port and
+  a `TransactionTemplate`; `DeltaSiteWipeService` loses eight. **Tests**: `SiteDeletionIntegrationTest` (a site with a
+  committed segment, checkpoint + frame, sync state, READY batch Parquet, error log, uploaded file
+  and an activation whose baseline is the site's batch is deleted with all its rows, the activation
+  kept and detached, and all three prefixes empty — including a delta Parquet and a stray segment
+  object no row names; a delete whose transaction fails — a trigger scoped to the test's site refuses
+  the site row — leaves every row and object in place; a delete inside a caller's transaction is
+  refused and deletes nothing), `SiteServiceTest` (the rows inside the transaction and the objects
+  after it with none active, in that order; a failed purge deletes nothing else; `NEVER` pinned —
+  the pre-Delta mock sequence is gone with the behaviour it described), `DeltaSiteHistoryPurgeTest`
+  (the object phase refuses a transaction and touches no object), and the unchanged
+  `DeltaSiteWipeServiceTest`/`SiteHistoryWipeIntegrationTest` over the real purge. Mutation-proven:
+  deleting objects inside the transaction reddens the order unit test and the wired delete case (the
+  guard fires); dropping `NEVER` reddens the pinned annotation and every wired case; dropping the
+  guard reddens its unit test; dropping the prefix walks reddens the delete case on the stray
+  segment. No REST, gRPC, proto, DTO, migration,
+  configuration-key, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Site
+  history wipe and the generation epoch", "Objects no row references are reclaimed").
 - snapshot-prefix-bootstrap: A site's first checkpoint streams its `FULL_SNAPSHOT` even when a DELTA
   or CONTINUOUS tail already sits behind it, in two ticks (issue #374). #292's streamed bootstrap was
   chosen only when the **whole** history was `FULL_SNAPSHOT`, and #293's merge needs a frame, so a
