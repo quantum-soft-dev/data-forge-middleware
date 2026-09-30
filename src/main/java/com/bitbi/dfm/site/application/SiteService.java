@@ -1,17 +1,13 @@
 package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.auth.application.RefreshTokenService;
-import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.application.SiteHistoryPurge;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
-import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
-import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -19,6 +15,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.UUID;
@@ -40,27 +38,18 @@ public class SiteService {
     private static final Logger logger = LoggerFactory.getLogger(SiteService.class);
 
     private final SiteRepository siteRepository;
-    private final BatchRepository batchRepository;
-    private final ErrorLogRepository errorLogRepository;
-    private final UploadedFileRepository uploadedFileRepository;
-    private final S3FileStorageService s3FileStorageService;
+    private final SiteHistoryPurge historyPurge;
     private final DeviceAuthorizationRepository deviceAuthorizationRepository;
     private final RefreshTokenService refreshTokenService;
     private final SiteSchemaService siteSchemaService;
 
     public SiteService(SiteRepository siteRepository,
-                       BatchRepository batchRepository,
-                       ErrorLogRepository errorLogRepository,
-                       UploadedFileRepository uploadedFileRepository,
-                       S3FileStorageService s3FileStorageService,
+                       SiteHistoryPurge historyPurge,
                        DeviceAuthorizationRepository deviceAuthorizationRepository,
                        RefreshTokenService refreshTokenService,
                        SiteSchemaService siteSchemaService) {
         this.siteRepository = siteRepository;
-        this.batchRepository = batchRepository;
-        this.errorLogRepository = errorLogRepository;
-        this.uploadedFileRepository = uploadedFileRepository;
-        this.s3FileStorageService = s3FileStorageService;
+        this.historyPurge = historyPurge;
         this.deviceAuthorizationRepository = deviceAuthorizationRepository;
         this.refreshTokenService = refreshTokenService;
         this.siteSchemaService = siteSchemaService;
@@ -390,23 +379,25 @@ public class SiteService {
     }
 
     /**
-     * Delete site (hard delete with cascade).
+     * Delete site (hard delete).
      * <p>
-     * Permanently deletes site and all associated data:
-     * - All batches for this site
-     * - All uploaded files for these batches
-     * - All error logs for this site
-     * - The site record itself
+     * Permanently deletes the site and all of its history: batches, uploaded files, changelog
+     * segments, checkpoints, completed-batch Parquet artifacts, plugin SQL and delta baselines, error
+     * logs, device authorizations, the schema and the sync state — then, once the transaction has
+     * committed, the S3 objects the rows named and everything under the site's
+     * {@code delta/{siteId}/segments/}, {@code checkpoints/{siteId}/} and {@code egress/{siteId}/}
+     * prefixes (issue #367). The history rows go through {@link SiteHistoryPurge}, the same code the
+     * site history wipe uses, so a site with Delta v2 history is no longer refused by the
+     * {@code changelog_segments.batch_id} and {@code account_plugins.baseline_batch_id} foreign keys.
+     * </p>
+     * <p>
+     * Objects are deleted only after the commit, never before: a rollback must leave every row
+     * pointing at an object that still exists. A failed object delete is logged and leaves an
+     * orphan; the delete itself has happened and is not reported as failed.
      * </p>
      * <p>
      * WARNING: This action cannot be undone. All data will be permanently lost.
      * For temporary disabling, use deactivateSite() instead.
-     * </p>
-     * <p>
-     * <b>Orphaned S3 Files:</b> If S3 deletion fails but database cleanup continues,
-     * orphaned files may remain in S3. The method logs errors at ERROR level and
-     * continues with database cleanup to prevent stuck state. Consider implementing
-     * periodic orphan detection and cleanup jobs for production environments.
      * </p>
      *
      * @param siteId site identifier
@@ -417,60 +408,40 @@ public class SiteService {
 
         Site site = getSite(siteId);
 
-        // Step 1: Find all batches for this site
-        List<Batch> batches = batchRepository.findBySiteId(siteId, Pageable.unpaged()).getContent();
-        List<UUID> batchIds = batches.stream().map(Batch::getId).toList();
+        SiteHistoryPurge.PurgedHistory purged = historyPurge.purgeRows(siteId);
+        logger.info("Deleted the history of site {}: batches={}, segments={}, checkpoints={}, files={}, "
+                        + "sqlGenerations={}, errorLogs={}, baselineDetached={}",
+                siteId, purged.deletedBatches(), purged.deletedSegments(), purged.deletedCheckpoints(),
+                purged.deletedFiles(), purged.deletedSqlGenerations(), purged.deletedErrorLogs(),
+                purged.baselineBatchDetached());
 
-        logger.info("Found {} batches to delete for site: {}", batches.size(), siteId);
-
-        // Step 2: Delete all uploaded files for these batches (from database AND S3)
-        if (!batchIds.isEmpty()) {
-            for (UUID batchId : batchIds) {
-                List<com.bitbi.dfm.upload.domain.UploadedFile> files = uploadedFileRepository.findByBatchId(batchId);
-                logger.info("Deleting {} uploaded files for batch: {}", files.size(), batchId);
-                for (com.bitbi.dfm.upload.domain.UploadedFile file : files) {
-                    // Delete from S3 first
-                    try {
-                        s3FileStorageService.deleteFile(file.getS3Key());
-                        logger.debug("Deleted S3 file: {}", file.getS3Key());
-                    } catch (Exception e) {
-                        logger.error("Failed to delete S3 file (continuing with database cleanup): key={}, error={}",
-                                   file.getS3Key(), e.getMessage());
-                        // Continue with database cleanup even if S3 deletion fails
-                    }
-                    // Delete from database
-                    uploadedFileRepository.deleteById(file.getId());
-                }
-            }
-        }
-
-        // Step 3: Delete all error logs for this site
-        List<com.bitbi.dfm.error.domain.ErrorLog> errorLogs = errorLogRepository.findBySiteId(siteId);
-        logger.info("Deleting {} error logs for site: {}", errorLogs.size(), siteId);
-        for (com.bitbi.dfm.error.domain.ErrorLog errorLog : errorLogs) {
-            errorLogRepository.deleteById(errorLog.getId());
-        }
-
-        // Step 4: Delete all batches for this site
-        if (!batches.isEmpty()) {
-            logger.info("Deleting {} batches for site: {}", batches.size(), siteId);
-            for (Batch batch : batches) {
-                batchRepository.deleteById(batch.getId());
-            }
-        }
-
-        // Step 5: Delete all device authorizations for this site
         deviceAuthorizationRepository.deleteBySiteId(siteId);
-        logger.info("Deleted device authorizations for site: {}", siteId);
 
-        // Step 6: Delete site schema (also deleted by DB CASCADE, but explicit for clarity)
+        // Also deleted by the database cascade, but explicit for clarity.
         siteSchemaService.deleteSchema(siteId);
 
-        // Step 7: Delete the site itself
-        logger.info("Deleting site record: id={}", siteId);
+        // Sync state and refresh tokens follow through the database cascade.
         siteRepository.deleteById(siteId);
 
+        List<String> objectKeys = purged.s3Keys();
+        runAfterCommit(() -> historyPurge.deleteObjectsOfDeletedSite(siteId, objectKeys));
+
         logger.warn("Site and all associated data permanently deleted: id={}, siteName={}", siteId, site.getSiteName());
+    }
+
+    private static void runAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            // A caller outside a transaction (a unit test constructing the service by hand): there
+            // is nothing to wait for.
+            action.run();
+        }
     }
 
     /**

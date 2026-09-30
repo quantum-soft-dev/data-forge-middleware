@@ -1,23 +1,16 @@
 package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.auth.application.RefreshTokenService;
-import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.application.SiteHistoryPurge;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
-import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
-import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Optional;
@@ -47,16 +40,7 @@ class SiteServiceTest {
     private SiteRepository siteRepository;
 
     @Mock
-    private BatchRepository batchRepository;
-
-    @Mock
-    private ErrorLogRepository errorLogRepository;
-
-    @Mock
-    private UploadedFileRepository uploadedFileRepository;
-
-    @Mock
-    private S3FileStorageService s3FileStorageService;
+    private SiteHistoryPurge historyPurge;
 
     @Mock
     private DeviceAuthorizationRepository deviceAuthorizationRepository;
@@ -76,8 +60,7 @@ class SiteServiceTest {
     void setUp() {
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
-        siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
-                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository,
+        siteService = new SiteService(siteRepository, historyPurge, deviceAuthorizationRepository,
                                       refreshTokenService, siteSchemaService);
     }
 
@@ -237,29 +220,36 @@ class SiteServiceTest {
     }
 
     @Test
-    @DisplayName("deleteSite - Should hard delete site with cascade deletion of all related data")
-    void deleteSite_ShouldHardDeleteWithCascade() {
-        // Given
+    @DisplayName("deleteSite - purges the history, then the site, and deletes the objects last")
+    void deleteSite_PurgesHistoryThenSiteThenObjects() {
         Site mockSite = mock(Site.class);
         when(mockSite.getSiteName()).thenReturn("test.example.com");
         when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
+        List<String> keys = List.of("delta/" + siteId + "/segments/a.pb.gz", "acct/site/file.csv");
+        when(historyPurge.purgeRows(siteId)).thenReturn(
+                new SiteHistoryPurge.PurgedHistory(1, 1, 0, 1, 0, 0, 10L, false, keys));
 
-        // Mock batches
-        Page<Batch> emptyBatchPage = new PageImpl<>(List.of());
-        when(batchRepository.findBySiteId(siteId, Pageable.unpaged())).thenReturn(emptyBatchPage);
-
-        // Mock error logs
-        when(errorLogRepository.findBySiteId(siteId)).thenReturn(List.of());
-
-        // When
         siteService.deleteSite(siteId);
 
-        // Then
-        verify(siteRepository).findById(siteId);
-        verify(batchRepository).findBySiteId(siteId, Pageable.unpaged());
-        verify(errorLogRepository).findBySiteId(siteId);
-        verify(deviceAuthorizationRepository).deleteBySiteId(siteId);
-        verify(siteRepository).deleteById(siteId);
+        org.mockito.InOrder order = inOrder(historyPurge, deviceAuthorizationRepository, siteSchemaService,
+                siteRepository);
+        order.verify(historyPurge).purgeRows(siteId);
+        order.verify(deviceAuthorizationRepository).deleteBySiteId(siteId);
+        order.verify(siteSchemaService).deleteSchema(siteId);
+        order.verify(siteRepository).deleteById(siteId);
+        order.verify(historyPurge).deleteObjectsOfDeletedSite(siteId, keys);
+    }
+
+    @Test
+    @DisplayName("deleteSite - a failed purge deletes neither the site nor any object")
+    void deleteSite_FailedPurgeDeletesNothingElse() {
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(mock(Site.class)));
+        when(historyPurge.purgeRows(siteId)).thenThrow(new IllegalStateException("FK"));
+
+        assertThatThrownBy(() -> siteService.deleteSite(siteId)).hasMessage("FK");
+
+        verify(siteRepository, never()).deleteById(any());
+        verify(historyPurge, never()).deleteObjectsOfDeletedSite(any(), any());
     }
 
     @Test

@@ -2373,6 +2373,30 @@ ran a manual reinit.
 including the old reload frame. They are addressed by key from the live `checkpoints` rows and the
 checkpoint pointer, both of which the reset clears, so no stale read is possible through them.
 
+**Deleting the site takes the same rows, and then the site (issue #367).** The site hard delete
+(`DELETE /api/v1/sites/{siteId}`, and the owner's route) was written before Delta v2: it deleted
+uploaded files, error logs and batches one by one and knew nothing of changelog segments, so any
+site with a committed segment could not be deleted at all — `changelog_segments.batch_id` (V30)
+has no `ON DELETE` action, and `account_plugins.baseline_batch_id` (V25) is `ON DELETE RESTRICT`
+— and it never touched the site's objects, which the orphan sweep then leaves alone for ever,
+since a prefix with no `sites` row is held back by default. Both operations now delete the
+history rows through one component, `SiteHistoryPurge` (steps 3–10 of the wipe, unchanged); the
+delete then removes device authorizations, the schema and the site row (sync state and refresh
+tokens follow by cascade). Its objects go **only after the commit**, like the wipe's: the exact
+keys the rows named, then everything under `delta/{siteId}/segments/`, `checkpoints/{siteId}/`
+and `egress/{siteId}/`, a page at a time. Unlike the wipe's walk there is no cut-off by time —
+with the site row gone nothing can name an object under those prefixes. What the delete does not
+reach (a failed batch of deletes, a listing that stopped early, an object a build already running
+writes after the walk) is logged as left behind and is reclaimed only by the orphan sweep with
+`delta.s3-orphan.reclaim-unknown-sites`, or by hand. The delete does **not** refuse a live
+session the way the wipe does: the session's next commit fails on the missing batch or site,
+which is the answer a client streaming into a deleted site should get. The wipe was not reused
+whole on purpose — its lock, live-session guard, epoch reset and `SITE_HISTORY_WIPE` audit
+describe keeping a site, not removing one. A `ON DELETE CASCADE` on `changelog_segments.batch_id`
+was weighed and not taken: it would make every batch delete silently take segments with pending
+queue work, which batch retention and the admin batch delete now handle and report explicitly
+(#212); no migration was needed.
+
 **Forced rebuild semantics (review r3, issue #128)**: `POST .../checkpoints/rebuild` is idempotent
 — a second request while one is pending answers `202 {"status": "already-queued"}` and queues
 nothing. A full rebuild queue answers 503 (flag cleared); rebuild flags orphaned by a restart are
@@ -2902,8 +2926,9 @@ rule for either prefix. Three populations accumulated:
   unreferenced the moment the next build writes its own — plus any `_frame/seq={n}/frame.pb.gz`
   the pointer never adopted, which **no row ever names** (that one is reclaimed once the pointer has
   passed its sequence, see the guard table);
-- **everything** belonging to a site deleted with `DELETE /api/v1/sites/{siteId}`, which hard-deletes
-  the row and does not touch either prefix.
+- **everything** belonging to a site deleted with `DELETE /api/v1/sites/{siteId}`, which
+  hard-deleted the row and did not touch either prefix (since #367 the delete walks the site's
+  prefixes after its commit, so what is left is only what that walk could not reach).
 
 `DeltaS3OrphanSweeper` runs daily (`delta.s3-orphan.sweep-ms`, first pass 10 minutes after start)
 and does the same four things for each prefix: list one site's objects, keep only the key shapes

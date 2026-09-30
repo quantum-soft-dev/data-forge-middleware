@@ -5,22 +5,13 @@ import com.bitbi.dfm.account.domain.AdminActionType;
 import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.delta.domain.Checkpoint;
-import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
-import com.bitbi.dfm.delta.domain.CheckpointRepository;
-import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
-import com.bitbi.dfm.error.domain.ErrorLogRepository;
-import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
-import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
-import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
 import org.slf4j.Logger;
@@ -59,8 +50,9 @@ import java.util.UUID;
  * method — and a {@code @Transactional} method called from a sibling method of the same bean is
  * silently un-proxied, i.e. not transactional at all.</p>
  *
- * <p>Like {@code BatchRetentionService}, this is a cross-aggregate cleanup service and reaches into
- * the batch, upload, error and plugin repositories directly. That is deliberate for a destructive
+ * <p>Like {@code BatchRetentionService}, this is a cross-aggregate cleanup service; the history
+ * rows themselves are deleted by {@link SiteHistoryPurge}, which the site hard delete shares
+ * (issue #367), and it reaches into the batch, upload, error and plugin repositories directly. That is deliberate for a destructive
  * one-shot operation whose whole point is a single ordered transaction; the ingestion path's
  * one-way package dependency (plugin → delta, never the reverse) is preserved everywhere it
  * matters — see the event-driven auto-reinit hook on {@code CheckpointService}.</p>
@@ -80,14 +72,7 @@ public class DeltaSiteWipeService {
     private final TransactionTemplate transactionTemplate;
     private final SiteSyncStateRepository syncStateRepository;
     private final BatchRepository batchRepository;
-    private final UploadedFileRepository uploadedFileRepository;
-    private final PluginSqlGenerationRepository sqlGenerationRepository;
-    private final PluginDeltaBaselineRepository baselineRepository;
-    private final AccountPluginRepository accountPluginRepository;
-    private final ChangelogSegmentRepository segmentRepository;
-    private final CheckpointRepository checkpointRepository;
-    private final BatchParquetArtifactRepository artifactRepository;
-    private final ErrorLogRepository errorLogRepository;
+    private final SiteHistoryPurge historyPurge;
     private final SiteSchemaService siteSchemaService;
     private final S3FileStorageService s3FileStorageService;
     private final S3CheckpointStorage checkpointStorage;
@@ -97,14 +82,7 @@ public class DeltaSiteWipeService {
     public DeltaSiteWipeService(TransactionTemplate transactionTemplate,
                                 SiteSyncStateRepository syncStateRepository,
                                 BatchRepository batchRepository,
-                                UploadedFileRepository uploadedFileRepository,
-                                PluginSqlGenerationRepository sqlGenerationRepository,
-                                PluginDeltaBaselineRepository baselineRepository,
-                                AccountPluginRepository accountPluginRepository,
-                                ChangelogSegmentRepository segmentRepository,
-                                CheckpointRepository checkpointRepository,
-                                BatchParquetArtifactRepository artifactRepository,
-                                ErrorLogRepository errorLogRepository,
+                                SiteHistoryPurge historyPurge,
                                 SiteSchemaService siteSchemaService,
                                 S3FileStorageService s3FileStorageService,
                                 S3CheckpointStorage checkpointStorage,
@@ -113,14 +91,7 @@ public class DeltaSiteWipeService {
         this.transactionTemplate = transactionTemplate;
         this.syncStateRepository = syncStateRepository;
         this.batchRepository = batchRepository;
-        this.uploadedFileRepository = uploadedFileRepository;
-        this.sqlGenerationRepository = sqlGenerationRepository;
-        this.baselineRepository = baselineRepository;
-        this.accountPluginRepository = accountPluginRepository;
-        this.segmentRepository = segmentRepository;
-        this.checkpointRepository = checkpointRepository;
-        this.artifactRepository = artifactRepository;
-        this.errorLogRepository = errorLogRepository;
+        this.historyPurge = historyPurge;
         this.siteSchemaService = siteSchemaService;
         this.s3FileStorageService = s3FileStorageService;
         this.checkpointStorage = checkpointStorage;
@@ -231,8 +202,8 @@ public class DeltaSiteWipeService {
     }
 
     /**
-     * The transactional phase: bulk deletes in FK order, with every S3 key collected before the row
-     * naming it disappears.
+     * The transactional phase: the lock and the live-session guard, the history rows through
+     * {@link SiteHistoryPurge}, then the schema, the epoch and the audit.
      */
     private WipedRows wipeRows(Site site, Initiator initiator, String ipAddress, String userAgent) {
         UUID siteId = site.getId();
@@ -255,64 +226,9 @@ public class DeltaSiteWipeService {
                     throw new SessionInProgressException(siteId, batch);
                 });
 
-        // 3. Collect first: after the deletes nothing remembers these keys.
-        List<String> s3Keys = new ArrayList<>();
-        long deletedBytes = 0L;
-        int deletedFiles = 0;
-        for (UploadedFileRepository.FileKeySize file : uploadedFileRepository.findS3KeysBySiteId(siteId)) {
-            deletedFiles++;
-            if (file.getS3Key() != null) {
-                s3Keys.add(file.getS3Key());
-            }
-            if (file.getFileSize() != null) {
-                deletedBytes += file.getFileSize();
-            }
-        }
-        for (PluginSqlGenerationRepository.S3KeySize sql : sqlGenerationRepository.findS3KeysBySiteId(siteId)) {
-            if (sql.getS3Key() != null) {
-                s3Keys.add(sql.getS3Key());
-            }
-            if (sql.getFileSizeBytes() != null) {
-                deletedBytes += sql.getFileSizeBytes();
-            }
-        }
-
-        // 4. Plugin SQL generations, both sides of the batch reference.
-        int deletedSqlGenerations = sqlGenerationRepository.deleteBySiteId(siteId);
-
-        // 5. Plugin delta baselines. The site row survives the wipe, so no cascade fires.
-        baselineRepository.deleteBySiteId(siteId);
-
-        // 6. Changelog segments, provisional ones included — a half-uploaded snapshot is history
-        // too, and its rows would block the batch delete either way.
-        s3Keys.addAll(segmentRepository.findAllS3KeysBySiteId(siteId));
-        int deletedSegments = segmentRepository.deleteBySiteId(siteId);
-
-        // 7. Checkpoints.
-        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
-            if (checkpoint.getS3KeyCsv() != null) {
-                s3Keys.add(checkpoint.getS3KeyCsv());
-            }
-            if (checkpoint.getS3KeyParquet() != null) {
-                s3Keys.add(checkpoint.getS3KeyParquet());
-            }
-        }
-        int deletedCheckpoints = checkpointRepository.deleteBySiteId(siteId);
-
-        // Unified artifact objects are also covered by the post-commit egress-prefix walk, but the
-        // manifest gives us exact keys even if that listing later fails.
-        s3Keys.addAll(artifactRepository.findS3KeysBySiteId(siteId));
-        artifactRepository.deleteBySiteId(siteId);
-
-        // 8. Error logs.
-        int deletedErrorLogs = errorLogRepository.deleteBySiteId(siteId);
-
-        // 9. Detach plugin baselines pointing at the site's batches — the FK is ON DELETE RESTRICT,
-        // so without this the batch delete fails outright.
-        boolean baselineBatchDetached = accountPluginRepository.detachBaselineBatchesOfSite(siteId) > 0;
-
-        // 10. Batches. Uploaded files and file comparisons follow through the database cascade.
-        int deletedBatches = batchRepository.deleteBySiteId(siteId);
+        // 3–10. The history rows, in FK order, with every S3 key collected before its row goes —
+        // shared with the site hard delete (issue #367), so the two cannot drift apart.
+        SiteHistoryPurge.PurgedHistory purged = historyPurge.purgeRows(siteId);
 
         // 11. The schema: the client re-submits it like a brand-new site.
         siteSchemaService.deleteSchema(siteId);
@@ -325,14 +241,14 @@ public class DeltaSiteWipeService {
         Map<String, Object> details = new LinkedHashMap<>();
         details.put("initiator", initiator.name());
         details.put("generation", state.getGeneration());
-        details.put("deletedBatches", deletedBatches);
-        details.put("deletedSegments", deletedSegments);
-        details.put("deletedCheckpoints", deletedCheckpoints);
-        details.put("deletedFiles", deletedFiles);
-        details.put("deletedSqlGenerations", deletedSqlGenerations);
-        details.put("deletedErrorLogs", deletedErrorLogs);
-        details.put("deletedBytes", deletedBytes);
-        details.put("baselineBatchDetached", baselineBatchDetached);
+        details.put("deletedBatches", purged.deletedBatches());
+        details.put("deletedSegments", purged.deletedSegments());
+        details.put("deletedCheckpoints", purged.deletedCheckpoints());
+        details.put("deletedFiles", purged.deletedFiles());
+        details.put("deletedSqlGenerations", purged.deletedSqlGenerations());
+        details.put("deletedErrorLogs", purged.deletedErrorLogs());
+        details.put("deletedBytes", purged.deletedBytes());
+        details.put("baselineBatchDetached", purged.baselineBatchDetached());
         adminActionLogRepository.save(AdminActionLog
                 .successForSite(AdminActionType.SITE_HISTORY_WIPE, site.getAccountId(), siteId,
                         null, ipAddress, userAgent)
@@ -346,9 +262,10 @@ public class DeltaSiteWipeService {
             throw new ConcurrentSessionException(siteId, remaining);
         }
 
-        return new WipedRows(state.getGeneration(), deletedBatches, deletedSegments, deletedCheckpoints,
-                deletedFiles, deletedSqlGenerations, deletedErrorLogs, deletedBytes,
-                baselineBatchDetached, s3Keys.stream().distinct().toList());
+        return new WipedRows(state.getGeneration(), purged.deletedBatches(), purged.deletedSegments(),
+                purged.deletedCheckpoints(), purged.deletedFiles(), purged.deletedSqlGenerations(),
+                purged.deletedErrorLogs(), purged.deletedBytes(), purged.baselineBatchDetached(),
+                purged.s3Keys());
     }
 
     /**
