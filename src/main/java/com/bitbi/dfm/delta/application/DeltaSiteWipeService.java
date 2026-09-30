@@ -12,6 +12,7 @@ import com.bitbi.dfm.shared.storage.S3ListedObject;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteHistoryPurge;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
 import org.slf4j.Logger;
@@ -50,12 +51,14 @@ import java.util.UUID;
  * method — and a {@code @Transactional} method called from a sibling method of the same bean is
  * silently un-proxied, i.e. not transactional at all.</p>
  *
- * <p>Like {@code BatchRetentionService}, this is a cross-aggregate cleanup service; the history
- * rows themselves are deleted by {@link SiteHistoryPurge}, which the site hard delete shares
- * (issue #367), and it reaches into the batch, upload, error and plugin repositories directly. That is deliberate for a destructive
- * one-shot operation whose whole point is a single ordered transaction; the ingestion path's
- * one-way package dependency (plugin → delta, never the reverse) is preserved everywhere it
- * matters — see the event-driven auto-reinit hook on {@code CheckpointService}.</p>
+ * <p>Like {@code BatchRetentionService}, this is a cross-aggregate cleanup service: the history
+ * rows are deleted by {@link DeltaSiteHistoryPurge}, which reaches into the batch, upload, error
+ * and plugin repositories directly and which the site hard delete shares through the
+ * {@link SiteHistoryPurge} port (issue #367). That is deliberate for a destructive one-shot
+ * operation whose whole point is a single ordered transaction. Two package dependencies are kept
+ * one-way: the ingestion path's plugin → delta (see the event-driven auto-reinit hook on
+ * {@code CheckpointService}), and delta → site, which is why the site delete reaches the purge
+ * through a port in {@code site.domain} rather than by naming this package.</p>
  *
  * <p>Deliberately allowed for legacy DBF sites as well as V2 ones: the delta steps are no-ops, but
  * the sync-state row is still created and bumped, so the epoch contract holds if the site is ever

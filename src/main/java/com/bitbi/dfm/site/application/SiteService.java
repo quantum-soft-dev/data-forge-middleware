@@ -1,10 +1,10 @@
 package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.auth.application.RefreshTokenService;
-import com.bitbi.dfm.delta.application.SiteHistoryPurge;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
+import com.bitbi.dfm.site.domain.SiteHistoryPurge;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
@@ -15,8 +15,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.UUID;
@@ -42,17 +42,20 @@ public class SiteService {
     private final DeviceAuthorizationRepository deviceAuthorizationRepository;
     private final RefreshTokenService refreshTokenService;
     private final SiteSchemaService siteSchemaService;
+    private final TransactionTemplate transactionTemplate;
 
     public SiteService(SiteRepository siteRepository,
                        SiteHistoryPurge historyPurge,
                        DeviceAuthorizationRepository deviceAuthorizationRepository,
                        RefreshTokenService refreshTokenService,
-                       SiteSchemaService siteSchemaService) {
+                       SiteSchemaService siteSchemaService,
+                       TransactionTemplate transactionTemplate) {
         this.siteRepository = siteRepository;
         this.historyPurge = historyPurge;
         this.deviceAuthorizationRepository = deviceAuthorizationRepository;
         this.refreshTokenService = refreshTokenService;
         this.siteSchemaService = siteSchemaService;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -383,17 +386,22 @@ public class SiteService {
      * <p>
      * Permanently deletes the site and all of its history: batches, uploaded files, changelog
      * segments, checkpoints, completed-batch Parquet artifacts, plugin SQL and delta baselines, error
-     * logs, device authorizations, the schema and the sync state — then, once the transaction has
-     * committed, the S3 objects the rows named and everything under the site's
-     * {@code delta/{siteId}/segments/}, {@code checkpoints/{siteId}/} and {@code egress/{siteId}/}
-     * prefixes (issue #367). The history rows go through {@link SiteHistoryPurge}, the same code the
-     * site history wipe uses, so a site with Delta v2 history is no longer refused by the
-     * {@code changelog_segments.batch_id} and {@code account_plugins.baseline_batch_id} foreign keys.
+     * logs, device authorizations, the schema and the sync state — then the S3 objects the rows named
+     * and everything under the site's {@code delta/{siteId}/segments/}, {@code checkpoints/{siteId}/}
+     * and {@code egress/{siteId}/} prefixes (issue #367). The history rows go through the
+     * {@link SiteHistoryPurge} port, whose implementation the site history wipe uses as well, so a
+     * site with Delta v2 history is no longer refused by the {@code changelog_segments.batch_id} and
+     * {@code account_plugins.baseline_batch_id} foreign keys.
      * </p>
      * <p>
-     * Objects are deleted only after the commit, never before: a rollback must leave every row
-     * pointing at an object that still exists. A failed object delete is logged and leaves an
-     * orphan; the delete itself has happened and is not reported as failed.
+     * Two phases, and deliberately <b>not</b> one transaction: the rows are deleted in a transaction
+     * of their own, and the objects only after it has committed, with no transaction open. Objects
+     * never go first — a rollback must leave every row pointing at an object that still exists — and
+     * the object phase walks the site's whole history over the network, which must not hold a
+     * connection and the rows' locks while it runs (the #147/#164/#234 rule). That is also why the
+     * method refuses a caller's transaction ({@link Propagation#NEVER}) instead of joining it. A
+     * failed object delete is logged and leaves an orphan; the delete itself has happened and is not
+     * reported as failed.
      * </p>
      * <p>
      * WARNING: This action cannot be undone. All data will be permanently lost.
@@ -403,9 +411,19 @@ public class SiteService {
      * @param siteId site identifier
      * @throws SiteNotFoundException if site not found
      */
+    @Transactional(propagation = Propagation.NEVER)
     public void deleteSite(UUID siteId) {
         logger.warn("Hard deleting site and all associated data: id={}", siteId);
 
+        DeletedSite deleted = transactionTemplate.execute(status -> deleteSiteRows(siteId));
+
+        historyPurge.deleteObjectsOfDeletedSite(siteId, deleted.objectKeys());
+
+        logger.warn("Site and all associated data permanently deleted: id={}, siteName={}",
+                siteId, deleted.siteName());
+    }
+
+    private DeletedSite deleteSiteRows(UUID siteId) {
         Site site = getSite(siteId);
 
         SiteHistoryPurge.PurgedHistory purged = historyPurge.purgeRows(siteId);
@@ -423,25 +441,11 @@ public class SiteService {
         // Sync state and refresh tokens follow through the database cascade.
         siteRepository.deleteById(siteId);
 
-        List<String> objectKeys = purged.s3Keys();
-        runAfterCommit(() -> historyPurge.deleteObjectsOfDeletedSite(siteId, objectKeys));
-
-        logger.warn("Site and all associated data permanently deleted: id={}, siteName={}", siteId, site.getSiteName());
+        return new DeletedSite(site.getSiteName(), purged.s3Keys());
     }
 
-    private static void runAfterCommit(Runnable action) {
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    action.run();
-                }
-            });
-        } else {
-            // A caller outside a transaction (a unit test constructing the service by hand): there
-            // is nothing to wait for.
-            action.run();
-        }
+    /** What the row phase of {@link #deleteSite} hands the object phase. */
+    private record DeletedSite(String siteName, List<String> objectKeys) {
     }
 
     /**

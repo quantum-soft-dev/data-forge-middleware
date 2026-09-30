@@ -2380,12 +2380,17 @@ site with a committed segment could not be deleted at all — `changelog_segment
 has no `ON DELETE` action, and `account_plugins.baseline_batch_id` (V25) is `ON DELETE RESTRICT`
 — and it never touched the site's objects, which the orphan sweep then leaves alone for ever,
 since a prefix with no `sites` row is held back by default. Both operations now delete the
-history rows through one component, `SiteHistoryPurge` (steps 3–10 of the wipe, unchanged); the
-delete then removes device authorizations, the schema and the site row (sync state and refresh
-tokens follow by cascade). Its objects go **only after the commit**, like the wipe's: the exact
-keys the rows named, then everything under `delta/{siteId}/segments/`, `checkpoints/{siteId}/`
-and `egress/{siteId}/`, a page at a time. Unlike the wipe's walk there is no cut-off by time —
-with the site row gone nothing can name an object under those prefixes. What the delete does not
+history rows through one component, `DeltaSiteHistoryPurge` (steps 3–10 of the wipe, unchanged),
+which the site service reaches through the `site.domain.SiteHistoryPurge` port so the `site`
+package does not depend on `delta`; the delete then removes device authorizations, the schema and
+the site row (sync state and refresh tokens follow by cascade) in one transaction. Its objects go
+**only after that transaction has committed and with none open** (`deleteSite` refuses a caller's
+transaction, and the object phase refuses to run inside one): the exact keys the rows named, then
+everything under `delta/{siteId}/segments/`, `checkpoints/{siteId}/` and `egress/{siteId}/`, a
+page at a time. Unlike the wipe's walk there is no cut-off by time — with the site row gone nothing
+can name an object under those prefixes. The walk runs on the request thread: one page of heap,
+about `2 x N / 1000` S3 calls for N objects and no database connection held, on a rare operator
+action whose caller waits for the answer anyway. What the delete does not
 reach (a failed batch of deletes, a listing that stopped early, an object a build already running
 writes after the walk) is logged as left behind and is reclaimed only by the orphan sweep with
 `delta.s3-orphan.reclaim-unknown-sites`, or by hand. The delete does **not** refuse a live

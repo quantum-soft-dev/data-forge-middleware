@@ -18,9 +18,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.IOException;
@@ -33,6 +35,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Hard-deleting a site that has Delta v2 history (issue #367).
@@ -87,6 +90,8 @@ class SiteDeletionIntegrationTest extends BaseIntegrationTest {
     private UUID accountId;
     private UUID siteId;
     private final List<UUID> seededAccounts = new ArrayList<>();
+    /** Objects a test leaves in the shared bucket on purpose; removed after it. */
+    private final List<String> objectsToRemove = new ArrayList<>();
 
     @BeforeEach
     void seedSite() {
@@ -108,6 +113,10 @@ class SiteDeletionIntegrationTest extends BaseIntegrationTest {
 
     @AfterEach
     void removeLeftovers() {
+        for (String key : objectsToRemove) {
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
+        }
+        objectsToRemove.clear();
         for (UUID account : seededAccounts) {
             jdbc.update("DELETE FROM account_plugins WHERE account_id = ?", account);
             jdbc.update("DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE account_id = ?)", account);
@@ -179,25 +188,54 @@ class SiteDeletionIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("a delete that rolls back leaves every object in place")
-    void rolledBackDeleteKeepsTheObjects() {
+    @DisplayName("a delete whose transaction fails leaves every row and every object in place")
+    void failedDeleteKeepsTheObjects() {
         UUID batchId = seedBatch();
         String fileKey = seedUploadedFile(batchId);
         ChangelogSegment segment = changelogSegmentService.persist(siteId, batchId, "DELTA", 1L,
                 List.of(insert(1L, "Ann")));
         markSegmentsProcessed(siteId);
+        objectsToRemove.add(fileKey);
+        objectsToRemove.add(segment.getS3Key());
+        // Refuse the site row's delete — the transaction's last statement, after the whole purge —
+        // for this site only, so nothing another class does can meet it.
+        String trigger = "refuse_site_delete_" + siteId.toString().replace("-", "");
+        jdbc.execute("CREATE FUNCTION " + trigger + "() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                + "BEGIN RAISE EXCEPTION 'site delete refused by the test'; END $$");
+        jdbc.execute("CREATE TRIGGER " + trigger + " BEFORE DELETE ON sites FOR EACH ROW "
+                + "WHEN (OLD.id = '" + siteId + "') EXECUTE FUNCTION " + trigger + "()");
+        try {
+            assertThatThrownBy(() -> siteService.deleteSite(siteId))
+                    .hasMessageContaining("site delete refused by the test");
+        } finally {
+            jdbc.execute("DROP TRIGGER " + trigger + " ON sites");
+            jdbc.execute("DROP FUNCTION " + trigger + "()");
+        }
 
-        // The caller's transaction decides: objects go only after the rows are committed as gone,
-        // so a rollback must find every row still pointing at an object that exists.
-        transactionTemplate.executeWithoutResult(status -> {
-            siteService.deleteSite(siteId);
-            status.setRollbackOnly();
-        });
-
+        // Objects go only after the rows are committed as gone, so a failure finds every row still
+        // pointing at an object that exists.
         assertThat(count("SELECT COUNT(*) FROM sites WHERE id = ?")).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM changelog_segments WHERE site_id = ?")).isEqualTo(1);
         assertThat(checkpointStorage.exists(fileKey)).isTrue();
         assertThat(checkpointStorage.exists(segment.getS3Key())).isTrue();
+    }
+
+    @Test
+    @DisplayName("refuses to run inside a caller's transaction, deleting nothing")
+    void refusesACallersTransaction() {
+        UUID batchId = seedBatch();
+        String fileKey = seedUploadedFile(batchId);
+        objectsToRemove.add(fileKey);
+
+        // The object walk must run with no transaction open; joining the caller's would hold its
+        // connection for the whole walk, so the delete refuses outright instead.
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(
+                status -> siteService.deleteSite(siteId)))
+                .isInstanceOf(IllegalTransactionStateException.class);
+
+        assertThat(count("SELECT COUNT(*) FROM sites WHERE id = ?")).isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM batches WHERE site_id = ?")).isEqualTo(1);
+        assertThat(checkpointStorage.exists(fileKey)).isTrue();
     }
 
     private long count(String sql) {

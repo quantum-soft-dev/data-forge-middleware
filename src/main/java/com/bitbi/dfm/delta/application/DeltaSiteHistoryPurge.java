@@ -13,6 +13,7 @@ import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.shared.storage.S3ListedObject;
 import com.bitbi.dfm.shared.storage.S3PrefixLister.S3PrefixWalk;
+import com.bitbi.dfm.site.domain.SiteHistoryPurge;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
@@ -21,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,8 +31,9 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * Removes every history row of one site, in the order the foreign keys dictate, and the objects
- * those rows named once the caller's transaction has committed (issue #367).
+ * The {@link SiteHistoryPurge} port's implementation: removes every history row of one site, in
+ * the order the foreign keys dictate, and — for a deleted site — its objects once the rows are
+ * committed as gone (issue #367).
  *
  * <p>Two operations need exactly this and nothing more: the site history wipe (035 — #89), which
  * then resets the site's epoch and keeps the site, and the site hard delete
@@ -47,11 +50,15 @@ import java.util.function.Function;
  * nothing remembers them — and deletes no object itself, because a rollback must leave every
  * object in place: rows pointing at files that no longer exist is the one genuinely harmful
  * ordering.</p>
+ *
+ * <p>It lives in {@code delta} because most of what it deletes is Delta history, and the wipe
+ * calls it directly; {@code SiteService} reaches it only through the port in {@code site.domain},
+ * so the package dependency stays one-way ({@code delta} → {@code site}).</p>
  */
 @Component
-public class SiteHistoryPurge {
+public class DeltaSiteHistoryPurge implements SiteHistoryPurge {
 
-    private static final Logger log = LoggerFactory.getLogger(SiteHistoryPurge.class);
+    private static final Logger log = LoggerFactory.getLogger(DeltaSiteHistoryPurge.class);
 
     private final BatchRepository batchRepository;
     private final UploadedFileRepository uploadedFileRepository;
@@ -66,18 +73,18 @@ public class SiteHistoryPurge {
     private final S3CheckpointStorage checkpointStorage;
     private final S3ChangelogSegmentStorage segmentStorage;
 
-    public SiteHistoryPurge(BatchRepository batchRepository,
-                            UploadedFileRepository uploadedFileRepository,
-                            PluginSqlGenerationRepository sqlGenerationRepository,
-                            PluginDeltaBaselineRepository baselineRepository,
-                            AccountPluginRepository accountPluginRepository,
-                            ChangelogSegmentRepository segmentRepository,
-                            CheckpointRepository checkpointRepository,
-                            BatchParquetArtifactRepository artifactRepository,
-                            ErrorLogRepository errorLogRepository,
-                            S3FileStorageService s3FileStorageService,
-                            S3CheckpointStorage checkpointStorage,
-                            S3ChangelogSegmentStorage segmentStorage) {
+    public DeltaSiteHistoryPurge(BatchRepository batchRepository,
+                                      UploadedFileRepository uploadedFileRepository,
+                                 PluginSqlGenerationRepository sqlGenerationRepository,
+                                 PluginDeltaBaselineRepository baselineRepository,
+                                 AccountPluginRepository accountPluginRepository,
+                                 ChangelogSegmentRepository segmentRepository,
+                                 CheckpointRepository checkpointRepository,
+                                 BatchParquetArtifactRepository artifactRepository,
+                                 ErrorLogRepository errorLogRepository,
+                                 S3FileStorageService s3FileStorageService,
+                                 S3CheckpointStorage checkpointStorage,
+                                 S3ChangelogSegmentStorage segmentStorage) {
         this.batchRepository = batchRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.sqlGenerationRepository = sqlGenerationRepository;
@@ -102,6 +109,7 @@ public class SiteHistoryPurge {
      * @param siteId the site whose history to delete
      * @return what was deleted, and the S3 keys the rows named
      */
+    @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public PurgedHistory purgeRows(UUID siteId) {
         // Collect first: after the deletes nothing remembers these keys.
@@ -175,18 +183,36 @@ public class SiteHistoryPurge {
      * ever named (checkpoint frames, delta Parquet keyed by seq range, a segment whose commit
      * failed after its upload).
      *
-     * <p>Called after the delete has committed, so every outcome here is "orphans left behind, no
-     * data lost" and none may surface as a failure of a delete that happened: nothing is thrown.
-     * No cut-off by time, unlike the wipe's walk: with the site row gone no row can name an object
-     * under these prefixes, so nothing there is live. An object written after the walk by a build
-     * that was already running stays behind, and so does anything a failed or truncated listing did
-     * not reach — {@code DeltaS3OrphanSweeper} takes such a prefix only when
+     * <p><b>Refuses to run inside a transaction</b> (the #147/#164/#234 rule): the walk is as long
+     * as the site's history, and an open transaction would hold its connection and every row lock
+     * it took for all of it. The caller commits the row delete first and calls this with nothing
+     * open.</p>
+     *
+     * <p><b>Synchronous on the caller's thread, deliberately.</b> Heap is one listing page at a
+     * time (up to 1000 keys) and each page costs one {@code DeleteObjects} round trip, so a site
+     * with N objects costs about {@code 2 x N / 1000} S3 calls. The largest population is the
+     * superseded checkpoint generations of a site whose orphan sweep is still in dry run — one
+     * object per table per night, about 32 000 in a year for an 87-table site — which is some 64
+     * round trips: seconds to tens of seconds, with no database connection held while they run. A site hard delete is a rare, explicit
+     * operator action whose caller waits for the answer anyway; handing the walk to a background
+     * executor would add a pool to the connection-demand audit and lose the delete's own request as
+     * the place its outcome is logged, for no heap or connection saving.</p>
+     *
+     * <p>Every outcome here is "orphans left behind, no data lost", and none may surface as a
+     * failure of a delete that happened: nothing is thrown. No cut-off by time, unlike the wipe's
+     * walk: with the site row gone no row can name an object under these prefixes, so nothing there
+     * is live. An object written after the walk by a build that was already running stays behind,
+     * and so does anything a failed or truncated listing did not reach —
+     * {@code DeltaS3OrphanSweeper} takes such a prefix only when
      * {@code delta.s3-orphan.reclaim-unknown-sites} declares the bucket this database's alone.</p>
      *
      * @param siteId    the deleted site
      * @param exactKeys the keys {@link #purgeRows} collected, plus any other the caller holds
+     * @throws IllegalStateException when called inside an active transaction
      */
+    @Override
     public void deleteObjectsOfDeletedSite(UUID siteId, List<String> exactKeys) {
+        refuseInsideTransaction();
         int[] leftBehind = {deleteQuietly(siteId, exactKeys)};
         Consumer<List<S3ListedObject>> deletePage = page ->
                 leftBehind[0] += deleteQuietly(siteId, page.stream().map(S3ListedObject::key).toList());
@@ -231,11 +257,12 @@ public class SiteHistoryPurge {
         }
     }
 
-    /**
-     * What {@link #purgeRows} deleted, and the S3 keys the rows named.
-     */
-    public record PurgedHistory(int deletedBatches, int deletedSegments, int deletedCheckpoints,
-                                int deletedFiles, int deletedSqlGenerations, int deletedErrorLogs,
-                                long deletedBytes, boolean baselineBatchDetached, List<String> s3Keys) {
+    private static void refuseInsideTransaction() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "Refusing to delete a deleted site's objects inside an active transaction: the "
+                            + "prefix walk would hold that transaction's connection and row locks for "
+                            + "the length of the site's whole object history (issue #367).");
+        }
     }
 }

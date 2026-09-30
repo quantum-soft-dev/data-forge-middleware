@@ -85,7 +85,7 @@ class DeltaSiteWipeServiceTest {
     @BeforeEach
     void setUp() {
         // The real purge over the same mocks: the order it deletes in is still this wipe's order.
-        SiteHistoryPurge purge = new SiteHistoryPurge(batchRepository, uploadedFileRepository,
+        DeltaSiteHistoryPurge purge = new DeltaSiteHistoryPurge(batchRepository, uploadedFileRepository,
                 sqlGenerationRepository, baselineRepository, accountPluginRepository, segmentRepository,
                 checkpointRepository, artifactRepository, errorLogRepository, s3FileStorageService,
                 checkpointStorage, mock(S3ChangelogSegmentStorage.class));
