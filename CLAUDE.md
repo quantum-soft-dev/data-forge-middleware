@@ -778,6 +778,48 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- batch-parquet-lost-enqueue: A completed batch whose `AFTER_COMMIT` Parquet enqueue was lost still
+  gets its work rows, and still before its site's later batches (issue #380, the hole #378 named).
+  `BatchParquetFinalizationListener` creates the rows after the completion commit (#099), so a pod
+  dying in that window, or an enqueue that throws, left a completed batch with published segments
+  and no row: #378's head-of-queue rule saw nothing to wait for, later batches were built past it,
+  the Parquet Export catalog (which does not enqueue on list) never showed it, and only an owner
+  download backfilled it, after its successors. **Both of the ticket's second and third candidates,
+  sharing one predicate** (`AWAITING_ENQUEUE` in `JpaBatchParquetArtifactRepository`): `COMPLETED`
+  or `COMPLETED_WITH_WARNINGS` (the two statuses that publish `BatchCompletedEvent`), a
+  non-provisional segment, no artifact row, `started_at` within new
+  `delta.batch-parquet.enqueue-horizon-hours` (168, refused below 1 by name). `findNextRetryable`
+  holds a site back while an earlier batch satisfies it, and `BatchParquetFinalizationWorker.sweep`
+  now runs `recoverLostEnqueues` on the worker's own pool before draining (still `HANDOFF` in the
+  inventory): every such batch completed more than two minutes ago (the grace leaves it to its own
+  listener) goes through the same `enqueueBatch`, one transaction per batch; one that actually got
+  rows is a WARN and new `delta.batch-parquet.enqueue.recovered` (registered at zero), a failing one
+  an ERROR that costs that batch alone. The listener's ERROR now points at the sweep, not at the
+  lazy download. **The shared horizon is the design**: a gate wider than the sweep would wait for a
+  batch nobody enqueues, a sweep wider than the gate would publish a recovered batch after its
+  successors; bounded, the gate waits at most the horizon if a recovery keeps failing, and pre-036
+  history (rowless by design) is not swept in wholesale, which 036's lazy backfill avoided.
+  **Rejected**: enqueueing inside the completion transaction — #099's reason stands (an enqueue
+  failure would roll back `SessionEnd` and the client retries the whole session), plus a
+  `CONTINUOUS` session's per-segment stats read would sit under the commit's locks. **Left out of
+  order, documented**: a batch older than the horizon, a batch ending `NOT_COMPLETED`/`FAILED`/
+  `CANCELLED` (never enqueued after commit), an admin requeue (039). No migration (**V61 stays
+  next**): the sweep reads `idx_batches_started_at`, the gate `idx_batches_site_started_id`.
+  **Tests**: `BatchParquetArtifactRepositoryIntegrationTest` (an owed earlier batch holds the next
+  one, then #378 takes over once it has rows; an empty session, a `NOT_COMPLETED` batch, a batch
+  before the horizon and a provisional-only one do not; `COMPLETED_WITH_WARNINGS` does; the sweep
+  query's order and grace; gate and sweep select the same batches),
+  `BatchParquetFinalizationIntegrationTest` (a FULL_SNAPSHOT whose enqueue was lost: the DELTA stays
+  `PENDING`, the catalog is empty, the sweep recovers the snapshot, the catalog lists it first),
+  `BatchParquetFinalizationServiceTest` (horizon passed to the claim, only created rows counted,
+  per-batch failure isolation, counter at zero, refusal by name), `BatchParquetFinalizationWorkerTest`
+  (recover before drain on the tick, not on a wake, a failed listing still drains).
+  **Mutation-proven**: dropping the gate reddens four tests including the end-to-end one; dropping
+  `provisional = false` reddens the sweep-query case; counting a raced batch reddens the counter
+  case; a sweep that skips recovery reddens both worker cases. One configuration key and one metric
+  added; no REST, gRPC, proto, DTO, migration, `specs/NNN-*`, S3-key or frontend change. See
+  `docs/cr-unified-batch-parquet.md` ("Durability and retries") and
+  `docs/parquet-export-plugin-guide.md` ("Order, epochs and what to skip").
 - batch-parquet-site-order: A site's completed-batch Parquet files are built, published and listed
   in batch order, so a DELTA can no longer be listed before the FULL_SNAPSHOT it follows (issue
   #378, seen 30.09 on a site whose large snapshot was still building when the next small delta was

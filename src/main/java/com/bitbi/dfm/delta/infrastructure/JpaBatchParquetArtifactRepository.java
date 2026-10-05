@@ -70,6 +70,12 @@ public interface JpaBatchParquetArtifactRepository
      * held back by this rule, so it cannot deadlock; other sites are built in parallel as before.
      * The {@code batches} join lives inside the subquery so the outer statement stays on one
      * table and {@code FOR UPDATE SKIP LOCKED} locks artifact rows only.</p>
+     *
+     * <p>An earlier batch with no row at all is invisible to that rule, and that is exactly the
+     * batch whose {@code AFTER_COMMIT} enqueue was lost (issue #380). So the site is also held
+     * back while an earlier batch satisfies {@link #AWAITING_ENQUEUE} — the predicate the sweep
+     * enqueues by, within the same horizon, so whatever the claim waits on is a batch the sweep
+     * will give rows to, and then the rule above takes over.</p>
      */
     @Override
     @Query(value = """
@@ -88,6 +94,14 @@ public interface JpaBatchParquetArtifactRepository
                       AND earlier.status IN ('PENDING', 'BUILDING', 'FAILED')
                       AND (earlier_batch.started_at, earlier_batch.id)
                           < (candidate_batch.started_at, candidate_batch.id))
+              AND NOT EXISTS (
+                    SELECT 1 FROM batches owing
+                    JOIN batches candidate_batch ON candidate_batch.id = candidate.batch_id
+                    WHERE owing.site_id = candidate.site_id
+                      AND (owing.started_at, owing.id)
+                          < (candidate_batch.started_at, candidate_batch.id)
+                      AND """ + " " + AWAITING_ENQUEUE + """
+                    )
               AND (candidate.status = 'PENDING'
                OR (candidate.status = 'FAILED' AND candidate.updated_at
                        < CAST(:now AS timestamp) - make_interval(secs =>
@@ -102,7 +116,34 @@ public interface JpaBatchParquetArtifactRepository
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
     List<BatchParquetArtifact> findNextRetryable(LocalDateTime now, int retryDelaySeconds,
-                                                 int leaseSeconds, int maxAttempts, int limit);
+                                                 int leaseSeconds, int maxAttempts,
+                                                 LocalDateTime enqueueHorizon, int limit);
+
+    /**
+     * A batch, aliased {@code owing}, still owed its work rows (issue #380). One text, shared by
+     * the claim query's gate and the sweep: a gate wider than the sweep would wait for a batch
+     * nobody enqueues, and a sweep wider than the gate would publish a recovered batch after its
+     * successors. The statuses are the two whose completion publishes {@code BatchCompletedEvent}.
+     */
+    String AWAITING_ENQUEUE = """
+            owing.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+                      AND owing.started_at >= CAST(:enqueueHorizon AS timestamp)
+                      AND EXISTS (SELECT 1 FROM changelog_segments published
+                                  WHERE published.batch_id = owing.id
+                                    AND published.provisional = false)
+                      AND NOT EXISTS (SELECT 1 FROM batch_parquet_artifacts queued
+                                      WHERE queued.batch_id = owing.id)
+            """;
+
+    @Override
+    @Query(value = "SELECT owing.id FROM batches owing WHERE " + AWAITING_ENQUEUE + """
+              AND owing.completed_at < CAST(:completedBefore AS timestamp)
+            ORDER BY owing.started_at, owing.id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<UUID> findBatchesAwaitingEnqueue(@Param("enqueueHorizon") LocalDateTime enqueueHorizon,
+                                          @Param("completedBefore") LocalDateTime completedBefore,
+                                          @Param("limit") int limit);
 
     @Override
     @Query(value = """

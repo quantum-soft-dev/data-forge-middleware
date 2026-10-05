@@ -96,6 +96,66 @@ class BatchParquetFinalizationWorkerTest {
         }
     }
 
+    @Test
+    void theSweepRecoversLostEnqueuesBeforeItDrains() throws Exception {
+        // Issue #380: a completed batch whose AFTER_COMMIT enqueue was lost is given its rows on the
+        // fallback tick, before the drain claims anything that could overtake it.
+        CountDownLatch drained = new CountDownLatch(1);
+        when(service.finalizeNext()).thenAnswer(invocation -> {
+            drained.countDown();
+            return false;
+        });
+        BatchParquetFinalizationWorker worker = new BatchParquetFinalizationWorker(service, 1);
+
+        worker.sweep();
+
+        assertTrue(drained.await(5, TimeUnit.SECONDS), "the sweep never drained");
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(service);
+        order.verify(service).recoverLostEnqueues();
+        order.verify(service).finalizeNext();
+        worker.shutdown();
+    }
+
+    @Test
+    void aWakeAloneDoesNotRecover() throws Exception {
+        // The recovery is a periodic listing; running it on every BATCH_COMPLETED wake would repeat
+        // it per session for nothing — the grace window keeps a fresh batch out of it anyway.
+        CountDownLatch drained = new CountDownLatch(1);
+        when(service.finalizeNext()).thenAnswer(invocation -> {
+            drained.countDown();
+            return false;
+        });
+        BatchParquetFinalizationWorker worker = new BatchParquetFinalizationWorker(service, 1);
+
+        worker.wake();
+
+        assertTrue(drained.await(5, TimeUnit.SECONDS));
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).recoverLostEnqueues();
+        worker.shutdown();
+    }
+
+    @Test
+    void aFailedRecoveryStillLetsTheSweepDrain() throws Exception {
+        CountDownLatch drained = new CountDownLatch(1);
+        when(service.recoverLostEnqueues()).thenThrow(new IllegalStateException("listing failed"));
+        when(service.finalizeNext()).thenAnswer(invocation -> {
+            drained.countDown();
+            return false;
+        });
+        BatchParquetFinalizationWorker worker = new BatchParquetFinalizationWorker(service, 1);
+
+        try (LogCapture capture = LogCapture.attachTo(BatchParquetFinalizationWorker.class)) {
+            worker.sweep();
+
+            assertTrue(drained.await(5, TimeUnit.SECONDS), "a failed listing must not stop the drain");
+            ILoggingEvent failure = awaitEvent(capture);
+            assertEquals(Level.WARN, failure.getLevel());
+            assertNotNull(failure.getThrowableProxy());
+        } finally {
+            worker.shutdown();
+        }
+    }
+
     private static ILoggingEvent awaitEvent(LogCapture capture) throws InterruptedException {
         for (int attempt = 0; attempt < 100; attempt++) {
             if (!capture.events().isEmpty()) {

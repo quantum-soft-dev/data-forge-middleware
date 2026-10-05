@@ -81,12 +81,46 @@ deliberately does not do:
   a batch; the rest arrives with a later `ready_at`, but never after a file of a later batch of
   the site. Publishing a whole batch atomically was not needed for the order guarantee.
 - **Out-of-order arrivals that remain, by construction:** an admin requeue of an `ABANDONED` row
-  (039) and the owner-download lazy backfill of a batch that has no rows put an *old* batch back
-  into the catalog after its successors. The requeued batch does become the head of its site
+  (039) and the owner-download lazy backfill of a batch that has no rows (one outside the #380
+  sweep below) put an *old* batch back into the catalog after its successors. The requeued batch does become the head of its site
   again, so the site's later unfinished batches wait for it.
 - **Different sites** are built in parallel exactly as before.
 
 The earliest unfinished batch of a site is never held back by the rule, so it cannot deadlock.
+
+**A batch whose enqueue was lost still holds its place (issue #380).** The rule above sees only
+batches that have rows, and the rows are created `AFTER_COMMIT` (#099), so a process that dies
+between a session's commit and its enqueue — or an enqueue that throws — left a completed batch
+with published segments and **no row at all**: later batches of the site were built past it, the
+Parquet Export catalog (which does not enqueue on list) never showed it, and only an owner download
+would have backfilled it, after its successors. Two pieces close it, sharing one predicate,
+`AWAITING_ENQUEUE` in `JpaBatchParquetArtifactRepository`: a batch in `COMPLETED` or
+`COMPLETED_WITH_WARNINGS` (the two statuses whose commit publishes `BatchCompletedEvent`), with a
+non-provisional changelog segment, no row in `batch_parquet_artifacts`, and `started_at` within
+`delta.batch-parquet.enqueue-horizon-hours` (default 168).
+
+- **The claim holds the site back** while an earlier batch of it satisfies the predicate — the same
+  `(started_at, id)` order as #378. Normally that window is the milliseconds between a commit and
+  its listener.
+- **The worker's sweep tick** (`delta.batch-parquet.sweep-ms`, on the worker's own pool) enqueues
+  every such batch completed more than two minutes ago — the grace leaves a batch to its own
+  listener — through the same `enqueueBatch`, one transaction per batch, then drains. A batch that
+  actually received rows is logged at WARN and counted on `delta.batch-parquet.enqueue.recovered`
+  (registered at zero); the listener's own failure is still its ERROR. A batch whose recovery
+  fails is logged at ERROR and retried on the next tick, and its site's later batches keep waiting.
+
+The horizon is shared on purpose. A gate wider than the sweep would wait for a batch nobody
+enqueues; a sweep wider than the gate would publish a recovered batch after its successors. Bounded
+by it, the gate can wait at most the horizon even if a recovery keeps failing, and history from
+before 036 — which has no rows by design — is not swept into the queue wholesale, the thing 036's
+lazy backfill was chosen to avoid. **Enqueueing inside the completion transaction was not taken**:
+#099 moved it out so that an enqueue failure cannot roll back an otherwise successful `SessionEnd`
+(the client retries the whole session), and for a long `CONTINUOUS` session the enqueue reads every
+segment's stats, which would then sit under the commit's locks. No migration: the sweep reads
+`idx_batches_started_at`, the gate `idx_batches_site_started_id`, and both probe
+`idx_segment_batch_id` and `uk_batch_parquet_artifact`. What remains out of order: a batch older
+than the horizon, a batch in another terminal status (`NOT_COMPLETED`, `FAILED`, `CANCELLED` — never
+enqueued after commit, only by an owner download), and the two arrivals listed above.
 No migration, and the cost does not grow with a site's history. The subquery's status predicate is
 exactly the predicate of the partial claim index `idx_batch_parquet_artifacts_claim`, so PostgreSQL
 reads `earlier` from that index — unfinished rows only — and filters the site from it; `READY` and

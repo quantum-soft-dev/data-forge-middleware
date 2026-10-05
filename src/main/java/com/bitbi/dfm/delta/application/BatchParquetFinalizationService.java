@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
@@ -71,6 +72,22 @@ public class BatchParquetFinalizationService {
     private final int retryDelaySeconds;
     private final int maxAttempts;
     private final int leaseSeconds;
+    /**
+     * How far back a completed batch still owed its work rows is looked for, and holds its site's
+     * later batches back (issue #380). One value for both, so the claim never waits on a batch the
+     * sweep will not enqueue.
+     */
+    private final Duration enqueueHorizon;
+
+    /**
+     * How long a completed batch is left to its own {@code AFTER_COMMIT} enqueue before the sweep
+     * treats it as lost. Milliseconds normally; the margin only keeps the sweep from counting a
+     * recovery that was not one.
+     */
+    static final Duration ENQUEUE_GRACE = Duration.ofMinutes(2);
+
+    /** Batches recovered per sweep tick; the rest wait for the next one. */
+    static final int RECOVERY_LIMIT = 100;
 
     public BatchParquetFinalizationService(
             BatchParquetArtifactRepository artifactRepository,
@@ -87,7 +104,15 @@ public class BatchParquetFinalizationService {
             @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
             @Value("${delta.batch-parquet.retry-delay-seconds:60}") int retryDelaySeconds,
             @Value("${delta.batch-parquet.max-attempts:7}") int maxAttempts,
-            @Value("${delta.batch-parquet.lease-seconds:1800}") int leaseSeconds) {
+            @Value("${delta.batch-parquet.lease-seconds:1800}") int leaseSeconds,
+            @Value("${delta.batch-parquet.enqueue-horizon-hours:168}") int enqueueHorizonHours) {
+        if (enqueueHorizonHours < 1) {
+            // Refused by name (#185's rule): 0 would make the claim query hold no site back and the
+            // sweep recover nothing — the issue #380 hole reopened, silently.
+            throw new IllegalArgumentException(
+                    "delta.batch-parquet.enqueue-horizon-hours must be at least 1, but was "
+                            + enqueueHorizonHours);
+        }
         this.artifactRepository = artifactRepository;
         this.segmentRepository = segmentRepository;
         this.segmentService = segmentService;
@@ -113,11 +138,13 @@ public class BatchParquetFinalizationService {
         this.retryDelaySeconds = retryDelaySeconds;
         this.maxAttempts = maxAttempts;
         this.leaseSeconds = leaseSeconds;
+        this.enqueueHorizon = Duration.ofHours(enqueueHorizonHours);
     }
 
     /**
      * Create the durable per-table work rows after the batch-completion transaction. Existing rows
-     * make replayed completion events harmless, and lazy download backfill covers a failed callback.
+     * make replayed completion events harmless, and {@link #recoverLostEnqueues} covers a callback
+     * that never ran or failed (issue #380).
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int enqueueBatch(UUID batchId) {
@@ -196,6 +223,47 @@ public class BatchParquetFinalizationService {
                 .forEach(segment -> segmentService.forEachRecord(
                         segment.getS3Key(), change -> tables.add(change.getTable())));
         return tables;
+    }
+
+    /**
+     * Give work rows to completed batches whose {@code AFTER_COMMIT} enqueue was lost (issue #380).
+     *
+     * <p>The rows are created after the completion commit, so a process that dies in that window,
+     * or an enqueue that throws, leaves a completed batch with published segments and no row: it
+     * held no place in the queue, the Parquet Export catalog never listed it (the catalog does not
+     * enqueue on list), and only an owner download would have backfilled it. The claim query holds
+     * the batch's site back behind exactly such a batch, by the same predicate and the same
+     * horizon, so a batch recovered here is still built and published before its successors.</p>
+     *
+     * <p>A batch completed less than {@link #ENQUEUE_GRACE} ago is left to its own enqueue. Only a
+     * batch that actually received rows here counts as recovered: one whose enqueue landed in
+     * between inserts nothing. Each batch is enqueued in its own transaction, and a failure costs
+     * that batch alone — it keeps holding its site back and is retried on the next tick.</p>
+     *
+     * @return batches that received work rows from this call
+     */
+    public int recoverLostEnqueues() {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        List<UUID> owed = transactions.execute(status -> artifactRepository.findBatchesAwaitingEnqueue(
+                now.minus(enqueueHorizon), now.minus(ENQUEUE_GRACE), RECOVERY_LIMIT));
+        int recovered = 0;
+        for (UUID batchId : owed == null ? List.<UUID>of() : owed) {
+            try {
+                Integer created = transactions.execute(status -> enqueueBatch(batchId));
+                if (created != null && created > 0) {
+                    recovered++;
+                    metrics.batchParquetEnqueueRecovered();
+                    log.warn("Recovered the lost completed-batch Parquet enqueue of batch {}: {} "
+                            + "work row(s) created by the sweep, so it is built ahead of its site's "
+                            + "later batches (issue #380)", batchId, created);
+                }
+            } catch (RuntimeException e) {
+                log.error("Could not recover the lost completed-batch Parquet enqueue of batch {}; "
+                        + "its site's later batches stay held back and the next sweep retries "
+                        + "(issue #380)", batchId, e);
+            }
+        }
+        return recovered;
     }
 
     /**
@@ -316,7 +384,7 @@ public class BatchParquetFinalizationService {
     private List<Claim> claimNext() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
-                now, retryDelaySeconds, leaseSeconds, maxAttempts, 1);
+                now, retryDelaySeconds, leaseSeconds, maxAttempts, now.minus(enqueueHorizon), 1);
         if (next.isEmpty()) {
             return null;
         }

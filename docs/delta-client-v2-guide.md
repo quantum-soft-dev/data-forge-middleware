@@ -1791,7 +1791,12 @@ kubectl get pods -n forge -o wide          # a Pending backend pod is the sympto
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
 durable manifest, and wakes a separate bounded worker pool; callback failures are contained and
-cannot turn the already committed session into an apparent client failure. A
+cannot turn the already committed session into an apparent client failure. A callback that never
+ran (the pod died between the commit and the enqueue) or failed is recovered by the worker's
+`DELTA_BATCH_PARQUET_SWEEP_MS` tick, which enqueues any completed batch with published segments
+and no work rows; until then the site's later batches are held back, so the recovered batch is
+still built and listed first (issue #380). Each recovery is a WARN naming the batch and an
+increment of `delta.batch-parquet.enqueue.recovered`. A
 manifest becomes `READY` only after its stable S3 object is complete. PostgreSQL advisory locking
 serializes the short batch claim across replicas; each table keeps its own claim token, lease,
 attempt count, and outcome. Failed table artifacts retry
@@ -1803,7 +1808,9 @@ the row is picked up again once `DELTA_BATCH_PARQUET_LEASE_SECONDS` (default 30 
 sign of life, which a live build refreshes as it goes. Operators can tune the completed-batch pool and disk policy with
 `DELTA_BATCH_PARQUET_MAX_CONCURRENT`, `DELTA_BATCH_PARQUET_SWEEP_MS`,
 `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,
-`DELTA_BATCH_PARQUET_LEASE_SECONDS`, `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`,
+`DELTA_BATCH_PARQUET_LEASE_SECONDS`, `DELTA_BATCH_PARQUET_ENQUEUE_HORIZON_HOURS` (default 168: how
+far back that sweep looks, and how far back a batch it would recover holds its site back),
+`DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`,
 `DELTA_BATCH_PARQUET_TEMP_DIR`, `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`,
 `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, and `DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`. The checkpoint
 path has its own pair of disk ceilings, `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (per table) and
@@ -3256,6 +3263,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `sql.generation.delta.segments.poisoned` | `sql_generation_delta_segments_poisoned_total` |
 | `delta.egress.duration{phase=...}` (timer) | `delta_egress_duration_seconds_count` / `_sum` / `_max` |
 | `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
+| `delta.batch-parquet.enqueue.recovered` | `delta_batch_parquet_enqueue_recovered_total` |
 | `delta.batch-parquet.duration{phase=...}` (timer) | `delta_batch_parquet_duration_seconds_count` / `_sum` / `_max` |
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
 | `delta.checkpoint.fold.bytes` (summary) | `delta_checkpoint_fold_bytes_count` / `_sum` / `_max` |

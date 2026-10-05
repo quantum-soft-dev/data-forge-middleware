@@ -17,6 +17,10 @@ import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import ch.qos.logback.classic.Level;
+import com.bitbi.dfm.util.LogCapture;
+import java.time.Duration;
+import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -40,6 +44,7 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
@@ -103,7 +108,7 @@ class BatchParquetFinalizationServiceTest {
                 segmentService, schemaService, batchRepository, storage, new DeltaMetrics(registry),
                 new DeltaParquetProperties(8L * 1024 * 1024), scratchBudget,
                 mock(PlatformTransactionManager.class), tempDir.toString(), maxTempBytes, 60,
-                maxAttempts, leaseSeconds);
+                maxAttempts, leaseSeconds, 168);
     }
 
     private static long phaseCount(SimpleMeterRegistry registry, String phase) {
@@ -568,13 +573,115 @@ class BatchParquetFinalizationServiceTest {
 
     @Test
     void claimsWithTheConfiguredBackoffAndLeaseWindows() {
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), any(LocalDateTime.class), anyInt()))
                 .thenReturn(List.of());
 
         assertFalse(service.finalizeNext());
 
         verify(artifactRepository).findNextRetryable(
-                any(LocalDateTime.class), eq(60), eq(1800), eq(5), eq(1));
+                any(LocalDateTime.class), eq(60), eq(1800), eq(5), any(LocalDateTime.class), eq(1));
+    }
+
+    // ---- Issue #380: a completed batch whose AFTER_COMMIT enqueue was lost --------------------
+
+    @Test
+    void holdsSitesBackBehindOwedBatchesWithinTheConfiguredEnqueueHorizon() {
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(),
+                any(LocalDateTime.class), anyInt())).thenReturn(List.of());
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
+
+        service.finalizeNext();
+
+        ArgumentCaptor<LocalDateTime> horizon = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(artifactRepository).findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(),
+                anyInt(), horizon.capture(), anyInt());
+        assertWithin(before.minusHours(168), horizon.getValue(),
+                "the claim's horizon is the configured one, so it matches the sweep's");
+    }
+
+    @Test
+    void recoversEveryBatchStillOwedItsRowsAndCountsOnlyTheOnesItEnqueued() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        BatchParquetFinalizationService recovering = newService(5, 1800, 10_000_000L, registry);
+        UUID siteId = UUID.randomUUID();
+        UUID lost = UUID.randomUUID();
+        UUID raced = UUID.randomUUID();
+        when(artifactRepository.findBatchesAwaitingEnqueue(any(), any(), anyInt()))
+                .thenReturn(List.of(lost, raced));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(lost)).thenReturn(List.of(
+                segment(siteId, lost, "lost", 1, 10, Map.of("orders", new TableChangeStats(3, 0, 0)))));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(raced)).thenReturn(List.of(
+                segment(siteId, raced, "raced", 11, 20, Map.of("orders", new TableChangeStats(3, 0, 0)))));
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(lost), eq(siteId), eq("orders"), any()))
+                .thenReturn(1);
+        // Its own AFTER_COMMIT enqueue landed between the listing and this insert.
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(raced), eq(siteId), eq("orders"), any()))
+                .thenReturn(0);
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
+
+        assertEquals(1, recovering.recoverLostEnqueues());
+
+        assertEquals(1.0, registry.get("delta.batch-parquet.enqueue.recovered").counter().count(),
+                "a batch whose own enqueue won the race was not lost and must not be counted");
+        ArgumentCaptor<LocalDateTime> horizon = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<LocalDateTime> completedBefore = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(artifactRepository).findBatchesAwaitingEnqueue(horizon.capture(), completedBefore.capture(),
+                eq(BatchParquetFinalizationService.RECOVERY_LIMIT));
+        assertWithin(before.minusHours(168), horizon.getValue(), "the same horizon as the claim");
+        assertWithin(before.minus(BatchParquetFinalizationService.ENQUEUE_GRACE), completedBefore.getValue(),
+                "a batch completed moments ago is left to its own enqueue");
+    }
+
+    @Test
+    void theRecoveryCounterIsRegisteredAtZero() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        newService(5, 1800, 10_000_000L, registry);
+
+        assertEquals(0.0, registry.get("delta.batch-parquet.enqueue.recovered").counter().count(),
+                "an alert on the series must predate the first recovery");
+    }
+
+    @Test
+    void aBatchWhoseRecoveryFailsCostsOnlyThatBatch() {
+        UUID siteId = UUID.randomUUID();
+        UUID broken = UUID.randomUUID();
+        UUID healthy = UUID.randomUUID();
+        when(artifactRepository.findBatchesAwaitingEnqueue(any(), any(), anyInt()))
+                .thenReturn(List.of(broken, healthy));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(broken))
+                .thenThrow(new IllegalStateException("connection reset"));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(healthy)).thenReturn(List.of(
+                segment(siteId, healthy, "healthy", 1, 10, Map.of("orders", new TableChangeStats(3, 0, 0)))));
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(healthy), eq(siteId), eq("orders"), any()))
+                .thenReturn(1);
+
+        try (LogCapture capture = LogCapture.attachTo(BatchParquetFinalizationService.class)) {
+            assertEquals(1, service.recoverLostEnqueues());
+
+            assertTrue(capture.events().stream().anyMatch(event -> event.getLevel() == Level.ERROR
+                            && event.getFormattedMessage().contains(broken.toString())
+                            && event.getThrowableProxy() != null),
+                    "the failed batch is named, with its cause");
+        }
+    }
+
+    @Test
+    void refusesAnEnqueueHorizonBelowOneHourByName() {
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> new BatchParquetFinalizationService(artifactRepository, segmentRepository,
+                        segmentService, schemaService, batchRepository, storage,
+                        new DeltaMetrics(new SimpleMeterRegistry()),
+                        new DeltaParquetProperties(8L * 1024 * 1024), TestScratchLeases.unboundedBudget(),
+                        mock(PlatformTransactionManager.class), tempDir.toString(), 10_000_000L, 60,
+                        5, 1800, 0));
+
+        assertEquals("delta.batch-parquet.enqueue-horizon-hours must be at least 1, but was 0",
+                refused.getMessage());
+    }
+
+    private static void assertWithin(LocalDateTime expected, LocalDateTime actual, String message) {
+        assertTrue(Duration.between(expected, actual).abs().toSeconds() < 60,
+                message + ": expected about " + expected + " but was " + actual);
     }
 
     @Test
@@ -583,7 +690,7 @@ class BatchParquetFinalizationServiceTest {
         UUID batchId = UUID.randomUUID();
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
         when(artifactRepository.findNextRetryable(
-                any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+                any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), any(LocalDateTime.class), anyInt()))
                 .thenReturn(List.of(artifact));
         when(artifactRepository.tryLockBatch(batchId)).thenReturn(false);
 
@@ -956,7 +1063,7 @@ class BatchParquetFinalizationServiceTest {
         stranded.markBuilding();
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), any(LocalDateTime.class), anyInt()))
                 .thenReturn(List.of(stranded));
         when(artifactRepository.tryLockBatch(batchId)).thenReturn(true);
         when(artifactRepository.findRetryableByBatchId(
@@ -978,7 +1085,7 @@ class BatchParquetFinalizationServiceTest {
     /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */
     private BatchParquetArtifact claimable(UUID batchId, UUID siteId, String tableName) {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, tableName);
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), any(LocalDateTime.class), anyInt()))
                 .thenReturn(List.of(artifact));
         when(artifactRepository.tryLockBatch(batchId)).thenReturn(true);
         when(artifactRepository.findRetryableByBatchId(
@@ -991,7 +1098,7 @@ class BatchParquetFinalizationServiceTest {
     private void claimableBatch(BatchParquetArtifact... artifacts) {
         UUID batchId = artifacts[0].getBatchId();
         when(artifactRepository.findNextRetryable(
-                any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+                any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), any(LocalDateTime.class), anyInt()))
                 .thenReturn(List.of(artifacts[0]));
         when(artifactRepository.tryLockBatch(batchId)).thenReturn(true);
         when(artifactRepository.findRetryableByBatchId(
