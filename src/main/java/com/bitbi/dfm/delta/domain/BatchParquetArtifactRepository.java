@@ -44,9 +44,6 @@ public interface BatchParquetArtifactRepository {
      * declared schema, data the schema cannot render, a batch whose segments a re-baseline removed)
      * and would otherwise be rebuilt forever.
      *
-     * @param now                current instant, the reference for both delays
-     * @param retryDelaySeconds  base failure backoff; doubles per attempt, capped
-     * @param leaseSeconds       how long a {@code BUILDING} claim is honoured before it is reclaimed
      * <p>The head of the queue is per site, in batch order (issues #378, #380): a row is held back
      * while an earlier batch of its site still has an unfinished row, or is still owed its rows
      * altogether (see {@link #findBatchesAwaitingEnqueue}).</p>

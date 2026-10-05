@@ -469,6 +469,18 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     }
 
     @Test
+    void aBatchStillOwedItsRowsHoldsBackOnlyItsOwnSite() {
+        UUID lost = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, lost, false);
+        UUID otherSiteBatch = insertBatch(OTHER_SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact otherSite = repository.save(
+                BatchParquetArtifact.pending(otherSiteBatch, OTHER_SITE_ID, "orders"));
+
+        assertTrue(isClaimed(otherSite, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600),
+                "one lost enqueue must not stop the whole fleet");
+    }
+
+    @Test
     void anEarlierBatchThatSealedNothingDoesNotHoldTheSiteBack() {
         UUID empty = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
         UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));

@@ -124,6 +124,12 @@ public interface JpaBatchParquetArtifactRepository
      * the claim query's gate and the sweep: a gate wider than the sweep would wait for a batch
      * nobody enqueues, and a sweep wider than the gate would publish a recovered batch after its
      * successors. The statuses are the two whose completion publishes {@code BatchCompletedEvent}.
+     *
+     * <p>Enqueueing such a batch always creates at least one row, so the gate always lets go: no
+     * path writes an empty segment ({@code DeltaSessionCommitService} skips empty record lists),
+     * so a published segment's stats name at least one table. A legacy segment without stats is
+     * read from S3 instead, and if that fails the sweep logs an ERROR every tick and the site waits
+     * at most the horizon.</p>
      */
     String AWAITING_ENQUEUE = """
             owing.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')

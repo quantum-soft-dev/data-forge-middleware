@@ -120,7 +120,12 @@ segment's stats, which would then sit under the commit's locks. No migration: th
 `idx_batches_started_at`, the gate `idx_batches_site_started_id`, and both probe
 `idx_segment_batch_id` and `uk_batch_parquet_artifact`. What remains out of order: a batch older
 than the horizon, a batch in another terminal status (`NOT_COMPLETED`, `FAILED`, `CANCELLED` — never
-enqueued after commit, only by an owner download), and the two arrivals listed above.
+enqueued after commit, only by an owner download), and the two arrivals listed above. One residual
+is #244's, not new: retention's hold-back reads artifact rows, so a batch still owed its rows is not
+held back by it. A recovery normally lands within a sweep tick plus the grace, well before the
+nightly prune; one that came only after the prune would build from the surviving segments, like a
+late lazy backfill. Enqueueing always creates a row — no path writes an empty segment — so the gate
+always lets go once the sweep reaches the batch.
 No migration, and the cost does not grow with a site's history. The subquery's status predicate is
 exactly the predicate of the partial claim index `idx_batch_parquet_artifacts_claim`, so PostgreSQL
 reads `earlier` from that index — unfinished rows only — and filters the site from it; `READY` and
