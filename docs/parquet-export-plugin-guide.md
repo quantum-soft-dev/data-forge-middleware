@@ -140,11 +140,12 @@ before it. What is **not** guaranteed:
   a file of a later batch of the same site.
 - **An old batch returning late.** An operator's requeue of an `abandoned` artifact, or a batch
   built on demand long after it finished, is listed after its successors. See `abandoned` below.
-- **A batch whose build was never queued.** A batch's work rows are created right after its
-  session commits; if that step is lost (the process dies at that instant), the batch holds no
-  place in the queue, later batches are built past it, and it appears only if something builds it
-  later (an owner download does). This is a known gap of the queue, not of this listing
-  (#380).
+- **A batch whose build was queued late.** A batch's work rows are created right after its
+  session commits. If that step is lost (the process dies at that instant), the server's sweep
+  queues the batch within a few minutes, and until then the site's later batches wait for it — so
+  it is still listed before them (#380). The sweep looks back
+  `DELTA_BATCH_PARQUET_ENQUEUE_HORIZON_HOURS` (7 days by default); a batch older than that, or one
+  rebuilt by an owner download long after its successors, is listed after them.
 - **Order across sites.** Each site is ordered on its own.
 - **`type=delta` / `type=checkpoint`.** Unchanged; this section is about batch files.
 

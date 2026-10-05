@@ -31,6 +31,13 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     private static final UUID SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
     private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
+    /**
+     * The enqueue horizon (issue #380) these cases pass. Fixed rather than derived from the clock,
+     * so the batches below — started on 2026-09-30 — stay inside it whenever the suite runs, while
+     * the seeded store-01 batch of 2025 stays outside it.
+     */
+    private static final LocalDateTime HORIZON = LocalDateTime.of(2026, 9, 1, 0, 0);
+
     @Autowired
     private BatchParquetArtifactRepository repository;
 
@@ -54,7 +61,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         repository.save(ready);
 
         List<UUID> claimed = repository.findNextRetryable(
-                        LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600, 7, 500).stream()
+                        LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600, 7, HORIZON, 500).stream()
                 .map(BatchParquetArtifact::getId).toList();
 
         assertTrue(claimed.contains(pending.getId()), "a pending row is claimable");
@@ -118,9 +125,9 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
                 BatchParquetArtifact.pending(batchId, SITE_ID, "active-customers"));
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
 
-        List<UUID> liveLeaseCandidates = repository.findNextRetryable(now, 0, 3600, 7, 500)
+        List<UUID> liveLeaseCandidates = repository.findNextRetryable(now, 0, 3600, 7, HORIZON, 500)
                 .stream().map(BatchParquetArtifact::getId).toList();
-        List<UUID> expiredLeaseCandidates = repository.findNextRetryable(now, 0, 0, 7, 500)
+        List<UUID> expiredLeaseCandidates = repository.findNextRetryable(now, 0, 0, 7, HORIZON, 500)
                 .stream().map(BatchParquetArtifact::getId).toList();
 
         assertFalse(liveLeaseCandidates.contains(pending.getId()),
@@ -230,7 +237,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
 
         assertEquals(BatchParquetArtifactStatus.ABANDONED,
                 repository.findById(spent.getId()).orElseThrow().getStatus());
-        assertTrue(repository.findNextRetryable(now, 0, 0, 2, 500).stream()
+        assertTrue(repository.findNextRetryable(now, 0, 0, 2, HORIZON, 500).stream()
                 .anyMatch(candidate -> candidate.getId().equals(retryable.getId())));
     }
 
@@ -297,7 +304,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
      */
     private boolean isClaimed(BatchParquetArtifact artifact, LocalDateTime now,
                               int retryDelaySeconds, int leaseSeconds) {
-        return repository.findNextRetryable(now, retryDelaySeconds, leaseSeconds, 7, 500).stream()
+        return repository.findNextRetryable(now, retryDelaySeconds, leaseSeconds, 7, HORIZON, 500).stream()
                 .anyMatch(claimed -> claimed.getId().equals(artifact.getId()));
     }
 
@@ -430,18 +437,193 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         assertFalse(isClaimed(highRow, now, 0, 3600), "and never lets both through at once");
     }
 
+
+    // ---- Issue #380: a completed batch whose enqueue was lost still holds its place ----------
+    //
+    // The work rows are created AFTER_COMMIT. A batch whose enqueue was lost (the process died in
+    // that window, or the enqueue threw) has no row, so the #378 rule cannot see it. The claim
+    // query therefore also holds a site back behind an earlier batch that is still owed its rows,
+    // and the sweep finds exactly those batches — one predicate for both, inside one horizon.
+
+    @Test
+    void anEarlierCompletedBatchStillOwedItsRowsHoldsBackTheNextBatchOfItsSite() {
+        UUID lost = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, lost, false);
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertFalse(isClaimed(next, now, 0, 3600),
+                "a later batch must not be built past an earlier one whose rows were never created");
+
+        BatchParquetArtifact recovered = repository.save(BatchParquetArtifact.pending(lost, SITE_ID, "orders"));
+
+        assertTrue(isClaimed(recovered, now, 0, 3600), "once enqueued, the earlier batch is the head");
+        assertFalse(isClaimed(next, now, 0, 3600), "and the #378 rule keeps the later one waiting");
+
+        recovered.markBuilding();
+        recovered.markReady("egress/orders.parquet", 3, 100, "abc");
+        repository.save(recovered);
+
+        assertTrue(isClaimed(next, now, 0, 3600), "published in batch order");
+    }
+
+    @Test
+    void aBatchStillOwedItsRowsHoldsBackOnlyItsOwnSite() {
+        UUID lost = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, lost, false);
+        UUID otherSiteBatch = insertBatch(OTHER_SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact otherSite = repository.save(
+                BatchParquetArtifact.pending(otherSiteBatch, OTHER_SITE_ID, "orders"));
+
+        assertTrue(isClaimed(otherSite, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600),
+                "one lost enqueue must not stop the whole fleet");
+    }
+
+    @Test
+    void anEarlierBatchThatSealedNothingDoesNotHoldTheSiteBack() {
+        UUID empty = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+
+        assertTrue(isClaimed(next, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600),
+                "a session with no published segment has nothing to build, so nothing to wait for");
+        assertFalse(awaitingEnqueue(HORIZON).contains(empty));
+    }
+
+    @Test
+    void anEarlierBatchThatDidNotCompleteDoesNotHoldTheSiteBack() {
+        // Only COMPLETED and COMPLETED_WITH_WARNINGS publish BatchCompletedEvent, so only they are
+        // enqueued after commit; a timed-out or failed session never was, and is not owed rows.
+        UUID notCompleted = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0), "NOT_COMPLETED");
+        insertSegment(SITE_ID, notCompleted, false);
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+
+        assertTrue(isClaimed(next, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600));
+        assertFalse(awaitingEnqueue(HORIZON).contains(notCompleted));
+    }
+
+    @Test
+    void aBatchCompletedWithWarningsIsOwedItsRowsLikeACompletedOne() {
+        UUID warned = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0), "COMPLETED_WITH_WARNINGS");
+        insertSegment(SITE_ID, warned, false);
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+
+        assertFalse(isClaimed(next, LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600));
+        assertTrue(awaitingEnqueue(HORIZON).contains(warned));
+    }
+
+    @Test
+    void anEarlierBatchStartedBeforeTheHorizonNeitherHoldsBackNorIsSwept() {
+        // The horizon is shared: a batch the gate would wait on is always one the sweep enqueues,
+        // so the gate cannot wait for ever; and history from before 036 is not enqueued wholesale.
+        UUID old = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, old, false);
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        LocalDateTime between = LocalDateTime.of(2026, 9, 30, 10, 30);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertTrue(repository.findNextRetryable(now, 0, 3600, 7, between, 500).stream()
+                .anyMatch(candidate -> candidate.getId().equals(next.getId())));
+        assertFalse(awaitingEnqueue(between).contains(old));
+        assertTrue(awaitingEnqueue(HORIZON).contains(old));
+    }
+
+    @Test
+    void theSweepFindsCompletedBatchesWithSegmentsAndNoRowsInBatchOrder() {
+        UUID second = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        insertSegment(SITE_ID, second, false);
+        UUID first = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, first, false);
+        UUID enqueued = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 9, 0));
+        insertSegment(SITE_ID, enqueued, false);
+        repository.save(BatchParquetArtifact.pending(enqueued, SITE_ID, "orders"));
+        UUID provisionalOnly = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 8, 0));
+        insertSegment(SITE_ID, provisionalOnly, true);
+
+        List<UUID> found = awaitingEnqueue(HORIZON);
+
+        assertTrue(found.indexOf(first) >= 0 && found.indexOf(first) < found.indexOf(second),
+                "both lost batches are found, earliest first");
+        assertFalse(found.contains(enqueued), "a batch with even one row is not owed its rows");
+        assertFalse(found.contains(provisionalOnly), "a provisional segment is not published yet");
+    }
+
+    @Test
+    void theSweepLeavesABatchAloneUntilItsOwnEnqueueHasHadTimeToRun() {
+        UUID fresh = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, fresh, false);
+        LocalDateTime completedAt = LocalDateTime.of(2026, 9, 30, 10, 5);
+
+        assertFalse(repository.findBatchesAwaitingEnqueue(HORIZON, completedAt, 500).contains(fresh),
+                "the AFTER_COMMIT enqueue may still be running for a batch completed at the cutoff");
+        assertTrue(repository.findBatchesAwaitingEnqueue(HORIZON, completedAt.plusSeconds(1), 500)
+                .contains(fresh));
+    }
+
+    @Test
+    void theGateAndTheSweepSelectTheSameBatches() {
+        // One predicate text serves both. A gate wider than the sweep would wait for a batch nobody
+        // enqueues; a sweep wider than the gate would publish a recovered batch after its successors.
+        UUID owed = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 10, 0));
+        insertSegment(SITE_ID, owed, false);
+        UUID later = insertBatch(SITE_ID, LocalDateTime.of(2026, 9, 30, 11, 0));
+        BatchParquetArtifact next = repository.save(BatchParquetArtifact.pending(later, SITE_ID, "orders"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertTrue(awaitingEnqueue(HORIZON).contains(owed));
+        assertFalse(isClaimed(next, now, 0, 3600));
+
+        repository.insertPendingIfAbsent(UUID.randomUUID(), owed, SITE_ID, "orders", now);
+
+        assertFalse(awaitingEnqueue(HORIZON).contains(owed), "the sweep has nothing more to do");
+        assertFalse(isClaimed(next, now, 0, 3600), "and the #378 rule takes over from the gate");
+    }
+
+    private List<UUID> awaitingEnqueue(LocalDateTime horizon) {
+        return repository.findBatchesAwaitingEnqueue(horizon,
+                LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 10_000);
+    }
+
+    private void insertSegment(UUID siteId, UUID batchId, boolean provisional) {
+        // Both queue markers stamped, so the site-blind egress and delta-SQL queues never claim it.
+        jdbc.update("""
+                INSERT INTO changelog_segments (id, site_id, batch_id, first_seq, last_seq,
+                    record_count, content_hash, s3_key, mode, plugin_sql_at, egress_at, provisional)
+                VALUES (?, ?, ?, ?, ?, 1, 'hash', ?, 'DELTA',
+                        CAST(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AS timestamp),
+                        CAST(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AS timestamp), ?)
+                """, UUID.randomUUID(), siteId, batchId, nextSeq, nextSeq,
+                "issue-380/" + batchId + "/" + nextSeq + ".pb.gz", provisional);
+        nextSeq++;
+    }
+
+    /** Distinct per insert, far above anything another class seeds: uk_segment_site_first_seq. */
+    private long nextSeq = 380_000_000L;
+
     private UUID insertBatch(UUID siteId, LocalDateTime startedAt) {
         return insertBatch(UUID.randomUUID(), siteId, startedAt);
     }
 
+    private UUID insertBatch(UUID siteId, LocalDateTime startedAt, String status) {
+        return insertBatch(UUID.randomUUID(), siteId, startedAt, status);
+    }
+
     private UUID insertBatch(UUID batchId, UUID siteId, LocalDateTime startedAt) {
+        return insertBatch(batchId, siteId, startedAt, "COMPLETED");
+    }
+
+    private UUID insertBatch(UUID batchId, UUID siteId, LocalDateTime startedAt, String status) {
         jdbc.update("""
                 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
                                      total_size, has_errors, started_at, created_at, completed_at,
                                      session_mode)
-                VALUES (?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', ?, 'COMPLETED', ?, 0, 0, false,
+                VALUES (?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', ?, ?, ?, 0, 0, false,
                         ?, ?, ?, 'DELTA')
-                """, batchId, siteId, "issue-378/" + batchId + "/", startedAt, startedAt,
+                """, batchId, siteId, status, "issue-378/" + batchId + "/", startedAt, startedAt,
                 startedAt.plusMinutes(5));
         return batchId;
     }

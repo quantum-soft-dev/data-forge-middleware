@@ -99,7 +99,8 @@ class ScheduledTaskInventoryTest {
         // Walks every site with work, and one site is a frame download, a download per segment and
         // a Parquet write plus upload per table.
         tasks.put("com.bitbi.dfm.delta.application.CheckpointScheduler#buildCheckpoints", Cost.LONG);
-        // Fallback wakes for the three queue workers: each submits a drain to its own pool.
+        // Fallback wakes for the three queue workers: each submits a drain to its own pool (the
+        // batch-parquet one recovers lost enqueues on that pool first, issue #380).
         tasks.put("com.bitbi.dfm.delta.application.BatchParquetFinalizationWorker#sweep", Cost.HANDOFF);
         tasks.put("com.bitbi.dfm.delta.application.DeltaEgressWorker#sweep", Cost.HANDOFF);
         tasks.put("com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker#sweep", Cost.HANDOFF);

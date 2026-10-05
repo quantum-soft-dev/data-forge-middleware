@@ -44,14 +44,38 @@ public interface BatchParquetArtifactRepository {
      * declared schema, data the schema cannot render, a batch whose segments a re-baseline removed)
      * and would otherwise be rebuilt forever.
      *
+     * <p>The head of the queue is per site, in batch order (issues #378, #380): a row is held back
+     * while an earlier batch of its site still has an unfinished row, or is still owed its rows
+     * altogether (see {@link #findBatchesAwaitingEnqueue}).</p>
+     *
      * @param now                current instant, the reference for both delays
      * @param retryDelaySeconds  base failure backoff; doubles per attempt, capped
      * @param leaseSeconds       how long a {@code BUILDING} claim is honoured before it is reclaimed
      * @param maxAttempts        spent expired claims are settled separately, never reclaimed
+     * @param enqueueHorizon     earliest {@code started_at} of a batch still owed its rows that
+     *                           holds its site back; the same bound the sweep uses
      * @param limit              maximum rows to claim
      */
     List<BatchParquetArtifact> findNextRetryable(LocalDateTime now, int retryDelaySeconds,
-                                                 int leaseSeconds, int maxAttempts, int limit);
+                                                 int leaseSeconds, int maxAttempts,
+                                                 LocalDateTime enqueueHorizon, int limit);
+
+    /**
+     * Completed batches still owed their work rows (issue #380): {@code COMPLETED} or
+     * {@code COMPLETED_WITH_WARNINGS} — the statuses whose commit enqueues them after the fact —
+     * with at least one published changelog segment and no row here at all, started at or after
+     * {@code enqueueHorizon}. The rows are created {@code AFTER_COMMIT}, so a process that dies in
+     * that window, or an enqueue that throws, leaves exactly such a batch. The claim query holds
+     * the batch's site back behind the same predicate, so the two cannot disagree.
+     *
+     * @param enqueueHorizon  earliest {@code started_at} considered
+     * @param completedBefore only batches completed strictly before this instant, so a batch whose
+     *                        own enqueue may still be running is left to it
+     * @param limit           maximum batches returned
+     * @return batch ids in batch order, {@code (started_at, id)}
+     */
+    List<UUID> findBatchesAwaitingEnqueue(LocalDateTime enqueueHorizon, LocalDateTime completedBefore,
+                                          int limit);
 
     /**
      * Serialize the short claim transaction for one batch. The lock is transaction-scoped, so the

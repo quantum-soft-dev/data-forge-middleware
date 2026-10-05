@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -109,6 +110,9 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private SiteService siteService;
+
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -333,6 +337,52 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                 .containsOnly(1L);
     }
 
+    /**
+     * Issue #380, end to end: a FULL_SNAPSHOT whose AFTER_COMMIT enqueue was lost — the process
+     * died between its session's commit and the listener — has no row, so the #378 rule cannot see
+     * it. The next session's DELTA must still not be built past it; the worker's sweep gives the
+     * snapshot its rows, and the catalog then lists it first. Dates are relative to now because the
+     * sweep and the gate look back only {@code delta.batch-parquet.enqueue-horizon-hours}.
+     */
+    @Test
+    @DisplayName("a lost enqueue is recovered by the sweep and still published before the next batch")
+    void aBatchWhoseEnqueueWasLostIsRecoveredAndPublishedBeforeItsSuccessor() {
+        LocalDateTime startedAt = LocalDateTime.now(ZoneOffset.UTC).minusHours(3);
+        UUID snapshot = insertBatch(startedAt, "FULL_SNAPSHOT");
+        UUID delta = insertBatch(startedAt.plusHours(1), "DELTA");
+        segmentService.persist(SITE_ID, snapshot, "FULL_SNAPSHOT", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Ann"))),
+                record("orders", Op.INSERT, 2L, 10L, data("id", intValue(10L), "description", stringValue("First")))));
+        segmentService.persist(SITE_ID, delta, "DELTA", 3L, List.of(
+                record("customers", Op.UPDATE, 3L, 1L, data("name", stringValue("Anne"))),
+                record("orders", Op.DELETE, 4L, 10L, Map.of())));
+        // Only the delta's own enqueue ran; the snapshot's was lost.
+        assertThat(finalizationService.enqueueBatch(delta)).isEqualTo(2);
+        double recoveredBefore = meterRegistry.get("delta.batch-parquet.enqueue.recovered").counter().count();
+
+        drainQueue();
+
+        assertThat(artifactRepository.findByBatchId(delta))
+                .as("the delta waits for the snapshot that was never queued")
+                .hasSize(2).allMatch(artifact -> artifact.getStatus() == BatchParquetArtifactStatus.PENDING);
+        assertThat(catalogDao.findBatchFiles(ACCOUNT_ID, LocalDateTime.of(2000, 1, 1, 0, 0),
+                SITE_ID, null, null, null, 100)).isEmpty();
+
+        assertThat(finalizationService.recoverLostEnqueues()).isGreaterThanOrEqualTo(1);
+        assertThat(artifactRepository.findByBatchId(snapshot)).hasSize(2);
+        assertThat(meterRegistry.get("delta.batch-parquet.enqueue.recovered").counter().count())
+                .isGreaterThanOrEqualTo(recoveredBefore + 1);
+
+        drainQueue();
+
+        List<ParquetExportCatalogDao.CatalogRow> listed = catalogDao.findBatchFiles(
+                ACCOUNT_ID, LocalDateTime.of(2000, 1, 1, 0, 0), SITE_ID, null, null, null, 100);
+        assertThat(listed).extracting(ParquetExportCatalogDao.CatalogRow::batchId,
+                        ParquetExportCatalogDao.CatalogRow::sessionMode)
+                .containsExactly(tuple(snapshot, "full_snapshot"), tuple(snapshot, "full_snapshot"),
+                        tuple(delta, "delta"), tuple(delta, "delta"));
+    }
+
     private void drainQueue() {
         int iterations = 0;
         while (finalizationService.finalizeNext()) {
@@ -517,7 +567,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                 new DeltaParquetProperties(8L * 1024 * 1024),
                 new com.bitbi.dfm.delta.application.ParquetScratchBudget(
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), 0L),
-                transactionManager, tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600);
+                transactionManager, tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600, 168);
     }
 
     /** Same finalizer, but with an already-elapsed build lease so stale claims are reclaimed. */
@@ -527,7 +577,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                 new DeltaParquetProperties(8L * 1024 * 1024),
                 new com.bitbi.dfm.delta.application.ParquetScratchBudget(
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), 0L),
-                transactionManager, tempDir.toString(), 10_000_000L, 0, 5, 0);
+                transactionManager, tempDir.toString(), 10_000_000L, 0, 5, 0, 168);
     }
 
     /** Take the retry-delay out of play so a test can drive consecutive attempts. */

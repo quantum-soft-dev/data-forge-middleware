@@ -28,10 +28,11 @@ public class BatchParquetFinalizationListener {
             service.enqueueBatch(event.batchId());
             worker.wake();
         } catch (RuntimeException e) {
-            // Completion is already durable. Lazy download backfill can recreate missing work, so
-            // this best-effort callback must not make the client observe a false SessionEnd failure.
+            // Completion is already durable, so this callback must not make the client observe a
+            // false SessionEnd failure. The worker's sweep finds the batch (issue #380) and the
+            // claim query holds the site's later batches back until it has its rows.
             log.error("Could not enqueue unified batch Parquet after batch {} committed; "
-                    + "lazy download backfill remains available", event.batchId(), e);
+                    + "the batch-parquet sweep will recover it", event.batchId(), e);
         }
     }
 }

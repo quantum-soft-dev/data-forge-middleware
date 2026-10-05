@@ -42,9 +42,28 @@ public class BatchParquetFinalizationWorker {
         pool.execute(this::drain);
     }
 
+    /**
+     * The fallback tick: recover completed batches whose own enqueue was lost (issue #380), then
+     * drain. Both run on this worker's pool, so the scheduler thread only hands off; a tick
+     * discarded because the pool is full is simply the next tick's work.
+     */
     @Scheduled(fixedDelayString = "${delta.batch-parquet.sweep-ms:60000}")
     public void sweep() {
-        wake();
+        pool.execute(this::recoverAndDrain);
+    }
+
+    private void recoverAndDrain() {
+        try {
+            if (!shuttingDown) {
+                service.recoverLostEnqueues();
+            }
+        } catch (RuntimeException e) {
+            // Per-batch failures are handled inside; this is the listing itself failing. The
+            // batches stay owed and keep their sites held back, so the drain below is still safe.
+            log.warn("Could not look for completed batches whose Parquet enqueue was lost; "
+                    + "the next sweep retries", e);
+        }
+        drain();
     }
 
     private void drain() {

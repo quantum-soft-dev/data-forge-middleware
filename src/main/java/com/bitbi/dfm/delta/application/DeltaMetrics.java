@@ -96,6 +96,10 @@ import java.util.function.Supplier;
  *       are the inner steps (042)</li>
  *   <li>{@code delta.batch-parquet.reclaims} — claims taken over after their build lease expired;
  *       a rising count means builds are outrunning {@code lease-seconds}</li>
+ *   <li>{@code delta.batch-parquet.enqueue.recovered} — completed batches the sweep gave work
+ *       rows to because their {@code AFTER_COMMIT} enqueue was lost (issue #380); registered at
+ *       zero, and any increase means a pod died between a session's commit and its enqueue, or the
+ *       enqueue failed — the ERROR of {@code BatchParquetFinalizationListener} says which</li>
  * </ul>
  *
  * @author Data Forge Team
@@ -155,6 +159,7 @@ public class DeltaMetrics {
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
     private final Counter batchParquetReclaims;
+    private final Counter batchParquetEnqueueRecovered;
     private final Counter segmentOrphanCandidates;
     private final Counter checkpointOrphanCandidates;
     private final Counter segmentOrphansReclaimed;
@@ -228,6 +233,10 @@ public class DeltaMetrics {
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
         this.batchParquetReclaims = Counter.builder("delta.batch-parquet.reclaims")
                 .description("Completed-batch Parquet claims taken over after their lease expired")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.batchParquetEnqueueRecovered = Counter.builder("delta.batch-parquet.enqueue.recovered")
+                .description("Completed batches whose lost AFTER_COMMIT Parquet enqueue the sweep "
+                        + "recovered (issue #380)")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.segmentOrphanCandidates = orphanCandidates(registry, ORPHAN_PREFIX_SEGMENTS);
         this.checkpointOrphanCandidates = orphanCandidates(registry, ORPHAN_PREFIX_CHECKPOINTS);
@@ -634,6 +643,11 @@ public class DeltaMetrics {
     /** A claim was taken over because its build lease had expired. */
     public void batchParquetReclaimed() {
         batchParquetReclaims.increment();
+    }
+
+    /** The sweep gave work rows to a completed batch whose own enqueue was lost (issue #380). */
+    public void batchParquetEnqueueRecovered() {
+        batchParquetEnqueueRecovered.increment();
     }
 
     /** Time one batch-level claim group (shared replay + uploads), whatever its outcomes. */

@@ -627,6 +627,11 @@ delta:
     # How long a BUILDING claim is honoured with no sign of life. The owner renews it every third
     # of this while it builds, so it bounds worker death, not how long a build may legitimately run.
     lease-seconds: ${DELTA_BATCH_PARQUET_LEASE_SECONDS:1800}
+    # How far back (by started_at) the sweep looks for a completed batch whose AFTER_COMMIT enqueue
+    # was lost, and how far back such a batch holds its site's later batches back (issue #380).
+    # One value for both, so the claim never waits on a batch the sweep will not enqueue; it also
+    # keeps history from before 036 out of the queue. >= 1; 0 is refused at startup by name.
+    enqueue-horizon-hours: ${DELTA_BATCH_PARQUET_ENQUEUE_HORIZON_HOURS:168}
     # A completed artifact is file-backed; refuse upload if the local file exceeds this policy.
     # Crossing it abandons that artifact on its first, deterministic attempt.
     # PER FILE, like the checkpoint ceilings above — and this path is the one that multiplies:
