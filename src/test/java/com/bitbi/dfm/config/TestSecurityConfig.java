@@ -6,6 +6,7 @@ import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
 import com.bitbi.dfm.shared.config.MetricsScrapeAccess;
 import com.bitbi.dfm.shared.config.SecurityConfiguration;
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -21,6 +22,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import com.bitbi.dfm.plugin.presentation.BitBiPluginApiPaths;
 import com.bitbi.dfm.plugin.presentation.ParquetExportBasicAuthFilter;
 import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 
@@ -305,20 +307,20 @@ public class TestSecurityConfig {
     /**
      * Bit BI Plugin API filter chain.
      * <p>
-     * Order 3: Third priority - matches specific Bit BI Plugin API endpoints.
+     * Order 3: Third priority - matches the Bit BI plugin-key namespace
+     * ({@link BitBiPluginApiPaths#KEY_AUTHENTICATED}, the same matcher as production, #384).
      * Plugin API Key authentication via PluginApiKeyAuthenticationFilter.
      * </p>
      * <p>
-     * IMPORTANT: Only specific Bit BI API endpoints use Plugin API Key auth.
      * The /api/v1/plugins/bit-bi/activate and /api/v1/plugins/bit-bi/deactivate
-     * endpoints use OAuth2 (handled by Order 4 filter chain).
+     * endpoints use OAuth2 (handled by the Order 5 filter chain).
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables")
+            .securityMatcher(BitBiPluginApiPaths.KEY_AUTHENTICATED)
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -379,7 +381,7 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (handled by Order 3)
+                .requestMatchers(BitBiPluginApiPaths.KEY_AUTHENTICATED).denyAll() // Explicitly deny (handled by Order 3)
                 .requestMatchers("/api/v1/plugins/parquet-export/files", "/api/v1/plugins/parquet-export/download/**").denyAll() // Explicitly deny (handled by Order 4, 028)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
@@ -405,7 +407,9 @@ public class TestSecurityConfig {
      * Default security filter chain for remaining endpoints.
      * <p>
      * Order 8: Lowest priority - catches all remaining requests.
-     * Allows public access to actuator and swagger; everything else is denied.
+     * Allows public access to actuator and swagger; everything else is denied. ERROR dispatches
+     * are permitted, as in production (#384) — MockMvc never performs one, so this line is here to
+     * keep the copy equal to {@code SecurityConfiguration}, not because any test here reaches it.
      * </p>
      */
     @Bean
@@ -415,6 +419,7 @@ public class TestSecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers(MetricsScrapeAccess.PATHS).access(metricsScrapeAuthorizationManager)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
