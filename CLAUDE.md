@@ -859,7 +859,6 @@ pages/{feature}/            # Route pages
   route, gRPC, proto, DTO shape, migration (**V61 stays next**), `specs/NNN-*`,
   configuration-key, metric, S3-key or frontend change. See `docs/bitbi-integration.md`
   ("Calling `activate` again on an active plugin").
-||||||| parent of 0416d14f (docs(delta): the 38-digit decimal cap and reason=overflow in the guides and journals (#382))
 - dev-row-group-8mib: Dev writes Parquet row groups of 8 MiB instead of the 16 MiB default, so Bit BI's
   reader takes every table (issue #385). Bit BI decodes a row group whole and refuses one above six
   million cells (their question 67); a writer closes a group by buffered bytes
