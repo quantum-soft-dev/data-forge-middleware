@@ -361,16 +361,25 @@ public final class ParquetCheckpointWriter {
         Map<String, Integer> widened = null;
         for (Map.Entry<String, LogicalTypes.Decimal> column : declared.entrySet()) {
             LogicalTypes.Decimal decimal = column.getValue();
-            int precision = needed.get(column.getKey());
+            int asked = needed.get(column.getKey());
+            int precision = ParquetSchemaMapper.cappedDecimalPrecision(asked);
             if (precision > decimal.getPrecision()) {
                 if (widened == null) {
                     widened = new java.util.LinkedHashMap<>();
                 }
                 widened.put(column.getKey(), precision);
-                log.warn("Column {} of table {} declared decimal({},{}) but its data needs precision {} — "
-                                + "widening the Parquet type (check the declared schema against the data)",
-                        column.getKey(), recordSchema.getName(), decimal.getPrecision(),
-                        decimal.getScale(), precision);
+                if (asked > precision) {
+                    log.warn("Column {} of table {} declared decimal({},{}) but its data needs precision {} — "
+                                    + "widening the Parquet type to the cap of {}; a value needing more is "
+                                    + "written NULL (check the declared schema against the data, issue #382)",
+                            column.getKey(), recordSchema.getName(), decimal.getPrecision(),
+                            decimal.getScale(), asked, precision);
+                } else {
+                    log.warn("Column {} of table {} declared decimal({},{}) but its data needs precision {} — "
+                                    + "widening the Parquet type (check the declared schema against the data)",
+                            column.getKey(), recordSchema.getName(), decimal.getPrecision(),
+                            decimal.getScale(), precision);
+                }
             }
         }
         if (widened == null) {
@@ -449,7 +458,17 @@ public final class ParquetCheckpointWriter {
                 }
                 return null;
             }
-            return exact.setScale(decimal.getScale(), RoundingMode.HALF_UP);
+            BigDecimal scaled = exact.setScale(decimal.getScale(), RoundingMode.HALF_UP);
+            if (scaled.precision() > decimal.getPrecision()) {
+                // More digits than the column is typed at. Every writer widens its decimal columns
+                // to the data before writing (PR #55), so the only value that reaches this is one
+                // the widening could not take: past ParquetSchemaMapper.MAX_DECIMAL_PRECISION
+                // (issue #382). Written NULL and counted, like a non-finite value, instead of a
+                // column every exact reader would refuse with the whole file.
+                nonFinite.overflow();
+                return null;
+            }
+            return scaled;
         }
         if (logical instanceof LogicalTypes.Date) {
             return toLocalDate(java);
@@ -479,6 +498,12 @@ public final class ParquetCheckpointWriter {
             log.warn("Table {}: {} decimal cell(s) written as NULL -- the value is NaN or "
                     + "+/-Infinity, which Parquet DECIMAL cannot represent (issue #215)",
                     tableName, tally.nonFiniteCount());
+        }
+        if (tally.overflowCount() > 0) {
+            log.warn("Table {}: {} decimal cell(s) written as NULL -- the value needs more than {} "
+                    + "digits at the column's scale, which no Parquet decimal column of this pipeline "
+                    + "carries (check the declared schema against the data, issue #382)",
+                    tableName, tally.overflowCount(), ParquetSchemaMapper.MAX_DECIMAL_PRECISION);
         }
         if (tally.malformedCount() > 0) {
             log.warn("Table {}: {} decimal cell(s) written as NULL -- the token could not be parsed "

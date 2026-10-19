@@ -590,10 +590,7 @@ public class BatchParquetFinalizationService {
                     // Counted only once the artifact is accepted (issue #215, review round 1): a
                     // table whose row count is rejected is retried up to max-attempts, and counting
                     // per attempt would report more degraded source cells than exist.
-                    metrics.unrepresentableDecimalsDegraded(
-                            result.degradedDecimals().nonFiniteCount(), false);
-                    metrics.unrepresentableDecimalsDegraded(
-                            result.degradedDecimals().malformedCount(), true);
+                    metrics.unrepresentableDecimalsDegraded(result.degradedDecimals());
                     SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
                             s3Key, result.rowCount(), result.fileSize(), result.checksum(),

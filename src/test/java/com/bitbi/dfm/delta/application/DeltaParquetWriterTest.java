@@ -180,6 +180,82 @@ class DeltaParquetWriterTest {
         assertEquals(2, decimal.getScale());
     }
 
+    /**
+     * Issue #382, the per-segment egress file: a DBF exponent token such as {@code .12E+40} must not
+     * widen the column past {@code decimal(38, s)} — a reader that decodes decimals exactly only to
+     * 38 digits refuses the whole file — so that cell is written NULL and counted as an overflow,
+     * while a value that fits under the cap still widens the column as before.
+     */
+    @Test
+    void segmentFileCapsTheWideningAt38AndNullsTheOverflowingCell() throws Exception {
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "qty", decVal(".12E+17"))),
+                change(Op.INSERT, 2L, Map.of("id", intVal(2)),
+                        Map.of("id", intVal(2), "qty", decVal(".12E+40"))));
+        DecimalDegradeTally degraded = new DecimalDegradeTally();
+
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet(
+                "customers", QTY_SCHEMA, records, ROW_GROUP_BYTES, degraded));
+
+        assertCappedAndNulled(rows);
+        assertEquals(1L, degraded.overflowCount());
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount());
+    }
+
+    /** Issue #382, the streamed completed-batch file of one table: the same cap and the same NULL. */
+    @Test
+    void streamedBatchFileCapsTheWideningAt38AndNullsTheOverflowingCell() throws Exception {
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "qty", decVal(".12E+17"))),
+                change(Op.INSERT, 2L, Map.of("id", intVal(2)),
+                        Map.of("id", intVal(2), "qty", decVal(".12E+40"))));
+        Path output = tempDir.resolve("customers-overflow.parquet");
+
+        DeltaParquetWriter.FileWriteResult result = DeltaParquetWriter.writeDeltaParquet(
+                output, "customers", QTY_SCHEMA, consumer -> records.forEach(consumer),
+                Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertCappedAndNulled(readBack(output));
+        assertEquals(1L, result.degradedDecimals().overflowCount());
+    }
+
+    /** Issue #382, the grouped completed-batch writer: the same cap and the same NULL. */
+    @Test
+    void groupedBatchWriterCapsTheWideningAt38AndNullsTheOverflowingCell() throws Exception {
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "qty", decVal(".12E+17"))),
+                change(Op.INSERT, 2L, Map.of("id", intVal(2)),
+                        Map.of("id", intVal(2), "qty", decVal(".12E+40"))));
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers-grouped-overflow.parquet"), QTY_SCHEMA, TestScratchLeases.unbounded()));
+
+        DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
+                requests, consumer -> records.forEach(consumer), Long.MAX_VALUE, ROW_GROUP_BYTES);
+
+        assertTrue(result.failures().isEmpty(), "an overflowing cell does not cost the table its file");
+        assertCappedAndNulled(readBack(requests.get("customers").output()));
+        assertEquals(1L, result.files().get("customers").degradedDecimals().overflowCount());
+    }
+
+    private static final TableSchema QTY_SCHEMA = new TableSchema(List.of(
+            new ColumnDefinition("id", "bigint", false),
+            new ColumnDefinition("qty", "numeric(7,2)", true)),
+            List.of("id"), List.of());
+
+    private static void assertCappedAndNulled(List<GenericRecord> rows) {
+        LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(rows.get(0).getSchema(), "qty")
+                .getLogicalType();
+        assertEquals(38, decimal.getPrecision(), "widening stops at the precision readers decode exactly");
+        assertEquals(2, decimal.getScale(), "the declared scale is kept");
+        assertEquals(new BigDecimal("12000000000000000.00"), rows.get(0).get("qty"),
+                "a value under the cap is kept");
+        assertNull(rows.get(1).get("qty"), "the value needing 42 digits is NULL");
+    }
+
     @Test
     void streamsTwoPassesToAFileAndRoutesOnlyTheTargetTable() throws Exception {
         TableSchema narrow = new TableSchema(List.of(

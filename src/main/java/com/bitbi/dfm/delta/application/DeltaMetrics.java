@@ -145,6 +145,7 @@ public class DeltaMetrics {
     private final Counter egressPoisoned;
     private final Counter nonFiniteDecimals;
     private final Counter malformedDecimals;
+    private final Counter overflowDecimals;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
     private final Counter checkpointFrameTooLarge;
@@ -207,6 +208,7 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.nonFiniteDecimals = unrepresentableDecimals(registry, "non_finite");
         this.malformedDecimals = unrepresentableDecimals(registry, "malformed");
+        this.overflowDecimals = unrepresentableDecimals(registry, "overflow");
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
@@ -836,7 +838,9 @@ public class DeltaMetrics {
                         + "representation: non_finite = NaN or +/-Infinity, legal in PostgreSQL and "
                         + "nothing to repair here; the signed NaN spelling PostgreSQL rejects also "
                         + "lands here and is deliberately not separated (issue #238); malformed = a "
-                        + "token BigDecimal cannot parse at all, a client defect (issue #215)")
+                        + "token BigDecimal cannot parse at all, a client defect (issue #215); "
+                        + "overflow = a value needing more than 38 digits at the column's scale, "
+                        + "past the widest decimal column a file carries (issue #382)")
                 .tag("reason", reason)
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         counter.increment(0.0);
@@ -847,11 +851,15 @@ public class DeltaMetrics {
      * Decimal cells written as NULL because the value has no Parquet DECIMAL representation
      * (issue #215).
      *
-     * <p>Both series are registered at zero, so an alert can predate the first occurrence, and the
-     * {@code reason} tag separates two conditions with opposite remedies: {@code non_finite} is
+     * <p>Every series is registered at zero, so an alert can predate the first occurrence, and the
+     * {@code reason} tag separates conditions with different remedies: {@code non_finite} is
      * PostgreSQL {@code numeric} holding {@code NaN} or {@code +/-Infinity}, which is legal at the
      * source and simply has no DECIMAL encoding — nothing to repair here — while {@code malformed}
-     * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix.</p>
+     * is a client sending a token {@code BigDecimal} cannot parse, which somebody has to fix, and
+     * {@code overflow} (issue #382) is a finite value needing more than
+     * {@link ParquetSchemaMapper#MAX_DECIMAL_PRECISION} digits at the column's scale — on a DBF site
+     * typically a number its writer stored in exponent form because the field could not hold it,
+     * so the remedy is the source data or the declared schema.</p>
      *
      * <p>One spelling is on this series without being separable on it, deliberately: PostgreSQL
      * rejects {@code '-NaN'::numeric}, so a signed NaN can only come from a client that formats
@@ -869,12 +877,17 @@ public class DeltaMetrics {
      * number of places one source cell was degraded. The WARN beside it names the table and the
      * count, not the column; the column is visible in the artifact as a NULL.</p>
      *
-     * @param cells     how many cells were degraded in one render; ignored when zero
-     * @param malformed {@code true} to count them as unparseable rather than non-finite
+     * @param tally the cells one render degraded, by reason; zero counts are ignored
      */
-    public void unrepresentableDecimalsDegraded(long cells, boolean malformed) {
+    void unrepresentableDecimalsDegraded(DecimalDegradeTally tally) {
+        increment(nonFiniteDecimals, tally.nonFiniteCount());
+        increment(malformedDecimals, tally.malformedCount());
+        increment(overflowDecimals, tally.overflowCount());
+    }
+
+    private static void increment(Counter counter, long cells) {
         if (cells > 0) {
-            (malformed ? malformedDecimals : nonFiniteDecimals).increment(cells);
+            counter.increment(cells);
         }
     }
 }
