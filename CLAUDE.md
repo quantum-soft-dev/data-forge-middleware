@@ -778,6 +778,53 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- oauth-anonymous-401: An anonymous request to the Auth0 chain answers 401 on a real server, and an
+  unknown path under the Bit BI plugin namespace answers by the key (issue #384, measured on
+  `test.dfm.bitbi.io`: every anonymous `/api/v1/**` request was an empty **403**, and BitBi read the
+  403 of a not-yet-shipped `/v2/sites` as "key accepted, v2 forbidden"). **The cause was established,
+  not assumed**, by reproducing the deployed table on the production `SecurityConfiguration` in an
+  embedded Tomcat: the Order 5 entry point calls `response.sendError(401)`, the container forwards
+  that to `/error`, `/error` matches no `/api/v1/**` chain and lands on the Order 8 default chain,
+  whose `anyRequest().denyAll()` answers the anonymous **ERROR dispatch** with
+  `Http403ForbiddenEntryPoint` — the 403 overwrites the 401. A garbage bearer kept answering 401 only
+  because `BearerTokenAuthenticationEntryPoint` uses `setStatus`, and the plugin-key chain because its
+  filter writes its own response; neither forwards to `/error`. Not specific to Spring Security 7
+  (#302): authorizing every dispatch type is Spring Security's behaviour since 6.0. **Why no test
+  saw it**: every security test drives MockMvc, which performs **no error dispatch** (a `sendError`
+  is just the status it reports), and on top of that runs `TestSecurityConfig`, since
+  `SecurityConfiguration` is `@Profile("!test")` — so not even a MockMvc test of the real class would
+  have been red. **Fix**: the default chain permits `DispatcherType.ERROR`, so `/error` renders the
+  status the original chain chose (Boot's error JSON); a direct `GET /error` is a `REQUEST` dispatch
+  and stays denied. Access-denied 403s are unchanged (a ROLE_USER on an admin route is still 403).
+  **The device chains had the same hole and close with it**: Order 0 (`/device/verify`) and Order 1
+  (`/api/v1/device/**`) end in `sendError(401)` too, so a missing or expired device access token
+  reached the client as 403, while `docs/device-flow-client-guide.md` tells a client to refresh on
+  401 — after this a device client gets the documented 401.
+  **Decided on the ticket's open question**: the plugin chain owns the namespace
+  `/api/v1/plugins/bit-bi/**` minus `/activate` and `/deactivate` (Auth0, `PluginController`), not a
+  list of today's routes — new `BitBiPluginApiPaths.KEY_AUTHENTICATED`, one `RequestMatcher` read by
+  the plugin chain's `securityMatcher`, the Order 5 `denyAll` (both in `SecurityConfiguration` and
+  `TestSecurityConfig`) and `PluginApiKeyAuthenticationFilter.shouldNotFilter`, which replaces three
+  hand-kept route lists. An unknown path is 401 without a valid key and **404** with one, and #386
+  adds its v2 routes with a controller alone; the price is that a new **Auth0** route under that
+  namespace must be added to the exclusion, or it will demand a plugin key. `TestSecurityConfig`
+  takes both changes so the copy does not drift. **Test**: `ProductionSecurityChainTest` (fast gate,
+  no database) boots the production class on a random port with only the web, MVC, error and
+  security auto-configurations and stubbed services behind the three filters, and drives it over
+  real HTTP; `SecurityFilterAutoConfiguration` is the load-bearing import, since it registers the
+  security filter for the ERROR dispatch as the application does. The harness is a plain
+  `@Configuration`: a `@SpringBootConfiguration` in that package was found by
+  `SecurityFilterChainTest`'s upward search and booted instead of the application; and it pins its
+  own profile as an inlined property, because CI exports `SPRING_PROFILES_ACTIVE=test`, under which
+  the production class does not exist (the first CI run failed every case that way). Red first on
+  develop in every row of the deployed table. **Mutation-proven**: dropping the ERROR permit
+  reddens the seven anonymous OAuth cases, the three device cases and the activation case;
+  restoring the route list reddens the two
+  valid-key-404 cases and the Auth0-token case; dropping `/activate` from the exclusion reddens the
+  activation case. `docs/bitbi-integration.md` gains what each status says about a key (401 / 404 /
+  403 / 429) and corrects "a deactivated key returns 403" — it answers 401. No REST route, gRPC,
+  proto, DTO, migration (**V61 stays next**), `specs/NNN-*`, configuration-key, metric, S3-key or
+  frontend change.
 - decimal-precision-cap: No Parquet artifact carries a decimal column wider than `decimal(38, s)`,
   and a value that needs more is written NULL and counted (issue #382, the owner's option (a) of
   2026-10-06). A DBF writer stores a number its field cannot hold in exponent form (`.12E+17` in a

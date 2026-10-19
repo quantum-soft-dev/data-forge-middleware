@@ -778,6 +778,26 @@ Get SQL changes for a site.
 | 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Server Error | Internal error (contact support) |
 
+### What a status says about your API key
+
+Every path under `/api/v1/plugins/bit-bi/` except `/activate` and `/deactivate` (which take an
+Auth0 token) is authenticated by `X-Plugin-Api-Key` — the server owns the whole namespace, not a
+list of today's routes (issue #384). So the status of a plugin-API call answers one question at a
+time, and a client can act on it without guessing:
+
+| Status | What it means | What to do |
+|--------|---------------|------------|
+| 401 | The key is missing, malformed, unknown, rotated away, or its activation is deactivated. Checked **before** the path, so a 401 says nothing about whether the route exists | Fix or re-issue the key (`POST /api/v1/account/plugins/bit-bi/rotate-api-key`); do not retry unchanged |
+| 404 | The key is valid and no such route exists — e.g. a v2 route called before the server ships it, or a typo | Check the path and the server version; the key is fine |
+| 403 | The key is valid and the route exists, but the resource is not this account's (a site of another account) | Do not retry; a different key will not help unless it belongs to the owning account |
+| 429 | The per-account rate limit is exhausted | Wait `Retry-After` seconds |
+
+**A 403 is never "your key was accepted but the route is forbidden".** Before #384 an unknown path
+fell outside the key's namespace, onto the Auth0 chain, and left the server as an empty 403 — a
+client holding a valid key read that as a verdict on its key. Both halves are gone: an unknown path
+with a valid key is 404, and an anonymous request to any Auth0 route (`/activate`,
+`/api/v1/account/**`, …) is 401.
+
 ### Error Examples
 
 **Invalid API Key (401)**:
@@ -839,7 +859,8 @@ Response includes `Retry-After` header with seconds to wait.
   invalidates the old one immediately. Re-posting `activate` for an already active plugin does
   **not** mint a key (#383) — the existing one keeps working; use the rotation endpoint to
   replace it.
-- **Deactivation**: API Key remains but returns 403 on all requests
+- **Deactivation**: the key is no longer accepted — every request with it answers **401**, like an
+  unknown key (validation matches active activations only)
 
 ### 2. Upsert Behavior
 
@@ -1165,7 +1186,7 @@ paths:
         - Sets is_active=false and records deactivated_at timestamp
         - Plugin will no longer receive events for this account
         - Activation record is preserved for audit purposes
-        - API Key remains but will return 403 on all requests
+        - API Key is no longer accepted: requests with it answer 401
       operationId: deactivatePlugin
       security:
         - oauth2: []

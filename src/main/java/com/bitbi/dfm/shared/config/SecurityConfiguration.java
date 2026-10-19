@@ -2,9 +2,11 @@ package com.bitbi.dfm.shared.config;
 
 import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import com.bitbi.dfm.plugin.presentation.BitBiPluginApiPaths;
 import com.bitbi.dfm.plugin.presentation.ParquetExportBasicAuthFilter;
 import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 import com.bitbi.dfm.shared.auth.AuthenticationAuditLogger;
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -175,7 +177,8 @@ public class SecurityConfiguration {
      * Bit BI Plugin API filter chain.
      * <p>
      * <b>Order 3</b>: Evaluated after the Device API chain<br>
-     * <b>Matches</b>: /api/v1/plugins/bit-bi/sql-changes, /api/v1/plugins/bit-bi/sites, /api/v1/plugins/bit-bi/tables<br>
+     * <b>Matches</b>: /api/v1/plugins/bit-bi/** except /activate and /deactivate
+     * ({@link BitBiPluginApiPaths#KEY_AUTHENTICATED})<br>
      * <b>Authentication</b>: Plugin API Key (X-Plugin-Api-Key header)
      * </p>
      * <p>
@@ -184,9 +187,11 @@ public class SecurityConfiguration {
      * API Keys are generated during plugin activation and stored in account_plugins.plugin_data.
      * </p>
      * <p>
-     * <b>IMPORTANT:</b> Only specific Bit BI API endpoints use Plugin API Key auth.
-     * The /api/v1/plugins/bit-bi/activate and /api/v1/plugins/bit-bi/deactivate
-     * endpoints use OAuth2 (handled by Order 4 filter chain).
+     * <b>IMPORTANT:</b> The chain owns the namespace, not a list of routes (issue #384): an unknown
+     * path answers 401 without a valid key and 404 with one, instead of falling through to the
+     * Auth0 chain and telling a client with a good key that it is not authenticated. The
+     * /api/v1/plugins/bit-bi/activate and /api/v1/plugins/bit-bi/deactivate endpoints use OAuth2
+     * (handled by the Order 5 filter chain).
      * </p>
      *
      * @since 5.0.0 (Plugin SQL Generation)
@@ -196,12 +201,7 @@ public class SecurityConfiguration {
     @Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher(
-                "/api/v1/plugins/bit-bi/sql-changes",
-                "/api/v1/plugins/bit-bi/sites",
-                "/api/v1/plugins/bit-bi/sites/**",
-                "/api/v1/plugins/bit-bi/tables"
-            )
+            .securityMatcher(BitBiPluginApiPaths.KEY_AUTHENTICATED)
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -260,7 +260,7 @@ public class SecurityConfiguration {
      * UI/Admin API filter chain (NEW unified structure).
      * <p>
      * <b>Order 5</b>: Fifth priority - evaluated AFTER the plugin API filter chains<br>
-     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/**, /api/v1/plugins/bit-bi/** and /api/v1/plugins/parquet-export/**)<br>
+     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/**, the Bit BI plugin-key namespace and /api/v1/plugins/parquet-export/**)<br>
      * <b>Authentication</b>: Auth0 OAuth2 Resource Server only
      * </p>
      * <p>
@@ -290,7 +290,7 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (already handled by Order 3)
+                .requestMatchers(BitBiPluginApiPaths.KEY_AUTHENTICATED).denyAll() // Explicitly deny (already handled by Order 3)
                 .requestMatchers("/api/v1/plugins/parquet-export/files", "/api/v1/plugins/parquet-export/download/**").denyAll() // Explicitly deny (already handled by Order 4, 028)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
@@ -336,6 +336,16 @@ public class SecurityConfiguration {
      * <p>
      * All other requests: Denied (403 Forbidden)
      * </p>
+     * <p>
+     * <b>ERROR dispatches are permitted</b> (issue #384). Every entry point and access-denied
+     * handler that calls {@code response.sendError(...)} makes the container forward the request to
+     * {@code /error}, which no {@code /api/v1/**} chain matches, so it reaches this chain. Under
+     * {@code denyAll} the anonymous forward was answered by {@code Http403ForbiddenEntryPoint}, and
+     * every 401 of the OAuth chain left the server as an empty 403. Permitting the dispatch lets
+     * {@code /error} render the status the original chain chose; a direct {@code GET /error} is a
+     * {@code REQUEST} dispatch and stays denied. MockMvc performs no error dispatch, which is why
+     * only {@code ProductionSecurityChainTest} — a real server — can see this.
+     * </p>
      */
     @Bean
     @Order(8)
@@ -344,6 +354,7 @@ public class SecurityConfiguration {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers(MetricsScrapeAccess.PATHS).access(metricsScrapeAuthorizationManager)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
