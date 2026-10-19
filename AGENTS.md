@@ -265,6 +265,47 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-v2-read-surface: Bit BI plugin v2 has its first routes — `GET /api/v1/plugins/bit-bi/v2/sites`,
+  `/sites/{siteId}/state` and `/sites/{siteId}/schema` (issue #386, phase 1 part 1 of
+  `docs/cr-bitbi-parquet-plugin.md`, which this change commits; spec `specs/044-bitbi-parquet/`).
+  BitBi had built and deployed a v2 consumer against the CR and found nothing to call. **A second
+  surface of the same plugin, not a fork**: the same `bit-bi` activation and `X-Plugin-Api-Key`, no
+  mode, and the per-account bucket v1 uses (v1 and v2 calls draw from one); new
+  `BitBiV2ApiController` over new `BitBiV2QueryService`, which composes `SiteRepository`
+  (`findActiveByAccountId` for the list, `findByIdAndAccountId` for ownership),
+  `DeltaSyncStateService.getSyncState` and `SiteSchemaService` (one public method added,
+  `tableSchemasOf(SiteSchema)`, so a caller reads the version and the tables from one row). No
+  per-consumer state is read. **No security change**: since #384 the plugin key owns the whole
+  `/api/v1/plugins/bit-bi/**` namespace, so the routes needed only their controller. **Decisions the
+  ticket asked to confirm or left open, recorded as CR decisions 13–18**: `epoch` is
+  `site_sync_state.baseline_epoch` (moved by a wipe *and* a re-baseline, never sent to the client —
+  `generation` does not move on a re-baseline, so it is not the epoch); `schemaVersion` in `/state`
+  and `/schema` has one source, `site_schemas.schema_version`, because the copy in
+  `site_sync_state` is written by a second transaction after the upsert and the two endpoints could
+  disagree about one schema for that window; a site of another account is **404** with the body of
+  an absent one (`SiteService.SiteNotFoundException`, "Site not found: <id>"), where v1 answers 403;
+  `identity` is `row_hash` for an empty declared `primaryKey` (every DBF table) and `primary_key`
+  otherwise, new `plugin/domain/RowIdentity`, derived and not stored; tables are sorted by name,
+  since JSONB keeps no key order; a 429 carries `Retry-After` **and** the standard error body (v1's
+  JSON routes answer an empty one); a deactivated site of the key's own account is not listed but
+  still answers `/state` and `/schema`, as v1's `/files` does. **Tests**: `RowIdentityTest`;
+  `BitBiV2QueryServiceTest` (the real `SiteSchemaService` over a stubbed `site_schemas` row);
+  `BitBiV2ApiContractTest` — the **production** `SecurityConfiguration` on a real Tomcat (the
+  harness of `ProductionSecurityChainTest`, the #384 lesson: MockMvc and `TestSecurityConfig` could
+  not see that 403) with the real controller and services, every body pinned whole with `WireJson`,
+  401 without a key and with an unknown one, 404 on a foreign site and on an unknown `/v2` path,
+  429 with `Retry-After`; `ProductionSecurityChainTest` moves its "unknown v2 path" rows from
+  `/v2/sites` (now a route) to `/v2/unknown`; `BitBiV2StateIntegrationTest` (Testcontainers) — the
+  epoch over a real `DeltaSiteWipeService.wipe` and a real `DeltaRebaselineService.reset`, with
+  `generation` shown not to move on the re-baseline, a key rotated away and an activation
+  deactivated (401 through the real `PluginApiKeyService`), identity from a schema stored through
+  `upsertSchema`, a foreign and an absent site against the real repository. **Mutation-proven**:
+  `epoch` read from `generation` reddens three tests (unit, contract, integration); ownership by
+  `findById` alone nine; `schemaVersion` from the sync state one; identity always `row_hash` two;
+  the rate-limit check removed three. The bodies are the guide's examples
+  (`docs/bitbi-integration.md`, "Bit BI API v2"), and its key-status table now says 403 is v1 only.
+  Three REST routes and three DTOs added; no gRPC, proto, migration (**V61 stays next**, taken by
+  #388), configuration-key, metric, S3-key or frontend change.
 - oauth-anonymous-401: An anonymous request to the Auth0 chain answers 401 on a real server, and an
   unknown path under the Bit BI plugin namespace answers by the key (issue #384, measured on
   `test.dfm.bitbi.io`: every anonymous `/api/v1/**` request was an empty **403**, and BitBi read the

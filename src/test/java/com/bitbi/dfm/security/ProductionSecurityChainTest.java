@@ -233,7 +233,8 @@ class ProductionSecurityChainTest {
                 "/api/v1/plugins/bit-bi/sites,       plk_valid,     200",
                 "/api/v1/plugins/bit-bi/v2/sites,    '',            401",
                 "/api/v1/plugins/bit-bi/v2/sites,    plk_invalid,   401",
-                "/api/v1/plugins/bit-bi/v2/sites,    plk_valid,     404",
+                "/api/v1/plugins/bit-bi/v2/unknown,  '',            401",
+                "/api/v1/plugins/bit-bi/v2/unknown,  plk_valid,     404",
                 "/api/v1/plugins/bit-bi/unknown,     plk_valid,     404"
         })
         void answersByKey(String path, String key, int expected) {

@@ -12,12 +12,13 @@
 4. [Authentication](#authentication)
 5. [Plugin Activation Flow](#plugin-activation-flow)
 6. [Plugin API Endpoints](#plugin-api-endpoints)
-7. [SQL Generation Feature](#sql-generation-feature)
-8. [API Reference](#api-reference)
-9. [Error Handling](#error-handling)
-10. [Integration Nuances](#integration-nuances)
-11. [Best Practices](#best-practices)
-12. [OpenAPI Specification](#openapi-specification)
+7. [Bit BI API v2](#bit-bi-api-v2)
+8. [SQL Generation Feature](#sql-generation-feature)
+9. [API Reference](#api-reference)
+10. [Error Handling](#error-handling)
+11. [Integration Nuances](#integration-nuances)
+12. [Best Practices](#best-practices)
+13. [OpenAPI Specification](#openapi-specification)
 
 ---
 
@@ -478,6 +479,105 @@ the answer is again **reinit**.
 
 ---
 
+## Bit BI API v2
+
+Version 2 lets Bit BI mirror a site from the server's typed Parquet files instead of generated SQL,
+holding the watermark on its own side. The design and the plan are
+[`docs/cr-bitbi-parquet-plugin.md`](cr-bitbi-parquet-plugin.md); the spec is
+`specs/044-bitbi-parquet/`. This section documents what is **shipped**: the first part of phase 1
+(issue #386) — `/v2/sites`, `/state` and `/schema`. `/snapshot` and `/files/{fileId}` are #387, the
+changes feed is #388.
+
+**Same key, same activation, same limit.** Every v2 route is under
+`/api/v1/plugins/bit-bi/v2`, authenticated by the `X-Plugin-Api-Key` of the account's `bit-bi`
+activation — the key v1 uses; there is no separate activation and no mode. v1 and v2 calls draw
+from **one** per-account rate-limit bucket (100 requests a minute). v1 keeps working unchanged
+beside v2.
+
+Every response body below is the exact wire form, pinned whole by the contract test
+`BitBiV2ApiContractTest` (on the production security chain and a real server); only the ids, the
+timestamp and the numbers are examples. Keys are always present and in this order; JSON parsers
+need not rely on the order.
+
+### GET /api/v1/plugins/bit-bi/v2/sites
+
+The account's active sites — the same selection as v1's `/sites`.
+
+```bash
+curl https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/v2/sites \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+```
+
+**Response (200 OK)**:
+```json
+{"sites":[{"id":"0199baac-f852-753f-6fc3-7c994fc38654","siteName":"fyt-new","displayName":"FYT"}]}
+```
+
+### GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/state
+
+Where the site's history stands — what a consumer compares its watermark `(epoch, seq)` with.
+
+**Response (200 OK)**:
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","epoch":3,"checkpointSeq":5020646,"lastAppliedSeq":5023845,"schemaVersion":2}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `epoch` | The site's baseline epoch. It moves on a **history wipe** and on a **re-baseline** (a client's full `FULL_SNAPSHOT` that replaces the site's history) and on nothing else. A value different from the one stored with your watermark means every row you hold belongs to a discarded history: clear the site's tables and reload. It is not the ingestion client's `generation`, which a re-baseline does not move |
+| `checkpointSeq` | The seq the current checkpoint snapshots are built at. `0` = no checkpoint yet (a new site, or right after a wipe or a re-baseline): wait for the nightly build |
+| `lastAppliedSeq` | The highest seq the server has committed |
+| `schemaVersion` | The version of the schema `/schema` serves; `0` = none submitted. When it moves, read `/schema` again before applying anything new |
+
+A site that has never synced answers zeros everywhere:
+
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","epoch":0,"checkpointSeq":0,"lastAppliedSeq":0,"schemaVersion":0}
+```
+
+### GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/schema
+
+The schema the site's client declared, with the row identity to key each table by. It is served
+because a Parquet file records neither the primary key nor the identity. Nothing is stored for it:
+`identity` is derived from the declared `primaryKey` — `row_hash` when it is empty (every DBF
+table; key rows by `_row_hash`), `primary_key` otherwise (key rows by those columns, ignore
+`_row_hash`). Tables are sorted by name; columns keep their declared order.
+
+**Response (200 OK)**:
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","schemaVersion":1,"tables":[{"table":"nsftrns","identity":"row_hash","primaryKey":[],"uniqueKeys":[],"columns":[{"name":"TR_NUM","type":"integer","nullable":true},{"name":"TR_DATE","type":"date","nullable":true}]},{"table":"orders","identity":"primary_key","primaryKey":["id"],"uniqueKeys":[{"name":"uk_orders_total","columns":["total"]}],"columns":[{"name":"id","type":"bigint","nullable":false},{"name":"total","type":"numeric(12,2)","nullable":true}]}]}
+```
+
+`type` is the PostgreSQL type as the client declared it. A declared `numeric(p,s)` can understate
+the data, in which case the Parquet column is wider than declared (see
+[`docs/delta-client-v2-guide.md`](delta-client-v2-guide.md)); load through casts. A site with no
+submitted schema answers:
+
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","schemaVersion":0,"tables":[]}
+```
+
+### v2 errors
+
+| Status | When | Body |
+|--------|------|------|
+| 401 | Missing, unknown, rotated-away key, or a deactivated activation — checked before the path | the same members as the standard body, `message` = `Invalid or missing API key`; the key order is not fixed |
+| 404 | The site does not exist **or belongs to another account** — the two are indistinguishable on purpose (v1 answers 403 for the second); also an unknown path under `/v2` with a valid key | standard error body |
+| 429 | The account's bucket is empty | standard error body, `Retry-After` header |
+
+```json
+{"timestamp":"2026-10-19T18:00:00.123456Z","status":404,"error":"Not Found","message":"Site not found: 0199bab0-ca3b-e41c-5521-2f4b33fda8b6","path":"/api/v1/plugins/bit-bi/v2/sites/0199bab0-ca3b-e41c-5521-2f4b33fda8b6/state"}
+```
+
+```json
+{"timestamp":"2026-10-19T18:00:00.123456Z","status":429,"error":"Too Many Requests","message":"Rate limit exceeded. Retry after 17 seconds.","path":"/api/v1/plugins/bit-bi/v2/sites"}
+```
+
+A deactivated (soft-deleted) site of your own account is not in `/v2/sites` but still answers
+`/state` and `/schema`, as v1's `/files` does.
+
+---
+
 ## SQL Generation Feature
 
 ### How It Works
@@ -788,8 +888,8 @@ time, and a client can act on it without guessing:
 | Status | What it means | What to do |
 |--------|---------------|------------|
 | 401 | The key is missing, malformed, unknown, rotated away, or its activation is deactivated. Checked **before** the path, so a 401 says nothing about whether the route exists | Fix or re-issue the key (`POST /api/v1/account/plugins/bit-bi/rotate-api-key`); do not retry unchanged |
-| 404 | The key is valid and no such route exists — e.g. a v2 route called before the server ships it, or a typo | Check the path and the server version; the key is fine |
-| 403 | The key is valid and the route exists, but the resource is not this account's (a site of another account) | Do not retry; a different key will not help unless it belongs to the owning account |
+| 404 | The key is valid and no such route exists — e.g. a v2 route called before the server ships it, or a typo. On **v2**, also a site that does not exist or is another account's ([v2 errors](#v2-errors)) | Check the path, the site id and the server version; the key is fine |
+| 403 | **v1 only**: the key is valid and the route exists, but the resource is not this account's (a site of another account) | Do not retry; a different key will not help unless it belongs to the owning account |
 | 429 | The per-account rate limit is exhausted | Wait `Retry-After` seconds |
 
 **A 403 is never "your key was accepted but the route is forbidden".** Before #384 an unknown path

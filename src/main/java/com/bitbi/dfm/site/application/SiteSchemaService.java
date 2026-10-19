@@ -105,6 +105,18 @@ public class SiteSchemaService {
     }
 
     /**
+     * Parse the table schemas of an already loaded schema row, so a caller that also needs the
+     * row's {@code schemaVersion} reads both from one row rather than from two queries that a
+     * concurrent {@code SubmitSchema} could land between (issue #386).
+     *
+     * @param siteSchema the stored schema row
+     * @return map of table name → TableSchema, in the row's stored order
+     */
+    public Map<String, TableSchema> tableSchemasOf(SiteSchema siteSchema) {
+        return parseSchemaData(siteSchema);
+    }
+
+    /**
      * Get the raw SiteSchema entity for a site.
      *
      * @param siteId site identifier
