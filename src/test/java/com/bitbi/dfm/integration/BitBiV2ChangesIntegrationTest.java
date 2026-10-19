@@ -134,6 +134,35 @@ class BitBiV2ChangesIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("An unsettled batch at or below the watermark does not hold the feed of a consumer past it")
+    void anOldUnsettledBatchBelowTheWatermarkDoesNotHold() {
+        UUID old = batch(1, "FULL_SNAPSHOT", "COMPLETED", 1, 100, Map.of("a", 100L), 4L);
+        UUID next = batch(2, "DELTA", "COMPLETED", 101, 110, Map.of("a", 10L), 4L);
+        artifact(old, "a", "FAILED", null, null);
+        artifact(next, "a", "READY", 10L, T0.plusHours(3));
+
+        assertThat(ids(service.changes(account, site, 4L, 100L, null, 50)))
+                .as("a consumer that loaded /snapshot at 100 already holds the first batch").containsExactly(next);
+        assertThat(listedIds())
+                .as("one reading from the epoch's start still waits for it (#378)").isEmpty();
+    }
+
+    @Test
+    @DisplayName("A batch before the cursor does not hold the next page — it was settled when its page was served")
+    void aBatchBeforeTheCursorDoesNotHoldTheNextPage() {
+        UUID a = batch(1, "FULL_SNAPSHOT", "COMPLETED", 1, 10, Map.of("t", 10L), 4L);
+        UUID b = batch(2, "DELTA", "COMPLETED", 11, 20, Map.of("t", 10L), 4L);
+        artifact(a, "t", "ABANDONED", null, T0.plusHours(3));
+        artifact(b, "t", "READY", 10L, T0.plusHours(4));
+        ChangesPage first = service.changes(account, site, null, 0L, null, 1);
+        assertThat(ids(first)).containsExactly(a);
+        // An operator requeues the abandoned artifact (039) after the consumer read the page.
+        jdbc.update("UPDATE batch_parquet_artifacts SET status = 'PENDING' WHERE batch_id = ?", a);
+
+        assertThat(ids(service.changes(account, site, null, 0L, first.nextCursor(), 1))).containsExactly(b);
+    }
+
+    @Test
     @DisplayName("A completed batch still owed its work rows holds the feed instead of reading all missing (#380)")
     void aBatchAwaitingItsEnqueueHoldsTheFeed() {
         UUID first = batch(1, "FULL_SNAPSHOT", "COMPLETED", 1, 100, Map.of("a", 100L), 4L);

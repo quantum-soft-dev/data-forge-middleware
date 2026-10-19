@@ -38,7 +38,11 @@ UPDATE batches b
                       AND later.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
                       AND (later.started_at, later.id) > (b.started_at, b.id));
 
--- The feed's seq predicate (last_seq > afterSeq) within one site.
+-- The feed's seq predicate (last_seq > afterSeq) within one site: a poll from a watermark reads the
+-- few batches above it instead of the site's whole retained history (measured on 3000 batches:
+-- 7 buffers against a sequential scan of 273). The cost is that a seal's update of last_seq is no
+-- longer a HOT update — one index entry per seal, against a poll that would otherwise grow with
+-- the site's history.
 CREATE INDEX idx_batches_site_last_seq
     ON batches (site_id, last_seq)
     WHERE last_seq IS NOT NULL;

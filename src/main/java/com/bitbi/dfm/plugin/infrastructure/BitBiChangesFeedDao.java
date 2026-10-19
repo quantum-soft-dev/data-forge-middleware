@@ -30,11 +30,27 @@ import java.util.UUID;
  * reads an unstamped batch a pre-V61 pod committed during the rolling deploy correctly.</p>
  *
  * <p><b>Order and end.</b> {@code (started_at, id)} — the order #378 builds a site's batches in,
- * <em>not</em> {@code ready_at}. The feed ends before the first batch with a table still
+ * <em>not</em> {@code ready_at}. The page ends before the first batch with a table still
  * {@code PENDING}/{@code BUILDING}/{@code FAILED}, or still owed its work rows
  * ({@link JpaBatchParquetArtifactRepository#AWAITING_ENQUEUE}, the #380 gate's own text and
  * horizon), so a consumer never sees batch N+1 before N is settled — and never reads a batch whose
  * {@code AFTER_COMMIT} enqueue has simply not run yet as all {@code missing}.</p>
+ *
+ * <p><b>Only batches past the consumer's position can end it.</b> The unsettled batch is looked for
+ * among the batches the request would list — above {@code afterSeq}, after the cursor — not over the
+ * whole epoch, which is narrower than #378's queue head on purpose: a batch at or below the
+ * consumer's watermark is one it already holds (applied, or inside the {@code /snapshot} it loaded),
+ * so an old batch whose build is retrying must not stop the feed of a consumer past it; and a batch
+ * before the cursor was settled when its page was served. A requeued (039) batch the consumer saw as
+ * {@code abandoned} therefore no longer holds later pages; the consumer stopped at it anyway.</p>
+ *
+ * <p><b>Volume.</b> The statement reads at most {@code limit} batches past the consumer's position
+ * (the page plus one), and only those batches' {@code table_stats} and artifact rows — never the
+ * site's history. A poll from a watermark ({@code afterSeq} near the site's end, the steady state)
+ * reaches them through V61's {@code idx_batches_site_last_seq}: measured on 3000 batches of one
+ * site, 7 buffers with it and a sequential scan of 273 without. A first read from the epoch's start
+ * walks the batches in start order and stops after {@code limit}. Whatever the plan, batch retention
+ * ({@code retentionDays}, 45 by default) bounds the rows a site has at all.</p>
  *
  * <p>One statement, so the batches, the end of the feed and every manifest come from one snapshot;
  * the caller runs it under {@code REPEATABLE READ} together with the epoch it compares against.</p>
@@ -63,12 +79,13 @@ public class BitBiChangesFeedDao {
 
     private static final String LISTED = """
             SELECT b.id, b.site_id, b.status, b.started_at, b.completed_at, b.session_mode,
-                   b.first_seq, b.last_seq, b.table_stats
+                   b.first_seq, b.last_seq
             FROM batches b
             WHERE b.site_id = :siteId
               AND b.status <> 'IN_PROGRESS'
               AND b.first_seq IS NOT NULL
-              AND """ + inEpoch(":epoch");
+              AND b.last_seq > :afterSeq
+            """;
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -98,13 +115,20 @@ public class BitBiChangesFeedDao {
                 .addValue("limit", limit);
         String cursorPredicate = "";
         if (cursorAt != null) {
-            cursorPredicate = "  AND (l.started_at, l.id) > (CAST(:cursorAt AS timestamp), CAST(:cursorId AS uuid))\n";
+            cursorPredicate = "  AND (b.started_at, b.id) > (CAST(:cursorAt AS timestamp), CAST(:cursorId AS uuid))\n";
             params.addValue("cursorAt", cursorAt).addValue("cursorId", cursorId);
         }
-        String sql = "WITH listed AS (\n" + LISTED + "),\n"
+        // candidates: at most :limit batches past the consumer's position, in feed order — the only
+        // rows the statement looks at, whatever the length of the site's history. held is the first
+        // of them that is not settled; the page ends before it. table_stats is read for the page alone.
+        String sql = "WITH candidates AS (\n" + LISTED + cursorPredicate
+                + "  AND " + inEpoch(":epoch")
                 + """
+                    ORDER BY b.started_at, b.id
+                    LIMIT :limit
+                ),
                 held AS (
-                    SELECT owing.started_at, owing.id FROM listed owing
+                    SELECT owing.started_at, owing.id FROM candidates owing
                     WHERE EXISTS (SELECT 1 FROM batch_parquet_artifacts unfinished
                                   WHERE unfinished.batch_id = owing.id
                                     AND unfinished.status IN ('PENDING', 'BUILDING', 'FAILED'))
@@ -114,24 +138,22 @@ public class BitBiChangesFeedDao {
                     LIMIT 1
                 ),
                 page AS (
-                    SELECT l.* FROM listed l
-                    WHERE l.last_seq > :afterSeq
-                """ + cursorPredicate + """
-                      AND NOT EXISTS (SELECT 1 FROM held h WHERE (h.started_at, h.id) <= (l.started_at, l.id))
-                    ORDER BY l.started_at, l.id
-                    LIMIT :limit
+                    SELECT c.* FROM candidates c
+                    WHERE NOT EXISTS (SELECT 1 FROM held h WHERE (h.started_at, h.id) <= (c.started_at, c.id))
                 )
                 SELECT p.id, p.status AS batch_status, p.started_at, p.completed_at, p.session_mode,
                        p.first_seq, p.last_seq, t.table_name,
-                       CASE WHEN p.table_stats -> t.table_name IS NULL THEN NULL
-                            ELSE COALESCE((p.table_stats -> t.table_name ->> 'inserts')::bigint, 0)
-                               + COALESCE((p.table_stats -> t.table_name ->> 'updates')::bigint, 0)
-                               + COALESCE((p.table_stats -> t.table_name ->> 'deletes')::bigint, 0)
+                       CASE WHEN stats.table_stats -> t.table_name IS NULL THEN NULL
+                            ELSE COALESCE((stats.table_stats -> t.table_name ->> 'inserts')::bigint, 0)
+                               + COALESCE((stats.table_stats -> t.table_name ->> 'updates')::bigint, 0)
+                               + COALESCE((stats.table_stats -> t.table_name ->> 'deletes')::bigint, 0)
                        END AS stat_rows,
                        a.status AS artifact_status, a.row_count, a.ready_at, a.updated_at AS artifact_updated_at
                 FROM page p
+                JOIN batches stats ON stats.id = p.id
                 LEFT JOIN LATERAL (
-                    SELECT k.table_name FROM jsonb_object_keys(COALESCE(p.table_stats, '{}'::jsonb)) AS k(table_name)
+                    SELECT k.table_name
+                    FROM jsonb_object_keys(COALESCE(stats.table_stats, '{}'::jsonb)) AS k(table_name)
                     UNION
                     SELECT x.table_name FROM batch_parquet_artifacts x WHERE x.batch_id = p.id
                 ) t ON TRUE

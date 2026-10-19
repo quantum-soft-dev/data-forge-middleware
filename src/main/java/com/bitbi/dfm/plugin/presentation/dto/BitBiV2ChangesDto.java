@@ -34,7 +34,7 @@ public record BitBiV2ChangesDto(
     /**
      * One batch (= one Delta session).
      */
-    @Schema(description = "One batch: a Delta session and the manifest of the tables it touched")
+    @Schema(name = "BitBiV2ChangesBatch", description = "One batch: a Delta session and the manifest of the tables it touched")
     public record Batch(
             @Schema(description = "Baseline epoch the batch belongs to", example = "3")
             long epoch,
@@ -64,7 +64,7 @@ public record BitBiV2ChangesDto(
     /**
      * One table of a batch.
      */
-    @Schema(description = "One table of a batch")
+    @Schema(name = "BitBiV2ChangesTable", description = "One table of a batch")
     public record Table(
             @Schema(description = "Table name", example = "nsftrns")
             String table,

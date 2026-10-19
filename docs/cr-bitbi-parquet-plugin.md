@@ -288,6 +288,10 @@ pilot starts.
     rule, which covers the batches a pre-V61 pod commits during the rolling deploy. Deriving the epoch
     by that rule alone, with no migration, was weighed and not taken: an operator deleting one
     `FULL_SNAPSHOT` batch would silently relabel the discarded history before it as current.
+    The fallback keeps that hazard for the history V61 left unstamped (batches before the latest
+    snapshot at migration time): deleting that snapshot batch would relabel them as current. It is
+    the operator action this design otherwise guards against, and it fades as retention removes
+    the pre-V61 batches.
 24. **Only the current epoch is listed, and `afterSeq` needs the consumer's `epoch`.** A wipe restarts
     seq at 1, and a client may resend a snapshot from seq 1, so an `afterSeq` of a discarded epoch
     would skip the new epoch's `full_snapshot`. The feed therefore takes an `epoch` parameter (not in
@@ -301,7 +305,12 @@ pilot starts.
 26. **The feed ends where the build queue's head is** — before the first batch with a table
     `PENDING`/`BUILDING`/`FAILED` (#378) **or** still owed its work rows within the enqueue horizon
     (#380's `AWAITING_ENQUEUE`, the same text). Without the second, every batch would read all
-    `missing` for the moment between its commit and its `AFTER_COMMIT` enqueue.
+    `missing` for the moment between its commit and its `AFTER_COMMIT` enqueue. The unsettled batch is
+    looked for only among the batches the request would list (above `afterSeq`, after the cursor,
+    at most a page plus one), which is narrower than #378's queue head on purpose: a batch at or
+    below the consumer's watermark is one it already holds, so an old batch whose build is retrying
+    does not stop a consumer past it, and the statement never reads the site's history. The
+    `(site_id, last_seq)` index keeps a poll from a watermark to the batches above it.
 27. **`fileId` kind `bp1:<siteId>:<batchId>:<table>`** — no epoch, no seq: a `READY` artifact is never
     rewritten (039 requeues only `ABANDONED` or a lapsed claim), so `(batch, table)` names one
     version; resolution checks the account, the batch's site and that the batch is in the current
