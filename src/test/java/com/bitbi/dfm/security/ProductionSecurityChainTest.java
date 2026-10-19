@@ -90,6 +90,10 @@ import static org.mockito.Mockito.when;
         classes = ProductionSecurityChainTest.Harness.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
+                // CI exports SPRING_PROFILES_ACTIVE=test, under which SecurityConfiguration
+                // (@Profile("!test")) does not exist; an inlined test property outranks the
+                // environment, so the production class is what this context boots everywhere.
+                "spring.profiles.active=production-security-harness",
                 "dfm.observability.metrics-scrape.allowed-cidrs=",
                 "spring.main.banner-mode=off"
         })

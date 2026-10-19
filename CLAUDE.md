@@ -814,7 +814,9 @@ pages/{feature}/            # Route pages
   real HTTP; `SecurityFilterAutoConfiguration` is the load-bearing import, since it registers the
   security filter for the ERROR dispatch as the application does. The harness is a plain
   `@Configuration`: a `@SpringBootConfiguration` in that package was found by
-  `SecurityFilterChainTest`'s upward search and booted instead of the application. Red first on
+  `SecurityFilterChainTest`'s upward search and booted instead of the application; and it pins its
+  own profile as an inlined property, because CI exports `SPRING_PROFILES_ACTIVE=test`, under which
+  the production class does not exist (the first CI run failed every case that way). Red first on
   develop in every row of the deployed table. **Mutation-proven**: dropping the ERROR permit
   reddens the seven anonymous OAuth cases, the three device cases and the activation case;
   restoring the route list reddens the two
