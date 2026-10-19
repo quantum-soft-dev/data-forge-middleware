@@ -810,10 +810,15 @@ pages/{feature}/            # Route pages
   **Tests**, red first (`decimal(42,2)`): `ParquetCheckpointWriterTest` (capped at 38 with the cell
   NULL and `overflow` 1, exactly 38 digits kept, the streamed open table byte-identical with the
   overflow), `DeltaParquetWriterTest` (segment file, streamed batch file, grouped batch writer),
-  `ParquetSchemaMapperTest` (declared `p > 38` capped, `s > 38` text), `DeltaMetricsTest` (three
-  reasons at zero, one tally reports all). **Mutation-proven**: `cappedDecimalPrecision` returning
-  `needed` reddens six tests; dropping the coercion's overflow branch reddens five (Avro then refuses
-  "precision 42 as max precision 38"). No REST, gRPC, proto, DTO, migration (**V61 stays next**),
+  `ParquetSchemaMapperTest` (declared `p > 38` capped, `s > 38` text, and per cell in
+  `ParquetCheckpointWriterTest`), `DeltaMetricsTest` (three reasons at zero, one tally reports all),
+  and — review round 1, since the writer tests cannot see a reporting site dropped — one service
+  test per artifact: `DeltaEgressServiceTest` and `BatchParquetFinalizationServiceTest` on a real
+  registry, `CheckpointServiceTest` (streamed and folded) on the tally handed to the metric.
+  **Mutation-proven**: `cappedDecimalPrecision` returning `needed` reddens six tests; dropping the
+  coercion's overflow branch reddens five (Avro then refuses "precision 42 as max precision 38");
+  deleting the report call in `DeltaEgressService`, `CheckpointSnapshotMaterializer` or
+  `BatchParquetFinalizationService` reddens that artifact's service test(s). No REST, gRPC, proto, DTO, migration (**V61 stays next**),
   `specs/NNN-*`, configuration-key, S3-key or frontend change; one metric tag value added. See
   `docs/delta-client-v2-guide.md` ("A value too wide for any decimal column"),
   `docs/parquet-export-plugin-guide.md`, `docs/bitbi-integration.md`.

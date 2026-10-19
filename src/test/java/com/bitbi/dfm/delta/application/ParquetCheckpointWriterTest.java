@@ -563,6 +563,50 @@ class ParquetCheckpointWriterTest {
         }
     }
 
+    /**
+     * Issue #382 at cell level for the two declared shapes: a {@code numeric(50,2)} column is a
+     * {@code decimal(38,2)} whose 39+-digit value is NULL and counted, and a {@code numeric(60,40)}
+     * column is text that carries its value losslessly and counts nothing.
+     */
+    @Test
+    void aDeclaredWideDecimalIsCappedPerCellAndAScaleAbove38IsWrittenAsText() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("wide", "numeric(50,2)", true),
+                col("fine", "numeric(60,40)", true)),
+                List.of("id"), List.of());
+        String fortyDigits = "9".repeat(40);
+        String fineToken = "0." + "1".repeat(40);
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("wide", decVal(fortyDigits));
+        row.put("fine", decVal(fineToken));
+        Map<String, Value> fits = new LinkedHashMap<>();
+        fits.put("id", intVal(2));
+        fits.put("wide", decVal("12.34"));
+        fits.put("fine", decVal("1.5"));
+
+        Path file = tempDir.resolve("declared-wide.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(row, fits), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.overflowCount(), "only the 42-digit cell of the capped column");
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount());
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            assertEquals(38, ((LogicalTypes.Decimal) branch(first.getSchema(), "wide").getLogicalType()).getPrecision());
+            assertNull(first.get("wide"), "40 digits at scale 2 need 42");
+            assertEquals(Schema.Type.STRING, branch(first.getSchema(), "fine").getType());
+            assertEquals(fineToken, first.get("fine").toString(), "a scale above 38 travels as text, losslessly");
+            GenericRecord second = reader.read();
+            assertEquals(new BigDecimal("12.34"), second.get("wide"));
+            assertEquals("1.5", second.get("fine").toString());
+        }
+    }
+
     /** The cap is 38, not 37: a value needing exactly 38 digits is still a value (issue #382). */
     @Test
     void aValueNeedingExactly38DigitsIsKept() throws Exception {
