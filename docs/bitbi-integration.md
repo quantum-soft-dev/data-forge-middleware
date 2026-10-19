@@ -485,8 +485,8 @@ Version 2 lets Bit BI mirror a site from the server's typed Parquet files instea
 holding the watermark on its own side. The design and the plan are
 [`docs/cr-bitbi-parquet-plugin.md`](cr-bitbi-parquet-plugin.md); the spec is
 `specs/044-bitbi-parquet/`. This section documents what is **shipped**: phase 1 — `/v2/sites`,
-`/state` and `/schema` (issue #386), `/snapshot` and `/files/{fileId}` (issue #387). The changes
-feed is #388.
+`/state` and `/schema` (issue #386), `/snapshot` and `/files/{fileId}` (issue #387) — and phase 2,
+the changes feed `/changes` (issue #388).
 
 **Same key, same activation, same limit.** Every v2 route is under
 `/api/v1/plugins/bit-bi/v2`, authenticated by the `X-Plugin-Api-Key` of the account's `bit-bi`
@@ -593,6 +593,87 @@ lists the new set.
 A site with no Delta checkpoint answers `checkpointSeq: 0` and no tables; v2 does not serve the
 historical uploaded CSV files v1's `/files` falls back to.
 
+### GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/changes
+
+The changes after a watermark, **one row per batch** — one ingestion session — never per file. Each
+batch carries the manifest of every table it touched. Batches come in **batch order**, the order the
+sessions ran in, not the order their files were published.
+
+| Parameter | Meaning |
+|-----------|---------|
+| `epoch` | The epoch your watermark belongs to. **Required** when `afterSeq` is above 0 |
+| `afterSeq` | Your watermark's seq: only batches whose `lastSeq` is above it. Read within `epoch` only; default `0` = from the start of the current epoch |
+| `cursor` | `nextCursor` of the previous page |
+| `size` | Batches per page, 1 to 200; default 50 |
+
+```bash
+curl "https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/v2/sites/0199baac-f852-753f-6fc3-7c994fc38654/changes?epoch=3&afterSeq=5020646&size=2" \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+```
+
+**Response (200 OK)** — a page that has a next one:
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","epoch":3,"batches":[{"epoch":3,"batchId":"0199bb0f-1a2b-7c3d-8e4f-5a6b7c8d9e01","sessionMode":"continuous","firstSeq":5019800,"lastSeq":5023011,"readyAt":"2026-10-20T01:14:07.311Z","tables":[{"table":"nsftrns","status":"ready","fileId":"YnAxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDowMTk5YmIwZi0xYTJiLTdjM2QtOGU0Zi01YTZiN2M4ZDllMDE6bnNmdHJucw","rows":3212}]},{"epoch":3,"batchId":"0199bb10-4c2e-7a1d-9f00-3b5e1a2c7d41","sessionMode":"delta","firstSeq":5023012,"lastSeq":5023845,"readyAt":"2026-10-20T06:03:12.500Z","tables":[{"table":"nsfcard","status":"abandoned","fileId":null,"rows":25},{"table":"nsftrns","status":"ready","fileId":"YnAxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDowMTk5YmIxMC00YzJlLTdhMWQtOWYwMC0zYjVlMWEyYzdkNDE6bnNmdHJucw","rows":834},{"table":"tmp_x","status":"missing","fileId":null,"rows":4}]}],"nextCursor":"ZmMxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDoxNzkyNDc2MDAwMDAwMDAwOjAxOTliYjEwLTRjMmUtN2ExZC05ZjAwLTNiNWUxYTJjN2Q0MQ"}
+```
+
+The next page — the same parameters plus the cursor — and the last one for now:
+
+```bash
+curl "https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/v2/sites/0199baac-f852-753f-6fc3-7c994fc38654/changes?epoch=3&afterSeq=5020646&size=2&cursor=ZmMxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDoxNzkyNDc2MDAwMDAwMDAwOjAxOTliYjEwLTRjMmUtN2ExZC05ZjAwLTNiNWUxYTJjN2Q0MQ" \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+```
+
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","epoch":3,"batches":[],"nextCursor":null}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `epoch` (top level) | The site's current epoch — the same value as `/state`. Every listed batch belongs to it |
+| `batches[].epoch` | The epoch the batch belongs to |
+| `batches[].sessionMode` | `full_snapshot` replaces every table of the site; `delta` and `continuous` apply on top. `null` for a batch that did not record one |
+| `batches[].firstSeq`, `lastSeq` | The batch's seq range. Once the batch is applied, store `(epoch, lastSeq)` as your watermark |
+| `batches[].readyAt` | When the batch's last table settled (its file was published, or its build gave up); for a batch with no build at all, when the session ended |
+| `tables[].status` | `ready` — the file exists; `abandoned` — the build gave up (an operator can requeue it); `missing` — no file and no build: the table has no declared schema, or the batch was never queued |
+| `tables[].fileId` | Pass it to `/files/{fileId}`; `null` unless `ready` |
+| `tables[].rows` | The file's rows when `ready`; otherwise the batch's records of the table |
+| `nextCursor` | Pass it as `cursor` for the next page; `null` when the feed ends here for now |
+
+**`afterSeq` is read within your epoch.** A history wipe restarts seq at 1, and a client may resend a
+snapshot from seq 1, so a seq of a discarded epoch says nothing about the new one. When `epoch` is
+not the site's current one, `afterSeq` is ignored and the feed starts at the beginning of the current
+epoch — whose first batch is the `full_snapshot` that opened it. `afterSeq` above 0 without `epoch`
+is `400`. Only the current epoch is ever listed.
+
+**The feed ends before the first batch whose files are still being built** (or have not been queued
+yet), so you never see batch N+1 before N is settled; poll again later. An empty page with a `null`
+cursor means "nothing more for now", not "the site is done".
+
+**A cursor belongs to the site it was issued for**: one of another site, or one this server did not
+issue, is `400`. A cursor is a position, not a watermark — keep `(epoch, lastSeq)` as your watermark
+and use the cursor only to walk the pages of one poll.
+
+**Rules for applying a batch** (answered to BitBi, v6):
+
+- Apply a batch's rows **in `_seq` order**. The server does not net them: a row inserted and then
+  updated in the same batch arrives as both.
+- A `full_snapshot` batch is loaded **from its own files**, not from `/snapshot`: clear the site's
+  tables and load every `ready` table of the batch. A table with no rows in the snapshot has no file
+  and is not in the manifest — it is empty.
+- `checkpointSeq` can fall **inside** a `continuous` batch: after loading `/snapshot`, the first batch
+  of the feed may start below your position. Take only its rows with `_seq` above it.
+- Seq is **dense within an epoch**: the batches of one epoch cover every seq from the first to the last
+  without a gap. A batch the server ended (a timed-out session that had committed some records) is
+  listed with every table `missing`, so a gap is never silent.
+- A batch with any table not `ready`: stop the site and alert. An operator requeues an abandoned
+  artifact, or you wait for the nightly checkpoint to pass the batch and reload from `/snapshot`.
+
+| Status | When |
+|--------|------|
+| 200 | A page (possibly empty) |
+| 400 | `size` out of 1–200, a negative `afterSeq` or `epoch`, `afterSeq` without `epoch`, or a cursor not issued for this site |
+| 404 | The site does not exist or belongs to another account |
+
 ### GET /api/v1/plugins/bit-bi/v2/files/{fileId}
 
 Download one file. The answer is a **302** whose `Location` is a presigned storage URL valid for
@@ -615,7 +696,14 @@ On dev the storage host is `storage.googleapis.com`, the bucket `dfm-dev-uploads
 bucket is the first path segment). Only the call to `/files` spends a token of the rate-limit bucket;
 the storage download does not.
 
-**A `fileId` names one version of one file.** It keeps leading to the object `/snapshot` listed
+A `fileId` comes from `/snapshot` (a checkpoint file) or from `/changes` (a batch file); both go
+through this route.
+
+**A batch file** (from `/changes`) resolves while its batch belongs to the site's current epoch and
+its file is `ready`; it is never rewritten, and it lives as long as its batch (45 days by default) —
+then `404`.
+
+**A checkpoint `fileId` names one version of one file.** It keeps leading to the object `/snapshot` listed
 after the next build has replaced the table, until that superseded object is removed: the
 server's storage cleanup may reclaim it on its first pass after the replacing build has moved
 `checkpointSeq` — so download a listing promptly rather than keeping its ids for later. Then the
@@ -626,7 +714,7 @@ seq exists again in the new history.
 | Status | When |
 |--------|------|
 | 302 | The file exists; `Location` is the presigned URL |
-| 404 | The id is not one this server issued, belongs to **another account**, belongs to a discarded epoch, names a table the site no longer has, or the object is gone — one body for all of them |
+| 404 | The id is not one this server issued, belongs to **another account**, belongs to a discarded epoch, names a table the site no longer has, names a batch file that is not `ready`, or the object is gone — one body for all of them |
 | 503 | Storage would not say whether the object exists; retry |
 
 ```json
@@ -637,6 +725,7 @@ seq exists again in the new history.
 
 | Status | When | Body |
 |--------|------|------|
+| 400 | `/changes`: a parameter out of range, `afterSeq` without `epoch`, or a cursor not issued for this site | standard error body |
 | 401 | Missing, unknown, rotated-away key, or a deactivated activation — checked before the path | the same members as the standard body, `message` = `Invalid or missing API key`; the key order is not fixed |
 | 404 | The site does not exist **or belongs to another account** — the two are indistinguishable on purpose (v1 answers 403 for the second); also an unknown path under `/v2` with a valid key | standard error body |
 | 429 | The account's bucket is empty | standard error body, `Retry-After` header |
@@ -651,7 +740,7 @@ seq exists again in the new history.
 ```
 
 A deactivated (soft-deleted) site of your own account is not in `/v2/sites` but still answers
-`/state`, `/schema` and `/snapshot`, as v1's `/files` does.
+`/state`, `/schema`, `/snapshot` and `/changes`, as v1's `/files` does.
 
 ---
 

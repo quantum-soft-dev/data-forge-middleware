@@ -84,7 +84,7 @@ existing one, reusing the application services Parquet Export already uses
 | `GET /sites/{siteId}/state` | `epoch`, `checkpointSeq`, `lastAppliedSeq`, `schemaVersion` |
 | `GET /sites/{siteId}/schema` | Per table: columns and types, `identity` (`row_hash` or `primary_key`), `primaryKey`, `uniqueKeys` |
 | `GET /sites/{siteId}/snapshot` | One checkpoint Parquet per table, all at `checkpointSeq` |
-| `GET /sites/{siteId}/changes?afterSeq=&cursor=&size=` | Completed batches above `afterSeq`, in batch order, each with its table manifest |
+| `GET /sites/{siteId}/changes?epoch=&afterSeq=&cursor=&size=` | Completed batches of the current epoch above `afterSeq` (read within `epoch`), in batch order, each with its table manifest |
 | `GET /files/{fileId}` | `302` to a short-lived presigned URL |
 
 Schema example:
@@ -136,7 +136,7 @@ Decisions built into the design:
 
 1. `GET /state`; if `checkpointSeq` is 0, wait for the first checkpoint.
 2. `GET /schema`; load every table from `/snapshot`; store `(epoch, checkpointSeq)` as the watermark.
-3. Poll `/changes?afterSeq=<watermark seq>`; apply each batch in one transaction, then advance the
+3. Poll `/changes?epoch=<watermark epoch>&afterSeq=<watermark seq>`; apply each batch in one transaction, then advance the
    watermark to its `lastSeq`. Re-applying after a crash is safe because the watermark moves with
    the data.
 4. A batch with `sessionMode = full_snapshot` and an unseen `batchId`, or an `epoch` different from
@@ -277,6 +277,40 @@ pilot starts.
 22. **`/files` presigns for 60 s and answers 404 for every refusal with one body** (another account,
     a never-issued id, a discarded epoch, a gone object), so an id cannot be used to probe which
     sites or versions exist. Storage that will not say whether the object exists is 503, not 404.
+
+2026-10-20 — choices made while implementing #388 (phase 2, the changes feed); not owner decisions, open to review:
+
+23. **The batch's epoch is stored (V61), and an unstamped batch is read by a rule.**
+    `batches.baseline_epoch` is written with each recorded segment, after the re-baseline reset, so a
+    `FULL_SNAPSHOT` carries the epoch it opened. V61 backfills the current epoch's batches — no
+    completed `FULL_SNAPSHOT` of the site started after them, since every committed snapshot runs the
+    reset and a wipe deletes every batch — and leaves older ones NULL. A NULL batch is read by the same
+    rule, which covers the batches a pre-V61 pod commits during the rolling deploy. Deriving the epoch
+    by that rule alone, with no migration, was weighed and not taken: an operator deleting one
+    `FULL_SNAPSHOT` batch would silently relabel the discarded history before it as current.
+24. **Only the current epoch is listed, and `afterSeq` needs the consumer's `epoch`.** A wipe restarts
+    seq at 1, and a client may resend a snapshot from seq 1, so an `afterSeq` of a discarded epoch
+    would skip the new epoch's `full_snapshot`. The feed therefore takes an `epoch` parameter (not in
+    the promised `?afterSeq=&cursor=&size=`): `afterSeq` applies only when it is the current epoch,
+    otherwise the feed starts at the epoch's beginning; `afterSeq > 0` without `epoch` is `400`. The
+    response states the current epoch at the top level, so an empty page still shows a change.
+25. **A batch the server ended is listed, with every table `missing`.** A session that ended
+    `NOT_COMPLETED`/`FAILED`/`CANCELLED` after committing seals has applied, checkpointed records
+    and no Parquet; leaving it out would put a silent hole in the epoch's seq. A batch with no
+    recorded segment, and a running one, are not listed.
+26. **The feed ends where the build queue's head is** — before the first batch with a table
+    `PENDING`/`BUILDING`/`FAILED` (#378) **or** still owed its work rows within the enqueue horizon
+    (#380's `AWAITING_ENQUEUE`, the same text). Without the second, every batch would read all
+    `missing` for the moment between its commit and its `AFTER_COMMIT` enqueue.
+27. **`fileId` kind `bp1:<siteId>:<batchId>:<table>`** — no epoch, no seq: a `READY` artifact is never
+    rewritten (039 requeues only `ABANDONED` or a lapsed claim), so `(batch, table)` names one
+    version; resolution checks the account, the batch's site and that the batch is in the current
+    epoch, and reads the key from the row with no HEAD. `decode` is strict for both kinds now: only
+    the spelling `encode` writes (review of #396).
+28. **`readyAt`** = when the batch's last table settled (published, or abandoned); with no artifact
+    row at all, when the session ended. **`rows`** = the file's row count when `ready`, otherwise the
+    batch's records of the table from `table_stats`. The cursor is an opaque `(started_at, id)`
+    position bound to the site (another site's is `400`); page size 1–200, default 50.
 
 The exact response bodies are in `docs/bitbi-integration.md` ("Bit BI API v2").
 

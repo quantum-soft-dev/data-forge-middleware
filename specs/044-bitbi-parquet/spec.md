@@ -33,7 +33,7 @@ Under `/api/v1/plugins/bit-bi/v2`, authenticated by the `bit-bi` activation's
 | `GET /sites/{siteId}/schema` | 1 (#386) | `siteId`, `schemaVersion`, per table `table`, `identity`, `primaryKey`, `uniqueKeys`, `columns` |
 | `GET /sites/{siteId}/snapshot` | 1 (#387) | One checkpoint Parquet per table at `checkpointSeq` |
 | `GET /files/{fileId}` | 1 (#387) | `302` to a short-lived presigned URL |
-| `GET /sites/{siteId}/changes?afterSeq=&cursor=&size=` | 2 (#388) | Completed batches above `afterSeq`, in batch order, each with its table manifest |
+| `GET /sites/{siteId}/changes?epoch=&afterSeq=&cursor=&size=` | 2 (#388) | Batches of the current epoch above `afterSeq` (read within `epoch`), in batch order, each with its table manifest |
 
 Rules the phase-1 routes hold:
 
@@ -67,12 +67,34 @@ Rules `/snapshot` and `/files` hold (#387):
 - No S3 call inside a transaction (#164): the database is read in `BitBiV2QueryService`'s read-only
   methods, HEAD and presign happen after they return.
 
+- **`/changes`** (#388): one row per batch of the site's **current** epoch — status not
+  `IN_PROGRESS`, at least one recorded segment — in `(started_at, id)` order, never `ready_at`. The
+  batch's epoch is `batches.baseline_epoch` (V61, stamped with each recorded segment after the
+  reset); an unstamped batch belongs to the current epoch when no completed `FULL_SNAPSHOT` of its
+  site started after it. The feed ends before the first batch with a table `PENDING`/`BUILDING`/
+  `FAILED` or still owed its work rows (#378, #380). `afterSeq` (`lastSeq > afterSeq`) applies only
+  when `epoch` is the current epoch, otherwise the feed starts at the epoch's beginning; `afterSeq >
+  0` without `epoch` is `400`. Manifest per table from `table_stats` and the artifact rows:
+  `ready` (with a `bp1:<siteId>:<batchId>:<table>` `fileId`), `abandoned`, `missing`. The cursor is
+  an opaque `(started_at, id)` bound to the site; another site's is `400`. One `REPEATABLE READ`
+  transaction.
+- `decode` of both `fileId` kinds is strict: only the spelling `encode` writes.
+
 Exact bodies: `docs/bitbi-integration.md`, "Bit BI API v2".
 
 ## Out of scope
 
 Retiring `/sql-changes` (phase 5, after a sunset that is not scheduled), an activation mode, an
 on-demand snapshot or SQL render, per-segment latency (decisions 1–5 of the CR).
+
+## Acceptance (phase 2 — #388)
+
+- Batches in order with their manifests; `abandoned`/`missing` visible; a batch with an unfinished
+  table holds the feed — integration test on the real SQL (mutation: ordering by `ready_at` reddens
+  the order test).
+- An epoch change is visible; `afterSeq` of another epoch does not skip the new `full_snapshot`;
+  another site's cursor is `400` — integration and contract tests.
+- V61 backfill — migration test on a database of its own.
 
 ## Acceptance (phase 1, part 2 — #387)
 

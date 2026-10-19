@@ -17,7 +17,8 @@ import java.util.UUID;
 
 /**
  * The file half of the Bit BI v2 read surface (issue #387): {@code /snapshot} and
- * {@code /files/{fileId}}.
+ * {@code /files/{fileId}} — the latter for a checkpoint id ({@code ck1}) and, since #388, for a
+ * completed-batch id ({@code bp1}) the changes feed hands out.
  *
  * <p><b>One seq for every table.</b> The listing is at the site's checkpoint pointer
  * ({@code site_sync_state.last_checkpoint_seq}, the {@code checkpointSeq} of {@code /state}) and at
@@ -125,7 +126,8 @@ public class BitBiV2FileService {
      * @param fileId    the opaque id from the request path
      * @return the presigned URL
      * @throws FileNotFoundException when the id is not one this server issued, names another
-     *                               account's file, belongs to a discarded epoch, or its object is gone
+     *                               account's file, belongs to a discarded epoch, names a batch file
+     *                               that is not ready, or its object is gone
      * @throws CheckpointStorageException when S3 cannot say whether the object exists
      */
     public String presignedUrl(UUID accountId, String fileId) {
