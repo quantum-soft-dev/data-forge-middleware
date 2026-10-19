@@ -167,6 +167,17 @@ class BitBiV2FileServiceTest {
         }
 
         @Test
+        @DisplayName("A table whose name no fileId can carry is missing; the rest of the listing stands (#396 review)")
+        void aTableNoIdCanNameIsMissing() {
+            rows(row("a/b", POINTER, true), row("orders", POINTER, true));
+
+            assertThat(service.snapshot(ACCOUNT, SITE).tables()).containsExactly(
+                    new SnapshotTable("a/b", TableStatus.MISSING, null),
+                    new SnapshotTable("orders", TableStatus.READY, fileIdAt("orders", POINTER)));
+            verify(checkpointStorage, never()).presence(anyString());
+        }
+
+        @Test
         @DisplayName("A row below the pointer describes an older state and is missing")
         void aRowBehindThePointerIsMissing() {
             rows(row("old", POINTER - 1, true));

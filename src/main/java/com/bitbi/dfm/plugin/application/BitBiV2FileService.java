@@ -91,6 +91,11 @@ public class BitBiV2FileService {
      * Is there a snapshot of this table at the pointer?
      */
     private boolean atPointer(SnapshotSource source, TableVersion row) {
+        if (!BitBiFileId.Checkpoint.isAddressable(row.table())) {
+            // No id can name it (its name would be a path in the key): listed, not a 500 for the
+            // whole snapshot (#396 review).
+            return false;
+        }
         long pointer = source.checkpointSeq();
         if (row.seq() == pointer) {
             // The row still describes the pointer; its key is the object, or there is none (#149).
