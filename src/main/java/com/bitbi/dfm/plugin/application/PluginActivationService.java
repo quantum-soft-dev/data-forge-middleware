@@ -31,7 +31,8 @@ import java.util.concurrent.TimeUnit;
  * <p>Handles the activation workflow per FR-005 (upsert behavior) and FR-006 (lifecycle hooks):
  * <ul>
  *   <li>New activation: Creates AccountPlugin record, calls plugin.onActivate()</li>
- *   <li>Update (already active): Updates pluginData, calls plugin.onActivate()</li>
+ *   <li>Update (already active): merges pluginData only — no lifecycle hook, so no new secret
+ *       and no baseline change (#383)</li>
  *   <li>Reactivation (was inactive): Reactivates with new data, calls plugin.onActivate()</li>
  * </ul>
  */
@@ -197,27 +198,31 @@ public class PluginActivationService {
                 isNewActivation = false;
             }
 
-            // 6. Call lifecycle hook (FR-006, FR-019)
+            // 6. Call lifecycle hook (FR-006, FR-019) — for a new activation or a reactivation only.
+            // An update of an already active plugin is a pluginData merge and nothing else (#383):
+            // onActivate issues a fresh secret and re-captures the plugin's baselines (bit-bi), so
+            // running it here would revoke the key the caller holds, hand the new one to nobody and
+            // move the SQL baselines without the owner asking — a reinit nobody requested.
+            boolean startsLifecycle = isNewActivation || isReactivation;
             String apiKey = null;
-            try {
-                apiKey = plugin.onActivate(accountPlugin);
-                logger.debug("Plugin {} onActivate hook completed for account {}", pluginId, accountId);
-            } catch (Exception e) {
-                // Log but don't fail the activation - hook failures are non-critical
-                logger.warn("Plugin {} onActivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
+            if (startsLifecycle) {
+                try {
+                    apiKey = plugin.onActivate(accountPlugin);
+                    logger.debug("Plugin {} onActivate hook completed for account {}", pluginId, accountId);
+                } catch (Exception e) {
+                    // Log but don't fail the activation - hook failures are non-critical
+                    logger.warn("Plugin {} onActivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
+                }
+
+                // 7. Log the SQL initialization state (FR-001, FR-002)
+                if (plugin instanceof BitBiPlugin bitBiPlugin) {
+                    bitBiPlugin.initializeSqlFromLatestBatch(accountPlugin, true);
+                }
             }
 
-            // 7. Trigger async SQL initialization for new activations and reactivations (FR-001, FR-002)
-            boolean shouldInitializeSql = isNewActivation || isReactivation;
-            if (plugin instanceof BitBiPlugin bitBiPlugin) {
-                bitBiPlugin.initializeSqlFromLatestBatch(accountPlugin, shouldInitializeSql);
-                logger.debug("SQL initialization triggered for plugin {} account {} (newOrReactivation={})",
-                        pluginId, accountId, shouldInitializeSql);
-            }
-
-            // Return API key for new activations and reactivations (new key is generated in both cases)
-            // Don't expose on updates - the existing key remains valid
-            String returnApiKey = (isNewActivation || isReactivation) ? apiKey : null;
+            // The key is shown only when the hook issued one; an update issues none, and the
+            // key the caller already holds keeps working.
+            String returnApiKey = apiKey;
 
             String action = isNewActivation ? "activated" : (isReactivation ? "reactivated" : "updated");
             logger.info("Plugin {} {} for account {}", pluginId, action, accountId);

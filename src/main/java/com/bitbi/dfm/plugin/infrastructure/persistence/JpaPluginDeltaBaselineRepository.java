@@ -35,8 +35,17 @@ public interface JpaPluginDeltaBaselineRepository
     @Query("DELETE FROM PluginDeltaBaseline b WHERE b.siteId = :siteId")
     int deleteBySiteId(@Param("siteId") UUID siteId);
 
+    /**
+     * {@code flushAutomatically} is load-bearing, not decoration (found working #383). This runs
+     * mid-transaction in {@code BitBiPlugin.onActivate}, right after the activation row was
+     * changed (reactivated, or given its {@code baseline_batch_id}). Hibernate's AUTO flush only
+     * flushes entities whose tables this DELETE touches, and {@code account_plugins} is not one of
+     * them, so without an explicit flush {@code clearAutomatically} detached the unflushed
+     * activation: a reactivated plugin stayed {@code is_active = false} with a key that never
+     * authenticated, and every activation of an account with sites lost its baseline batch.
+     */
     @Override
-    @Modifying(clearAutomatically = true)
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("DELETE FROM PluginDeltaBaseline b WHERE b.accountPluginId = :accountPluginId AND b.siteId = :siteId")
     int deleteByAccountPluginIdAndSiteId(

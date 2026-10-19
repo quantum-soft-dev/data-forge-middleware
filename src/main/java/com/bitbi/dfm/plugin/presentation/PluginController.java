@@ -109,7 +109,8 @@ public class PluginController {
      * <p>Implements upsert behavior per FR-005:</p>
      * <ul>
      *   <li>If not activated: Creates new activation record (returns 201)</li>
-     *   <li>If already active: Updates pluginData and timestamps (returns 200)</li>
+     *   <li>If already active: merges pluginData only — no new API key, no baseline change
+     *       (returns 200 with no key, #383)</li>
      *   <li>If deactivated: Reactivates with new pluginData (returns 200)</li>
      * </ul>
      *
@@ -124,16 +125,22 @@ public class PluginController {
             Activates a plugin for the authenticated account.
 
             **Upsert Behavior (FR-005):**
-            - If plugin is not activated: Creates new activation record (201)
-            - If plugin is already active: Updates pluginData and timestamps (200)
-            - If plugin was deactivated: Reactivates with new pluginData (200)
+            - If plugin is not activated: Creates new activation record (201). The response
+              carries the plugin's secret (bit-bi: `apiKey`), shown this once.
+            - If plugin is already active: merges the sent pluginData into the stored one and
+              changes nothing else (200, `apiKey` null). The secret the caller holds keeps
+              working, and bit-bi's SQL baselines (baseline batch, per-table delta baselines)
+              are not moved — that is what reinit is for.
+            - If plugin was deactivated: Reactivates with new pluginData (200). A new secret is
+              issued and returned once; the previous one stops working.
 
             **Validation (FR-004):**
             - pluginData is validated against the plugin's JSON Schema
             - Returns 400 if validation fails
 
             **Lifecycle Hook (FR-006):**
-            - Calls plugin.onActivate() after successful activation
+            - Calls plugin.onActivate() after a new activation or a reactivation, never on an
+              update of an already active plugin
             """
     )
     @ApiResponses({
@@ -147,7 +154,7 @@ public class PluginController {
         ),
         @ApiResponse(
             responseCode = "200",
-            description = "Plugin updated successfully (existing activation)",
+            description = "Existing activation: reactivated (new apiKey returned) or, if already active, pluginData merged with no other change (apiKey null)",
             content = @Content(
                 mediaType = "application/json",
                 schema = @Schema(implementation = PluginActivationResponseDto.class)
