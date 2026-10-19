@@ -265,6 +265,30 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- dev-row-group-8mib: Dev writes Parquet row groups of 8 MiB instead of the 16 MiB default, so Bit BI's
+  reader takes every table (issue #385). Bit BI decodes a row group whole and refuses one above six
+  million cells (their question 67); a writer closes a group by buffered bytes
+  (`delta.parquet.row-group-bytes`), and in `fyt-new`'s checkpoint of 2026-10-06 the widest table,
+  `nsfwork`, came to 177 355 rows a group, about 6.2 million cells, with 23 more of the 87 tables
+  above 25 000 rows a group. The byte limit stays a byte limit, as the CR decided; the key is lowered
+  where the consumer is. `k8s/overlays/dev/configmap-patch.yaml` sets
+  `DELTA_PARQUET_ROW_GROUP_BYTES: "8388608"`; `application.yml`'s default and the stage and prod
+  overlays are untouched. Only the split changes — the rows are the same, a writer holds half the
+  buffer, the footer carries about twice the row groups, compression is a little worse. Checkpoint
+  snapshots take it on the next nightly build; batch and delta files already written keep their
+  groups. **Guard**: `ParquetRowGroupDeploymentTest` (fast gate, over every file under `k8s/`, with
+  `S3OrphanSweepDeploymentTest`'s manifest reader): the dev overlay sets exactly 8 MiB in one
+  spelling, the key is the placeholder `application.yml` binds, the value sits below the default,
+  and no other manifest sets the key in either the placeholder or the relaxed-binding spelling. The
+  pre-commit hook's `k8s/*` branch runs it. `ParquetScratchCeilingBudgetTest` does not read this key
+  and is unchanged. Mutation: the key added to the stage overlay reddens the "no other manifest" case;
+  the guard was red on the dev case before the value was set. All three overlays render with
+  `kubectl kustomize`. **Not in the PR**: the deploy (`deploy-dev/*` tag, a human step), the check
+  that `nsfwork`'s largest group roughly halves after the first night, and telling Bit BI the date.
+  No production code, REST, gRPC, proto, DTO, migration (**V61 stays next**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change; one configuration value, in one overlay. See
+  `docs/delta-client-v2-guide.md` ("Row-group budget") and `docs/bitbi-integration.md` ("Download
+  Baseline Files").
 - batch-parquet-lost-enqueue: A completed batch whose `AFTER_COMMIT` Parquet enqueue was lost still
   gets its work rows, and still before its site's later batches (issue #380, the hole #378 named).
   `BatchParquetFinalizationListener` creates the rows after the completion commit (#099), so a pod

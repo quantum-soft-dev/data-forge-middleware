@@ -367,6 +367,15 @@ A null means the hash is unknown, not that the rows holding it are one row. See
 `docs/delta-client-v2-guide.md` ("`row_hash`"). A site that never ingested through Delta answers with its
 historical uploaded files instead, in their original formats.
 
+**Row groups.** A snapshot is split into row groups by size, not by row count: a writer closes a
+group once its buffer reaches `delta.parquet.row-group-bytes` (`DELTA_PARQUET_ROW_GROUP_BYTES`). The
+value is per deployment — **8 MiB on dev** (`test.dfm.bitbi.io`, issue #385), the 16 MiB default on
+stage and prod — so the rows per group depend on the table's width and the deployment, not on a
+constant a client can assume. Dev was lowered because Bit BI's reader decodes a row group whole and
+refuses one above six million cells; at 16 MiB the widest table there reached about 6.2 million.
+The rows are the same either way. A snapshot takes a new value on its next nightly build, while batch
+and delta files already written keep the groups they were written with.
+
 ### Get SQL Changes
 
 Retrieve SQL changes for a specific site after a given date.

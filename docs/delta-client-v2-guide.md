@@ -3304,7 +3304,14 @@ raising it buys nothing but risk above the heap it costs. It is also the floor o
 groups a big artifact carries: a multi-GB completed-batch file at 16 MiB keeps its footer (row
 groups × columns, parsed in full before a reader touches data) in the hundreds of entries, which is
 why the default sits at the top of the range rather than the bottom. Move it only together with the
-pod's heap. The
+pod's heap. **Dev runs at 8 MiB** (`k8s/overlays/dev/configmap-patch.yaml`, issue #385), and the
+reason is a reader rather than the heap: Bit BI decodes a row group whole and refuses one above six
+million cells, and at 16 MiB the widest checkpoint table there (`fyt-new`'s `nsfwork`, 177 355 rows
+a group) came to about 6.2 million. Only the split changes — the rows are the same, a writer holds
+half the buffer, the footer carries about twice the row groups and compression is a little worse.
+Checkpoint snapshots take it on the next nightly build; batch and delta files already written keep
+their groups. Stage and prod keep the default, and `ParquetRowGroupDeploymentTest` holds that the
+key is set on dev alone. The
 per-segment egress writer renders its (seal-bounded, ≤ 16 MiB of records) file in memory, so there
 the budget bounds only the encoder's own buffer; it takes the same key deliberately, because all
 three writers share one pod's heap and one tuning decision.
