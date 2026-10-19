@@ -484,9 +484,9 @@ the answer is again **reinit**.
 Version 2 lets Bit BI mirror a site from the server's typed Parquet files instead of generated SQL,
 holding the watermark on its own side. The design and the plan are
 [`docs/cr-bitbi-parquet-plugin.md`](cr-bitbi-parquet-plugin.md); the spec is
-`specs/044-bitbi-parquet/`. This section documents what is **shipped**: the first part of phase 1
-(issue #386) — `/v2/sites`, `/state` and `/schema`. `/snapshot` and `/files/{fileId}` are #387, the
-changes feed is #388.
+`specs/044-bitbi-parquet/`. This section documents what is **shipped**: phase 1 — `/v2/sites`,
+`/state` and `/schema` (issue #386), `/snapshot` and `/files/{fileId}` (issue #387). The changes
+feed is #388.
 
 **Same key, same activation, same limit.** Every v2 route is under
 `/api/v1/plugins/bit-bi/v2`, authenticated by the `X-Plugin-Api-Key` of the account's `bit-bi`
@@ -557,6 +557,82 @@ submitted schema answers:
 {"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","schemaVersion":0,"tables":[]}
 ```
 
+### GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/snapshot
+
+The site's nightly checkpoint: one Parquet file per table, **every one at the same seq**,
+`checkpointSeq` — the value `/state` answers. Load every `ready` table, then store
+`(epoch, checkpointSeq)` as your watermark; the changes after it are exactly what the changes feed
+will serve above that seq.
+
+**Response (200 OK)**:
+```json
+{"siteId":"0199baac-f852-753f-6fc3-7c994fc38654","epoch":3,"checkpointSeq":5020646,"tables":[{"table":"nsfcard","status":"missing","fileId":null},{"table":"nsftrns","status":"ready","fileId":"Y2sxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDozOjUwMjA2NDY6bnNmdHJucw"},{"table":"orders","status":"ready","fileId":"Y2sxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDozOjUwMjA2NDY6b3JkZXJz"}]}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `epoch` | The baseline epoch the files belong to — the same value as `/state` |
+| `checkpointSeq` | The seq every `ready` file is at. `0` = no checkpoint yet; then `tables` is empty |
+| `tables[].status` | `ready` — a file exists at `checkpointSeq`; `missing` — none does |
+| `tables[].fileId` | Pass it to `/files/{fileId}`; `null` unless `ready`. Opaque: do not parse it |
+
+Tables are sorted by name. **`missing` is never silent**: a table the site has a checkpoint row for
+but no file at `checkpointSeq` is listed with `fileId: null`. It means one of: the build could not
+write the table's snapshot (it gave up after repeated failures, and an operator has to look); the
+table's state is older than `checkpointSeq`; or the table first appeared after `checkpointSeq` and
+its first snapshot is being built — its rows then arrive in the changes after `checkpointSeq`. Do not
+advance past a `missing` table you hold rows for.
+
+**During the nightly build (around 02:00 UTC)** the build replaces tables one by one and moves
+`checkpointSeq` only at the end — or not at all, if it stops part way, until the next night. The
+listing does not follow it table by table: it keeps answering the previous build's files, all at
+the previous `checkpointSeq`, until the pointer moves. A download therefore never mixes two builds
+(v1's `/sites/{siteId}/files` does, in that window). Once `checkpointSeq` has moved, `/snapshot`
+lists the new set.
+
+A site with no Delta checkpoint answers `checkpointSeq: 0` and no tables; v2 does not serve the
+historical uploaded CSV files v1's `/files` falls back to.
+
+### GET /api/v1/plugins/bit-bi/v2/files/{fileId}
+
+Download one file. The answer is a **302** whose `Location` is a presigned storage URL valid for
+**60 seconds**; follow it (most HTTP clients do) **without** the API key — the URL carries its own
+signature. The bytes come straight from storage; nothing passes through this server.
+
+```bash
+curl -L -o nsftrns.parquet \
+  https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/v2/files/Y2sxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDozOjUwMjA2NDY6bnNmdHJucw \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+```
+
+```http
+HTTP/1.1 302 Found
+Location: https://storage.googleapis.com/dfm-dev-uploads/checkpoints/0199baac-f852-753f-6fc3-7c994fc38654/nsftrns/seq=5020646/snapshot.parquet?X-Amz-Algorithm=AWS4-HMAC-SHA256&...
+Cache-Control: no-store
+```
+
+On dev the storage host is `storage.googleapis.com`, the bucket `dfm-dev-uploads`, path-style (the
+bucket is the first path segment). Only the call to `/files` spends a token of the rate-limit bucket;
+the storage download does not.
+
+**A `fileId` names one version of one file.** It keeps leading to the object `/snapshot` listed
+after the next build has replaced the table, until that superseded object is removed: the
+server's storage cleanup may reclaim it on its first pass after the replacing build has moved
+`checkpointSeq` — so download a listing promptly rather than keeping its ids for later. Then the
+answer is `404`: read `/snapshot` again. A `fileId` from before a
+history wipe or a re-baseline (an `epoch` you no longer hold) is `404` as well, even if the same
+seq exists again in the new history.
+
+| Status | When |
+|--------|------|
+| 302 | The file exists; `Location` is the presigned URL |
+| 404 | The id is not one this server issued, belongs to **another account**, belongs to a discarded epoch, names a table the site no longer has, or the object is gone — one body for all of them |
+| 503 | Storage would not say whether the object exists; retry |
+
+```json
+{"timestamp":"2026-10-20T08:00:00.123456Z","status":404,"error":"Not Found","message":"File not found: Y2sxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDozOjUwMjA2NDY6b3JkZXJz","path":"/api/v1/plugins/bit-bi/v2/files/Y2sxOjAxOTliYWFjLWY4NTItNzUzZi02ZmMzLTdjOTk0ZmMzODY1NDozOjUwMjA2NDY6b3JkZXJz"}
+```
+
 ### v2 errors
 
 | Status | When | Body |
@@ -564,6 +640,7 @@ submitted schema answers:
 | 401 | Missing, unknown, rotated-away key, or a deactivated activation — checked before the path | the same members as the standard body, `message` = `Invalid or missing API key`; the key order is not fixed |
 | 404 | The site does not exist **or belongs to another account** — the two are indistinguishable on purpose (v1 answers 403 for the second); also an unknown path under `/v2` with a valid key | standard error body |
 | 429 | The account's bucket is empty | standard error body, `Retry-After` header |
+| 503 | `/snapshot` or `/files`: object storage would not say whether a file exists | standard error body, `message` = `Object storage is temporarily unavailable. Please try again.` |
 
 ```json
 {"timestamp":"2026-10-19T18:00:00.123456Z","status":404,"error":"Not Found","message":"Site not found: 0199bab0-ca3b-e41c-5521-2f4b33fda8b6","path":"/api/v1/plugins/bit-bi/v2/sites/0199bab0-ca3b-e41c-5521-2f4b33fda8b6/state"}
@@ -574,7 +651,7 @@ submitted schema answers:
 ```
 
 A deactivated (soft-deleted) site of your own account is not in `/v2/sites` but still answers
-`/state` and `/schema`, as v1's `/files` does.
+`/state`, `/schema` and `/snapshot`, as v1's `/files` does.
 
 ---
 

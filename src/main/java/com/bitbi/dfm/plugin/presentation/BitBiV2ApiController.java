@@ -1,10 +1,12 @@
 package com.bitbi.dfm.plugin.presentation;
 
+import com.bitbi.dfm.plugin.application.BitBiV2FileService;
 import com.bitbi.dfm.plugin.application.BitBiV2QueryService;
 import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SiteListDto;
 import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SiteSchemaDto;
 import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SiteStateDto;
+import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SnapshotDto;
 import com.bitbi.dfm.plugin.presentation.dto.SiteDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
@@ -17,22 +19,25 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * Bit BI plugin API v2, read surface part 1 (issue #386; plan in
+ * Bit BI plugin API v2, read surface (issues #386 and #387; plan in
  * {@code docs/cr-bitbi-parquet-plugin.md}, phase 1).
  *
  * <p>A versioned surface beside {@link BitBiPluginApiController}, not a fork: the same
@@ -41,8 +46,10 @@ import java.util.function.Supplier;
  * holds its own watermark; nothing here reads {@code baseline_batch_id} or
  * {@code plugin_delta_baselines}.</p>
  *
- * <p>A site of another account answers 404 exactly like one that does not exist (v1 answers 403).
- * A 429 carries {@code Retry-After} and the standard error body.</p>
+ * <p>A site of another account answers 404 exactly like one that does not exist (v1 answers 403),
+ * and a {@code fileId} of another account like one never issued. A 429 carries {@code Retry-After}
+ * and the standard error body. A {@code /files} call spends a token like every other route; the
+ * download it redirects to goes straight to storage and spends none.</p>
  */
 @RestController
 @RequestMapping(ApiRoutes.BITBI_V2_API)
@@ -51,10 +58,13 @@ import java.util.function.Supplier;
 public class BitBiV2ApiController {
 
     private final BitBiV2QueryService queryService;
+    private final BitBiV2FileService fileService;
     private final PluginRateLimiterService rateLimiterService;
 
-    public BitBiV2ApiController(BitBiV2QueryService queryService, PluginRateLimiterService rateLimiterService) {
+    public BitBiV2ApiController(BitBiV2QueryService queryService, BitBiV2FileService fileService,
+                                PluginRateLimiterService rateLimiterService) {
         this.queryService = queryService;
+        this.fileService = fileService;
         this.rateLimiterService = rateLimiterService;
     }
 
@@ -69,7 +79,7 @@ public class BitBiV2ApiController {
     })
     public ResponseEntity<?> listSites(Authentication authentication, HttpServletRequest request) {
         UUID accountId = accountId(authentication);
-        return limited(accountId, request, () -> new BitBiV2SiteListDto(queryService.listSites(accountId).stream()
+        return limitedBody(accountId, request, () -> new BitBiV2SiteListDto(queryService.listSites(accountId).stream()
                 .map(site -> SiteDto.of(site.getId(), site.getSiteName(), site.getDisplayName()))
                 .toList()));
     }
@@ -92,7 +102,7 @@ public class BitBiV2ApiController {
             @Parameter(description = "Site identifier", required = true) @PathVariable UUID siteId,
             Authentication authentication, HttpServletRequest request) {
         UUID accountId = accountId(authentication);
-        return limited(accountId, request, () -> BitBiV2SiteStateDto.from(queryService.state(accountId, siteId)));
+        return limitedBody(accountId, request, () -> BitBiV2SiteStateDto.from(queryService.state(accountId, siteId)));
     }
 
     @GetMapping(value = "/sites/{siteId}/schema", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -112,13 +122,81 @@ public class BitBiV2ApiController {
             @Parameter(description = "Site identifier", required = true) @PathVariable UUID siteId,
             Authentication authentication, HttpServletRequest request) {
         UUID accountId = accountId(authentication);
-        return limited(accountId, request, () -> BitBiV2SiteSchemaDto.from(queryService.schema(accountId, siteId)));
+        return limitedBody(accountId, request, () -> BitBiV2SiteSchemaDto.from(queryService.schema(accountId, siteId)));
+    }
+
+    @GetMapping(value = "/sites/{siteId}/snapshot", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "A site's checkpoint snapshot",
+            description = "One checkpoint Parquet per table, every one at checkpointSeq (the checkpoint pointer, "
+                    + "the same value /state answers), with the epoch they belong to. Stays at that seq while "
+                    + "the nightly build replaces tables one by one. A table with no file at checkpointSeq is "
+                    + "listed with status missing and a null fileId. checkpointSeq 0 means no checkpoint yet "
+                    + "and lists no tables.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The snapshot",
+                    content = @Content(schema = @Schema(implementation = BitBiV2SnapshotDto.class))),
+            @ApiResponse(responseCode = "401", description = "Missing, invalid or revoked API key"),
+            @ApiResponse(responseCode = "404", description = "No such site for this account",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "429", description = "Rate limit exceeded; see Retry-After",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "503", description = "Object storage could not say whether a file exists; retry",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<?> snapshot(
+            @Parameter(description = "Site identifier", required = true) @PathVariable UUID siteId,
+            Authentication authentication, HttpServletRequest request) {
+        UUID accountId = accountId(authentication);
+        return limitedBody(accountId, request, () -> BitBiV2SnapshotDto.from(fileService.snapshot(accountId, siteId)));
+    }
+
+    @GetMapping("/files/{fileId}")
+    @Operation(summary = "Download a file",
+            description = "302 to a presigned storage URL valid for 60 seconds. The fileId is pinned to one version "
+                    + "of one file: it keeps naming the object /snapshot listed after the next build, until "
+                    + "retention or the orphan sweep removes it (then 404; read /snapshot again). The download "
+                    + "itself does not go through this server and is not rate-limited.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "302", description = "Location: the presigned URL"),
+            @ApiResponse(responseCode = "401", description = "Missing, invalid or revoked API key"),
+            @ApiResponse(responseCode = "404", description = "Unknown id, another account's file, a discarded "
+                    + "epoch, or the object is gone",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "429", description = "Rate limit exceeded; see Retry-After",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "503", description = "Object storage could not say whether the file exists; retry",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<?> file(
+            @Parameter(description = "Opaque file id from /snapshot", required = true) @PathVariable String fileId,
+            Authentication authentication, HttpServletRequest request) {
+        UUID accountId = accountId(authentication);
+        return limited(accountId, request, () -> ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(fileService.presignedUrl(accountId, fileId)))
+                .cacheControl(CacheControl.noStore())
+                .build());
+    }
+
+    /**
+     * {@code /files/{fileId}} for an id that names nothing this account may read: the standard 404
+     * body, one message for every reason.
+     */
+    @ExceptionHandler(BitBiV2FileService.FileNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> fileNotFound(BitBiV2FileService.FileNotFoundException ex,
+                                                         HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorResponseDto(Instant.now(),
+                HttpStatus.NOT_FOUND.value(), "Not Found", ex.getMessage(), request.getRequestURI()));
+    }
+
+    private ResponseEntity<?> limitedBody(UUID accountId, HttpServletRequest request, Supplier<Object> body) {
+        return limited(accountId, request, () -> ResponseEntity.ok(body.get()));
     }
 
     /**
      * Spend one token of the account's bucket before any read, as v1 does, then answer.
      */
-    private ResponseEntity<?> limited(UUID accountId, HttpServletRequest request, Supplier<Object> body) {
+    private ResponseEntity<?> limited(UUID accountId, HttpServletRequest request,
+                                      Supplier<ResponseEntity<?>> response) {
         if (!rateLimiterService.tryConsume(accountId)) {
             long retryAfter = rateLimiterService.getRetryAfterSeconds(accountId);
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
@@ -127,7 +205,7 @@ public class BitBiV2ApiController {
                             "Too Many Requests", "Rate limit exceeded. Retry after " + retryAfter + " seconds.",
                             request.getRequestURI()));
         }
-        return ResponseEntity.ok(body.get());
+        return response.get();
     }
 
     private static UUID accountId(Authentication authentication) {

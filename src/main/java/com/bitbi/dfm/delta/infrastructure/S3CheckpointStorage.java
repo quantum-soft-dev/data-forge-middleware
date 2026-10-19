@@ -179,8 +179,22 @@ public class S3CheckpointStorage {
      * @return the S3 key written
      */
     public String uploadParquet(UUID siteId, String tableName, long seq, Path file) {
-        return putFile(String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq),
+        return putFile(snapshotKey(siteId, tableName, seq),
                 "application/vnd.apache.parquet", file, "checkpoint Parquet");
+    }
+
+    /**
+     * The key of a table's checkpoint snapshot at one seq — the one function the build writes with
+     * and the Bit BI v2 {@code fileId} resolves through (issue #387), so a key derived from a
+     * {@code (table, seq)} is the key the build wrote and not a second spelling of it.
+     *
+     * @param siteId    the site
+     * @param tableName the table
+     * @param seq       the seq the snapshot was built at
+     * @return {@code checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet}
+     */
+    public static String snapshotKey(UUID siteId, String tableName, long seq) {
+        return String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq);
     }
 
     /**

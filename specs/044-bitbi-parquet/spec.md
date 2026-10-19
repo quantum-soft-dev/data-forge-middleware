@@ -5,7 +5,7 @@
 (sites, state, schema), [#387](https://github.com/quantum-soft-dev/data-forge-middleware/issues/387)
 (snapshot, file redirect); phase 2 — [#388](https://github.com/quantum-soft-dev/data-forge-middleware/issues/388)
 (changes feed); pilot — [#389](https://github.com/quantum-soft-dev/data-forge-middleware/issues/389)
-**Status**: phase 1 part 1 implemented (#386); the rest open
+**Status**: phase 1 implemented (#386, #387); phase 2 and the pilot open
 
 ## Problem
 
@@ -47,12 +47,40 @@ Rules the phase-1 routes hold:
   `/v2` answers `401` without a valid key and `404` with one (#384).
 - `429` carries `Retry-After` and the standard error body.
 
+Rules `/snapshot` and `/files` hold (#387):
+
+- Every `ready` file of `/snapshot` is at `checkpointSeq`, the pointer `/state` answers — also while
+  a nightly build has moved some tables' rows past it, and after a build that stopped part way. A
+  row ahead of the pointer is answered from the object at the pointer (kept by the orphan sweep,
+  which leaves every checkpoint object at or above the pointer alone); a table with nothing at the
+  pointer is `missing` with a null `fileId`, never left out. `checkpointSeq = 0` lists no tables.
+- **`fileId`** is base64url (no padding) of `ck1:<siteId>:<epoch>:<seq>:<table>`. It names a
+  version, not a `checkpoints` row (the row is reused and rekeyed by every build): the key is derived
+  by `S3CheckpointStorage.snapshotKey`, the function the build writes with. Not signed — resolution
+  re-checks ownership, the current epoch, the table's row and the object's presence, so a forged id
+  reaches nothing a valid one of the same account could not. A table name never contains `/`. #388
+  adds a second kind beside `ck1` for completed-batch artifacts; the prefix carries its own version.
+- `/files/{fileId}` answers `302` to a presigned URL valid 60 s, `Cache-Control: no-store`. `404`,
+  one body, for an id never issued, another account's, a discarded epoch, a table with no row, an
+  object that is gone. `503` when storage cannot say whether the object exists. The call spends a
+  rate-limit token; the download does not touch the server.
+- No S3 call inside a transaction (#164): the database is read in `BitBiV2QueryService`'s read-only
+  methods, HEAD and presign happen after they return.
+
 Exact bodies: `docs/bitbi-integration.md`, "Bit BI API v2".
 
 ## Out of scope
 
 Retiring `/sql-changes` (phase 5, after a sunset that is not scheduled), an activation mode, an
 on-demand snapshot or SQL render, per-segment latency (decisions 1–5 of the CR).
+
+## Acceptance (phase 1, part 2 — #387)
+
+- `/snapshot` lists every table at one `checkpointSeq`, also in the build window — unit and
+  integration tests.
+- `/files/{fileId}` redirects to the object `/snapshot` listed, also after the next build; `404`
+  once it is gone, after a wipe, and for another account — integration test on LocalStack.
+- Bodies pinned on the production chain through `WireJson`; the guide's examples.
 
 ## Acceptance (phase 1, part 1 — #386)
 

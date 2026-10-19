@@ -857,6 +857,12 @@ public final class ApiRoutes {
     /** v2: a site's declared schema with each table's row identity. Method: GET. */
     public static final String BITBI_V2_SITE_SCHEMA = BITBI_V2_SITES + "/{siteId}/schema";
 
+    /** v2: one checkpoint Parquet per table, all at the checkpoint pointer (#387). Method: GET. */
+    public static final String BITBI_V2_SITE_SNAPSHOT = BITBI_V2_SITES + "/{siteId}/snapshot";
+
+    /** v2: 302 to a short-lived presigned URL of the file a fileId names (#387). Method: GET. */
+    public static final String BITBI_V2_FILE = BITBI_V2_API + "/files/{fileId}";
+
     // ==================== Parquet Export Plugin API (028) ====================
 
     /**
