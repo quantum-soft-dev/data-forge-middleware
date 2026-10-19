@@ -32,7 +32,33 @@ public final class ParquetSchemaMapper {
      */
     public static final String ROW_HASH_COLUMN = "_row_hash";
 
+    /**
+     * The widest decimal column any Parquet artifact of this pipeline carries (issue #382).
+     *
+     * <p>Thirty-eight digits is the most BitBi, DuckDB and Spark decode exactly — the 128-bit
+     * decimal — and such a reader refuses a file with a wider column <em>whole</em>, every row of
+     * the table, not the one cell. Parquet's {@code BINARY} decimal has no bound of its own, so
+     * without this one a single DBF exponent token ({@code .12E+40} in a field seven wide) took a
+     * table's artifact away from every consumer. A column is never typed wider, whether the width
+     * comes from the declaration or from widening to the data; a value that needs more is written
+     * NULL and counted ({@code reason=overflow} on {@code delta.parquet.unrepresentable-decimals}).</p>
+     */
+    public static final int MAX_DECIMAL_PRECISION = 38;
+
     private ParquetSchemaMapper() {
+    }
+
+    /**
+     * The precision a decimal column is typed at when its declaration or its data asks for
+     * {@code needed} digits — {@code needed}, but never above {@link #MAX_DECIMAL_PRECISION}. The
+     * one rule every Parquet writer types its decimal columns by (issue #382), so the snapshot, the
+     * delta file and the completed-batch file of one cell cannot disagree about where it stops.
+     *
+     * @param needed the digits asked for
+     * @return the precision to type the column at
+     */
+    static int cappedDecimalPrecision(int needed) {
+        return Math.min(needed, MAX_DECIMAL_PRECISION);
     }
 
     /**
@@ -172,7 +198,15 @@ public final class ParquetSchemaMapper {
                 }
                 int precision = params.get(0);
                 int scale = params.size() > 1 ? params.get(1) : 0;
-                yield LogicalTypes.decimal(precision, scale).addToSchema(Schema.create(Schema.Type.BYTES));
+                if (scale > MAX_DECIMAL_PRECISION) {
+                    // decimal(38, s) does not exist for s > 38, and a wider column is one every
+                    // exact reader refuses (issue #382) -- so the column is carried losslessly as
+                    // text, the bare-numeric rule above, rather than rounded to a scale it does not
+                    // have.
+                    yield Schema.create(Schema.Type.STRING);
+                }
+                yield LogicalTypes.decimal(cappedDecimalPrecision(precision), scale)
+                        .addToSchema(Schema.create(Schema.Type.BYTES));
             }
             case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
             case "bytea" -> Schema.create(Schema.Type.BYTES);

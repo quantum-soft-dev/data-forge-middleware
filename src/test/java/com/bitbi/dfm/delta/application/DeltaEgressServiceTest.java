@@ -102,6 +102,29 @@ class DeltaEgressServiceTest {
         assertEquals(1L, phaseCount("total"));
     }
 
+    /**
+     * Issue #382, review round 1: the per-segment delta file moves
+     * {@code delta.parquet.unrepresentable-decimals{reason=overflow}} for a cell past 38 digits.
+     */
+    @Test
+    void shouldCountADecimalCellPastThirtyEightDigitsAsOverflow() {
+        when(changelogSegmentService.readRecords("changelog/key")).thenReturn(List.of(
+                insert("stock", 1L, Map.of("id", intVal(1), "qty", decVal(".12E+40"))),
+                insert("stock", 2L, Map.of("id", intVal(2), "qty", decVal("1.50")))));
+        when(siteSchemaService.getTableSchemas(SITE_ID)).thenReturn(Map.of(
+                "stock", new TableSchema(List.of(
+                        new ColumnDefinition("id", "bigint", false),
+                        new ColumnDefinition("qty", "numeric(7,2)", true)), List.of("id"), List.of())));
+
+        service.egressSegment(segment);
+
+        verify(storage).uploadDelta(eq(SITE_ID), eq("stock"), eq(1L), eq(2L), any(byte[].class));
+        assertEquals(1.0, registry.get("delta.parquet.unrepresentable-decimals")
+                .tag("reason", "overflow").counter().count());
+        assertEquals(0.0, registry.get("delta.parquet.unrepresentable-decimals")
+                .tag("reason", "non_finite").counter().count());
+    }
+
     @Test
     void shouldRecordEgressPhasesOnASuccessfulSegment() {
         when(changelogSegmentService.readRecords("changelog/key")).thenReturn(List.of(
@@ -230,6 +253,10 @@ class DeltaEgressServiceTest {
 
     private static Value intVal(long v) {
         return Value.newBuilder().setIntValue(v).build();
+    }
+
+    private static Value decVal(String v) {
+        return Value.newBuilder().setDecimalValue(v).build();
     }
 
     private static Value strVal(String v) {

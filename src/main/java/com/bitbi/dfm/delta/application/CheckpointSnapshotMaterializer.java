@@ -463,8 +463,7 @@ final class CheckpointSnapshotMaterializer {
         // re-baseline landing mid-build makes the guard throw and discards everything the
         // build produced, so counting earlier credited cells to an artifact that was never
         // published -- and the next build re-renders and counts them again.
-        metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
-        metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
+        metrics.unrepresentableDecimalsDegraded(nonFinite);
     }
 
     /**

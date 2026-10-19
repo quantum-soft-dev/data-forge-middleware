@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -170,6 +171,41 @@ class ParquetSchemaMapperTest {
         assertEquals(Schema.Type.STRING, branch(avro, "amount2").getType());
         assertTrue(branch(avro, "priced").getLogicalType() instanceof LogicalTypes.Decimal,
                 "explicitly scaled numeric still maps to a decimal logical type");
+    }
+
+    /**
+     * Issue #382: no artifact carries a decimal column wider than 38 digits, whatever made it wide.
+     * A declared {@code numeric(50,2)} is capped like a widened one, so its values beyond 38 digits
+     * are written NULL rather than costing every reader the file. A declared scale above 38 cannot
+     * be {@code decimal(38, s)} at all, so that column is carried losslessly as a string — the
+     * bare-{@code numeric} rule — and is therefore not a Parquet DECIMAL for the SQL key guard.
+     */
+    @Test
+    void aDeclaredDecimalWiderThan38IsCappedAndOneWhoseScaleExceeds38IsAString() {
+        TableSchema schema = new TableSchema(List.of(
+                col("wide", "numeric(50,2)", true),
+                col("at_cap", "numeric(38,10)", true),
+                col("tiny_scale_room", "numeric(60,38)", true),
+                col("too_fine", "numeric(60,40)", true)),
+                List.of(), List.of());
+
+        Schema avro = ParquetSchemaMapper.toAvroSchema("t", schema);
+
+        LogicalTypes.Decimal wide = (LogicalTypes.Decimal) branch(avro, "wide").getLogicalType();
+        assertEquals(38, wide.getPrecision());
+        assertEquals(2, wide.getScale());
+        LogicalTypes.Decimal atCap = (LogicalTypes.Decimal) branch(avro, "at_cap").getLogicalType();
+        assertEquals(38, atCap.getPrecision());
+        assertEquals(10, atCap.getScale());
+        LogicalTypes.Decimal room = (LogicalTypes.Decimal) branch(avro, "tiny_scale_room").getLogicalType();
+        assertEquals(38, room.getPrecision());
+        assertEquals(38, room.getScale());
+        assertEquals(Schema.Type.STRING, branch(avro, "too_fine").getType(),
+                "decimal(38, 40) does not exist; the token is carried as text");
+        assertTrue(ParquetSchemaMapper.rendersAsParquetDecimal("numeric(50,2)"));
+        assertFalse(ParquetSchemaMapper.rendersAsParquetDecimal("numeric(60,40)"));
+        assertEquals(38, ParquetSchemaMapper.cappedDecimalPrecision(41));
+        assertEquals(19, ParquetSchemaMapper.cappedDecimalPrecision(19));
     }
 
     /** The value branch of a field's schema (unwrapping a nullable union). */

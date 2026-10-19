@@ -367,8 +367,10 @@ public final class DeltaParquetWriter {
             Schema fieldSchema = field.schema();
             Schema valueSchema = branch(fieldSchema);
             if (valueSchema.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal) {
-                int precision = Math.max(decimal.getPrecision(), precisions.getOrDefault(
-                        field.name(), decimal.getPrecision()));
+                // Capped by the rule ParquetCheckpointWriter widens by (issue #382): past it the
+                // cell is written NULL by the shared coercion, never a column too wide to read.
+                int precision = Math.max(decimal.getPrecision(), ParquetSchemaMapper.cappedDecimalPrecision(
+                        precisions.getOrDefault(field.name(), decimal.getPrecision())));
                 if (precision > decimal.getPrecision()) {
                     Schema wider = org.apache.avro.LogicalTypes.decimal(precision, decimal.getScale())
                             .addToSchema(Schema.create(Schema.Type.BYTES));

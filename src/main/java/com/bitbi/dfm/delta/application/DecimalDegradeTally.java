@@ -12,6 +12,11 @@ package com.bitbi.dfm.delta.application;
  * degrading them to NULL without keeping them distinguishable would have replaced one defect with
  * a quieter one.</p>
  *
+ * <p>A third counter since issue #382, {@code overflow}: a finite value that needs more digits than
+ * the widest decimal column a file may carry ({@link ParquetSchemaMapper#MAX_DECIMAL_PRECISION}).
+ * Its remedy is a third one — the source data or the declared schema, typically a DBF writer
+ * storing a number its field could not hold in exponent form.</p>
+ *
  * <p>Not thread-safe and deliberately so: one instance belongs to one writer rendering one table,
  * which is single-threaded, and a shared instance would blur the per-table WARN this exists to
  * produce.</p>
@@ -23,6 +28,7 @@ final class DecimalDegradeTally {
 
     private long nonFinite;
     private long malformed;
+    private long overflow;
 
     /** A value legal at the source that DECIMAL cannot encode. */
     void nonFinite() {
@@ -34,6 +40,11 @@ final class DecimalDegradeTally {
         malformed++;
     }
 
+    /** A value that needs more digits than the widest decimal column a file may carry (issue #382). */
+    void overflow() {
+        overflow++;
+    }
+
     long nonFiniteCount() {
         return nonFinite;
     }
@@ -42,8 +53,12 @@ final class DecimalDegradeTally {
         return malformed;
     }
 
+    long overflowCount() {
+        return overflow;
+    }
+
     /** Whether anything was degraded at all — the test for whether to log or report. */
     boolean any() {
-        return nonFinite > 0 || malformed > 0;
+        return nonFinite > 0 || malformed > 0 || overflow > 0;
     }
 }

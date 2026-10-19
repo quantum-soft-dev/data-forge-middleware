@@ -269,6 +269,54 @@ class CheckpointServiceTest {
         assertNull(saved.getValue().getS3KeyCsv(), "the V2 build must not materialize CSV any more");
     }
 
+    /**
+     * Issue #382, review round 1: a published snapshot reports its overflowing decimal cells to the
+     * metric — on the streamed bootstrap path (this class's default fixture) and on the fold path,
+     * which reach the report through the one publish step. The counter itself is
+     * {@code DeltaMetricsTest}'s; what is pinned here is that the build hands the tally over.
+     */
+    @Test
+    void aStreamedSnapshotReportsItsOverflowingDecimalCells() {
+        stubOverflowingQtyTable();
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1L, reportedOverflow(), "the streamed snapshot reports the cell past 38 digits");
+    }
+
+    @Test
+    void aFoldedSnapshotReportsItsOverflowingDecimalCells() {
+        useFoldPath();
+        stubOverflowingQtyTable();
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1L, reportedOverflow(), "the folded snapshot reports the cell past 38 digits");
+    }
+
+    private void stubOverflowingQtyTable() {
+        Value one = Value.newBuilder().setIntValue(1).build();
+        Value two = Value.newBuilder().setIntValue(2).build();
+        stubSegmentRecords("s3/segment", List.of(
+                ChangeRecord.newBuilder().setTable("stock").setOp(Op.INSERT).setSeq(1L)
+                        .putKey("id", one).putData("id", one)
+                        .putData("qty", Value.newBuilder().setDecimalValue(".12E+40").build()).build(),
+                ChangeRecord.newBuilder().setTable("stock").setOp(Op.INSERT).setSeq(2L)
+                        .putKey("id", two).putData("id", two)
+                        .putData("qty", Value.newBuilder().setDecimalValue("1.50").build()).build()));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("stock", new TableSchema(
+                List.of(new TableSchema.ColumnDefinition("id", "bigint", false),
+                        new TableSchema.ColumnDefinition("qty", "numeric(7,2)", true)),
+                List.of("id"), List.of())));
+        recordUploads("checkpoints/parquet-key");
+    }
+
+    private long reportedOverflow() {
+        ArgumentCaptor<DecimalDegradeTally> tallies = ArgumentCaptor.forClass(DecimalDegradeTally.class);
+        verify(metrics, atLeastOnce()).unrepresentableDecimalsDegraded(tallies.capture());
+        return tallies.getAllValues().stream().mapToLong(DecimalDegradeTally::overflowCount).sum();
+    }
+
     @Test
     void materializesNoCsvSnapshotAlongsideTheParquet() {
         // The point of #113: one pass, one buffer. Parquet is the only object the build uploads

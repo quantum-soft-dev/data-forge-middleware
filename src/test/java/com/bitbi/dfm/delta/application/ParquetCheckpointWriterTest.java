@@ -520,6 +520,160 @@ class ParquetCheckpointWriterTest {
         }
     }
 
+    /**
+     * Issue #382: a DBF writer stores a number that does not fit its field in exponent form
+     * ({@code .12E+17} in a field seven wide), and nothing bounds that exponent — so before the cap
+     * {@code .12E+40} in a {@code numeric(7,2)} widened the column to {@code decimal(42,2)}, and a
+     * reader that decodes decimals exactly only to 38 digits (BitBi, DuckDB, Spark) refused the
+     * whole file. The column stops at {@code decimal(38, s)}; the one value that needs more is
+     * written NULL and counted as an overflow, while a value that still fits widens as before.
+     */
+    @Test
+    void aValueNeedingMoreThan38DigitsIsWrittenNullAndTheColumnStopsAt38() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("qty", "numeric(7,2)", true)),
+                List.of("id"), List.of());
+        List<Map<String, Value>> rows = new ArrayList<>();
+        for (String token : new String[]{".12E+17", ".12E+40", "1.50"}) {
+            Map<String, Value> row = new LinkedHashMap<>();
+            row.put("id", intVal(rows.size() + 1));
+            row.put("qty", decVal(token));
+            rows.add(row);
+        }
+
+        Path file = tempDir.resolve("overflow.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema, rows,
+                Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.overflowCount(), "one cell needs more than 38 digits");
+        assertEquals(0L, degraded.nonFiniteCount(), "an overflow is not a non-finite value");
+        assertEquals(0L, degraded.malformedCount(), "an overflow is not a client defect in the token");
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(first.getSchema(), "qty").getLogicalType();
+            assertEquals(38, decimal.getPrecision(), "widening stops at the precision readers decode exactly");
+            assertEquals(2, decimal.getScale(), "the declared scale is kept");
+            assertEquals(new BigDecimal("12000000000000000.00"), first.get("qty"),
+                    "a value that fits under the cap is kept");
+            assertNull(reader.read().get("qty"), "the value needing 42 digits is NULL");
+            assertEquals(new BigDecimal("1.50"), reader.read().get("qty"));
+        }
+    }
+
+    /**
+     * Issue #382 at cell level for the two declared shapes: a {@code numeric(50,2)} column is a
+     * {@code decimal(38,2)} whose 39+-digit value is NULL and counted, and a {@code numeric(60,40)}
+     * column is text that carries its value losslessly and counts nothing.
+     */
+    @Test
+    void aDeclaredWideDecimalIsCappedPerCellAndAScaleAbove38IsWrittenAsText() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false),
+                col("wide", "numeric(50,2)", true),
+                col("fine", "numeric(60,40)", true)),
+                List.of("id"), List.of());
+        String fortyDigits = "9".repeat(40);
+        String fineToken = "0." + "1".repeat(40);
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("wide", decVal(fortyDigits));
+        row.put("fine", decVal(fineToken));
+        Map<String, Value> fits = new LinkedHashMap<>();
+        fits.put("id", intVal(2));
+        fits.put("wide", decVal("12.34"));
+        fits.put("fine", decVal("1.5"));
+
+        Path file = tempDir.resolve("declared-wide.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema,
+                List.of(row, fits), Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(1L, degraded.overflowCount(), "only the 42-digit cell of the capped column");
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount());
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord first = reader.read();
+            assertEquals(38, ((LogicalTypes.Decimal) branch(first.getSchema(), "wide").getLogicalType()).getPrecision());
+            assertNull(first.get("wide"), "40 digits at scale 2 need 42");
+            assertEquals(Schema.Type.STRING, branch(first.getSchema(), "fine").getType());
+            assertEquals(fineToken, first.get("fine").toString(), "a scale above 38 travels as text, losslessly");
+            GenericRecord second = reader.read();
+            assertEquals(new BigDecimal("12.34"), second.get("wide"));
+            assertEquals("1.5", second.get("fine").toString());
+        }
+    }
+
+    /** The cap is 38, not 37: a value needing exactly 38 digits is still a value (issue #382). */
+    @Test
+    void aValueNeedingExactly38DigitsIsKept() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("qty", "numeric(7,2)", true)),
+                List.of("id"), List.of());
+        String thirtySixDigits = "1".repeat(36);
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("qty", decVal(thirtySixDigits + ".25"));
+
+        Path file = tempDir.resolve("exactly-38.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(row),
+                Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        assertEquals(0L, degraded.overflowCount());
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord r = reader.read();
+            assertEquals(new BigDecimal(thirtySixDigits + ".25"), r.get("qty"));
+            assertEquals(38, ((LogicalTypes.Decimal) branch(r.getSchema(), "qty").getLogicalType()).getPrecision());
+        }
+    }
+
+    /**
+     * The streaming form (#292's open table over a closed envelope) applies the same cap and the
+     * same NULL, so the snapshot a bootstrap build writes and the one a fold writes agree about an
+     * overflowing cell (issue #382).
+     */
+    @Test
+    void theStreamingFormCapsAndCountsTheOverflowTheSameWay() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("qty", "numeric(7,2)", true)),
+                List.of("id"), List.of());
+        List<Map<String, Value>> rows = new ArrayList<>();
+        for (String token : new String[]{".12E+40", "3.10"}) {
+            Map<String, Value> row = new LinkedHashMap<>();
+            row.put("id", intVal(rows.size() + 1));
+            row.put("qty", decVal(token));
+            rows.add(row);
+        }
+        Path expectedFile = tempDir.resolve("overflow-expected.parquet");
+        DecimalDegradeTally expected = ParquetCheckpointWriter.writeParquet(expectedFile, "t", schema,
+                rows, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        ParquetCheckpointWriter.DecimalEnvelope envelope =
+                ParquetCheckpointWriter.decimalEnvelope(ParquetSchemaMapper.toAvroSchema("t", schema));
+        rows.forEach(envelope::observe);
+        Schema widened = envelope.widened();
+        assertEquals(38, ((LogicalTypes.Decimal) branch(widened, "qty").getLogicalType()).getPrecision());
+
+        Path streamedFile = tempDir.resolve("overflow-streamed.parquet");
+        DecimalDegradeTally streamed;
+        try (ParquetCheckpointWriter.OpenTable table = ParquetCheckpointWriter.openTable(
+                streamedFile, "t", schema, widened, Long.MAX_VALUE, ROW_GROUP_BYTES,
+                TestScratchLeases.unbounded())) {
+            rows.forEach(table::write);
+            streamed = table.tally();
+        }
+
+        assertArrayEquals(Files.readAllBytes(expectedFile), Files.readAllBytes(streamedFile));
+        assertEquals(1L, expected.overflowCount());
+        assertEquals(expected.overflowCount(), streamed.overflowCount());
+    }
+
     @Test
     void flushesRowGroupsAtTheConfiguredByteBudget() throws Exception {
         // The row-group buffer is what a writer holds in heap before it flushes, so the budget is

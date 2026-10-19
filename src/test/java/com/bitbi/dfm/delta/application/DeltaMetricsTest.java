@@ -56,6 +56,36 @@ class DeltaMetricsTest {
         assertEquals(8.0, lag.totalAmount(), "5 + 3 lag recorded");
     }
 
+    /**
+     * Issue #382: an overflow is its own reason on the degraded-decimal series, registered at zero
+     * beside the two #215 reasons, and one tally reports all three.
+     */
+    @Test
+    void reportsEveryDegradedDecimalReasonFromOneTally() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+        for (String reason : List.of("non_finite", "malformed", "overflow")) {
+            assertEquals(0.0, registry.get("delta.parquet.unrepresentable-decimals")
+                    .tag("reason", reason).counter().count(), reason + " registered at zero");
+        }
+
+        DecimalDegradeTally tally = new DecimalDegradeTally();
+        tally.nonFinite();
+        tally.malformed();
+        tally.malformed();
+        tally.overflow();
+        tally.overflow();
+        tally.overflow();
+        metrics.unrepresentableDecimalsDegraded(tally);
+
+        assertEquals(1.0, registry.get("delta.parquet.unrepresentable-decimals")
+                .tag("reason", "non_finite").counter().count());
+        assertEquals(2.0, registry.get("delta.parquet.unrepresentable-decimals")
+                .tag("reason", "malformed").counter().count());
+        assertEquals(3.0, registry.get("delta.parquet.unrepresentable-decimals")
+                .tag("reason", "overflow").counter().count());
+    }
+
     @Test
     void ignoresNegativeSeqLag() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();

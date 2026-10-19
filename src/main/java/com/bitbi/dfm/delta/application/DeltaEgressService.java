@@ -254,8 +254,7 @@ public class DeltaEgressService {
             // segment is never marked, and the sweep re-renders every table -- re-counting the ones
             // that already uploaded. The ordering removes the re-count for the failing table only
             // (review round 3).
-            metrics.unrepresentableDecimalsDegraded(nonFinite.nonFiniteCount(), false);
-            metrics.unrepresentableDecimalsDegraded(nonFinite.malformedCount(), true);
+            metrics.unrepresentableDecimalsDegraded(nonFinite);
         });
 
         // Targeted UPDATE of this marker only (issue #245): a save of the claim-time snapshot

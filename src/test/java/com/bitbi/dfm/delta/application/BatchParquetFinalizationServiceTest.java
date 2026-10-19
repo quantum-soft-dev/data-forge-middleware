@@ -288,6 +288,37 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(1L, phaseCount(registry, "upload"));
     }
 
+    /**
+     * Issue #382, review round 1: an accepted completed-batch artifact moves
+     * {@code delta.parquet.unrepresentable-decimals{reason=overflow}} for a cell past 38 digits.
+     */
+    @Test
+    void countsADecimalCellPastThirtyEightDigitsAsOverflowOnceTheArtifactIsAccepted() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        BatchParquetFinalizationService counted = newService(5, 1800, 10_000_000L, registry);
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        claimable(batchId, siteId, "stock");
+        ChangelogSegment segment = segment(siteId, batchId, "stock", 1, 1,
+                Map.of("stock", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("stock", new TableSchema(
+                List.of(new ColumnDefinition("id", "bigint", false),
+                        new ColumnDefinition("qty", "numeric(7,2)", true)),
+                List.of("id"), List.of())));
+        Value id = Value.newBuilder().setIntValue(1).build();
+        Value qty = Value.newBuilder().setDecimalValue(".12E+40").build();
+        stream("stock", ChangeRecord.newBuilder().setTable("stock").setSeq(1L).setOp(Op.INSERT)
+                .putKey("id", id).putData("id", id).putData("qty", qty).build());
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/stock.parquet");
+
+        assertTrue(counted.finalizeNext());
+
+        assertEquals(1.0, registry.get("delta.parquet.unrepresentable-decimals")
+                .tag("reason", "overflow").counter().count());
+    }
+
     @Test
     void finalizesEveryRetryableTableInTheBatchFromOneReplay() {
         UUID siteId = UUID.randomUUID();
