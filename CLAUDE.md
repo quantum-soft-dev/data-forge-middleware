@@ -778,6 +778,43 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-reactivate-noop: A second `POST /api/v1/plugins/bit-bi/activate` on an already active
+  plugin merges `pluginData` and changes nothing else (issue #383, found answering Bit BI's
+  question 66(b) while they prepare a second account). `PluginActivationService.activate` already
+  answered that call 200 with no key ("the existing key remains valid"), but it ran
+  `plugin.onActivate` on every branch, and `BitBiPlugin.onActivate` issues a new key, moves
+  `baseline_batch_id` to the account's latest completed batch and re-captures
+  `plugin_delta_baselines` from the current checkpoints. So the key the caller held stopped
+  working, the new one was shown to nobody, and the mirror's SQL baselines moved: an unrequested
+  reinit, recoverable only by an owner rotation. **The hook now runs only for a new activation or
+  a reactivation**, which is what `Plugin.onActivate`'s own Javadoc already said ("the newly
+  created or reactivated activation record"). The service broke that contract; the SPI did not
+  need a second hook. No separate `onUpdate` was added, because an update has nothing to do but
+  the `pluginData` merge `AccountPlugin.updatePluginData` already does. `parquet-export` behaves
+  the same as before (its `mintCredentials` already skipped an existing login). A reactivation
+  still issues and returns a new key. **Found while working, fixed here because the ticket's
+  reactivation criterion was false without it**: `JpaPluginDeltaBaselineRepository
+  .deleteByAccountPluginIdAndSiteId` was `@Modifying(clearAutomatically = true)` without
+  `flushAutomatically`. Hibernate's AUTO flush flushes only entities in the DELETE's own tables,
+  and `account_plugins` is not one of them, so the capture in `onActivate` detached the unflushed
+  activation. Every bit-bi activation of an account with sites lost the `baseline_batch_id` it had
+  just set. Every reactivation left the row `is_active = false` while answering active, with a
+  key `validateApiKey` never accepted. Reinit was spared only because `recaptureForSite` runs a
+  flushing changelog-segment update first. The fix is `flushAutomatically = true`, the
+  `JpaChangelogSegmentRepository` convention, with a comment saying why it is load-bearing.
+  **Tests** on the real `BitBiPlugin`, not a mocked hook (`PluginActivationIntegrationTest
+  .RepeatedActivation`): between two activations the account gains a newer completed batch and
+  the site's checkpoint moves forward, and still the first key authenticates, the stored
+  `baseline_batch_id` (raw column after a flush) and the delta baseline are unchanged, and the
+  response carries no key. A new activation stores its baseline batch. A reactivation reaches
+  the row as active, its new key authenticates and the old one does not.
+  `PluginActivationServiceTest` now verifies that an update never calls `onActivate`.
+  **Mutation-proven**: the hook back on the update path with the key still suppressed (the
+  pre-#383 shape) reddens the repeated-activation case, on the key first and on the baseline batch
+  once the key check is relaxed. Dropping `flushAutomatically` reddens all three cases. No REST
+  route, gRPC, proto, DTO shape, migration (**V61 stays next**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change. See `docs/bitbi-integration.md`
+  ("Calling `activate` again on an active plugin").
 - dev-row-group-8mib: Dev writes Parquet row groups of 8 MiB instead of the 16 MiB default, so Bit BI's
   reader takes every table (issue #385). Bit BI decodes a row group whole and refuses one above six
   million cells (their question 67); a writer closes a group by buffered bytes

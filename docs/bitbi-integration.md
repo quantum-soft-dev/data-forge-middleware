@@ -247,7 +247,7 @@ curl -X POST https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/activate \
 }
 ```
 
-**Response (200 OK - Update Existing)**:
+**Response (200 OK - Plugin Already Active)**:
 ```json
 {
   "pluginId": "bit-bi",
@@ -255,14 +255,33 @@ curl -X POST https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/activate \
   "accountId": "550e8400-e29b-41d4-a716-446655440000",
   "isActive": true,
   "activatedAt": "2025-01-10T08:00:00Z",
-  "apiKey": "plk_x9Y8w7V6u5T4s3R2q1P0o9N8m7L6k5J4",
+  "apiKey": null,
   "lastUsedAt": "2025-01-14T15:45:00Z"
 }
 ```
 
+#### Calling `activate` again on an active plugin
+
+A second `POST .../bit-bi/activate` for an account whose Bit BI plugin is **already active** has
+no side effects beyond the configuration:
+
+- the `pluginData` you send is merged into the stored one (keys you send are added or replaced,
+  keys you omit are kept), so this is how `tenantId` is changed;
+- **no new API key is issued**: the key you already hold keeps authenticating, and the response
+  carries `"apiKey": null`;
+- the SQL baselines are **not** moved: neither the baseline batch nor the per-table delta
+  baselines are re-captured, so `/sql-changes` continues exactly where it was. Moving them is
+  what `reinit` is for, and it is a separate, explicit owner action;
+- the answer is `200 OK` with the current state of the activation.
+
+Before issue #383 this call silently replaced the key (the one you held stopped working, and the
+new one was shown to nobody) and re-captured the baselines; only an owner rotation restored
+access. A **reactivation** — `activate` after `deactivate` — is unchanged: it issues a new key,
+returns it once in this response, and the previous key stops authenticating.
+
 > **Important**: Store the `apiKey` securely. It is returned **only for a new activation or a
 > reactivation** and cannot be retrieved later. Re-posting `activate` for an already-active
-> plugin updates the configuration and returns no key. If the key is lost, rotate it —
+> plugin updates the configuration, keeps the existing key and returns none. If the key is lost, rotate it —
 > `POST /api/v1/account/plugins/bit-bi/rotate-api-key` (owner Auth0 token), or the **Rotate API
 > key** action on the plugin card in Dashboard → My Plugins. The new key is shown once and the
 > previous one stops authenticating immediately.
@@ -620,10 +639,14 @@ Activate a plugin for the authenticated account.
   "accountId": "uuid",
   "isActive": true,
   "activatedAt": "iso8601",
-  "apiKey": "string (plk_...)",
+  "apiKey": "string (plk_...) | null",
   "lastUsedAt": "iso8601 | null"
 }
 ```
+
+`apiKey` is set on `201` (new activation) and on a `200` that reactivated a deactivated plugin;
+on a `200` for an already-active plugin it is `null`, and nothing but `pluginData` changes — see
+[Calling `activate` again on an active plugin](#calling-activate-again-on-an-active-plugin).
 
 #### DELETE /api/v1/plugins/{pluginId}/deactivate
 
@@ -803,16 +826,19 @@ Response includes `Retry-After` header with seconds to wait.
 - **Single Return**: Key is returned **only once** in the activation or rotation response
 - **Storage**: Key is stored as a BCrypt hash plus a SHA-256 lookup handle (not retrievable)
 - **Rotation**: `POST /api/v1/account/plugins/bit-bi/rotate-api-key` issues a new key and
-  invalidates the old one immediately. Re-activating an already active plugin also mints a new
-  key, but does **not** return it — use the rotation endpoint instead.
+  invalidates the old one immediately. Re-posting `activate` for an already active plugin does
+  **not** mint a key (#383) — the existing one keeps working; use the rotation endpoint to
+  replace it.
 - **Deactivation**: API Key remains but returns 403 on all requests
 
 ### 2. Upsert Behavior
 
 Plugin activation uses **upsert** semantics:
-- First activation: Creates new record, returns 201
-- Subsequent activations: Updates existing record, returns 200
-- Re-activation after deactivation: Sets `is_active=true`, returns 200
+- First activation: Creates new record, issues the API key, sets the SQL baselines, returns 201
+- Subsequent activations of an active plugin: merge `pluginData` only — same key, same
+  baselines — and return 200 with `apiKey: null`
+- Re-activation after deactivation: Sets `is_active=true`, issues and returns a new key,
+  re-captures the SQL baselines, returns 200
 
 ### 3. Account vs Admin Users
 
@@ -1048,8 +1074,9 @@ paths:
 
         **Upsert Behavior:**
         - If plugin is not activated: Creates new activation record (201)
-        - If plugin is already active: Updates pluginData and timestamps (200)
-        - If plugin was deactivated: Reactivates with new pluginData (200)
+        - If plugin is already active: merges pluginData only (200, apiKey null) — no new
+          API key, no change to the SQL baselines
+        - If plugin was deactivated: Reactivates with new pluginData and a new API key (200)
 
         **Important:** The API Key is returned only in this response. Store it securely.
       operationId: activatePlugin

@@ -37,7 +37,7 @@ import static org.mockito.Mockito.*;
  *
  * <p>Tests activation/deactivation workflow per FR-005, FR-006:
  * <ul>
- *   <li>Activate calls plugin.onActivate()</li>
+ *   <li>Activate calls plugin.onActivate() for a new activation or a reactivation, never for an update</li>
  *   <li>Deactivate calls plugin.onDeactivate()</li>
  *   <li>Plugin not found throws PluginNotFoundException</li>
  *   <li>Plugin disabled throws PluginNotEnabledException</li>
@@ -142,9 +142,10 @@ class PluginActivationServiceTest {
             // When
             ActivationResult result = service.activate(accountId, pluginId, pluginData);
 
-            // Then
+            // Then - an update merges pluginData and runs no lifecycle hook (#383)
             assertThat(result.isNewActivation()).isFalse();
-            verify(mockPlugin).onActivate(any(AccountPlugin.class));
+            assertThat(result.accountPlugin().getPluginData()).containsEntry("tenantId", "tenant-123");
+            verify(mockPlugin, never()).onActivate(any(AccountPlugin.class));
         }
 
         @Test
@@ -205,7 +206,6 @@ class PluginActivationServiceTest {
             // Given
             AccountPlugin existingPlugin = AccountPlugin.activate(accountId, pluginId, Map.of("tenantId", "old-tenant"));
             // Note: plugin is active, not deactivated
-            String apiKeyFromHook = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
 
             when(pluginRegistry.findById(pluginId)).thenReturn(Optional.of(mockPlugin));
             when(pluginConfigRepository.findByPluginId(pluginId)).thenReturn(Optional.of(mockPluginConfig));
@@ -215,14 +215,14 @@ class PluginActivationServiceTest {
                 .thenReturn(Optional.of(existingPlugin));
             when(accountPluginRepository.save(any(AccountPlugin.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
-            when(mockPlugin.onActivate(any(AccountPlugin.class))).thenReturn(apiKeyFromHook);
 
             // When
             ActivationResult result = service.activate(accountId, pluginId, pluginData);
 
-            // Then - API key should NOT be returned for updates (existing key remains valid)
+            // Then - no key is issued or returned for an update (the existing key remains valid)
             assertThat(result.apiKey()).isNull();
             assertThat(result.isNewActivation()).isFalse();
+            verify(mockPlugin, never()).onActivate(any(AccountPlugin.class));
         }
 
         @Test

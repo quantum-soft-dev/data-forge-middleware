@@ -1,16 +1,23 @@
 package com.bitbi.dfm.plugin.integration;
 
+import com.bitbi.dfm.delta.domain.Checkpoint;
+import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.integration.AbstractIntegrationTest;
 import com.bitbi.dfm.plugin.application.PluginActivationService;
+import com.bitbi.dfm.plugin.application.PluginApiKeyService;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -48,8 +55,28 @@ class PluginActivationIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private PluginRegistry pluginRegistry;
 
+    @Autowired
+    private PluginApiKeyService pluginApiKeyService;
+
+    @Autowired
+    private PluginDeltaBaselineRepository deltaBaselineRepository;
+
+    @Autowired
+    private CheckpointRepository checkpointRepository;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
     private static final UUID TEST_ACCOUNT_ID = UUID.fromString("0199baac-f851-7ed9-5963-00dbaf07b233");
     private static final String BIT_BI_PLUGIN_ID = "bit-bi";
+
+    /** MOCK account of test-data.sql: owns store-01 and completed batches, unlike TEST_ACCOUNT_ID. */
+    private static final UUID SITE_OWNER_ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    private static final UUID STORE_01_SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
+    private static final String BASELINE_TABLE = "t383_orders";
 
     @Nested
     @DisplayName("New Activation")
@@ -139,6 +166,134 @@ class PluginActivationIntegrationTest extends AbstractIntegrationTest {
             assertThat(updated.accountPlugin().getId()).isEqualTo(initial.accountPlugin().getId());
             assertThat(updated.accountPlugin().getPluginData()).containsEntry("tenantId", "updated-tenant");
             assertThat(updated.accountPlugin().isActive()).isTrue();
+        }
+    }
+
+    /**
+     * A second {@code /activate} on an active bit-bi has no side effects (issue #383).
+     *
+     * <p>Driven through the real {@code BitBiPlugin}, because the side effects live in its
+     * {@code onActivate} — a mocked hook cannot show that the key was re-issued or the baselines
+     * moved. Between the two calls the account gains a newer completed batch and the site's
+     * checkpoint moves forward, so a hook that ran again would visibly move both.</p>
+     */
+    @Nested
+    @DisplayName("Repeated activation of an active bit-bi (#383)")
+    class RepeatedActivation {
+
+        @Test
+        @DisplayName("Should keep the API key, the baseline batch and the delta baselines")
+        @Transactional
+        void shouldKeepApiKeyBaselineBatchAndDeltaBaselinesOnRepeatedActivation() {
+            Checkpoint checkpoint = checkpointRepository.save(
+                    Checkpoint.create(STORE_01_SITE_ID, BASELINE_TABLE, 10L, 5L));
+
+            PluginActivationService.ActivationResult first = pluginActivationService.activate(
+                    SITE_OWNER_ACCOUNT_ID, BIT_BI_PLUGIN_ID, Map.of("tenantId", "first-tenant"));
+            assertThat(first.isNewActivation()).isTrue();
+            String issuedKey = first.apiKey();
+            assertThat(issuedKey).as("the first activation shows its key").isNotNull();
+            Long activationId = first.accountPlugin().getId();
+            UUID baselineBatchBefore = first.accountPlugin().getBaselineBatchId();
+            assertThat(baselineBatchBefore).as("the first activation sets a baseline batch").isNotNull();
+            assertThat(baselinesOf(activationId)).containsEntry(BASELINE_TABLE, 10L);
+
+            UUID newerBatchId = insertNewerCompletedBatch();
+            checkpoint.update(20L, 7L);
+            checkpointRepository.save(checkpoint);
+
+            PluginActivationService.ActivationResult second = pluginActivationService.activate(
+                    SITE_OWNER_ACCOUNT_ID, BIT_BI_PLUGIN_ID, Map.of("tenantId", "second-tenant"));
+
+            assertThat(second.isNewActivation()).isFalse();
+            assertThat(second.apiKey()).as("a repeated activation shows no key").isNull();
+            assertThat(second.accountPlugin().getId()).isEqualTo(activationId);
+            assertThat(second.accountPlugin().getPluginData()).containsEntry("tenantId", "second-tenant");
+
+            // validateApiKey is readOnly and joins this test's transaction, which leaves the
+            // pending key write unflushed — flush so the lookup reads what was written.
+            entityManager.flush();
+            assertThat(pluginApiKeyService.validateApiKey(issuedKey))
+                    .as("the key issued by the first activation still authenticates")
+                    .map(AccountPlugin::getId)
+                    .contains(activationId);
+
+            assertThat(storedBaselineBatchId(activationId))
+                    .as("baseline_batch_id stays where the first activation put it")
+                    .isEqualTo(baselineBatchBefore)
+                    .isNotEqualTo(newerBatchId);
+            assertThat(baselinesOf(activationId))
+                    .as("plugin_delta_baselines are not re-captured from the newer checkpoint")
+                    .containsEntry(BASELINE_TABLE, 10L);
+        }
+
+        /**
+         * Found working #383: the delta-baseline capture in {@code onActivate} cleared the
+         * persistence context without flushing it, so the {@code baseline_batch_id} it had just set
+         * on an account with sites never reached the row.
+         */
+        @Test
+        @DisplayName("Should persist the baseline batch a new activation sets")
+        @Transactional
+        void shouldPersistBaselineBatchOfNewActivation() {
+            PluginActivationService.ActivationResult first = pluginActivationService.activate(
+                    SITE_OWNER_ACCOUNT_ID, BIT_BI_PLUGIN_ID, Map.of("tenantId", "first-tenant"));
+
+            assertThat(storedBaselineBatchId(first.accountPlugin().getId()))
+                    .as("the account's latest completed batch, as stored in the row")
+                    .isNotNull()
+                    .isEqualTo(first.accountPlugin().getBaselineBatchId());
+        }
+
+        @Test
+        @DisplayName("Should still issue and return a new key on reactivation")
+        @Transactional
+        void shouldIssueNewKeyOnReactivation() {
+            PluginActivationService.ActivationResult first = pluginActivationService.activate(
+                    SITE_OWNER_ACCOUNT_ID, BIT_BI_PLUGIN_ID, Map.of("tenantId", "first-tenant"));
+            String firstKey = first.apiKey();
+            assertThat(firstKey).isNotNull();
+
+            pluginActivationService.deactivate(SITE_OWNER_ACCOUNT_ID, BIT_BI_PLUGIN_ID);
+            PluginActivationService.ActivationResult reactivated = pluginActivationService.activate(
+                    SITE_OWNER_ACCOUNT_ID, BIT_BI_PLUGIN_ID, Map.of("tenantId", "first-tenant"));
+
+            assertThat(reactivated.apiKey()).as("reactivation shows a new key").isNotNull().isNotEqualTo(firstKey);
+            entityManager.flush();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT is_active FROM account_plugins WHERE id = ?", Boolean.class, first.accountPlugin().getId()))
+                    .as("the reactivation reached the row")
+                    .isTrue();
+            assertThat(pluginApiKeyService.validateApiKey(reactivated.apiKey())).isPresent();
+            assertThat(pluginApiKeyService.validateApiKey(firstKey))
+                    .as("the key of the previous activation no longer authenticates")
+                    .isEmpty();
+        }
+
+        /** The raw column, read after a flush — the persistence context would answer with its own copy. */
+        private UUID storedBaselineBatchId(Long activationId) {
+            entityManager.flush();
+            return jdbcTemplate.queryForObject(
+                    "SELECT baseline_batch_id FROM account_plugins WHERE id = ?", UUID.class, activationId);
+        }
+
+        private Map<String, Long> baselinesOf(Long activationId) {
+            Map<String, Long> seqs = new HashMap<>();
+            deltaBaselineRepository.findByAccountPluginIdAndSiteId(activationId, STORE_01_SITE_ID)
+                    .forEach(b -> seqs.put(b.getTableName(), b.getBaselineSeq()));
+            return seqs;
+        }
+
+        private UUID insertNewerCompletedBatch() {
+            UUID batchId = UUID.randomUUID();
+            jdbcTemplate.update("""
+                    INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
+                                         total_size, has_errors, started_at, created_at, completed_at)
+                    VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false,
+                            '2999-01-01 00:00:00', '2999-01-01 00:00:00', '2999-01-01 00:10:00')
+                    """, batchId, SITE_OWNER_ACCOUNT_ID, STORE_01_SITE_ID,
+                    SITE_OWNER_ACCOUNT_ID + "/store-01.example.com/2999-01-01/00-00/");
+            return batchId;
         }
     }
 
