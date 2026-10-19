@@ -837,6 +837,26 @@ public final class ApiRoutes {
      */
     public static final String BITBI_TABLES = BITBI_PLUGIN_API + "/tables";
 
+    /**
+     * Base path of the Bit BI plugin API v2 (issue #386, {@code docs/cr-bitbi-parquet-plugin.md}).
+     * <p>
+     * Same key ({@code X-Plugin-Api-Key}), same activation and same per-account rate limit as v1;
+     * it serves Parquet and the site's position instead of generated SQL. No security change is
+     * needed for a route here: the plugin key owns the whole {@code /api/v1/plugins/bit-bi/**}
+     * namespace (issue #384, {@code BitBiPluginApiPaths}).
+     * </p>
+     */
+    public static final String BITBI_V2_API = BITBI_PLUGIN_API + "/v2";
+
+    /** v2: the account's sites. Method: GET. Returns: BitBiV2SiteListDto. */
+    public static final String BITBI_V2_SITES = BITBI_V2_API + "/sites";
+
+    /** v2: a site's epoch, checkpoint pointer, watermark and schema version. Method: GET. */
+    public static final String BITBI_V2_SITE_STATE = BITBI_V2_SITES + "/{siteId}/state";
+
+    /** v2: a site's declared schema with each table's row identity. Method: GET. */
+    public static final String BITBI_V2_SITE_SCHEMA = BITBI_V2_SITES + "/{siteId}/schema";
+
     // ==================== Parquet Export Plugin API (028) ====================
 
     /**
