@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
@@ -318,7 +319,7 @@ class DeltaSessionCommitServiceTest {
         InOrder order = inOrder(segmentService, syncStateService, batchLifecycleService);
         order.verify(segmentService).persistPrepared(prepared);
         order.verify(syncStateService).advanceWatermark(SITE, 100L);
-        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, List.of(
+        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, 0L, List.of(
                 new BatchDeltaSegment(100L, 1L, 100L, Map.of("orders", new BatchTableStats(70, 20, 10)))));
     }
 
@@ -335,7 +336,7 @@ class DeltaSessionCommitServiceTest {
 
         InOrder order = inOrder(syncStateService, batchLifecycleService);
         order.verify(syncStateService).advanceWatermark(SITE, 103L);
-        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, List.of(
+        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, 0L, List.of(
                 new BatchDeltaSegment(3L, 101L, 103L, Map.of("orders", new BatchTableStats(3, 0, 0)))));
         order.verify(batchLifecycleService).completeBatch(BATCH);
     }
@@ -363,17 +364,55 @@ class DeltaSessionCommitServiceTest {
         InOrder order = inOrder(segmentService, batchLifecycleService);
         order.verify(segmentService).findProvisional(BATCH);
         order.verify(segmentService).publishProvisional(BATCH);
-        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, List.of(
+        order.verify(batchLifecycleService).recordDeltaSegments(BATCH, 0L, List.of(
                 new BatchDeltaSegment(50L, 200L, 249L, Map.of("customers", new BatchTableStats(50, 0, 0))),
                 new BatchDeltaSegment(100L, 100L, 199L, Map.of("customers", new BatchTableStats(100, 0, 0)))));
         order.verify(batchLifecycleService).completeBatch(BATCH);
+    }
+
+    // ---- Issue #388: the batch keeps the epoch its records belong to -------------------------
+
+    @Test
+    void aReBaselineStampsTheEpochItsOwnResetOpened() {
+        // A FULL_SNAPSHOT is the batch that moves the epoch, and its records belong to the new one:
+        // the epoch is read after the reset, in the same transaction, never before it.
+        when(syncStateService.baselineEpoch(SITE)).thenReturn(5L);
+        PreparedSegment tail = new PreparedSegment(UUID.randomUUID(), SITE, BATCH, "FULL_SNAPSHOT",
+                1L, 10L, 10, "hash", "delta/site/segments/fs.pb.gz",
+                Map.of("orders", new TableChangeStats(10, 0, 0)));
+        stubUpload(tail);
+        stubRow("delta/site/segments/fs.pb.gz");
+
+        commit.commit(SITE, BATCH, "FULL_SNAPSHOT", 1L, 10L,
+                List.of(ChangeRecord.newBuilder().setSeq(10L).build()), true);
+
+        InOrder order = inOrder(rebaselineService, syncStateService, batchLifecycleService);
+        order.verify(rebaselineService).reset(SITE, 1L);
+        order.verify(syncStateService).baselineEpoch(SITE);
+        order.verify(batchLifecycleService).recordDeltaSegments(eq(BATCH), eq(5L), any());
+        order.verify(batchLifecycleService).completeBatch(BATCH);
+    }
+
+    @Test
+    void aSealStampsTheSitesCurrentEpoch() {
+        when(syncStateService.baselineEpoch(SITE)).thenReturn(3L);
+        PreparedSegment prepared = new PreparedSegment(UUID.randomUUID(), SITE, BATCH, "CONTINUOUS",
+                1L, 2L, 2, "hash", "delta/site/segments/c.pb.gz",
+                Map.of("orders", new TableChangeStats(2, 0, 0)));
+        stubUpload(prepared);
+        stubRow("delta/site/segments/c.pb.gz");
+
+        commit.commitSegment(SITE, BATCH, "CONTINUOUS", 1L, 2L,
+                List.of(ChangeRecord.newBuilder().setSeq(2L).build()));
+
+        verify(batchLifecycleService).recordDeltaSegments(eq(BATCH), eq(3L), any());
     }
 
     @Test
     void anEmptySessionAddsNothingToTheBatchTotals() {
         commit.commit(SITE, BATCH, "DELTA", 5L, 4L, List.of());
 
-        verify(batchLifecycleService, never()).recordDeltaSegments(any(), any());
+        verify(batchLifecycleService, never()).recordDeltaSegments(any(), anyLong(), any());
         verify(batchLifecycleService).completeBatch(BATCH);
     }
 

@@ -69,6 +69,15 @@ public interface BatchRepository {
                          Map<String, BatchTableStats> tableStats, Long firstSeq, Long lastSeq);
 
     /**
+     * Record the baseline epoch a batch's records belong to (issue #388, V61) — the only writer of
+     * {@code batches.baseline_epoch}, which the entity maps read-only. Version-free, like
+     * {@link #storeDeltaTotals}, and for the same reason.
+     *
+     * @return number of rows updated
+     */
+    int storeBaselineEpoch(UUID batchId, long baselineEpoch);
+
+    /**
      * Atomically reap a batch that is <em>still</em> expired (030/T06).
      * <p>
      * The timeout sweeper SELECTs expired batches and then transitions them one at a time. A live

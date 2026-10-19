@@ -117,6 +117,16 @@ public class Batch {
     @Column(name = "last_seq", updatable = false)
     private Long lastSeq;
 
+    /**
+     * The baseline epoch ({@code site_sync_state.baseline_epoch}) the batch's records belong to
+     * (issue #388, V61). Written by {@code BatchRepository#storeBaselineEpoch} in the transaction
+     * that records each of its segments — after a re-baseline's reset, so a FULL_SNAPSHOT carries
+     * the epoch it opened. {@code null} for a batch that recorded no segment, and for one committed
+     * before V61 outside the epoch V61 backfilled. Never written by a whole-entity save.
+     */
+    @Column(name = "baseline_epoch", insertable = false, updatable = false)
+    private Long baselineEpoch;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;

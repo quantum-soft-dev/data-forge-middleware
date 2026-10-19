@@ -51,6 +51,19 @@ public class DeltaSyncStateService {
     }
 
     /**
+     * The site's baseline epoch as this transaction sees it (issue #388) — after a re-baseline's
+     * {@code reset} in the same ingestion commit, the epoch that reset opened. Joins the caller's
+     * transaction rather than opening a read-only one of its own.
+     *
+     * @param siteId site identifier
+     * @return {@code site_sync_state.baseline_epoch}; 0 when the site never synced
+     */
+    @Transactional
+    public long baselineEpoch(UUID siteId) {
+        return repository.findBySiteId(siteId).map(SiteSyncState::getBaselineEpoch).orElse(0L);
+    }
+
+    /**
      * Fetch the raw sync state entity for a site, if the client has ever synced. Used by the
      * REST presentation (B4) which needs the full row incl. timestamps and request flags.
      *

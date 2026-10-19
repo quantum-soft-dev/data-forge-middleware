@@ -88,6 +88,8 @@ class DeltaSessionCommitTransactionIntegrationTest extends BaseIntegrationTest {
                 "the segment PutObject must not run inside the commit transaction");
         assertTrue(segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).isPresent(),
                 "the commit itself still wrote the segment row");
+        assertEquals(0L, batchEpoch(IN_PROGRESS_BATCH),
+                "the batch carries the epoch its records were committed in (#388)");
     }
 
     @Test
@@ -112,6 +114,12 @@ class DeltaSessionCommitTransactionIntegrationTest extends BaseIntegrationTest {
         assertEquals(1L, jdbc.queryForMap("SELECT * FROM site_sync_state WHERE site_id = ?", SITE)
                         .get("baseline_epoch"),
                 "the baseline epoch moved, so a build that overlapped is still refused");
+        assertEquals(1L, batchEpoch(IN_PROGRESS_BATCH),
+                "a FULL_SNAPSHOT carries the epoch its own reset opened, not the one it started in (#388)");
+    }
+
+    private Long batchEpoch(UUID batchId) {
+        return jdbc.queryForObject("SELECT baseline_epoch FROM batches WHERE id = ?", Long.class, batchId);
     }
 
     @Test
