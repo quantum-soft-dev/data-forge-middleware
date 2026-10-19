@@ -1,8 +1,10 @@
 package com.bitbi.dfm.plugin.presentation;
 
+import com.bitbi.dfm.plugin.application.BitBiV2ChangesService;
 import com.bitbi.dfm.plugin.application.BitBiV2FileService;
 import com.bitbi.dfm.plugin.application.BitBiV2QueryService;
 import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
+import com.bitbi.dfm.plugin.presentation.dto.BitBiV2ChangesDto;
 import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SiteListDto;
 import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SiteSchemaDto;
 import com.bitbi.dfm.plugin.presentation.dto.BitBiV2SiteStateDto;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
@@ -37,8 +40,8 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * Bit BI plugin API v2, read surface (issues #386 and #387; plan in
- * {@code docs/cr-bitbi-parquet-plugin.md}, phase 1).
+ * Bit BI plugin API v2 (issues #386 and #387, phase 1; #388, the changes feed of phase 2; plan in
+ * {@code docs/cr-bitbi-parquet-plugin.md}).
  *
  * <p>A versioned surface beside {@link BitBiPluginApiController}, not a fork: the same
  * {@code bit-bi} activation and API key, the same per-account rate-limit bucket (v1 and v2 calls
@@ -59,12 +62,14 @@ public class BitBiV2ApiController {
 
     private final BitBiV2QueryService queryService;
     private final BitBiV2FileService fileService;
+    private final BitBiV2ChangesService changesService;
     private final PluginRateLimiterService rateLimiterService;
 
     public BitBiV2ApiController(BitBiV2QueryService queryService, BitBiV2FileService fileService,
-                                PluginRateLimiterService rateLimiterService) {
+                                BitBiV2ChangesService changesService, PluginRateLimiterService rateLimiterService) {
         this.queryService = queryService;
         this.fileService = fileService;
+        this.changesService = changesService;
         this.rateLimiterService = rateLimiterService;
     }
 
@@ -150,6 +155,40 @@ public class BitBiV2ApiController {
         return limitedBody(accountId, request, () -> BitBiV2SnapshotDto.from(fileService.snapshot(accountId, siteId)));
     }
 
+    @GetMapping(value = "/sites/{siteId}/changes", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "A site's changes feed",
+            description = "The site's batches of its current epoch, in batch order, each with the manifest of the "
+                    + "tables it touched (ready / abandoned / missing). Pass the epoch and the seq of your "
+                    + "watermark: afterSeq filters only within that epoch, so after a wipe or a re-baseline the "
+                    + "feed starts again at the new epoch's full_snapshot. The feed ends before the first batch "
+                    + "whose files are still being built. Pages are walked with nextCursor.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "One page of the feed",
+                    content = @Content(schema = @Schema(implementation = BitBiV2ChangesDto.class))),
+            @ApiResponse(responseCode = "400", description = "A parameter out of range, afterSeq without epoch, or a "
+                    + "cursor not issued for this site",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "401", description = "Missing, invalid or revoked API key"),
+            @ApiResponse(responseCode = "404", description = "No such site for this account",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "429", description = "Rate limit exceeded; see Retry-After",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<?> changes(
+            @Parameter(description = "Site identifier", required = true) @PathVariable UUID siteId,
+            @Parameter(description = "The epoch your watermark belongs to; required with afterSeq above 0")
+            @RequestParam(required = false) Long epoch,
+            @Parameter(description = "Your watermark's seq: only batches whose lastSeq is above it, within epoch")
+            @RequestParam(defaultValue = "0") long afterSeq,
+            @Parameter(description = "nextCursor of the previous page") @RequestParam(required = false) String cursor,
+            @Parameter(description = "Batches per page, 1 to " + BitBiV2ChangesService.MAX_PAGE_SIZE)
+            @RequestParam(defaultValue = "" + BitBiV2ChangesService.DEFAULT_PAGE_SIZE) int size,
+            Authentication authentication, HttpServletRequest request) {
+        UUID accountId = accountId(authentication);
+        return limitedBody(accountId, request, () -> BitBiV2ChangesDto.from(
+                changesService.changes(accountId, siteId, epoch, afterSeq, cursor, size)));
+    }
+
     @GetMapping("/files/{fileId}")
     @Operation(summary = "Download a file",
             description = "302 to a presigned storage URL valid for 60 seconds. The fileId is pinned to one version "
@@ -168,7 +207,8 @@ public class BitBiV2ApiController {
                     content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
     })
     public ResponseEntity<?> file(
-            @Parameter(description = "Opaque file id from /snapshot", required = true) @PathVariable String fileId,
+            @Parameter(description = "Opaque file id from /snapshot or /changes", required = true)
+            @PathVariable String fileId,
             Authentication authentication, HttpServletRequest request) {
         UUID accountId = accountId(authentication);
         return limited(accountId, request, () -> ResponseEntity.status(HttpStatus.FOUND)

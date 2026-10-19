@@ -142,6 +142,18 @@ public class BatchParquetFinalizationService {
     }
 
     /**
+     * How far back a batch still owed its work rows is waited for — the
+     * {@code delta.batch-parquet.enqueue-horizon-hours} of the claim gate and the sweep. The Bit BI
+     * v2 changes feed (issue #388) ends at the same batches the gate holds back, so it reads the
+     * horizon here rather than binding the key a second time.
+     *
+     * @return the horizon
+     */
+    public Duration enqueueHorizon() {
+        return enqueueHorizon;
+    }
+
+    /**
      * Create the durable per-table work rows after the batch-completion transaction. Existing rows
      * make replayed completion events harmless, and {@link #recoverLostEnqueues} covers a callback
      * that never ran or failed (issue #380).

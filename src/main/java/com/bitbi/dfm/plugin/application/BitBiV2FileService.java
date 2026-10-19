@@ -53,13 +53,16 @@ public class BitBiV2FileService {
     static final Duration PRESIGN_TTL = Duration.ofSeconds(60);
 
     private final BitBiV2QueryService queryService;
+    private final BitBiV2ChangesService changesService;
     private final S3CheckpointStorage checkpointStorage;
     private final S3PresignedUrlService presignedUrlService;
 
     public BitBiV2FileService(BitBiV2QueryService queryService,
+                              BitBiV2ChangesService changesService,
                               S3CheckpointStorage checkpointStorage,
                               S3PresignedUrlService presignedUrlService) {
         this.queryService = queryService;
+        this.changesService = changesService;
         this.checkpointStorage = checkpointStorage;
         this.presignedUrlService = presignedUrlService;
     }
@@ -126,10 +129,14 @@ public class BitBiV2FileService {
      * @throws CheckpointStorageException when S3 cannot say whether the object exists
      */
     public String presignedUrl(UUID accountId, String fileId) {
-        BitBiFileId.Checkpoint id = BitBiFileId.decode(fileId)
-                .filter(BitBiFileId.Checkpoint.class::isInstance)
-                .map(BitBiFileId.Checkpoint.class::cast)
-                .orElseThrow(() -> new FileNotFoundException(fileId));
+        BitBiFileId id = BitBiFileId.decode(fileId).orElseThrow(() -> new FileNotFoundException(fileId));
+        return switch (id) {
+            case BitBiFileId.Checkpoint checkpoint -> checkpointUrl(accountId, fileId, checkpoint);
+            case BitBiFileId.BatchFile batchFile -> batchFileUrl(accountId, fileId, batchFile);
+        };
+    }
+
+    private String checkpointUrl(UUID accountId, String fileId, BitBiFileId.Checkpoint id) {
         // One answer for every refusal, so an id cannot be used to learn which sites exist.
         if (!queryService.isResolvable(accountId, id)) {
             throw new FileNotFoundException(fileId);
@@ -144,6 +151,20 @@ public class BitBiV2FileService {
             case UNKNOWN -> throw new CheckpointStorageException("Cannot tell whether " + key + " exists", null);
         }
         String fileName = id.table() + "_seq" + id.seq() + ".parquet";
+        return presignedUrlService.generatePresignedUrl(key, fileName, PRESIGN_TTL).url();
+    }
+
+    /**
+     * A completed-batch Parquet (issue #388). The {@code READY} row is the authority and no HEAD is
+     * made: the object is published before the row turns {@code READY}, is never rewritten, and is
+     * removed only after its row (retention, batch or site deletion), so a row still {@code READY}
+     * names an object that exists.
+     */
+    private String batchFileUrl(UUID accountId, String fileId, BitBiFileId.BatchFile id) {
+        String key = changesService.readyBatchFileKey(accountId, id)
+                .orElseThrow(() -> new FileNotFoundException(fileId));
+        String safeTable = id.table().replaceAll("[^A-Za-z0-9._-]", "_");
+        String fileName = safeTable + "_batch-" + id.batchId() + ".parquet";
         return presignedUrlService.generatePresignedUrl(key, fileName, PRESIGN_TTL).url();
     }
 

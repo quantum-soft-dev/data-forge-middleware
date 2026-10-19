@@ -62,6 +62,7 @@ class BitBiV2FileServiceTest {
     private CheckpointRepository checkpointRepository;
     private S3CheckpointStorage checkpointStorage;
     private S3PresignedUrlService presignedUrlService;
+    private BitBiV2ChangesService changesService;
     private BitBiV2FileService service;
 
     @BeforeEach
@@ -74,7 +75,8 @@ class BitBiV2FileServiceTest {
         BitBiV2QueryService queryService = new BitBiV2QueryService(siteRepository, syncStateService,
                 new SiteSchemaService(mock(SiteSchemaRepository.class), JsonMapper.builder().build()),
                 checkpointRepository);
-        service = new BitBiV2FileService(queryService, checkpointStorage, presignedUrlService);
+        changesService = mock(BitBiV2ChangesService.class);
+        service = new BitBiV2FileService(queryService, changesService, checkpointStorage, presignedUrlService);
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE);
@@ -306,6 +308,29 @@ class BitBiV2FileServiceTest {
 
             assertThatThrownBy(() -> service.presignedUrl(ACCOUNT, fileIdAt("orders", POINTER)))
                     .isInstanceOf(CheckpointStorageException.class);
+        }
+
+        @Test
+        @DisplayName("A batch file resolves to its ready artifact's key, named after table and batch, with no HEAD (#388)")
+        void aBatchFileResolvesToItsArtifact() {
+            UUID batch = UUID.fromString("0199bb10-4c2e-7a1d-9f00-3b5e1a2c7d41");
+            BitBiFileId.BatchFile id = new BitBiFileId.BatchFile(SITE, batch, "or ders");
+            String key = "egress/" + SITE + "/batches/" + batch + "/attempts/x/or ders.parquet";
+            when(changesService.readyBatchFileKey(ACCOUNT, id)).thenReturn(Optional.of(key));
+
+            assertThat(service.presignedUrl(ACCOUNT, id.encode())).isEqualTo("https://storage.example/" + key);
+            verify(presignedUrlService).generatePresignedUrl(eq(key), eq("or_ders_batch-" + batch + ".parquet"),
+                    eq(BitBiV2FileService.PRESIGN_TTL));
+            verify(checkpointStorage, never()).presence(anyString());
+        }
+
+        @Test
+        @DisplayName("A batch file the feed would not hand out is 404 with the one body")
+        void anUnresolvableBatchFileIsNotFound() {
+            BitBiFileId.BatchFile id = new BitBiFileId.BatchFile(SITE, UUID.randomUUID(), "orders");
+            when(changesService.readyBatchFileKey(any(), any())).thenReturn(Optional.empty());
+
+            assertNotFound(ACCOUNT, id.encode());
         }
 
         private void assertNotFound(UUID accountId, String fileId) {
