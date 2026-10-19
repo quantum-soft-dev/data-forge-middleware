@@ -778,6 +778,45 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- decimal-precision-cap: No Parquet artifact carries a decimal column wider than `decimal(38, s)`,
+  and a value that needs more is written NULL and counted (issue #382, the owner's option (a) of
+  2026-10-06). A DBF writer stores a number its field cannot hold in exponent form (`.12E+17` in a
+  field seven wide), nothing bounds the exponent, and the widening of PR #55 had no ceiling either:
+  `.12E+40` in a `numeric(7,2)` typed the column `decimal(42,2)`, which BitBi, DuckDB and Spark —
+  exact only to 38 digits — refuse with the whole file, i.e. the table's snapshot, delta file and
+  completed-batch file all lost to one cell. **One rule for all three writers**:
+  `ParquetSchemaMapper.MAX_DECIMAL_PRECISION = 38` and `cappedDecimalPrecision`, used by both
+  widening implementations (`ParquetCheckpointWriter.widen` behind `DecimalEnvelope` /
+  `widenDecimalsToFit` — the folded snapshot, the streamed bootstrap/merge passes and per-segment
+  egress — and `DeltaParquetWriter.widenDecimals` — the streamed and grouped completed-batch
+  writers), and the NULL is written by the one coercion seam they share
+  (`ParquetCheckpointWriter.coerce`): a value whose precision at the column's scale exceeds the
+  field's is NULL, which after widening can only be a value past 38, so the cell agrees across the
+  artifacts. **The metric gains `reason=overflow`** on `delta.parquet.unrepresentable-decimals`
+  (additive, registered at zero), not a reuse of `non_finite` or `malformed`: its remedy is a third
+  one (the source data or the declared schema), and an alert on either existing reason would
+  misdirect. `DecimalDegradeTally` gains the counter, `warnDegraded` one WARN per table for it, and
+  `DeltaMetrics.unrepresentableDecimalsDegraded(tally)` replaces the per-reason pairs at the three
+  reporting sites, so a fourth reason cannot be forgotten at one of them. **Decided while working,
+  as the ticket asked**: the cap applies to the **declared** type too — `numeric(50,2)` is typed
+  `decimal(38,2)` — since the reader refuses the file whatever made the column wide; a declared
+  scale above 38 cannot be `decimal(38, s)` at all and is carried as **text**, the bare-`numeric`
+  rule, rather than rounded (`rendersAsParquetDecimal` follows the mapper, so #233's SQL key guard
+  agrees). The cap is `min(needed, 38)`, so a column holding one overflow is typed `decimal(38, s)`
+  rather than as wide as its surviving values. Unchanged: the value stays in the segment and the
+  frame, and `/sql-changes` carries it as text. **One consequence stated rather than fixed**: on a
+  keyless table the snapshot's row now has NULL in that key cell while the SQL stream addresses it
+  by the value — before the cap that table had no readable baseline at all; filed as #393.
+  **Tests**, red first (`decimal(42,2)`): `ParquetCheckpointWriterTest` (capped at 38 with the cell
+  NULL and `overflow` 1, exactly 38 digits kept, the streamed open table byte-identical with the
+  overflow), `DeltaParquetWriterTest` (segment file, streamed batch file, grouped batch writer),
+  `ParquetSchemaMapperTest` (declared `p > 38` capped, `s > 38` text), `DeltaMetricsTest` (three
+  reasons at zero, one tally reports all). **Mutation-proven**: `cappedDecimalPrecision` returning
+  `needed` reddens six tests; dropping the coercion's overflow branch reddens five (Avro then refuses
+  "precision 42 as max precision 38"). No REST, gRPC, proto, DTO, migration (**V61 stays next**),
+  `specs/NNN-*`, configuration-key, S3-key or frontend change; one metric tag value added. See
+  `docs/delta-client-v2-guide.md` ("A value too wide for any decimal column"),
+  `docs/parquet-export-plugin-guide.md`, `docs/bitbi-integration.md`.
 - bitbi-reactivate-noop: A second `POST /api/v1/plugins/bit-bi/activate` on an already active
   plugin merges `pluginData` and changes nothing else (issue #383, found answering Bit BI's
   question 66(b) while they prepare a second account). `PluginActivationService.activate` already
@@ -815,6 +854,7 @@ pages/{feature}/            # Route pages
   route, gRPC, proto, DTO shape, migration (**V61 stays next**), `specs/NNN-*`,
   configuration-key, metric, S3-key or frontend change. See `docs/bitbi-integration.md`
   ("Calling `activate` again on an active plugin").
+||||||| parent of 0416d14f (docs(delta): the 38-digit decimal cap and reason=overflow in the guides and journals (#382))
 - dev-row-group-8mib: Dev writes Parquet row groups of 8 MiB instead of the 16 MiB default, so Bit BI's
   reader takes every table (issue #385). Bit BI decodes a row group whole and refuses one above six
   million cells (their question 67); a writer closes a group by buffered bytes

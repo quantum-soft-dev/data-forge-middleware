@@ -250,6 +250,15 @@ It is the **last** column by design (the owner's decision on #373): a reader tha
 name must tolerate this extra `_`-prefixed column; one that maps by position is unaffected. See
 `docs/delta-client-v2-guide.md` ("`row_hash`").
 
+**Decimals stop at 38 digits** (issue #382). In every file type a `numeric(p,s)` column is a
+Parquet decimal of at most `decimal(38, s)` — the most DuckDB, Spark and other 128-bit readers decode
+exactly, and a wider column makes them refuse the whole file. The column is otherwise as wide as the
+file's data needs, so its precision can differ between files of one table; size your target column
+at 38 rather than at one file's type. A value needing more than 38 digits at the column's scale is
+**NULL** in the file, counted server-side on
+`delta.parquet.unrepresentable-decimals{reason=overflow}`; a column declared with a scale above 38
+is text. See `docs/delta-client-v2-guide.md` ("A value too wide for any decimal column").
+
 ## Operational notes
 
 - **Anonymous download route**: `/download/{token}` has no application-level rate limit (the

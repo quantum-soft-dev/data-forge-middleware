@@ -386,6 +386,16 @@ A null means the hash is unknown, not that the rows holding it are one row. See
 `docs/delta-client-v2-guide.md` ("`row_hash`"). A site that never ingested through Delta answers with its
 historical uploaded files instead, in their original formats.
 
+**Decimals stop at 38 digits.** A `numeric(p,s)` column is a Parquet decimal of at most
+`decimal(38, s)` (issue #382) — the most a 128-bit reader decodes exactly — whatever its declared
+precision or the width its data asks for. A value that needs more than 38 digits at the column's
+scale (on a DBF site, typically a number the source program stored in exponent form, `.12E+40`) is
+**NULL** in the snapshot rather than a column wide enough to make the reader refuse the file; the
+SQL stream still carries the value as text. On a keyless table that NULL is part of the row's
+identity in the snapshot, so a later `UPDATE`/`DELETE` of that row from `/sql-changes` does not
+reach the row loaded from the snapshot. A column declared with a scale above 38 is text. See
+`docs/delta-client-v2-guide.md` ("A value too wide for any decimal column").
+
 **Row groups.** A snapshot is split into row groups by size, not by row count: a writer closes a
 group once its buffer reaches `delta.parquet.row-group-bytes` (`DELTA_PARQUET_ROW_GROUP_BYTES`). The
 value is per deployment — **8 MiB on dev** (`test.dfm.bitbi.io`, issue #385), the 16 MiB default on

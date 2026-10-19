@@ -582,7 +582,11 @@ Column and table names must be valid PostgreSQL identifiers (`^[A-Za-z_][A-Za-z0
 Declare `numeric(p,s)` truthfully: values are rescaled to the declared scale on write, and if a value needs
 more precision than declared, the server **widens the Parquet decimal type to fit** (logged server-side as a
 schema-vs-data warning) rather than failing the file — but the declared schema is what consumers see, so an
-understated precision means per-file type drift. A table whose data cannot be rendered against its declared
+understated precision means per-file type drift. **The widening stops at `decimal(38, s)`** (issue #382): no
+artifact carries a decimal column wider than 38 digits, whether the width came from the data or from the
+declaration (`numeric(50,2)` is typed `decimal(38,2)`), and a value that needs more is written NULL — see
+[A value too wide for any decimal column](#a-value-too-wide-for-any-decimal-column). A declared scale above 38
+cannot be `decimal(38, s)` at all, so such a column is carried as text, like a bare `numeric`. A table whose data cannot be rendered against its declared
 schema at all (e.g. unparsable values) is skipped from typed Parquet egress — the segment still completes for
 the remaining tables.
 
@@ -1555,6 +1559,10 @@ many cells it degraded, and `delta.parquet.unrepresentable-decimals` carries the
   `" 1.5 "` is stored as `1.5` rather than counted here (issue #240). The token that remains
   unparseable after the trim is the defect.
 
+- **`overflow`** — a finite value that needs more than 38 digits at the column's scale (issue #382);
+  see [A value too wide for any decimal column](#a-value-too-wide-for-any-decimal-column). The remedy
+  is the source data or the declared schema.
+
 Read the series as **cells, not rows or files**: a row with two such columns counts twice, and the
 same source cell is counted again by every *Parquet* consumer that renders it — per-segment egress,
 the completed-batch artifact, the nightly checkpoint — because each writes a separate artifact in
@@ -1589,6 +1597,41 @@ such cell threw out of the mapper, and because every consumer catches per table 
 whole delta file, failed its checkpoint snapshot (spending a `materialize_attempts` towards the
 permanent give-up above) and stopped the batch's Bit BI SQL. Storing the value truthfully would mean
 widening the column's type, which changes the Parquet schema every consumer reads.
+
+### A value too wide for any decimal column
+
+**No Parquet artifact carries a decimal column wider than `decimal(38, s)`** (issue #382). Thirty-eight
+digits is the most BitBi, DuckDB and Spark decode exactly — the 128-bit decimal — and such a reader
+refuses a file with a wider column **whole**: every row of the table, not the one cell. Parquet's own
+`BINARY` decimal has no bound, and the widening described under
+[Schema JSON / type mapping](#schema-json--type-mapping) had none either, so one value was enough.
+
+DBF sites are where these values come from. A program writing a DBF stores a number its field cannot
+hold in exponent form — `.12E+17` in a field seven wide is seventeen digits with two or three
+significant — and nothing bounds that exponent: `.12E+40` in a `numeric(7,2)` column used to type the
+column `decimal(42,2)`. Now:
+
+- a decimal column is typed at the precision its declaration and its data ask for, **but at most 38**
+  — the declared scale is kept;
+- a value that needs more than 38 digits at that scale is written **NULL** and counted on
+  `delta.parquet.unrepresentable-decimals{reason=overflow}`, with one WARN per rendered table naming
+  the table and the count — the treatment `NaN` already has;
+- a value that fits under the cap widens the column exactly as before (`.12E+17` in `numeric(7,2)`
+  is `12000000000000000.00` in a `decimal(19,2)` column);
+- a **declared** `numeric(p,s)` with `p > 38` is typed `decimal(38, s)` by the same rule; one with
+  `s > 38` cannot be a 38-digit decimal at all and is carried as **text**, as a bare `numeric` is.
+
+The rule lives in one place — `ParquetSchemaMapper.cappedDecimalPrecision` types the column and the
+shared coercion writes the NULL — so the checkpoint snapshot, the per-segment delta file and the
+completed-batch file agree about every such cell. Each artifact sizes its column from **its own** rows,
+so the precision can differ between them (it did before, too); the cap cannot.
+
+What is **not** lost: the value stays in the changelog segment and in the checkpoint frame (protobuf),
+and the Bit BI SQL stream (`/sql-changes`) still carries it as text. **One consequence for keys is
+stated rather than hidden**: on a keyless table — DBF tables usually are, so the whole row is the key
+— the baseline row in a checkpoint snapshot carries NULL in that cell while the SQL stream addresses
+the row by the value, so a later `UPDATE`/`DELETE` of that row does not reach the mirror row loaded
+from the snapshot. Before this cap the same table had no readable baseline at all; closing the gap is #393.
 
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
@@ -3282,7 +3325,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.retention.segments.deleted-pending{reason=pending_plugin_sql\|pending_egress}` | `delta_retention_segments_deleted_pending_total{reason=...}` |
 | `delta.parquet.scratch.bytes` | `delta_parquet_scratch_bytes` |
 | `delta.parquet.scratch.refused{writer=...}` | `delta_parquet_scratch_refused_total{writer=...}` |
-| `delta.parquet.unrepresentable-decimals{reason=non_finite\|malformed}` | `delta_parquet_unrepresentable_decimals_total{reason=...}` |
+| `delta.parquet.unrepresentable-decimals{reason=non_finite\|malformed\|overflow}` | `delta_parquet_unrepresentable_decimals_total{reason=...}` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:
