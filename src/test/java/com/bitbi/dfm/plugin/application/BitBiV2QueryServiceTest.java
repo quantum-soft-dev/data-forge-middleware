@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
+import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.plugin.domain.RowIdentity;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.application.SiteService;
@@ -51,7 +52,8 @@ class BitBiV2QueryServiceTest {
         // The real schema service over a stubbed row, so identity is derived from the stored JSONB
         // shape SubmitSchema writes rather than from a TableSchema built by hand.
         SiteSchemaService schemaService = new SiteSchemaService(schemaRepository, JsonMapper.builder().build());
-        service = new BitBiV2QueryService(siteRepository, syncStateService, schemaService);
+        service = new BitBiV2QueryService(siteRepository, syncStateService, schemaService,
+                mock(CheckpointRepository.class));
     }
 
     private void siteOwnedBy(UUID accountId) {

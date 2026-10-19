@@ -1,7 +1,7 @@
 # CR: Bit BI plugin v2 — Parquet files instead of generated SQL
 
 **Status:** in progress. Phase 1, part 1 (`/v2/sites`, `/state`, `/schema`) shipped with #386;
-part 2 (`/snapshot`, `/files/{fileId}`) is #387, phase 2 (`/changes`) #388, the pilot #389.
+part 2 (`/snapshot`, `/files/{fileId}`) with #387; phase 2 (`/changes`) #388, the pilot #389.
 Committed to `develop` with #386; until then the draft lived outside the repository.
 **Spec directory:** `specs/044-bitbi-parquet/`.
 **Flyway:** one migration expected (V61, phase 2). No frontend change. No proto change.
@@ -160,7 +160,7 @@ Decisions built into the design:
 | Phase | Scope | Notes |
 |---|---|---|
 | **0. Prerequisites** | `PLUGIN_PARQUET_EXPORT_BASE_URL` in the dev overlay (links are issued as `http://`); decide what to do with batches published before #378 that are listed out of order on dev; client fixes the understated decimals of `fyt-new`; #380 (in progress) | Found on dev, 2026-10-01. Independent of the rest |
-| **1. Read surface** | `/v2/sites`, `/state`, `/schema` (with `identity`), `/snapshot`, `/files/{fileId}`; contract tests; guide | No migration. Reuses `CheckpointFileQueryService` and the site-schema read |
+| **1. Read surface** | `/v2/sites`, `/state`, `/schema` (with `identity`), `/snapshot`, `/files/{fileId}`; contract tests; guide | No migration. Reuses the checkpoint rows and storage and the site-schema read (v1's `CheckpointFileQueryService` keeps its own contract, see `specs/044-bitbi-parquet/plan.md`) |
 | **2. Changes feed** | `/changes` with `afterSeq`, an explicit `epoch` and the table manifest per batch | **V61**: the epoch a batch belongs to has to be stored with the batch (`site_sync_state.baseline_epoch` is per site and moves). Catalog query gains a seq predicate and its index. Starts after #380 is merged: the feed inherits its ordering guarantee |
 | **3. Pilot** | One site (proposed: `fyt-new`) mirrored through both surfaces at once; compare row counts and per-table checksums daily | Runs on dev. Exit criterion: seven nights without a difference. BitBi's own FYT mirror is stale since 2026-07-26, so the comparison is v2 against v1 on this server, not against it |
 | **4. Migration** | Bit BI's sites move from the old server one by one, each with its written go-ahead: new site here, extractor switched, full initial snapshot; a sunset date for `/sql-changes` is announced | Not scheduled (decision 3). On the consumer side a move is a load from `/snapshot`; nothing changes in this server's code |
@@ -255,6 +255,29 @@ pilot starts.
 18. **A deactivated site of the key's own account** is not listed by `/v2/sites` but answers
     `/state` and `/schema`, as v1's `/files` and `/sql-changes` serve it.
 
+2026-10-20 — choices made while implementing #387 (phase 1, part 2); not owner decisions, open to review:
+
+19. **`/snapshot` stays at the pointer through a build instead of answering 409.** A build saves each
+    table's row at the new seq before it moves `last_checkpoint_seq`, and a build that stops part
+    way (a scratch refusal, a shutdown) leaves the rows like that until the next night, so a 409
+    would have meant up to a day without a snapshot. The objects at the pointer survive the window
+    — the orphan sweep keeps every checkpoint object at or above the pointer — so a row that moved
+    on is answered from the object at the pointer, one HEAD per such table, and only while rows and
+    pointer disagree.
+20. **A table with no file at the pointer is listed as `missing`, `fileId: null`.** That covers a
+    table the build gave up on (#149), a row below the pointer, and a table first seen by the
+    running build; the response does not tell them apart, since only the first needs an operator
+    and telling it from the third would need a read the listing cannot afford per table.
+21. **`fileId` = base64url of `ck1:<siteId>:<epoch>:<seq>:<table>`, unsigned, no table.** It names a
+    version, so it keeps naming the listed object after the next build; the key is derived by the
+    build's own key function. The epoch is in it because a wipe or a re-baseline restarts seq and
+    the same key can later hold other data. Signing was weighed and not taken: resolution re-checks
+    ownership, epoch, the table's row and the object, so a signature would protect nothing and add
+    a secret whose rotation invalidates every id. #388 adds a second kind beside `ck1`.
+22. **`/files` presigns for 60 s and answers 404 for every refusal with one body** (another account,
+    a never-issued id, a discarded epoch, a gone object), so an id cannot be used to probe which
+    sites or versions exist. Storage that will not say whether the object exists is 503, not 404.
+
 The exact response bodies are in `docs/bitbi-integration.md` ("Bit BI API v2").
 
 ## Open questions for the client team
@@ -277,7 +300,7 @@ batch-Parquet queue and limits the order guarantee `/changes` inherits.
 |---|---|---|---|---|
 | A | Dev issues Parquet Export links as `https` | `k8s/overlays/dev/configmap-patch.yaml`, a manifest guard test | neither | — |
 | B | Batches published before #378 are listed out of order on dev | decision first: leave and document, or re-stamp `ready_at` | V61 only if re-stamped | — |
-| C | Bit BI v2 read surface: sites, state, schema with `identity` (**#386**, shipped); snapshot, file redirect (**#387**) | new `BitBiV2ApiController` + DTOs, `CheckpointFileQueryService`, `ApiRoutes`, `SecurityConfiguration`, `docs/bitbi-integration.md` | `specs/044-bitbi-parquet/` | — |
+| C | Bit BI v2 read surface: sites, state, schema with `identity` (**#386**, shipped); snapshot, file redirect (**#387**, shipped) | new `BitBiV2ApiController` + DTOs, `CheckpointFileQueryService`, `ApiRoutes`, `SecurityConfiguration`, `docs/bitbi-integration.md` | `specs/044-bitbi-parquet/` | — |
 | D (**#388**) | Bit BI v2 changes feed with `afterSeq`, `epoch` and the per-batch table manifest | `ParquetExportCatalogDao`, `ParquetExportCatalogQuery`, `Batch`, the v2 controller | **V61** (epoch stored with the batch, seq index) | C; #380; B if it takes V61 |
 | E (**#389**) | Pilot: one dev site (`fyt-new`) through both surfaces, daily comparison | no product code; a runbook in `docs/` | neither | D, deploy tag |
 

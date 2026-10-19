@@ -53,6 +53,9 @@ class S3CheckpointStorageUploadTest {
                 .uploadParquet(SITE, "customers", 7L, snapshot);
 
         assertEquals("checkpoints/" + SITE + "/customers/seq=7/snapshot.parquet", key);
+        // The Bit BI v2 fileId derives the key of a (table, seq) instead of reading it from the
+        // row (issue #387): the derived key must be the one the build wrote.
+        assertEquals(S3CheckpointStorage.snapshotKey(SITE, "customers", 7L), key);
     }
 
     @Test

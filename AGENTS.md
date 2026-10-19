@@ -265,6 +265,47 @@ pages/{feature}/            # Route pages
 - Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-v2-snapshot-files: Bit BI plugin v2 serves its snapshot and its files —
+  `GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/snapshot` and `GET /api/v1/plugins/bit-bi/v2/files/{fileId}`
+  (issue #387, phase 1 part 2 of `docs/cr-bitbi-parquet-plugin.md`, spec `specs/044-bitbi-parquet/`).
+  v1's `/sites/{siteId}/files` proxies every byte through the heap and, during the 02:00 build,
+  mixes two builds (BitBi's question 55); v2 does neither. **`/snapshot` is one seq for every
+  table**: the checkpoint pointer `/state` answers as `checkpointSeq`, with the `epoch`. A build saves
+  each table's row at the new seq before it moves the pointer, and a build that stops part way (a
+  scratch refusal, a shutdown) leaves the rows like that until the next night, so answering 409 in
+  that window would have meant up to a day without a snapshot. Instead a row ahead of the pointer is
+  answered from the object at the pointer, which the orphan sweep keeps (`seq >= pointer`, #158) —
+  one HEAD per such table, only while rows and pointer disagree. A table with nothing at the pointer
+  (given up #149, a row below the pointer, a table first seen by the running build) is
+  `status: missing`, `fileId: null`, never left out; pointer 0 lists no tables, and v2 does not serve
+  v1's historical-CSV fallback. **`fileId` names a version, not a row**: base64url (no padding) of
+  `ck1:<siteId>:<epoch>:<seq>:<table>` (new `plugin/domain/BitBiFileId`), the key derived by new
+  `S3CheckpointStorage.snapshotKey` — the function `uploadParquet` now writes with — because the
+  `checkpoints` row is reused and rekeyed by every build. The epoch is in it because a wipe or a
+  re-baseline restarts seq and the same key can later hold other data. Unsigned, deliberately:
+  resolution re-checks ownership, the current epoch, the table's row and the object's presence, so a
+  forged id reaches nothing a valid one of the same account could not, and no secret is added. #388
+  adds a second kind beside `ck1`. **No table, so no migration (V61 stays #388's).** `/files` answers
+  302 to a presigned URL valid 60 s (`S3PresignedUrlService`, path-style already), `Cache-Control:
+  no-store`; one 404 body (`File not found: <fileId>`, handled in the controller) for an id never
+  issued, another account's, a discarded epoch, a table with no row, an object retention or the
+  orphan sweep removed; 503 (the existing `CheckpointStorageException` handler) when storage cannot
+  say. The call spends a rate-limit token; the download does not touch the server. **No S3 inside a
+  transaction** (#164): new `BitBiV2FileService` does HEAD and presign after
+  `BitBiV2QueryService.snapshotSource` / `isResolvable` (read-only) return. v1's
+  `CheckpointFileQueryService` is not used — its 403 and its fallback are not v2's contract. CR
+  decisions 19–22. **Tests**: `BitBiFileIdTest`, `BitBiV2FileServiceTest` (the build window, given
+  up, behind the pointer, undecidable storage, pinned after the next build, epoch, foreign, gone),
+  `BitBiV2ApiContractTest` (`/snapshot` body whole through `WireJson`, 302 with `Location` and
+  `no-store`, 404 bodies, 401/429 on both routes, 503), `S3CheckpointStorageUploadTest` (derived key
+  = written key) and `BitBiV2SnapshotFilesIntegrationTest` on LocalStack (the presigned URL opens the
+  listed bytes before, during and after a build; 404 once the object is deleted, after a real wipe
+  even when the new epoch reaches the same seq, and for another account's key). **Mutation-proven**:
+  listing a row's own seq instead of the pointer reddens three unit and both window integration
+  cases; dropping the epoch check reddens its unit case and the wipe case; skipping the presence
+  check reddens three unit/contract cases and the pinned integration case. Two REST routes and one
+  DTO added; no gRPC, proto, migration (**V61 stays next**), `specs/NNN-*`, configuration-key,
+  metric, S3-key or frontend change. See `docs/bitbi-integration.md` ("Bit BI API v2").
 - bitbi-v2-read-surface: Bit BI plugin v2 has its first routes — `GET /api/v1/plugins/bit-bi/v2/sites`,
   `/sites/{siteId}/state` and `/sites/{siteId}/schema` (issue #386, phase 1 part 1 of
   `docs/cr-bitbi-parquet-plugin.md`, which this change commits; spec `specs/044-bitbi-parquet/`).
