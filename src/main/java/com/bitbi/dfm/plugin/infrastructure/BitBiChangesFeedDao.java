@@ -54,8 +54,8 @@ import java.util.UUID;
  * state) reaches its batches through V61's {@code idx_batches_site_last_seq} instead. Only the
  * page's batches have their {@code table_stats} and artifact rows read. Measured on one site of
  * 30 000 batches (25 000 unstamped before its latest snapshot, 80 tables each), a first read went
- * from 46 s — a per-row subquery over the whole site — to under 40 ms, of which assembling the
- * page's 4 080 manifest rows is most. A site whose epoch never ended walks from its first retained
+ * from 46 s — a per-row subquery over the whole site — to tens of milliseconds depending on the
+ * machine, most of it assembling the page's 4 080 manifest rows. A site whose epoch never ended walks from its first retained
  * batch; batch retention ({@code retentionDays}, 45 by default) bounds that.</p>
  *
  * <p>One statement, so the batches, the end of the feed and every manifest come from one snapshot;

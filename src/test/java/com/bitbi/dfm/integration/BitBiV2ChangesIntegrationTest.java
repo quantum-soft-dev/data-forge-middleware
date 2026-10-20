@@ -238,6 +238,18 @@ class BitBiV2ChangesIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("A site with no completed snapshot and only unstamped batches has every one of them in its epoch")
+    void noSnapshotAtAllMeansEverythingIsCurrent() {
+        UUID first = batch(1, "DELTA", "COMPLETED", 1, 10, Map.of("a", 10L), null);
+        UUID second = batch(2, "CONTINUOUS", "COMPLETED", 11, 20, Map.of("a", 10L), null);
+        for (UUID b : List.of(first, second)) {
+            artifact(b, "a", "READY", 10L, T0.plusHours(4));
+        }
+
+        assertThat(listedIds()).containsExactly(first, second);
+    }
+
+    @Test
     @DisplayName("A batch held inside the window under a cursor ends the page there, with no next cursor")
     void aHeldBatchUnderACursorEndsThePage() {
         UUID a = batch(1, "FULL_SNAPSHOT", "COMPLETED", 1, 10, Map.of("t", 10L), 4L);

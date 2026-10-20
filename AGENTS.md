@@ -283,8 +283,9 @@ pages/{feature}/            # Route pages
   the rest NULL, and a NULL is read by the same rule, which covers batches a pre-V61 pod commits
   during the rollout. The feed reads that boundary — the site's latest completed FULL_SNAPSHOT —
   once per request through V61's partial `idx_batches_site_completed_snapshot` and walks the epoch
-  from there, at most a page plus one past the consumer (review rounds 1–2: a per-row subquery over
-  the whole site took 46 s on 30 000 batches, now under 40 ms); `idx_batches_site_last_seq` serves
+  from there, reading at most a page plus one listed batch past the consumer and passing over the
+  unlisted ones (review rounds 1–2: a per-row subquery over the whole site took 46 s on 30 000
+  batches, now tens of ms depending on the machine, mostly the page's manifest); `idx_batches_site_last_seq` serves
   a poll from a watermark. **Rejected**: deriving the epoch by that rule alone — an operator deleting a
   FULL_SNAPSHOT batch would relabel the discarded history as current. **Decided while working**:
   `afterSeq` is read within the consumer's epoch, so the feed takes an `epoch` parameter beyond the
