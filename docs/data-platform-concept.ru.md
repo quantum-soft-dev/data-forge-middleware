@@ -79,7 +79,6 @@ flowchart LR
     subgraph Storage["Хранение"]
         Postgres["PostgreSQL metadata"]
         S3["Object storage"]
-        Redis["Cache / rate limits"]
     end
 
     subgraph Consumers["Потребители"]
@@ -110,7 +109,6 @@ flowchart LR
     Changelog --> S3
     Checkpoint --> S3
     Audit --> Postgres
-    Auth --> Redis
 
     Checkpoint --> BitBI
     Checkpoint --> PowerBI

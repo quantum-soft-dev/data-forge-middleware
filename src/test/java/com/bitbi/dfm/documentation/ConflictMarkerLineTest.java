@@ -179,7 +179,7 @@ class ConflictMarkerLineTest {
         return false;
     }
 
-    private static List<String> trackedFiles(Path root) throws IOException, InterruptedException {
+    static List<String> trackedFiles(Path root) throws IOException, InterruptedException {
         Process git = new ProcessBuilder("git", "ls-files", "-z")
                 .directory(root.toFile())
                 .redirectError(ProcessBuilder.Redirect.DISCARD)

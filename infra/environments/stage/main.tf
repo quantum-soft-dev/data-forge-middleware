@@ -13,11 +13,6 @@ provider "google" {
   region  = var.region
 }
 
-data "google_compute_network" "vpc" {
-  name    = "${var.environment}-bitbi-vpc"
-  project = var.project_id
-}
-
 module "forge" {
   source = "../../modules/forge-app"
 
@@ -26,11 +21,6 @@ module "forge" {
   environment        = var.environment
   cloud_sql_instance = var.cloud_sql_instance
   db_password        = var.db_password
-
-  create_redis             = true
-  redis_tier               = "BASIC"
-  redis_memory_gb          = 1
-  redis_authorized_network = data.google_compute_network.vpc.self_link
 }
 
 output "app_service_account_email" {
@@ -43,10 +33,6 @@ output "artifact_registry_repo" {
 
 output "uploads_bucket" {
   value = module.forge.uploads_bucket
-}
-
-output "redis_host" {
-  value = module.forge.redis_host
 }
 
 output "gcs_hmac_access_id" {
