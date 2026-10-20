@@ -888,11 +888,14 @@ row and is where this shows up.
 
 The server counts each skip on `sql.generation.delta.records.skipped.unrepresentable_key` and logs
 a WARN naming the table, the seq and the column — the same treatment a `NaN` key has had since #215.
-Such a row is absent from what the mirror can maintain until the source value or the declared
-column type is fixed; a **data** cell holding such a value is not skipped and is still written
-as its value (`SET qty = 1200000000000000000000000000000000000000`), while the baseline file
-holds NULL in that cell. Files already delivered are not rewritten; a mirror that diverged is
-repaired by a **reinit**.
+What that leaves in your mirror: a row loaded from the **baseline**, whose key cell is NULL in
+`snapshot.parquet`, stays there **frozen** — its later UPDATEs and DELETE are skipped, so a row the
+source deleted remains. A **reinit does not repair it**: it reloads the same `snapshot.parquet` and
+brings the NULL back. Only correcting the source data or the declared column type does. A row
+**inserted after** the baseline is simply absent, since its INSERT is skipped too. A **data** cell
+holding such a value is not skipped and is still written as its value
+(`SET qty = 1200000000000000000000000000000000000000`), while the baseline file holds NULL in that
+cell.
 
 ### Table Name Derivation
 

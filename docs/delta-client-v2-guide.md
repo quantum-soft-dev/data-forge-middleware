@@ -1643,10 +1643,18 @@ whose **key** holds a value the Parquet artifacts write NULL for `overflow` is *
 with a WARN naming the column and the 38-digit cap. An `INSERT` keyed on one is skipped too — it
 would create a row this stream could never address again. The decision is the Parquet side's own:
 `ParquetSchemaMapper.overflowsParquetDecimal` builds the column type the writers build, reads the
-value the way they do and applies the same cap, so the skip and the NULL cannot disagree about a
-cell (`ParquetCheckpointWriterTest` writes each case and holds the predicate to what comes back). The
-remedy is the source data or a truthful declaration; until then that row is absent from what the
-mirror can maintain, loudly.
+value the way they do and applies the same cap. The writer keeps its own comparison, so the
+agreement between the skip and the NULL is held by a test rather than by construction:
+`ParquetCheckpointWriterTest.theOverflowPredicateAnswersExactlyTheCellsTheWriterWritesNull` writes
+each case through the real writer and requires the predicate to be true exactly where the cell comes
+back NULL.
+
+What the skip leaves behind, stated plainly: a row that came from the **baseline**, whose key cell
+is NULL there, stays in the mirror **frozen** — its later `UPDATE`s and `DELETE` are skipped, so a
+row the source deleted remains. A **reinit** does not repair it: it reloads the same
+`snapshot.parquet` and brings the NULL back. Only correcting the source data or the declared column
+type does. A row **inserted after** the baseline is the one case that is simply absent from the
+mirror, since its `INSERT` is skipped too.
 
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is

@@ -284,7 +284,12 @@ pages/{feature}/            # Route pages
   refuses, or a bool/bytes value, answers false rather than poisoning the batch), converts the value
   through `ParquetCheckpointWriter.toBigDecimal` (now package-private) and compares at the column's
   scale with the writers' HALF_UP against the cap (`exceedsDecimalCap`) — the `rendersAsParquetDecimal`
-  precedent of #233. **Tests**: `DeltaSqlGenerationStrategyTest` through the strategy (the #263
+  precedent of #233. The writer keeps its own comparison, so the agreement between the skip and the
+  NULL is held by `theOverflowPredicateAnswersExactlyTheCellsTheWriterWritesNull`, not by
+  construction. **What the skip leaves**: a baseline row whose key cell is NULL stays in the mirror
+  frozen (its later UPDATE/DELETE skipped, so a row the source deleted remains), and a reinit reloads
+  the same `snapshot.parquet` and brings the NULL back — only correcting the source data or the
+  declared type repairs it; only a row inserted after the baseline is absent. **Tests**: `DeltaSqlGenerationStrategyTest` through the strategy (the #263
   lesson) — keyless DELETE, UPDATE and INSERT with `.12E+40` and a DELETE with `1.2E39` as a
   `double_value` skipped and counted four times, a 38-digit key still addressed, an overflowing data
   cell still rendered; `ParquetCheckpointWriterTest` writes thirteen cells, each in its own column,

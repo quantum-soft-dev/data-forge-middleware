@@ -545,12 +545,9 @@ public final class ParquetCheckpointWriter {
      * {@code NaN} and {@code +/-Infinity} natively, and a {@code string_value} of {@code "NaN"} is
      * equally possible, so guarding only the decimal token left both of those throwing out of the
      * writer and costing the table its file -- the exact blast radius #215 exists to close.</p>
-     */
-    /**
-     * The decimal a value is typed as before it is written into a DECIMAL column, or {@code null}
-     * for a value with no decimal form (non-finite, unparseable). Package-private for
-     * {@link ParquetSchemaMapper#overflowsParquetDecimal}, which must read a value the way the
-     * writers do (issue #393).
+     *
+     * <p>Package-private for {@link ParquetSchemaMapper#overflowsParquetDecimal}, which must read a
+     * value the way the writers do (issue #393).</p>
      */
     static BigDecimal toBigDecimal(Object java) {
         if (java instanceof BigDecimal bd) {
