@@ -1,10 +1,13 @@
 package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.site.domain.TableSchema;
+import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -161,6 +164,54 @@ public final class ParquetSchemaMapper {
             // poison route on the path #215 exists to keep un-poisonable.
             return false;
         }
+    }
+
+    /**
+     * Whether every Parquet artifact writes this cell NULL because the value needs more than
+     * {@link #MAX_DECIMAL_PRECISION} digits at its column's scale (issue #382) — the
+     * {@code reason=overflow} of {@code delta.parquet.unrepresentable-decimals}.
+     *
+     * <p>Answered with the writers' own pieces rather than a second copy of the rule: the field type
+     * is the one {@link #avroType} builds for them (so a bare {@code numeric} and a scale above 38,
+     * both text, never overflow), the value is converted the way {@code ParquetCheckpointWriter}
+     * converts it before typing it, and the cap is the one the writers widen a column to. A column is
+     * widened to its data up to the cap, so past the cap is exactly where a cell becomes NULL.</p>
+     *
+     * <p>Read by the Bit BI SQL path (issue #393), the #233 rule for a third reason: a key cell the
+     * baseline holds as NULL cannot be addressed by the value the SQL would render, so a record keyed
+     * on one is skipped rather than emitted against a row it does not match. A non-finite or
+     * malformed value answers {@code false} here — it has reasons of its own
+     * ({@link ValueMapper#isUnrepresentable}, {@link #rendersAsParquetDecimal}).</p>
+     *
+     * @param pgType the declared PostgreSQL column type
+     * @param cell   the wire value
+     * @return {@code true} if the Parquet artifacts write this cell NULL for overflow
+     */
+    public static boolean overflowsParquetDecimal(String pgType, Value cell) {
+        if (cell == null) {
+            return false;
+        }
+        try {
+            if (!(avroType(pgType).getLogicalType() instanceof LogicalTypes.Decimal decimal)) {
+                return false;
+            }
+            Object java = ValueMapper.toJava(cell);
+            BigDecimal exact = java == null ? null : ParquetCheckpointWriter.toBigDecimal(java);
+            return exact != null && exceedsDecimalCap(exact, decimal.getScale());
+        } catch (RuntimeException e) {
+            // A declaration Avro refuses (numeric(2,5)), or a value no decimal coercion reads (a
+            // bool or bytes in a numeric column): neither is an overflow, and the throw would fail
+            // the whole batch's SQL -- the poison route rendersAsParquetDecimal already avoids.
+            return false;
+        }
+    }
+
+    /**
+     * Whether {@code exact}, at {@code scale}, needs more digits than {@link #MAX_DECIMAL_PRECISION}
+     * — the rounding the writers apply before they compare it with the column's precision.
+     */
+    static boolean exceedsDecimalCap(BigDecimal exact, int scale) {
+        return exact.setScale(scale, RoundingMode.HALF_UP).precision() > MAX_DECIMAL_PRECISION;
     }
 
     private static Schema avroType(String pgType) {
