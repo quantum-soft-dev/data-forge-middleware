@@ -1,7 +1,8 @@
 # CR: Bit BI plugin v2 — Parquet files instead of generated SQL
 
 **Status:** in progress. Phase 1, part 1 (`/v2/sites`, `/state`, `/schema`) shipped with #386;
-part 2 (`/snapshot`, `/files/{fileId}`) with #387; phase 2 (`/changes`) #388, the pilot #389.
+part 2 (`/snapshot`, `/files/{fileId}`) with #387; phase 2 (`/changes`) with #388; the pilot is #389,
+run by [`docs/bitbi-v2-pilot-runbook.md`](bitbi-v2-pilot-runbook.md).
 Committed to `develop` with #386; until then the draft lived outside the repository.
 **Spec directory:** `specs/044-bitbi-parquet/`.
 **Flyway:** one migration expected (V61, phase 2). No frontend change. No proto change.
@@ -162,7 +163,7 @@ Decisions built into the design:
 | **0. Prerequisites** | `PLUGIN_PARQUET_EXPORT_BASE_URL` in the dev overlay (links are issued as `http://`); decide what to do with batches published before #378 that are listed out of order on dev; client fixes the understated decimals of `fyt-new`; #380 (in progress) | Found on dev, 2026-10-01. Independent of the rest |
 | **1. Read surface** | `/v2/sites`, `/state`, `/schema` (with `identity`), `/snapshot`, `/files/{fileId}`; contract tests; guide | No migration. Reuses the checkpoint rows and storage and the site-schema read (v1's `CheckpointFileQueryService` keeps its own contract, see `specs/044-bitbi-parquet/plan.md`) |
 | **2. Changes feed** | `/changes` with `afterSeq`, an explicit `epoch` and the table manifest per batch | **V61**: the epoch a batch belongs to has to be stored with the batch (`site_sync_state.baseline_epoch` is per site and moves). Catalog query gains a seq predicate and its index. Starts after #380 is merged: the feed inherits its ordering guarantee |
-| **3. Pilot** | One site (proposed: `fyt-new`) mirrored through both surfaces at once; compare row counts and per-table checksums daily | Runs on dev. Exit criterion: seven nights without a difference. BitBi's own FYT mirror is stale since 2026-07-26, so the comparison is v2 against v1 on this server, not against it |
+| **3. Pilot** | One site (`fyt-new`) mirrored through both surfaces at once; compare row counts and per-table checksums daily — [runbook](bitbi-v2-pilot-runbook.md) | Runs on dev. Exit criterion: seven nights without an unexplained difference. BitBi's own FYT mirror is stale since 2026-07-26, so the comparison is v2 against v1 on this server, not against it |
 | **4. Migration** | Bit BI's sites move from the old server one by one, each with its written go-ahead: new site here, extractor switched, full initial snapshot; a sunset date for `/sql-changes` is announced | Not scheduled (decision 3). On the consumer side a move is a load from `/snapshot`; nothing changes in this server's code |
 | **5. Removal** | Delete SQL generation, its queue, `plugin_sql_generations`, `plugin_delta_baselines`, the v1 routes | Separate ticket after the sunset. Removes `sql.generation.*` metrics |
 
@@ -348,6 +349,6 @@ batch-Parquet queue and limits the order guarantee `/changes` inherits.
 | B | Batches published before #378 are listed out of order on dev | decision first: leave and document, or re-stamp `ready_at` | V61 only if re-stamped | — |
 | C | Bit BI v2 read surface: sites, state, schema with `identity` (**#386**, shipped); snapshot, file redirect (**#387**, shipped) | new `BitBiV2ApiController` + DTOs, `CheckpointFileQueryService`, `ApiRoutes`, `SecurityConfiguration`, `docs/bitbi-integration.md` | `specs/044-bitbi-parquet/` | — |
 | D (**#388**) | Bit BI v2 changes feed with `afterSeq`, `epoch` and the per-batch table manifest | `ParquetExportCatalogDao`, `ParquetExportCatalogQuery`, `Batch`, the v2 controller | **V61** (epoch stored with the batch, seq index) | C; #380; B if it takes V61 |
-| E (**#389**) | Pilot: one dev site (`fyt-new`) through both surfaces, daily comparison | no product code; a runbook in `docs/` | neither | D, deploy tag |
+| E (**#389**) | Pilot: one dev site (`fyt-new`) through both surfaces, daily comparison | no product code; [`docs/bitbi-v2-pilot-runbook.md`](bitbi-v2-pilot-runbook.md) | neither | D, deploy tag |
 
 B and D both want V61, so they must not run in parallel. C and A are independent of everything.

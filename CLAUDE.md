@@ -781,6 +781,34 @@ pages/{feature}/            # Route pages
 - Migrations current at **V61**; next migration is **V62** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-v2-pilot-runbook: The Bit BI v2 pilot on `fyt-new` has a runbook,
+  `docs/bitbi-v2-pilot-runbook.md` (issue #389, phase 3 of `docs/cr-bitbi-parquet-plugin.md`, linked
+  from its status line, plan and ticket table). Documentation only, and **only half of #389**: the
+  deploy by `deploy-dev/*` tag, the seven nights and BitBi's written confirmation are a person's
+  steps, so the PR says `Refs #389` and the ticket stays open. Written against what #386–#388
+  shipped (the `epoch` parameter of `/changes`, the `ready|abandoned|missing` manifest, the 039
+  requeue and its 409 when the segments are gone, #244). **Before the start**: v2 and V61 on the
+  running image; `DELTA_PARQUET_ROW_GROUP_BYTES=8388608` in the dev overlay **and in the running
+  pod**, since `forge-config` is consumed through `envFrom` and applying it restarts nothing (#385);
+  the row groups of the snapshot BitBi will load, read from the file's footer; `_row_hash` on every
+  row and unique per table (a table without it needs one re-baseline, CR decision 8, a person's
+  call); `track_duplicates` off and the extractor's frequency, both site-side. **Every morning**:
+  the exported PromQL names, with the caveat that every meter is pod-wide (no site tag, and the dev
+  server holds other sites), so the WARN/ERROR line found by site id in the JSON logs is what
+  attributes a moved counter; the v1 side's `sql_generation_*` beside the v2 one, because the
+  comparison is v2 against v1 on this server and a v1 loss reads as a divergence; what BitBi send
+  (per table: both row counts, both checksums, the v2 watermark, the last v1 generation); a
+  comment template for #389. **A night counts** when every difference has a named cause that is not
+  a v2 defect; an unexplained one resets the count. **Explained causes recorded**: lag between the
+  two consumers; `overflow` decimals (Parquet NULL since #382, v1 SQL keeps the number); v1's
+  `unrepresentable_key` skips; a v1 mirror older than #370; DBF duplicates collapsed by the client.
+  **Playbooks**: a non-`ready` table (abandoned → `lastError`, requeue; missing → no schema, a lost
+  enqueue inside #380's horizon, or a server-ended batch; neither repairable → reload after the
+  checkpoint passes it); an epoch that moved or a `full_snapshot` applied without clearing; a
+  difference by `_row_hash` (NULL hashes, duplicated hashes from a straddling `continuous` batch,
+  `track_duplicates`). The last section is the template for the other four sites (phase 4, not
+  scheduled). No code, test, REST, gRPC, proto, DTO, migration (**V62 stays next**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - bitbi-key-overflow-skip: A Bit BI record whose key holds a decimal too wide for any Parquet column
   is skipped instead of addressing a baseline row it cannot match (issue #393, left open by #382).
   Since #382 a value needing more than `ParquetSchemaMapper.MAX_DECIMAL_PRECISION` (38) digits at its
