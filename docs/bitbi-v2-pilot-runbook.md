@@ -235,15 +235,22 @@ Compare per table, in the mirror and in the server's own file for the same point
 
 Name the cause in the night's record and the night still counts.
 
-- **A decimal wider than 38 digits** (`unrepresentable_decimals{reason="overflow"}`, #382): Parquet
-  writes the cell NULL, the v1 SQL carries the number. The WARN names the table. The remedy is the
-  source data or the declared schema; for the pilot it is an explained difference.
+- **A decimal wider than 38 digits** (`unrepresentable_decimals{reason="overflow"}`, #382): every
+  Parquet file writes the cell NULL, so the v2 mirror has the row with a NULL in that cell (it is
+  still addressed by its `_row_hash`). On the v1 side it depends on whether the cell is part of the
+  key, and **on a DBF table every column is** (the whole row is the key): since #393 v1 skips such a
+  record — `INSERT`, `UPDATE` and `DELETE` alike — and counts it on
+  `sql_generation_delta_records_skipped_unrepresentable_key_total`, with a WARN naming the column. So
+  v1 lacks a row inserted after its baseline, or keeps a row the source deleted, while v2 is right
+  apart from the NULL cell. A data cell of a table with a primary key would carry the number in v1.
+  The remedy is the source data or the declared schema; for the pilot it is an explained difference.
 - **`non_finite` / `malformed`**: both paths write a numeric column's cell NULL (#215, #240) and should
   agree; a `double precision` `NaN` is kept by both (#233). A difference here is not expected — treat
   it as unexplained.
 - **v1 skipped a record** (`sql_generation_delta_records_skipped_unrepresentable_key_total` moved): a
-  v1 `UPDATE`/`DELETE` keyed by a decimal it cannot address was not rendered, so the **v1** mirror
-  keeps a row the source changed or deleted.
+  v1 record keyed by a decimal it cannot address (non-finite, unparseable, or wider than 38 digits —
+  #215, #233, #393) was not rendered, so the **v1** mirror lacks the row or keeps one the source
+  changed or deleted.
 - **v1 mirror older than a v1 fix**: a v1 mirror built before #370 can hold rows a `DELETE` with a
   NULL key never reached; a batch whose SQL was deleted and generated again is re-delivered to a
   cursor that had passed it. Either way the v1 side is wrong and its repair is `reinit`.

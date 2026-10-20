@@ -809,8 +809,8 @@ pages/{feature}/            # Route pages
   a v2 defect; an unexplained one resets the count to zero, and so — by the strict reading of
   "seven nights in a row" the runbook defaults to — does a lost night (a halt and reload, or no
   comparison); relaxing that is left to the person running the pilot. **Explained causes recorded**: lag between the
-  two consumers; `overflow` decimals (Parquet NULL since #382, v1 SQL keeps the number); v1's
-  `unrepresentable_key` skips; a v1 mirror older than #370; DBF duplicates collapsed by the client.
+  two consumers; `overflow` decimals (Parquet NULL since #382; on a DBF table, where every column
+  is key, v1 skips the whole record since #393); v1's `unrepresentable_key` skips; a v1 mirror older than #370; DBF duplicates collapsed by the client.
   **Playbooks**: a non-`ready` table (abandoned → `lastError`, requeue; missing → no schema, a lost
   enqueue inside #380's horizon, or a server-ended batch; neither repairable → reload after the
   checkpoint passes it); an epoch that moved or a `full_snapshot` applied without clearing; a
