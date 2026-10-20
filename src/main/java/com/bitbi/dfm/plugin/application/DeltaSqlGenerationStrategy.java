@@ -200,11 +200,12 @@ public class DeltaSqlGenerationStrategy {
     /**
      * Why this record's key addresses no row, or {@code null} when it addresses one.
      *
-     * <p>The two reasons have different remedies — a client emitting a value nothing can store, or a
-     * client contradicting its own declared schema — which is why the reason travels into the WARN
+     * <p>The three reasons have different remedies — a client emitting a value nothing can store, a
+     * client contradicting its own declared schema, or a source value wider than its declared
+     * column (issue #393) — which is why the reason travels into the WARN
      * instead of being implied by it. The <em>counter</em> deliberately does not distinguish them:
      * {@code sql.generation.delta.records.skipped.unrepresentable_key} stays one untagged series
-     * because the alert is the same either way (a client is sending keys this pipeline cannot
+     * because the alert is the same whatever the reason (a client is sending keys this pipeline cannot
      * address), and tagging a series that already exists untagged breaks the dashboards reading
      * it.</p>
      *
@@ -219,6 +220,11 @@ public class DeltaSqlGenerationStrategy {
             if (isNonFiniteInDecimalColumn(cell.getKey(), cell.getValue(), schema)) {
                 return "key column '" + cell.getKey() + "' holds a non-finite value while its declared "
                         + "type materialises as a Parquet DECIMAL, which stores it as NULL";
+            }
+            if (overflowsParquetDecimal(cell.getKey(), cell.getValue(), schema)) {
+                return "key column '" + cell.getKey() + "' holds a value needing more than "
+                        + ParquetSchemaMapper.MAX_DECIMAL_PRECISION + " digits at its declared scale, "
+                        + "which every Parquet artifact stores as NULL";
             }
         }
         return null;
@@ -288,6 +294,26 @@ public class DeltaSqlGenerationStrategy {
         }
         return schema.findColumn(column)
                 .map(definition -> ParquetSchemaMapper.rendersAsParquetDecimal(definition.type()))
+                .orElse(false);
+    }
+
+    /**
+     * The third reason a key cell is NULL in every Parquet artifact (issue #393): a finite value
+     * needing more than {@link ParquetSchemaMapper#MAX_DECIMAL_PRECISION} digits at its column's
+     * scale (#382 — a DBF program writes a number too wide for its field as {@code .12E+40}). The
+     * Bit BI baseline row then holds NULL in that key cell; {@code WHERE qty = 1.2E+39} matches
+     * nothing and the mirror keeps a row the source deleted, while rendering {@code qty IS NULL}
+     * would reach every row whose cell really is NULL (#370). So the record is skipped, the #233
+     * rule, and the predicate is the Parquet side's own rather than a second copy of the cap.
+     *
+     * <p>Keys only. A <em>data</em> cell of this kind is left as the value: the owner's decision on
+     * #382 is that the SQL stream carries it as text, unlike #240's NaN, which follows Parquet to
+     * NULL.</p>
+     */
+    private boolean overflowsParquetDecimal(String column, com.bitbi.dfm.delta.grpc.v2.Value cell,
+                                            TableSchema schema) {
+        return schema.findColumn(column)
+                .map(definition -> ParquetSchemaMapper.overflowsParquetDecimal(definition.type(), cell))
                 .orElse(false);
     }
 

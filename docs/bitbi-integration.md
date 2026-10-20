@@ -874,6 +874,29 @@ store it at all and writes NULL (issue #215), described in
 On the DBF/CSV path the same quoting rule applies once the site schema has mapped a column to a
 numeric DBF type. Without a schema the column is Character and the token is quoted anyway.
 
+### A Key Value Too Wide for the Baseline
+
+A Delta v2 record whose **key** holds a decimal needing more than 38 digits at its column's declared
+scale is **skipped** — no INSERT, UPDATE or DELETE is generated for it (issue #393). A DBF program
+writes a number too wide for its field in exponent form (`.12E+40` in a `numeric(7,2)` column), and
+no Parquet artifact carries a decimal column wider than `decimal(38, s)`, so the checkpoint
+`snapshot.parquet` your baseline is loaded from (`/sites/{siteId}/files`) holds **NULL** in that
+cell. A statement addressing the row by the value would match nothing, and one addressing it by
+`IS NULL` (see [NULL in a WHERE Clause](#null-in-a-where-clause)) would reach every row whose cell
+really is NULL — so neither is written. A keyless table, typical for DBF, is addressed by its whole
+row and is where this shows up.
+
+The server counts each skip on `sql.generation.delta.records.skipped.unrepresentable_key` and logs
+a WARN naming the table, the seq and the column — the same treatment a `NaN` key has had since #215.
+What that leaves in your mirror: a row loaded from the **baseline**, whose key cell is NULL in
+`snapshot.parquet`, stays there **frozen** — its later UPDATEs and DELETE are skipped, so a row the
+source deleted remains. A **reinit does not repair it**: it reloads the same `snapshot.parquet` and
+brings the NULL back. Only correcting the source data or the declared column type does. A row
+**inserted after** the baseline is simply absent, since its INSERT is skipped too. A **data** cell
+holding such a value is not skipped and is still written as its value
+(`SET qty = 1200000000000000000000000000000000000000`), while the baseline file holds NULL in that
+cell.
+
 ### Table Name Derivation
 
 Table names are derived from CSV filenames:

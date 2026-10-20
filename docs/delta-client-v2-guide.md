@@ -1588,7 +1588,10 @@ non-finite arriving as `double_value` or as a non-finite `string_value` is repre
 wire and is normally rendered — but not when the column it keys materialises as a Parquet DECIMAL,
 where the writers must write NULL and a quoted `'NaN'` would address no row. Issue #240 closed the
 same gap for **data** cells, by following the Parquet NULL rather than quoting. See
-[A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted).
+[A non-finite `double` is kept, and quoted](#a-non-finite-double-is-kept-and-quoted). Issue #393 adds a
+third reason for keys only: a finite value needing more than 38 digits at its column's scale, which
+every Parquet artifact writes NULL — see
+[A value too wide for any decimal column](#a-value-too-wide-for-any-decimal-column).
 
 
 **What this does not give you:** for a `numeric` column `NaN` is not `NULL`, so a row-for-row
@@ -1627,11 +1630,31 @@ completed-batch file agree about every such cell. Each artifact sizes its column
 so the precision can differ between them (it did before, too); the cap cannot.
 
 What is **not** lost: the value stays in the changelog segment and in the checkpoint frame (protobuf),
-and the Bit BI SQL stream (`/sql-changes`) still carries it as text. **One consequence for keys is
-stated rather than hidden**: on a keyless table — DBF tables usually are, so the whole row is the key
-— the baseline row in a checkpoint snapshot carries NULL in that cell while the SQL stream addresses
-the row by the value, so a later `UPDATE`/`DELETE` of that row does not reach the mirror row loaded
-from the snapshot. Before this cap the same table had no readable baseline at all; closing the gap is #393.
+and the Bit BI SQL stream (`/sql-changes`) still carries it as text in a **data** cell (the owner's
+decision on #382 — unlike a `NaN`, which follows Parquet to NULL, #240).
+
+**A key cell is the exception** (issue #393). On a keyless table — DBF tables usually are, so the
+whole row is the key — the baseline row in a checkpoint snapshot carries NULL in that cell, so a
+statement addressing the row by the value (`WHERE qty = 1.2E+39`) matches nothing and the mirror
+keeps a row the source deleted; rendering `qty IS NULL` instead would reach every row whose cell
+really is NULL (#370). So the Bit BI SQL path applies the #233 rule to this third reason: a record
+whose **key** holds a value the Parquet artifacts write NULL for `overflow` is **skipped**, counted on
+`sql.generation.delta.records.skipped.unrepresentable_key` (the same untagged series as `NaN` keys)
+with a WARN naming the column and the 38-digit cap. An `INSERT` keyed on one is skipped too — it
+would create a row this stream could never address again. The decision is the Parquet side's own:
+`ParquetSchemaMapper.overflowsParquetDecimal` builds the column type the writers build, reads the
+value the way they do and applies the same cap. The writer keeps its own comparison, so the
+agreement between the skip and the NULL is held by a test rather than by construction:
+`ParquetCheckpointWriterTest.theOverflowPredicateAnswersExactlyTheCellsTheWriterWritesNull` writes
+each case through the real writer and requires the predicate to be true exactly where the cell comes
+back NULL.
+
+What the skip leaves behind, stated plainly: a row that came from the **baseline**, whose key cell
+is NULL there, stays in the mirror **frozen** — its later `UPDATE`s and `DELETE` are skipped, so a
+row the source deleted remains. A **reinit** does not repair it: it reloads the same
+`snapshot.parquet` and brings the NULL back. Only correcting the source data or the declared column
+type does. A row **inserted after** the baseline is the one case that is simply absent from the
+mirror, since its `INSERT` is skipped too.
 
 `delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is

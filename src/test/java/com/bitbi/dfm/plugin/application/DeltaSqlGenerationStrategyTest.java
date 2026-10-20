@@ -462,4 +462,69 @@ class DeltaSqlGenerationStrategyTest {
         assertThat(result.stats().updates()).isEqualTo(4);
         assertThat(result.stats().inserts()).isEqualTo(1);
     }
+
+    private static Value dec(String token) {
+        return Value.newBuilder().setDecimalValue(token).build();
+    }
+
+    /**
+     * Issue #393, the #233 rule applied to the third reason a Parquet artifact writes a key cell
+     * NULL: a value needing more than {@code ParquetSchemaMapper.MAX_DECIMAL_PRECISION} digits at its
+     * column's scale (#382 — a DBF program writes a number too wide for its field as {@code .12E+40}).
+     * The baseline row in the Bit BI mirror then holds NULL in that key cell, so a statement
+     * addressing the row by its value ({@code WHERE qty = 1.2E+39}) matches nothing and the mirror
+     * keeps a row the source deleted — and rendering {@code qty IS NULL} instead would reach every
+     * row whose cell really is NULL (#370). A keyless table is the typical shape: its key is the
+     * whole row. Rendered through the strategy, not the generator (the #263 lesson).
+     *
+     * <p>Controls: a value needing exactly 38 digits is still a value and still addresses its row;
+     * the same overflowing value in a <em>data</em> cell is untouched (the owner's #382 decision:
+     * the SQL stream carries it as text).</p>
+     */
+    @Test
+    @DisplayName("should skip a keyless record whose key needs more decimal digits than a Parquet column carries (issue #393)")
+    void shouldSkipKeylessRecordWhoseKeyOverflowsTheParquetDecimalCap() throws IOException {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaSqlGenerationStrategy counted =
+                new DeltaSqlGenerationStrategy(segmentService, new SqlStatementGenerator(), registry);
+        TableSchema keyless = new TableSchema(List.of(
+                new TableSchema.ColumnDefinition("code", "varchar", true),
+                new TableSchema.ColumnDefinition("qty", "numeric(7,2)", true)),
+                List.of(), List.of());
+        TableSchema keyed = new TableSchema(List.of(
+                new TableSchema.ColumnDefinition("id", "bigint", false),
+                new TableSchema.ColumnDefinition("qty", "numeric(7,2)", true)),
+                List.of("id"), List.of());
+        String thirtySixDigits = "1".repeat(36);
+
+        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+                record("stock", Op.DELETE, 1, ordered("code", str("A"), "qty", dec(".12E+40")), Map.of()),
+                record("stock", Op.UPDATE, 2, ordered("code", str("B"), "qty", dec(".12E+40")),
+                        Map.of("code", str("B2"))),
+                record("stock", Op.INSERT, 3, ordered("code", str("C"), "qty", dec(".12E+40")), Map.of()),
+                // the same value one wire case over: a double carries 1.2E39 natively
+                record("stock", Op.DELETE, 4, ordered("code", str("E"), "qty", dbl(1.2E39)), Map.of()),
+                record("stock", Op.DELETE, 5,
+                        ordered("code", str("D"), "qty", dec(thirtySixDigits + ".25")), Map.of()),
+                record("ledger", Op.UPDATE, 6, Map.of("id", intVal(7)), Map.of("qty", dec(".12E+40")))));
+
+        SqlGenerationResult result = counted.generate(BATCH, SITE, List.of(segment(1, 6, "DELTA")),
+                Map.of("stock", keyless, "ledger", keyed), Map.of());
+
+        assertThat(result).isNotNull();
+        assertThat(result.sqlContent())
+                .doesNotContain("'A'")
+                .doesNotContain("'B'")
+                .doesNotContain("'C'")
+                .doesNotContain("'E'")
+                .contains("DELETE FROM stock WHERE code = 'D' AND qty = " + thirtySixDigits + ".25")
+                .contains("UPDATE ledger SET qty = ")
+                .contains("WHERE id = 7");
+        assertThat(result.stats().deletes()).isEqualTo(1);
+        assertThat(result.stats().inserts()).isZero();
+        assertThat(result.stats().updates()).isEqualTo(1);
+        assertThat(registry.counter("sql.generation.delta.records.skipped.unrepresentable_key").count())
+                .as("one series for every key this pipeline cannot address, overflow included")
+                .isEqualTo(4.0);
+    }
 }

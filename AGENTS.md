@@ -265,6 +265,42 @@ pages/{feature}/            # Route pages
 - Migrations current at **V61**; next migration is **V62** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-key-overflow-skip: A Bit BI record whose key holds a decimal too wide for any Parquet column
+  is skipped instead of addressing a baseline row it cannot match (issue #393, left open by #382).
+  Since #382 a value needing more than `ParquetSchemaMapper.MAX_DECIMAL_PRECISION` (38) digits at its
+  column's scale — a DBF exponent token, `.12E+40` in `numeric(7,2)` — is NULL in every Parquet
+  artifact (`reason=overflow`), while `/sql-changes` still carried it. On a keyless table (the DBF
+  norm: the whole row is the key) the baseline row from the checkpoint `snapshot.parquet` holds NULL
+  in that cell, so `WHERE qty = 1200…0` matched nothing and the mirror kept a deleted row or
+  collected a duplicate. **The #233 rule, extended to a third reason**: `unaddressableKeyReason`
+  skips such a record (INSERT included — it would create a row the stream never addresses again) on
+  the existing untagged `sql.generation.delta.records.skipped.unrepresentable_key`, with a WARN
+  naming the column and the cap. **Rejected**: rendering the key cell `IS NULL` to match the
+  baseline — since #370 that reaches every row whose cell really is NULL, the reason #215's skip was
+  rewritten. **Data cells are untouched**, the owner's #382 decision ("SQL not affected"), unlike
+  #240's NaN, which follows Parquet to NULL. **One predicate, not a second copy**: new public
+  `ParquetSchemaMapper.overflowsParquetDecimal(pgType, Value)` builds the field type the writers
+  build (a bare `numeric` and a scale above 38 are text and never overflow; a declaration Avro
+  refuses, or a bool/bytes value, answers false rather than poisoning the batch), converts the value
+  through `ParquetCheckpointWriter.toBigDecimal` (now package-private) and compares at the column's
+  scale with the writers' HALF_UP against the cap (`exceedsDecimalCap`) — the `rendersAsParquetDecimal`
+  precedent of #233. The writer keeps its own comparison, so the agreement between the skip and the
+  NULL is held by `theOverflowPredicateAnswersExactlyTheCellsTheWriterWritesNull`, not by
+  construction. **What the skip leaves**: a baseline row whose key cell is NULL stays in the mirror
+  frozen (its later UPDATE/DELETE skipped, so a row the source deleted remains), and a reinit reloads
+  the same `snapshot.parquet` and brings the NULL back — only correcting the source data or the
+  declared type repairs it; only a row inserted after the baseline is absent. **Tests**: `DeltaSqlGenerationStrategyTest` through the strategy (the #263
+  lesson) — keyless DELETE, UPDATE and INSERT with `.12E+40` and a DELETE with `1.2E39` as a
+  `double_value` skipped and counted four times, a 38-digit key still addressed, an overflowing data
+  cell still rendered; `ParquetCheckpointWriterTest` writes thirteen cells, each in its own column,
+  through the real writer and requires the predicate to answer true exactly where the cell comes
+  back NULL (decimal, double and string wire cases, a declared `numeric(50,2)`, HALF_UP at
+  `numeric(38,0)`, an int at `numeric(38,30)`, text-typed columns), plus every non-overflow cell
+  answering false. **Mutation-proven**: without the strategy branch the strategy test is red (all
+  four statements emitted); `>` made `>=` in the cap reddens both (the 38-digit control). No REST,
+  gRPC, proto, DTO, migration (**V62 stays next**), `specs/NNN-*`, configuration-key, metric-name,
+  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("A value too wide for any decimal
+  column") and `docs/bitbi-integration.md` ("A Key Value Too Wide for the Baseline").
 - bitbi-v2-changes-feed: Bit BI plugin v2 has its changes feed —
   `GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/changes?epoch=&afterSeq=&cursor=&size=` (issue #388,
   phase 2 of `docs/cr-bitbi-parquet-plugin.md`). A row is a **batch** of the site's **current**

@@ -25,6 +25,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -605,6 +606,86 @@ class ParquetCheckpointWriterTest {
             assertEquals(new BigDecimal("12.34"), second.get("wide"));
             assertEquals("1.5", second.get("fine").toString());
         }
+    }
+
+    /**
+     * Issue #393: the Bit BI SQL path skips a record keyed on a value the Parquet artifacts write
+     * NULL for overflow, and it learns which values those are from
+     * {@link ParquetSchemaMapper#overflowsParquetDecimal} rather than from a second copy of the
+     * rule. This holds the two together: for each cell, written through the real writer in a column
+     * of its own (so each column widens to its own data), the predicate answers {@code true} exactly
+     * when the cell comes back NULL. Every value is finite and well formed, so overflow is the only
+     * way here to a NULL — and the tally agrees on how many.
+     */
+    @Test
+    void theOverflowPredicateAnswersExactlyTheCellsTheWriterWritesNull() throws Exception {
+        String thirtySixDigits = "1".repeat(36);
+        Object[][] cases = {
+                // column type, value, expected predicate
+                {"numeric(7,2)", decVal(".12E+40"), true},
+                {"numeric(7,2)", decVal(thirtySixDigits + ".25"), false},
+                {"numeric(7,2)", decVal(".12E+17"), false},
+                {"numeric(7,2)", dblVal(1.2E39), true},
+                {"numeric(7,2)", strVal("1.2E+39"), true},
+                {"numeric(50,2)", decVal("9".repeat(40)), true},
+                {"numeric(38,0)", decVal("9".repeat(38) + ".5"), true},
+                {"numeric(38,0)", decVal("9".repeat(38) + ".4"), false},
+                {"numeric(38,30)", intVal(1_000_000_000L), true},
+                {"numeric(38,30)", intVal(12_345_678L), false},
+                {"numeric(60,40)", decVal("0." + "1".repeat(40)), false},
+                {"numeric", decVal("9".repeat(60)), false},
+                {"double precision", dblVal(1.2E39), false},
+        };
+        List<ColumnDefinition> columns = new ArrayList<>();
+        Map<String, Value> row = new LinkedHashMap<>();
+        for (int i = 0; i < cases.length; i++) {
+            columns.add(col("c" + i, (String) cases[i][0], true));
+            row.put("c" + i, (Value) cases[i][1]);
+        }
+        TableSchema schema = new TableSchema(columns, List.of(), List.of());
+
+        Path file = tempDir.resolve("overflow-predicate.parquet");
+        DecimalDegradeTally degraded = ParquetCheckpointWriter.writeParquet(file, "t", schema, List.of(row),
+                Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded());
+
+        long expectedOverflows = 0;
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord written = reader.read();
+            for (int i = 0; i < cases.length; i++) {
+                String type = (String) cases[i][0];
+                Value cell = (Value) cases[i][1];
+                boolean predicted = ParquetSchemaMapper.overflowsParquetDecimal(type, cell);
+                assertEquals(cases[i][2], predicted, "predicate for " + type + " / " + cell);
+                assertEquals(predicted, written.get("c" + i) == null,
+                        "the predicate and the writer disagree on " + type + " / " + cell);
+                if (predicted) {
+                    expectedOverflows++;
+                }
+            }
+        }
+        assertEquals(expectedOverflows, degraded.overflowCount());
+        assertEquals(0L, degraded.nonFiniteCount() + degraded.malformedCount());
+    }
+
+    /**
+     * The predicate is about overflow alone: a SQL NULL, an unset value, a non-finite or malformed
+     * token and a declaration Avro refuses all answer {@code false} — the first two are not
+     * degraded, the next two have their own reason (#215/#233), and the last has no Parquet artifact
+     * to disagree with (issue #393).
+     */
+    @Test
+    void theOverflowPredicateIsFalseForEveryOtherKindOfCell() {
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(7,2)", nullVal()));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(7,2)", Value.getDefaultInstance()));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(7,2)", decVal("NaN")));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(7,2)", dblVal(Double.POSITIVE_INFINITY)));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(7,2)", decVal("abc")));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(7,2)", boolVal(true)));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("numeric(2,5)", decVal(".12E+40")));
+        assertFalse(ParquetSchemaMapper.overflowsParquetDecimal("varchar", decVal(".12E+40")));
     }
 
     /** The cap is 38, not 37: a value needing exactly 38 digits is still a value (issue #382). */
