@@ -281,13 +281,18 @@ pages/{feature}/            # Route pages
   (`delta_batch_parquet_queue`, `delta_checkpoint_tables_given_up`) as `max`, since every pod reports
   the same server-wide count and `sum` would multiply it by the replica count — with the caveat that
   no meter has a site tag (the dev server holds other sites), so the WARN/ERROR line found by site id
-  in the JSON logs is what attributes a moved number; a nightly build's abort reason comes from
-  `builds.aborted{reason}` and the log, not the Delta Sync tab, which records it only at pointer 0; the v1 side's `sql_generation_*` beside the v2 one, because the
+  in the JSON logs is what attributes a moved number; the logs are read at WARN every morning, since a
+  checkpoint build that throws on S3/JDBC/scratch is a WARN `Checkpoint build failed for site …` and
+  moves no `builds.aborted` (only its four permanent kinds do; an unresolved S3 denial is
+  `Skipping site … this tick` and `delta_s3_read_denied_total`), and none of it reaches the Delta
+  Sync tab, which records an abort only at pointer 0; an advancing build rewrites every table's
+  snapshot, so a 16 MiB row group on `nsfwork` after one is a failed check; the v1 side's `sql_generation_*` beside the v2 one, because the
   comparison is v2 against v1 on this server and a v1 loss reads as a divergence; what BitBi send
   (per table: both row counts, both checksums, the v2 watermark, the last v1 generation); a
   comment template for #389. **A night counts** when every difference has a named cause that is not
-  a v2 defect; an unexplained one resets the count to zero, a lost night (a halt and reload, or no
-  comparison) is neither counted nor a reset. **Explained causes recorded**: lag between the
+  a v2 defect; an unexplained one resets the count to zero, and so — by the strict reading of
+  "seven nights in a row" the runbook defaults to — does a lost night (a halt and reload, or no
+  comparison); relaxing that is left to the person running the pilot. **Explained causes recorded**: lag between the
   two consumers; `overflow` decimals (Parquet NULL since #382, v1 SQL keeps the number); v1's
   `unrepresentable_key` skips; a v1 mirror older than #370; DBF duplicates collapsed by the client.
   **Playbooks**: a non-`ready` table (abandoned → `lastError`, requeue; missing → no schema, a lost
