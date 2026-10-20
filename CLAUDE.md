@@ -781,6 +781,43 @@ pages/{feature}/            # Route pages
 - Migrations current at **V61**; next migration is **V62** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-v2-pilot-runbook: The Bit BI v2 pilot on `fyt-new` has a runbook,
+  `docs/bitbi-v2-pilot-runbook.md` (issue #389, phase 3 of `docs/cr-bitbi-parquet-plugin.md`, linked
+  from its status line, plan and ticket table). Documentation only, and **only half of #389**: the
+  deploy by `deploy-dev/*` tag, the seven nights and BitBi's written confirmation are a person's
+  steps, so the PR says `Refs #389` and the ticket stays open. Written against what #386–#388
+  shipped (the `epoch` parameter of `/changes`, the `ready|abandoned|missing` manifest, the 039
+  requeue and its 409 when the segments are gone, #244). **Before the start**: v2 and V61 on the
+  running image; `DELTA_PARQUET_ROW_GROUP_BYTES=8388608` in the dev overlay **and in the running
+  pod**, since `forge-config` is consumed through `envFrom` and applying it restarts nothing (#385);
+  the row groups of the snapshot BitBi will load, read from the file's footer; `_row_hash` on every
+  row and unique per table (a table without it needs one re-baseline, CR decision 8, a person's
+  call); `track_duplicates` off and the extractor's frequency, both site-side. **Every morning**:
+  the exported PromQL names — counters as `sum(increase())`, the two database-backed gauges
+  (`delta_batch_parquet_queue`, `delta_checkpoint_tables_given_up`) as `max`, since every pod reports
+  the same server-wide count and `sum` would multiply it by the replica count — with the caveat that
+  no meter has a site tag (the dev server holds other sites), so the WARN/ERROR line found by site id
+  in the JSON logs is what attributes a moved number; the logs are read at WARN every morning, since a
+  checkpoint build that throws on S3/JDBC/scratch is a WARN `Checkpoint build failed for site …` and
+  moves no `builds.aborted` (only its four permanent kinds do; an unresolved S3 denial is
+  `Skipping site … this tick` and `delta_s3_read_denied_total`), and none of it reaches the Delta
+  Sync tab, which records an abort only at pointer 0; an advancing build rewrites every table's
+  snapshot, so a 16 MiB row group on `nsfwork` after one is a failed check; the v1 side's `sql_generation_*` beside the v2 one, because the
+  comparison is v2 against v1 on this server and a v1 loss reads as a divergence; what BitBi send
+  (per table: both row counts, both checksums, the v2 watermark, the last v1 generation); a
+  comment template for #389. **A night counts** when every difference has a named cause that is not
+  a v2 defect; an unexplained one resets the count to zero, and so — by the strict reading of
+  "seven nights in a row" the runbook defaults to — does a lost night (a halt and reload, or no
+  comparison); relaxing that is left to the person running the pilot. **Explained causes recorded**: lag between the
+  two consumers; `overflow` decimals (Parquet NULL since #382; on a DBF table, where every column
+  is key, v1 skips the whole record since #393); v1's `unrepresentable_key` skips; a v1 mirror older than #370; DBF duplicates collapsed by the client.
+  **Playbooks**: a non-`ready` table (abandoned → `lastError`, requeue; missing → no schema, a lost
+  enqueue inside #380's horizon, or a server-ended batch; neither repairable → reload after the
+  checkpoint passes it); an epoch that moved or a `full_snapshot` applied without clearing; a
+  difference by `_row_hash` (NULL hashes, duplicated hashes from a straddling `continuous` batch,
+  `track_duplicates`). The last section is the template for the other four sites (phase 4, not
+  scheduled). No code, test, REST, gRPC, proto, DTO, migration (**V62 stays next**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - bitbi-key-overflow-skip: A Bit BI record whose key holds a decimal too wide for any Parquet column
   is skipped instead of addressing a baseline row it cannot match (issue #393, left open by #382).
   Since #382 a value needing more than `ParquetSchemaMapper.MAX_DECIMAL_PRECISION` (38) digits at its
