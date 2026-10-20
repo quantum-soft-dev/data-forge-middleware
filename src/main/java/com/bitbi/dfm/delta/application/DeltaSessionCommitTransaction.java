@@ -100,8 +100,9 @@ public class DeltaSessionCommitTransaction {
         }
         syncStateService.advanceWatermark(siteId, committedSeq);
         // After the watermark: site_sync_state before batches, the lock order of every writer here.
+        // The epoch is read after the reset: a FULL_SNAPSHOT's records belong to the epoch it opens.
         if (!recorded.isEmpty()) {
-            batchLifecycleService.recordDeltaSegments(batchId, recorded);
+            batchLifecycleService.recordDeltaSegments(batchId, syncStateService.baselineEpoch(siteId), recorded);
         }
         batchLifecycleService.completeBatch(batchId);
         return segmentKey;
@@ -119,7 +120,8 @@ public class DeltaSessionCommitTransaction {
         syncStateService.advanceWatermark(siteId, committedSeq);
         // Seal by seal, not once at SessionEnd (#346): a CONTINUOUS session can outlive a nightly
         // checkpoint, and retention then deletes its early segments while it is still running.
-        batchLifecycleService.recordDeltaSegments(prepared.batchId(), List.of(contributionOf(prepared)));
+        batchLifecycleService.recordDeltaSegments(prepared.batchId(), syncStateService.baselineEpoch(siteId),
+                List.of(contributionOf(prepared)));
         return segmentKey;
     }
 

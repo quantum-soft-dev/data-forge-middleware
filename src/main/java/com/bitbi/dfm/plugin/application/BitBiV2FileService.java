@@ -17,7 +17,8 @@ import java.util.UUID;
 
 /**
  * The file half of the Bit BI v2 read surface (issue #387): {@code /snapshot} and
- * {@code /files/{fileId}}.
+ * {@code /files/{fileId}} — the latter for a checkpoint id ({@code ck1}) and, since #388, for a
+ * completed-batch id ({@code bp1}) the changes feed hands out.
  *
  * <p><b>One seq for every table.</b> The listing is at the site's checkpoint pointer
  * ({@code site_sync_state.last_checkpoint_seq}, the {@code checkpointSeq} of {@code /state}) and at
@@ -53,13 +54,16 @@ public class BitBiV2FileService {
     static final Duration PRESIGN_TTL = Duration.ofSeconds(60);
 
     private final BitBiV2QueryService queryService;
+    private final BitBiV2ChangesService changesService;
     private final S3CheckpointStorage checkpointStorage;
     private final S3PresignedUrlService presignedUrlService;
 
     public BitBiV2FileService(BitBiV2QueryService queryService,
+                              BitBiV2ChangesService changesService,
                               S3CheckpointStorage checkpointStorage,
                               S3PresignedUrlService presignedUrlService) {
         this.queryService = queryService;
+        this.changesService = changesService;
         this.checkpointStorage = checkpointStorage;
         this.presignedUrlService = presignedUrlService;
     }
@@ -91,6 +95,11 @@ public class BitBiV2FileService {
      * Is there a snapshot of this table at the pointer?
      */
     private boolean atPointer(SnapshotSource source, TableVersion row) {
+        if (!BitBiFileId.Checkpoint.isAddressable(row.table())) {
+            // No id can name it (its name would be a path in the key): listed, not a 500 for the
+            // whole snapshot (#396 review).
+            return false;
+        }
         long pointer = source.checkpointSeq();
         if (row.seq() == pointer) {
             // The row still describes the pointer; its key is the object, or there is none (#149).
@@ -117,14 +126,19 @@ public class BitBiV2FileService {
      * @param fileId    the opaque id from the request path
      * @return the presigned URL
      * @throws FileNotFoundException when the id is not one this server issued, names another
-     *                               account's file, belongs to a discarded epoch, or its object is gone
+     *                               account's file, belongs to a discarded epoch, names a batch file
+     *                               that is not ready, or its object is gone
      * @throws CheckpointStorageException when S3 cannot say whether the object exists
      */
     public String presignedUrl(UUID accountId, String fileId) {
-        BitBiFileId.Checkpoint id = BitBiFileId.decode(fileId)
-                .filter(BitBiFileId.Checkpoint.class::isInstance)
-                .map(BitBiFileId.Checkpoint.class::cast)
-                .orElseThrow(() -> new FileNotFoundException(fileId));
+        BitBiFileId id = BitBiFileId.decode(fileId).orElseThrow(() -> new FileNotFoundException(fileId));
+        return switch (id) {
+            case BitBiFileId.Checkpoint checkpoint -> checkpointUrl(accountId, fileId, checkpoint);
+            case BitBiFileId.BatchFile batchFile -> batchFileUrl(accountId, fileId, batchFile);
+        };
+    }
+
+    private String checkpointUrl(UUID accountId, String fileId, BitBiFileId.Checkpoint id) {
         // One answer for every refusal, so an id cannot be used to learn which sites exist.
         if (!queryService.isResolvable(accountId, id)) {
             throw new FileNotFoundException(fileId);
@@ -139,6 +153,20 @@ public class BitBiV2FileService {
             case UNKNOWN -> throw new CheckpointStorageException("Cannot tell whether " + key + " exists", null);
         }
         String fileName = id.table() + "_seq" + id.seq() + ".parquet";
+        return presignedUrlService.generatePresignedUrl(key, fileName, PRESIGN_TTL).url();
+    }
+
+    /**
+     * A completed-batch Parquet (issue #388). The {@code READY} row is the authority and no HEAD is
+     * made: the object is published before the row turns {@code READY}, is never rewritten, and is
+     * removed only after its row (retention, batch or site deletion), so a row still {@code READY}
+     * names an object that exists.
+     */
+    private String batchFileUrl(UUID accountId, String fileId, BitBiFileId.BatchFile id) {
+        String key = changesService.readyBatchFileKey(accountId, id)
+                .orElseThrow(() -> new FileNotFoundException(fileId));
+        String safeTable = id.table().replaceAll("[^A-Za-z0-9._-]", "_");
+        String fileName = safeTable + "_batch-" + id.batchId() + ".parquet";
         return presignedUrlService.generatePresignedUrl(key, fileName, PRESIGN_TTL).url();
     }
 

@@ -20,7 +20,7 @@
 
 ## Phase 2 — #388
 
-- [ ] T13 V61: the epoch a batch belongs to, stored with the batch; seq index for the catalog
-- [ ] T14 Catalog query with an `afterSeq` predicate, in batch order (inherits #378/#380)
-- [ ] T15 Per-batch table manifest from `batches.table_stats`: `ready` / `abandoned` / `missing`
-- [ ] T16 `GET /v2/sites/{siteId}/changes?afterSeq=&cursor=&size=`; contract and integration tests; guide
+- [x] T13 V61: the epoch a batch belongs to, stored with the batch (stamped with each recorded segment, after the reset); backfill of the current epoch; seq index — `BatchBaselineEpochMigrationIntegrationTest`, `DeltaSessionCommitTransactionIntegrationTest`, `DeltaSessionCommitServiceTest`, `BatchLifecycleServiceTest`
+- [x] T14 Feed query with an `afterSeq` predicate within the consumer's `epoch`, in batch order, ending at the build queue's head (inherits #378/#380) — `BitBiV2ChangesIntegrationTest`
+- [x] T15 Per-batch table manifest from `batches.table_stats` and the artifact rows: `ready` / `abandoned` / `missing`; `fileId` kind `bp1`; strict `decode` — `BitBiV2ChangesIntegrationTest`, `BitBiFileIdTest`, `BitBiV2FileServiceTest`
+- [x] T16 `GET /v2/sites/{siteId}/changes?epoch=&afterSeq=&cursor=&size=`; cursor `BitBiChangesCursor`; contract tests (`BitBiV2ApiContractTest`), guide, CR decisions 23–28

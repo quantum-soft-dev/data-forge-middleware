@@ -146,7 +146,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V60**, next is **V61**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V61**, next is **V62**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the `com.bitbi.dfm.documentation.*` guards, this one included, for any commit touching a path outside its backend, frontend and manifest branches — docs, migrations, scripts, configuration (#342) — while a backend commit runs the whole fast gate instead.
 - **Follow-ups**: a finding out of scope first goes looking for an existing ticket on the same **theme** — open and closed, related-but-not-identical included. An open match gets the evidence as a comment, so the ticket grows into one run-sized problem instead of a sibling appearing. A closed match is **never reopened**: a stale observation (the fix is already in `develop`, the worktree is just older) needs nothing at all, and only a true regression — reproducing on current `origin/develop` — gets a new issue linking the old one and the fixing commit. A closed match carrying **`duplicate`** is the exception to "stale": it was closed by another ticket's work, which may still be open (three of the seventeen labelled closes are today), so read the absorber named in its closing comment and look at *its* state — and ask the search for labels, not just titles. Only when the theme has no ticket yet is one filed, framed as the theme (root cause / subsystem), and its body states three things before it is filed — the files it expects to touch, whether it needs a Flyway migration or a `specs/NNN-*` directory, and which open tickets live in those same files ("none found" is valid). `.github/ISSUE_TEMPLATE/task.yml` carries those three as required form fields; a ticket filed with `gh issue create --body` gets no form, so the same sections are written by hand. A keyword search *does* find these tickets — #190 and #200 both open with "SQL regeneration" — but nothing in the process asked anyone to run it, and the colliding pairs surfaced only because somebody read every open ticket in one sitting. A file list makes that check mechanical instead of something somebody has to think to do. `/github-issue-runner` reads those lines at step 2b where they exist, and still re-checks by grep. The full rule, the search method and the reasoning live in **`CLAUDE.md`** → "Follow-ups" and "Every follow-up says what it will touch"; this file is the condensed mirror.
 - **Absorbed tickets carry `duplicate`**: closing a ticket folded into another (`folds #NNN`) auto-moves its card to `Done` via project 16's enabled `Item closed` workflow, so `Done` mixes a ticket closed by its own PR with one closed by somebody else's — the 2026-08-19 pass read eight such closes (not all of them; see the census in `CLAUDE.md`), four with the absorber still open, the sharpest #200 (`priority: high`, unfixed) in `Done` under a blocked #190, indistinguishable from #143/#162/#204/#214 whose work really did land. Whoever closes a ticket as absorbed applies the **`duplicate`** label **and** comments naming the absorber and whether it is still open. The label means the durable fact *closed by another ticket's work, not its own PR* — not "still unfixed", a reading the closer cannot know and which decays (#200 was labelled as unfixed and #190 merged the next day) — so every absorbed close is labelled and the absorber's own state answers whether it shipped. The card stays in `Done`: a separate column would be overwritten by that same workflow on every close. `Done` minus `duplicate` is the work that closed on its own merits. Reasoning and the rejected options live in **`CLAUDE.md`** → "A ticket closed as absorbed carries `duplicate`"; this file is the condensed mirror.
 - **Closed tickets keep no `status: *` label**: the column is `Done`; the live labels are a state machine for open work. `gh issue list --label "status: in progress"` and `/merge`'s `--label "status: ready to merge"` are read across states often enough that a closed ticket wearing one is a wrong answer (#89 still read in progress a month after it shipped). Every close route strips every `status:*` actually present — query then remove, because `gh issue edit --remove-label` 404s on a label that is not on the issue, which is why `/merge` naming only `ready to merge` + `in review` was the defect. The backstop is `.github/workflows/strip-closed-status-labels.yml` (`issues: closed` + weekly sweep). A scheduled auto-strip is worth having here (the predicate is mechanical) and was declined as a journal guard on #205. Full rule in **`CLAUDE.md`** → "Status lives in two places".
@@ -262,9 +262,56 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 12 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V60**; next migration is **V61** (do not reuse numbers)
+- Migrations current at **V61**; next migration is **V62** (do not reuse numbers)
 
 ## Recent Changes
+- bitbi-v2-changes-feed: Bit BI plugin v2 has its changes feed —
+  `GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/changes?epoch=&afterSeq=&cursor=&size=` (issue #388,
+  phase 2 of `docs/cr-bitbi-parquet-plugin.md`). A row is a **batch** of the site's **current**
+  epoch — not `IN_PROGRESS`, at least one recorded segment — with `epoch`, `batchId`, `sessionMode`,
+  `firstSeq`/`lastSeq`, `readyAt` and a manifest of every table it touched (`table_stats` ∪ artifact
+  rows): `ready` with a fileId and the file's rows, `abandoned`, `missing`. **Order is
+  `(started_at, id)`, never `ready_at`**, and the feed ends before the first batch with a table
+  `PENDING`/`BUILDING`/`FAILED` or still owed its work rows (`AWAITING_ENQUEUE`, #380's text and
+  horizon, read through new `BatchParquetFinalizationService.enqueueHorizon()`) — without the second,
+  every batch would read all `missing` between its commit and its `AFTER_COMMIT` enqueue. A session
+  the server ended after committing seals is listed with every table `missing`, so the epoch's seq
+  has no silent hole. **V61** adds `batches.baseline_epoch`, written by a targeted update
+  (`BatchRepository.storeBaselineEpoch`, mapped read-only on `Batch`) with each recorded segment,
+  after the re-baseline reset, so a FULL_SNAPSHOT carries the epoch it opened; the backfill stamps
+  the current epoch's batches (no completed FULL_SNAPSHOT of the site started after them) and leaves
+  the rest NULL, and a NULL is read by the same rule, which covers batches a pre-V61 pod commits
+  during the rollout. The feed reads that boundary — the site's latest completed FULL_SNAPSHOT —
+  once per request through V61's partial `idx_batches_site_completed_snapshot` and walks the epoch
+  from there, reading at most a page plus one listed batch past the consumer and passing over the
+  unlisted ones (review rounds 1–2: a per-row subquery over the whole site took 46 s on 30 000
+  batches, now tens of ms depending on the machine, mostly the page's manifest); `idx_batches_site_last_seq` serves
+  a poll from a watermark. **Rejected**: deriving the epoch by that rule alone — an operator deleting a
+  FULL_SNAPSHOT batch would relabel the discarded history as current. **Decided while working**:
+  `afterSeq` is read within the consumer's epoch, so the feed takes an `epoch` parameter beyond the
+  promised signature — a wipe restarts seq at 1, and an `afterSeq` of a discarded epoch would skip
+  the new `full_snapshot`; another epoch starts the feed at the current epoch's beginning, and
+  `afterSeq > 0` without `epoch` is 400. Cursor `BitBiChangesCursor` (opaque `(started_at, id)`,
+  bound to the site — another site's is 400); page 1–200, default 50; one `REPEATABLE READ` read.
+  New `fileId` kind **`bp1:<siteId>:<batchId>:<table>`**; `/files` resolves it to the `READY`
+  artifact of a batch in the current epoch (no HEAD; the row is the authority). From the review of
+  #396: both kinds are pinned by a literal wire form, `decode` accepts only the spelling `encode`
+  writes, and `/snapshot` lists a table no checkpoint id can carry (`/` in the name) as `missing`
+  instead of failing with a 500. **Tests**: `BitBiV2ChangesIntegrationTest` (real SQL: order against
+  reversed publication, manifest, the three unfinished statuses, the #380 gate, never-queued and
+  server-ended batches, running/empty not listed, stamped and unstamped epochs, `afterSeq` with a
+  straddling CONTINUOUS batch, a stale epoch, cursor paging, foreign cursor/account, `bp1`
+  resolution), `BatchBaselineEpochMigrationIntegrationTest` (backfill on a database of its own),
+  `DeltaSessionCommitTransactionIntegrationTest` (a real re-baseline stamps the epoch it opened),
+  `BitBiV2ApiContractTest` (bodies whole, 400s, 404, 401/429 over the new route, a `bp1` redirect),
+  `BitBiFileIdTest`, `BitBiChangesCursorTest`, `BitBiV2FileServiceTest`, `DeltaSessionCommitServiceTest`,
+  `BatchLifecycleServiceTest`. **Mutation-proven**: ordering by `ready_at` reddens six feed cases
+  (the order one among them); dropping the head of the queue reddens two; a horizon no batch is
+  inside reddens the #380 case; dropping the NULL rule and ignoring the stamp each redden the epoch
+  case; a failed snapshot counted as a reset reddens two migration cases; a lax `decode` reddens
+  seven. **V61 is taken, V62 is next.** No gRPC, proto, existing DTO, configuration-key, metric,
+  S3-key or frontend change. See `docs/bitbi-integration.md` ("GET .../changes") and
+  `docs/cr-bitbi-parquet-plugin.md` (decisions 23–28).
 - bitbi-v2-snapshot-files: Bit BI plugin v2 serves its snapshot and its files —
   `GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/snapshot` and `GET /api/v1/plugins/bit-bi/v2/files/{fileId}`
   (issue #387, phase 1 part 2 of `docs/cr-bitbi-parquet-plugin.md`, spec `specs/044-bitbi-parquet/`).

@@ -194,20 +194,26 @@ public class BatchLifecycleService {
      * {@code ChangelogRetentionService.prune} deleting the segments below the checkpoint. The batch
      * row is locked for the read-modify-write and written back with a targeted, version-free
      * update: taking part in {@code @Version} would make a seal fail a concurrent transition, or
-     * be failed by it (030). An untracked batch (pre-V58) is left as it is.
+     * be failed by it (030). An untracked batch (pre-V58) keeps its totals as they are.
+     * </p>
+     * <p>
+     * The batch also records the baseline epoch its records belong to (issue #388), the same way
+     * and for every batch, tracked or not: it is what the Bit BI v2 changes feed lists a batch by.
      * </p>
      *
-     * @param batchId  batch (session) identifier
-     * @param segments the committed segments' contributions; nothing happens when empty
+     * @param batchId       batch (session) identifier
+     * @param baselineEpoch the site's baseline epoch in this transaction (after a re-baseline's reset)
+     * @param segments      the committed segments' contributions; nothing happens when empty
      * @throws BatchNotFoundException if the batch does not exist
      */
     @Transactional
-    public void recordDeltaSegments(UUID batchId, List<BatchDeltaSegment> segments) {
+    public void recordDeltaSegments(UUID batchId, long baselineEpoch, List<BatchDeltaSegment> segments) {
         if (segments.isEmpty()) {
             return;
         }
         Batch batch = batchRepository.findByIdForUpdate(batchId)
                 .orElseThrow(() -> new BatchNotFoundException("Batch not found"));
+        batchRepository.storeBaselineEpoch(batchId, baselineEpoch);
         if (!batch.tracksDeltaTotals()) {
             logger.debug("Batch {} predates stored totals; its history keeps reading the segments", batchId);
             return;

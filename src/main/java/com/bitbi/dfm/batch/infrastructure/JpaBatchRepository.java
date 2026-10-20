@@ -118,6 +118,15 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
                          Map<String, BatchTableStats> tableStats, Long firstSeq, Long lastSeq);
 
     /**
+     * Bulk JPQL like {@link #storeDeltaTotals}: no {@code @Version} bump, not restricted to
+     * IN_PROGRESS, inside the ingestion commit's transaction.
+     */
+    @Override
+    @Modifying
+    @Query("UPDATE Batch b SET b.baselineEpoch = :baselineEpoch WHERE b.id = :batchId")
+    int storeBaselineEpoch(UUID batchId, long baselineEpoch);
+
+    /**
      * Reap an expired batch, but only while it is <em>still</em> expired and IN_PROGRESS (030/T06).
      * <p>
      * The status and cutoff predicates make the sweeper's transition atomic with its own decision.

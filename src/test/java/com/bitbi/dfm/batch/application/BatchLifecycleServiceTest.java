@@ -541,13 +541,14 @@ class BatchLifecycleServiceTest {
             Batch batch = Batch.start(accountId, siteId, "CONTINUOUS");
             when(batchRepository.findByIdForUpdate(batch.getId())).thenReturn(Optional.of(batch));
 
-            service.recordDeltaSegments(batch.getId(), List.of(
+            service.recordDeltaSegments(batch.getId(), 4L, List.of(
                     new BatchDeltaSegment(2L, 1L, 2L, Map.of("orders", new BatchTableStats(2, 0, 0))),
                     new BatchDeltaSegment(1L, 3L, 3L, Map.of("customers", new BatchTableStats(0, 1, 0)))));
 
             verify(batchRepository).storeDeltaTotals(batch.getId(), 3L, 2,
                     Map.of("orders", new BatchTableStats(2, 0, 0), "customers", new BatchTableStats(0, 1, 0)),
                     1L, 3L);
+            verify(batchRepository).storeBaselineEpoch(batch.getId(), 4L);
             // A save would take part in @Version and could fail a concurrent transition (030).
             verify(batchRepository, never()).save(any());
         }
@@ -559,16 +560,18 @@ class BatchLifecycleServiceTest {
             when(untracked.tracksDeltaTotals()).thenReturn(false);
             when(batchRepository.findByIdForUpdate(batchId)).thenReturn(Optional.of(untracked));
 
-            service.recordDeltaSegments(batchId, List.of(new BatchDeltaSegment(1L, 1L, 1L, null)));
+            service.recordDeltaSegments(batchId, 2L, List.of(new BatchDeltaSegment(1L, 1L, 1L, null)));
 
             verify(untracked, never()).recordDeltaSegment(any());
             verify(batchRepository, never()).storeDeltaTotals(any(), any(), any(), any(), any(), any());
+            // The epoch is not a total: an untracked batch still learns which history it belongs to (#388).
+            verify(batchRepository).storeBaselineEpoch(batchId, 2L);
         }
 
         @Test
         @DisplayName("Should not even lock the batch when there is nothing to add")
         void shouldNotTouchTheBatchForNoSegments() {
-            service.recordDeltaSegments(batchId, List.of());
+            service.recordDeltaSegments(batchId, 0L, List.of());
 
             verifyNoInteractions(batchRepository);
         }
@@ -578,7 +581,7 @@ class BatchLifecycleServiceTest {
         void shouldThrowWhenTheBatchIsMissing() {
             when(batchRepository.findByIdForUpdate(batchId)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.recordDeltaSegments(batchId,
+            assertThatThrownBy(() -> service.recordDeltaSegments(batchId, 0L,
                     List.of(new BatchDeltaSegment(1L, 1L, 1L, null))))
                     .isInstanceOf(BatchLifecycleService.BatchNotFoundException.class);
         }
