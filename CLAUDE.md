@@ -781,6 +781,42 @@ pages/{feature}/            # Route pages
 - Migrations current at **V61**; next migration is **V62** (do not reuse numbers)
 
 ## Recent Changes
+- redis-infra-teardown: The Redis left outside the application after #319 is removed from the
+  repository — the code half of issue #335; the issue stays open for the human steps. **Terraform**:
+  `infra/modules/forge-app` loses `google_redis_instance.cache`, the `create_redis`/`redis_tier`/
+  `redis_memory_gb`/`redis_authorized_network` variables and the `redis_host` output; stage and prod
+  lose their `create_redis = true` block, their `redis_host` output and the
+  `data "google_compute_network" "vpc"` they read only to attach the instance; dev loses its
+  `create_redis = false`. Dev never created the instance, so its plan (run by `infra-deploy.yml` on
+  the PR and applied automatically on the merge) changes no resource; a stage or prod plan
+  **destroys** the Memorystore instance (`BASIC` / `STANDARD_HA`). **The ordering rule is the
+  hazard**: from this merge on, any manual `apply` of stage or prod, for whatever reason, deletes
+  that instance, so it must not run while that environment still runs a build with Redis.
+  **The dormant AWS path is cleaned, not left**, and that is the decision #335 asked for: a re-enabled
+  `deploy` job builds the current commit, which has no Redis since #319, so the `RedisHost`/`RedisPort`/
+  `RedisPassword` parameters, the `RedisPasswordSecret` Secrets Manager resource (and its line in the
+  task-execution IAM policy) and the three `SPRING_DATA_REDIS_*` container variables of
+  `deploy-script/template-1763397226530.yaml` would configure nothing. Removing only
+  `REDIS_PASSWORD` from `ci-cd.yml` was not an option: `RedisPassword` carries `MinLength: 1`, so an
+  empty value would have failed the stack update. `deploy-script/config/{dev,prod}.json.template`,
+  `deploy-script/GEMINI.md` and the job's `REDIS_PASSWORD` env go with it. **Guard**:
+  `NoRedisInfrastructureTest` (package `documentation`, so the pre-commit hook runs it for an
+  infra-, `deploy-script/`- or workflow-only commit) reads the tracked files of `infra/`,
+  `deploy-script/`, `k8s/`, `.github/workflows/`, `.devcontainer/`, `.conductor/` and every
+  `docker-compose*` file and fails on `redis` or `memorystore` in any case, naming `file:line`;
+  `docs/` and `specs/` are left out, since they record the history in which Redis existed. It fails
+  closed (it must read the module, both environment files, the CloudFormation template, `ci-cd.yml`
+  and the base ConfigMap), reuses `ConflictMarkerLineTest.trackedFiles` (now package-private), and
+  every tracked file is already a `test` input (#342). Red first on `develop` (every line above);
+  mutation: putting `create_redis = false` back into `infra/environments/dev/main.tf` reddens it.
+  **Docs**: `infra/README.md`; `docs/cr-gke-migration.md` gains a dated update and marks its Redis
+  rows as history; `docs/data-platform-concept.ru.md` drops the "Cache / rate limits" node (rate
+  limiting is Caffeine, in-process). **Left to a human, on #335**: the stage/prod `terraform apply`
+  (only after that environment runs a build without Redis), `kubectl -n forge delete
+  deploy/forge-redis svc/forge-redis` in dev after a `deploy-dev/*` build without Redis, the stale
+  `SPRING_DATA_REDIS_PASSWORD` key in `forge-secrets`, and the repository secret `REDIS_PASSWORD`.
+  No production code, REST, gRPC, proto, DTO, migration (**V62 stays next**), `specs/NNN-*`,
+  configuration-key, metric, S3-key or frontend change.
 - bitbi-v2-changes-feed: Bit BI plugin v2 has its changes feed —
   `GET /api/v1/plugins/bit-bi/v2/sites/{siteId}/changes?epoch=&afterSeq=&cursor=&size=` (issue #388,
   phase 2 of `docs/cr-bitbi-parquet-plugin.md`). A row is a **batch** of the site's **current**

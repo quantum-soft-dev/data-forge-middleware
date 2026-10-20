@@ -22,8 +22,6 @@ module "forge" {
   cloud_sql_instance = var.cloud_sql_instance
   db_password        = var.db_password
 
-  # dev uses in-cluster Redis (no Memorystore)
-  create_redis = false
   # org policy blocks SA HMAC keys in bitbi-dev — use a user-account HMAC instead
   create_hmac = false
 }

@@ -24,8 +24,3 @@ output "gcs_hmac_secret" {
   value       = var.create_hmac ? google_storage_hmac_key.app[0].secret : ""
   sensitive   = true
 }
-
-output "redis_host" {
-  description = "Memorystore Redis host (empty for dev / in-cluster)"
-  value       = var.create_redis ? google_redis_instance.cache[0].host : ""
-}

@@ -5,7 +5,8 @@
 ## Background
 
 `data-forge-middleware` (forge/DFM) is deployed on AWS ECS Fargate (`us-east-1`): backend +
-frontend (nginx), RDS PostgreSQL, external Redis, S3 bucket `dfm-prod-uploads`, Auth0. The service
+frontend (nginx), RDS PostgreSQL, external Redis (gone since #319/#335, see below), S3 bucket
+`dfm-prod-uploads`, Auth0. The service
 is consumed by **bitbi (DynamicVisualizer)**, which already runs on **GKE** using the model:
 three separate GCP projects/clusters — `bitbi-dev` / `bitbi-stage` / `bitbi-production`, an app
 namespace, kustomize overlays, Terraform infra, GitHub Actions + Workload Identity Federation.
@@ -19,6 +20,18 @@ Move forge to the same model: three clusters, namespace **`forge`**, branch → 
 > tag-driven (`deploy-dev/*`), see [cr-tag-driven-dev-deploy.md](./cr-tag-driven-dev-deploy.md).
 > Stage/prod branch triggers are unchanged.
 
+> **Update 2026-10-20 (#335):** there is no Redis anywhere any more. #319 removed it from the
+> application — both Upload History caches were inert and Redis had no other user (rate limiting is
+> Caffeine, in-process) — together with `k8s/overlays/dev/redis.yaml`. #335 removed what was left
+> outside the application: the Memorystore instance of `infra/modules/forge-app` with its
+> `create_redis`/`redis_*` variables and `redis_host` output, the VPC data source stage/prod read
+> only to attach it, and the Redis parameters, secret and `SPRING_DATA_REDIS_*` variables of the
+> dormant AWS path (`deploy-script/`, `REDIS_PASSWORD` in `ci-cd.yml`). The Redis rows below are
+> the plan as it was made, kept as history. The one-off steps a human does are listed on #335: the
+> stage/prod `terraform apply` that destroys the instances (only once that environment runs a
+> build without Redis), `kubectl -n forge delete deploy/forge-redis svc/forge-redis` in dev, and
+> the leftover `SPRING_DATA_REDIS_PASSWORD` / `REDIS_PASSWORD` secrets.
+
 1. **Dev migration** into the `forge` namespace of `dev-bitbi-cluster`, testing, reconnect bitbi-dev.
 2. **Prod cutover** into `prod-bitbi-cluster`.
 
@@ -27,7 +40,7 @@ Move forge to the same model: three clusters, namespace **`forge`**, branch → 
 | Topic | Decision |
 |---|---|
 | Object storage | Migrate to **GCS** via the S3-compatible XML API (S3 client code change) |
-| DB/cache (dev) | Reuse Cloud SQL `dev-bitbi-db` (new `dfm` database) + **in-cluster Redis** |
+| DB/cache (dev) | Reuse Cloud SQL `dev-bitbi-db` (new `dfm` database) + **in-cluster Redis** (removed, #319) |
 | Data | Copy prod data (pg_dump RDS→Cloud SQL, objects S3→GCS) |
 | Automation | Full pipeline: Terraform + GitHub Actions + WIF |
 | Ingress (dev) | **Internal-only** (ClusterIP); bitbi → `forge-backend.forge.svc.cluster.local:8080`; admin UI via port-forward |
@@ -57,11 +70,12 @@ checksum on, path-style off).
 ### Stage 2 — infra (Terraform), k8s (kustomize), CI/CD (GitHub Actions + WIF) ✅ (artifacts)
 
 - **k8s/** — kustomize `base` + `overlays/{dev,stage,prod}`: `forge-backend`/`forge-frontend`,
-  HPA, PDB, WI ServiceAccount, ConfigMaps. Dev is internal-only + in-cluster `forge-redis`. All
+  HPA, PDB, WI ServiceAccount, ConfigMaps. Dev is internal-only (+ in-cluster `forge-redis` until
+  #319). All
   overlays pass `kubectl kustomize`. Helpers in `deploy/gke/`.
 - **infra/** — `modules/forge-app` + `environments/{dev,stage,prod}` (lean: reuses bitbi clusters/
-  VPCs/Cloud SQL instances; creates AR repo, SA+WI, `dfm` DB + user, GCS bucket + HMAC, Memorystore
-  for stage/prod). State shares `bitbi-terraform-state` (`forge/environments/{env}`).
+  VPCs/Cloud SQL instances; creates AR repo, SA+WI, `dfm` DB + user, GCS bucket + HMAC — and
+  Memorystore for stage/prod until #335). State shares `bitbi-terraform-state` (`forge/environments/{env}`).
   `terraform validate` is green; dev `terraform plan` = 10 to add, 0 change, 0 destroy.
 - **CI/CD** — `.github/workflows/app-deploy.yml` (build backend+frontend → push AR → sync
   `forge-secrets` → kustomize apply → rollout) and `infra-deploy.yml` (Terraform plan/apply via WIF).
@@ -79,7 +93,7 @@ checksum on, path-style off).
 | `AUTH0_CLIENT_SECRET` | `AUTH0_MGMT_CLIENT_SECRET` | Management API secret |
 | `PLUGIN_BITBI_CLIENT_ID` | `PLUGIN_BITBI_CLIENT_ID` | — |
 | `DB_MASTER_PASSWORD` | (Stage 3) `pg_dump` from AWS RDS | user `bitbi` |
-| `REDIS_PASSWORD` | — | not needed (GKE Redis has no AUTH) |
+| `REDIS_PASSWORD` | — | not needed (GKE Redis had no AUTH); unused by the AWS path too since #335 — delete the secret |
 | `GHCR_PAT` | — | not needed (images → Artifact Registry) |
 
 **Additional GitHub secrets required:** `GCP_WIF_PROVIDER`, `GCP_WIF_SA` (Workload Identity

@@ -1,8 +1,7 @@
 # forge-app: lean per-environment infra for the data-forge-middleware service.
 # Reuses bitbi's existing GKE cluster, VPC and Cloud SQL instance — this module only
 # provisions the forge-specific resources: Artifact Registry repo, Workload-Identity
-# service account, Cloud SQL database/user, a GCS bucket + HMAC keys, and (stage/prod)
-# a Memorystore Redis instance.
+# service account, Cloud SQL database/user, and a GCS bucket + HMAC keys.
 
 terraform {
   required_version = ">= 1.9"
@@ -92,18 +91,4 @@ resource "google_storage_hmac_key" "app" {
   count                 = var.create_hmac ? 1 : 0
   project               = var.project_id
   service_account_email = google_service_account.app.email
-}
-
-# ── Memorystore Redis (stage/prod only) ───────────────────────────────────────
-
-resource "google_redis_instance" "cache" {
-  count              = var.create_redis ? 1 : 0
-  project            = var.project_id
-  name               = "${var.environment}-forge-redis"
-  tier               = var.redis_tier
-  memory_size_gb     = var.redis_memory_gb
-  region             = var.region
-  authorized_network = var.redis_authorized_network
-  redis_version      = "REDIS_7_2"
-  display_name       = "Forge Redis (${var.environment})"
 }

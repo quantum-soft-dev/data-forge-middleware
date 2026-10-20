@@ -92,22 +92,6 @@ Parameters:
     Description: JWT Secret (min 256 bits)
     MinLength: 32
 
-  RedisHost:
-    Type: String
-    Description: Redis host endpoint
-    Default: redis.example.com
-
-  RedisPort:
-    Type: String
-    Description: Redis port
-    Default: '6379'
-
-  RedisPassword:
-    Type: String
-    NoEcho: true
-    Description: Redis password
-    MinLength: 1
-
   HostedZoneId:
     Type: String
     Description: Route53 Hosted Zone ID for DNS records
@@ -456,14 +440,6 @@ Resources:
       Description: JWT signing secret
       SecretString: !Ref JWTSecret
 
-  # Secrets Manager - Redis Password
-  RedisPasswordSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub ${AWS::StackName}/redis/password
-      Description: Redis password
-      SecretString: !Ref RedisPassword
-
   # Lambda Execution Role
   LambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -657,7 +633,6 @@ Resources:
                   - !Ref AppDBCredentialsSecret
                   - !Ref Auth0Secret
                   - !Ref JWTSecretSecret
-                  - !Ref RedisPasswordSecret
 
   # ECS Task Role (for application)
   ECSTaskRole:
@@ -750,10 +725,6 @@ Resources:
               Value: INFO
             - Name: LOGGING_LEVEL_COM_BITBI_DFM
               Value: DEBUG
-            - Name: SPRING_DATA_REDIS_HOST
-              Value: !Ref RedisHost
-            - Name: SPRING_DATA_REDIS_PORT
-              Value: !Ref RedisPort
             - Name: AUTH0_ISSUER
               Value: !Sub 'https://${Auth0Domain}/'
             - Name: AUTH0_MGMT_AUDIENCE
@@ -781,8 +752,6 @@ Resources:
               ValueFrom: !Sub '${Auth0Secret}:audience::'
             - Name: JWT_SECRET
               ValueFrom: !Ref JWTSecretSecret
-            - Name: SPRING_DATA_REDIS_PASSWORD
-              ValueFrom: !Ref RedisPasswordSecret
           LogConfiguration:
             LogDriver: awslogs
             Options:

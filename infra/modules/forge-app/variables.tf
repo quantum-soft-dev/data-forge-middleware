@@ -47,34 +47,8 @@ variable "bucket_location" {
   default     = "US"
 }
 
-# ── Redis (Memorystore — stage/prod only; dev uses in-cluster Redis) ───────────
-
-variable "create_redis" {
-  description = "Create a Memorystore Redis instance (false for dev)"
-  type        = bool
-  default     = false
-}
-
 variable "create_hmac" {
   description = "Create a GCS HMAC key for the app SA. Set false where the org policy iam.disableServiceAccountKeyCreation blocks SA keys (then use a user-account HMAC instead)."
   type        = bool
   default     = true
-}
-
-variable "redis_tier" {
-  description = "Memorystore tier (BASIC / STANDARD_HA)"
-  type        = string
-  default     = "BASIC"
-}
-
-variable "redis_memory_gb" {
-  description = "Memorystore memory size in GB"
-  type        = number
-  default     = 1
-}
-
-variable "redis_authorized_network" {
-  description = "Self link / id of the VPC the Memorystore instance attaches to (stage/prod)"
-  type        = string
-  default     = ""
 }
