@@ -222,6 +222,41 @@ class BitBiV2ChangesIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("Unstamped history: the latest completed snapshot opens the epoch and is itself listed; a failed one does not")
+    void anUnstampedSnapshotOpensTheEpoch() {
+        UUID before = batch(1, "DELTA", "COMPLETED", 1, 10, Map.of("a", 10L), null);
+        UUID snapshot = batch(2, "FULL_SNAPSHOT", "COMPLETED", 11, 40, Map.of("a", 30L), null);
+        UUID after = batch(3, "DELTA", "COMPLETED", 41, 50, Map.of("a", 10L), null);
+        // Never committed, so it reset nothing: it does not move the boundary.
+        batch(4, "FULL_SNAPSHOT", "FAILED", null, null, Map.of(), null);
+        UUID afterTheFailure = batch(5, "DELTA", "COMPLETED", 51, 60, Map.of("a", 10L), null);
+        for (UUID b : List.of(before, snapshot, after, afterTheFailure)) {
+            artifact(b, "a", "READY", 10L, T0.plusHours(6));
+        }
+
+        assertThat(listedIds()).containsExactly(snapshot, after, afterTheFailure);
+    }
+
+    @Test
+    @DisplayName("A batch held inside the window under a cursor ends the page there, with no next cursor")
+    void aHeldBatchUnderACursorEndsThePage() {
+        UUID a = batch(1, "FULL_SNAPSHOT", "COMPLETED", 1, 10, Map.of("t", 10L), 4L);
+        UUID b = batch(2, "DELTA", "COMPLETED", 11, 20, Map.of("t", 10L), 4L);
+        UUID c = batch(3, "DELTA", "COMPLETED", 21, 30, Map.of("t", 10L), 4L);
+        UUID d = batch(4, "DELTA", "COMPLETED", 31, 40, Map.of("t", 10L), 4L);
+        artifact(a, "t", "READY", 10L, T0.plusHours(5));
+        artifact(b, "t", "READY", 10L, T0.plusHours(5));
+        artifact(c, "t", "PENDING", null, null);
+        artifact(d, "t", "READY", 10L, T0.plusHours(5));
+        String cursor = new BitBiChangesCursor(site, T0.plusHours(1), a).encode();
+
+        ChangesPage page = service.changes(account, site, null, 0L, cursor, 2);
+
+        assertThat(ids(page)).containsExactly(b);
+        assertThat(page.nextCursor()).as("the feed ends at the held batch for now").isNull();
+    }
+
+    @Test
     @DisplayName("afterSeq filters within the consumer's epoch, and a batch straddling it is listed whole")
     void afterSeqWithinTheEpoch() {
         UUID snapshot = batch(1, "FULL_SNAPSHOT", "COMPLETED", 1, 100, Map.of("a", 100L), 4L);

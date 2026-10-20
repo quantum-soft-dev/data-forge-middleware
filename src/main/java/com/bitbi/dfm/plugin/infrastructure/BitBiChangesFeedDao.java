@@ -44,13 +44,19 @@ import java.util.UUID;
  * before the cursor was settled when its page was served. A requeued (039) batch the consumer saw as
  * {@code abandoned} therefore no longer holds later pages; the consumer stopped at it anyway.</p>
  *
- * <p><b>Volume.</b> The statement reads at most {@code limit} batches past the consumer's position
- * (the page plus one), and only those batches' {@code table_stats} and artifact rows — never the
- * site's history. A poll from a watermark ({@code afterSeq} near the site's end, the steady state)
- * reaches them through V61's {@code idx_batches_site_last_seq}: measured on 3000 batches of one
- * site, 7 buffers with it and a sequential scan of 273 without. A first read from the epoch's start
- * walks the batches in start order and stops after {@code limit}. Whatever the plan, batch retention
- * ({@code retentionDays}, 45 by default) bounds the rows a site has at all.</p>
+ * <p><b>Volume.</b> The epoch's boundary — the site's latest completed {@code FULL_SNAPSHOT} — is
+ * read once, through V61's {@code idx_batches_site_completed_snapshot}, and the walk in start order
+ * begins there: every batch of the current epoch starts at or after it, so a read never reaches the
+ * discarded epochs before it, and an unstamped batch is compared with that one row instead of
+ * running a subquery of its own. The walk stops after {@code limit} listed batches (the page plus
+ * one); it passes over the epoch's batches that are not listed (running, empty, at or below
+ * {@code afterSeq}) on the way. A poll from a watermark ({@code afterSeq} near the end, the steady
+ * state) reaches its batches through V61's {@code idx_batches_site_last_seq} instead. Only the
+ * page's batches have their {@code table_stats} and artifact rows read. Measured on one site of
+ * 30 000 batches (25 000 unstamped before its latest snapshot, 80 tables each), a first read went
+ * from 46 s — a per-row subquery over the whole site — to under 40 ms, of which assembling the
+ * page's 4 080 manifest rows is most. A site whose epoch never ended walks from its first retained
+ * batch; batch retention ({@code retentionDays}, 45 by default) bounds that.</p>
  *
  * <p>One statement, so the batches, the end of the feed and every manifest come from one snapshot;
  * the caller runs it under {@code REPEATABLE READ} together with the epoch it compares against.</p>
@@ -87,6 +93,32 @@ public class BitBiChangesFeedDao {
               AND b.last_seq > :afterSeq
             """;
 
+    /** The site's latest completed FULL_SNAPSHOT — the boundary of its current epoch — as one row. */
+    private static final String SNAP = """
+            WITH snap AS MATERIALIZED (
+                SELECT s.started_at, s.id FROM batches s
+                WHERE s.site_id = :siteId
+                  AND s.session_mode = 'FULL_SNAPSHOT'
+                  AND s.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+                ORDER BY s.started_at DESC, s.id DESC
+                LIMIT 1
+            )""";
+
+    /**
+     * {@link #inEpoch} with the boundary taken once from {@code snap}: an unstamped batch is current
+     * when no completed FULL_SNAPSHOT started after it, i.e. when it is the latest snapshot or after
+     * it (or there is none). The leading {@code started_at} bound repeats it for a stamped batch —
+     * which cannot start before the snapshot that opened its epoch, or a later one would have moved
+     * the epoch — so the index walk in start order begins at the epoch's start.
+     */
+    private static final String CURRENT_EPOCH_FROM_SNAP = """
+              AND b.started_at >= COALESCE((SELECT snap.started_at FROM snap), '-infinity'::timestamp)
+              AND (b.baseline_epoch = :epoch
+                   OR (b.baseline_epoch IS NULL
+                       AND (NOT EXISTS (SELECT 1 FROM snap)
+                            OR (b.started_at, b.id) >= (SELECT snap.started_at, snap.id FROM snap))))
+            """;
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public BitBiChangesFeedDao(NamedParameterJdbcTemplate jdbc) {
@@ -113,16 +145,47 @@ public class BitBiChangesFeedDao {
                 .addValue("afterSeq", afterSeq)
                 .addValue("enqueueHorizon", enqueueHorizon)
                 .addValue("limit", limit);
-        String cursorPredicate = "";
         if (cursorAt != null) {
-            cursorPredicate = "  AND (b.started_at, b.id) > (CAST(:cursorAt AS timestamp), CAST(:cursorId AS uuid))\n";
             params.addValue("cursorAt", cursorAt).addValue("cursorId", cursorId);
         }
-        // candidates: at most :limit batches past the consumer's position, in feed order — the only
-        // rows the statement looks at, whatever the length of the site's history. held is the first
-        // of them that is not settled; the page ends before it. table_stats is read for the page alone.
-        String sql = "WITH candidates AS (\n" + LISTED + cursorPredicate
-                + "  AND " + inEpoch(":epoch")
+        String sql = pageSql(cursorAt != null);
+        Map<UUID, FeedBatch> batches = new LinkedHashMap<>();
+        jdbc.query(sql, params, rs -> {
+            UUID id = rs.getObject("id", UUID.class);
+            String status = rs.getString("batch_status");
+            LocalDateTime startedAt = rs.getObject("started_at", LocalDateTime.class);
+            LocalDateTime completedAt = rs.getObject("completed_at", LocalDateTime.class);
+            String sessionMode = rs.getString("session_mode");
+            long firstSeq = rs.getLong("first_seq");
+            long lastSeq = rs.getLong("last_seq");
+            FeedBatch batch = batches.computeIfAbsent(id, ignored -> new FeedBatch(id, status, startedAt,
+                    completedAt, sessionMode, firstSeq, lastSeq, new ArrayList<>()));
+            String table = rs.getString("table_name");
+            if (table != null) {
+                batch.tables().add(new FeedTable(table, rs.getString("artifact_status"),
+                        rs.getObject("row_count", Long.class), rs.getObject("stat_rows", Long.class),
+                        rs.getObject("ready_at", LocalDateTime.class),
+                        rs.getObject("artifact_updated_at", LocalDateTime.class)));
+            }
+        });
+        return List.copyOf(batches.values());
+    }
+
+    /**
+     * The statement of {@link #findPage}, with or without the cursor predicate.
+     */
+    static String pageSql(boolean withCursor) {
+        String cursorPredicate = withCursor
+                ? "  AND (b.started_at, b.id) > (CAST(:cursorAt AS timestamp), CAST(:cursorId AS uuid))\n"
+                : "";
+        // snap: the site's latest completed FULL_SNAPSHOT, read once. Every batch of the current epoch
+        // starts at or after it, so it is also where the walk in start order begins: a first read
+        // never reaches the discarded epochs before it, and an unstamped batch is compared with it
+        // instead of running a correlated subquery per row.
+        // candidates: at most :limit batches past the consumer's position, in feed order. held is the
+        // first of them that is not settled; the page ends before it. table_stats is read for the
+        // page alone.
+        return SNAP + ",\ncandidates AS (\n" + LISTED + cursorPredicate + CURRENT_EPOCH_FROM_SNAP
                 + """
                     ORDER BY b.started_at, b.id
                     LIMIT :limit
@@ -160,26 +223,6 @@ public class BitBiChangesFeedDao {
                 LEFT JOIN batch_parquet_artifacts a ON a.batch_id = p.id AND a.table_name = t.table_name
                 ORDER BY p.started_at, p.id, t.table_name
                 """;
-        Map<UUID, FeedBatch> batches = new LinkedHashMap<>();
-        jdbc.query(sql, params, rs -> {
-            UUID id = rs.getObject("id", UUID.class);
-            String status = rs.getString("batch_status");
-            LocalDateTime startedAt = rs.getObject("started_at", LocalDateTime.class);
-            LocalDateTime completedAt = rs.getObject("completed_at", LocalDateTime.class);
-            String sessionMode = rs.getString("session_mode");
-            long firstSeq = rs.getLong("first_seq");
-            long lastSeq = rs.getLong("last_seq");
-            FeedBatch batch = batches.computeIfAbsent(id, ignored -> new FeedBatch(id, status, startedAt,
-                    completedAt, sessionMode, firstSeq, lastSeq, new ArrayList<>()));
-            String table = rs.getString("table_name");
-            if (table != null) {
-                batch.tables().add(new FeedTable(table, rs.getString("artifact_status"),
-                        rs.getObject("row_count", Long.class), rs.getObject("stat_rows", Long.class),
-                        rs.getObject("ready_at", LocalDateTime.class),
-                        rs.getObject("artifact_updated_at", LocalDateTime.class)));
-            }
-        });
-        return List.copyOf(batches.values());
     }
 
     /**

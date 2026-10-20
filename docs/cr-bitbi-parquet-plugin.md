@@ -309,8 +309,11 @@ pilot starts.
     looked for only among the batches the request would list (above `afterSeq`, after the cursor,
     at most a page plus one), which is narrower than #378's queue head on purpose: a batch at or
     below the consumer's watermark is one it already holds, so an old batch whose build is retrying
-    does not stop a consumer past it, and the statement never reads the site's history. The
-    `(site_id, last_seq)` index keeps a poll from a watermark to the batches above it.
+    does not stop a consumer past it. The statement reads the epoch's boundary (the latest completed
+    `FULL_SNAPSHOT`) once, through a partial index, and walks from there, so a first read never
+    reaches the discarded epochs and an unstamped batch costs no subquery of its own; the
+    `(site_id, last_seq)` index keeps a poll from a watermark to the batches above it. A first read
+    of an epoch still walks its unlisted batches up to the page; retention bounds a site's rows.
 27. **`fileId` kind `bp1:<siteId>:<batchId>:<table>`** — no epoch, no seq: a `READY` artifact is never
     rewritten (039 requeues only `ABANDONED` or a lapsed claim), so `(batch, table)` names one
     version; resolution checks the account, the batch's site and that the batch is in the current

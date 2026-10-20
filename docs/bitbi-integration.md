@@ -648,7 +648,9 @@ is `400`. Only the current epoch is ever listed.
 **The feed ends before the first batch whose files are still being built** (or have not been queued
 yet), so you never see batch N+1 before N is settled; poll again later. Only batches above your
 `afterSeq` (and after your cursor) can end it: an older batch whose build is still retrying does not
-stop a consumer that is already past it. An empty page with a `null`
+stop a consumer that is already past it. A batch you passed as `abandoned` that an operator later requeues and
+rebuilds does not appear again above your watermark: to pick its file up, reload the site (from
+`/snapshot`, or from the epoch's start). An empty page with a `null`
 cursor means "nothing more for now", not "the site is done".
 
 **A cursor belongs to the site it was issued for**: one of another site, or one this server did not
