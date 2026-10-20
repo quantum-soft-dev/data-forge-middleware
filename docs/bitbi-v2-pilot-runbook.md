@@ -36,9 +36,9 @@ Each item is checked and its answer written in #389 before BitBi is told to star
 
 | Check | How | Expected |
 |---|---|---|
-| v2 is deployed | The image of `deploy/forge-backend` is built from a `develop` commit at or after `d5a0db3a` (#388, the last part of v2); with a key, `GET /api/v1/plugins/bit-bi/v2/sites/SITE/changes` answers **200** (an image without the route answers 404) | 200, and Flyway reports **V61** applied at startup |
+| v2 is deployed | Without BitBi's key: the image tag of `deploy/forge-backend` is a short commit sha (`kubectl -n forge get deploy forge-backend -o jsonpath='{.spec.template.spec.containers[0].image}'`), and it must contain the squash commit of #388's PR — `git merge-base --is-ancestor $(gh pr view 397 --json mergeCommit --jq .mergeCommit.oid) <image sha>` exits 0. Flyway's startup line in the pod log reads `Current version of schema "public": 61` (or `now at version v61`). BitBi can confirm from their side: `GET /api/v1/plugins/bit-bi/v2/sites/SITE/changes` answers **200**, not 404 | the image contains #388; schema at **V61** |
 | Row groups are 8 MiB | `k8s/overlays/dev/configmap-patch.yaml` carries `DELTA_PARQUET_ROW_GROUP_BYTES: "8388608"` (#385). It is consumed through `envFrom`, so applying the overlay restarts nothing: check the **running** pod too, `kubectl -n forge exec deploy/forge-backend -- printenv DELTA_PARQUET_ROW_GROUP_BYTES` | `8388608` in both. A pod started before the change still writes 16 MiB groups: `kubectl -n forge rollout restart deploy/forge-backend` |
-| The snapshot BitBi will load was written with 8 MiB groups | Download one large table through `/snapshot` → `/files` and read its footer: DuckDB `SELECT max(row_group_bytes), max(row_group_num_rows) FROM parquet_metadata('nsftrns.parquet')` | about 8 MiB or less. A file written before the restart keeps 16 MiB groups until the next 02:00 UTC build rewrites it |
+| The snapshot BitBi will load was written with 8 MiB groups | Download the widest table through `/snapshot` → `/files` — on `fyt-new` that is `nsfwork`, the table that crossed BitBi's limit at 16 MiB (`docs/delta-client-v2-guide.md`, "Metrics", the 8 MiB note) — and read its footer: DuckDB `SELECT max(row_group_bytes), max(row_group_num_rows) FROM parquet_metadata('nsfwork.parquet')` | about 8 MiB or less, and rows per group × columns under BitBi's six million cells. A table's snapshot changes only when a build **rewrites that table** — a build with new segments for it; an idle nightly visit rewrites nothing. So a table untouched since the restart keeps its 16 MiB groups until a change to it is built: check the table, not the date of the build |
 | Every row carries `_row_hash`, unique per table | For every table of `/snapshot`: `SELECT count(*), count(_row_hash), count(DISTINCT _row_hash) FROM 'table.parquet'` | three equal numbers per table. On 2026-10-06: 5 028 074 rows, all hashed, all distinct |
 | `track_duplicates` is off | On the FYT machine, the extractor's `config.toml`: `[ingestion.keyless] track_duplicates` absent or `false` (site side; asked of whoever runs the extractor) | off — v2 does not support it (CR, "Row identity") |
 | Extractor frequency | Site side, not ours (CR decision 9). BitBi ask for hourly runs | the value set on the site, written down |
@@ -64,7 +64,7 @@ telling them again before the start:
 ## 2. Deploy and the message to BitBi (person)
 
 1. Tag the deploy: `TAG=deploy-dev/$(date +%Y%m%d-%H%M); git tag $TAG && git push origin $TAG`
-   (`docs/cr-tag-driven-dev-deploy.md`), from a `develop` that contains `d5a0db3a`.
+   (`docs/cr-tag-driven-dev-deploy.md`), from a `develop` commit that contains #388.
 2. Wait for the rollout and repeat the first row of section 1.
 3. Tell BitBi: the host, the site id, the epoch and `checkpointSeq` from `/state`, the date of
    night 1 (the first night after their bootstrap), and where the result is recorded (#389).
@@ -76,23 +76,32 @@ everything between the morning of N−1 and the morning of N.
 
 ### 3.1 Our side
 
-The metrics are **pod-wide, not per site** — no meter here carries a site tag, and the dev server
-holds other sites besides the pilot. A counter that moved says *something* happened; the log line it
-comes with names the site and the table. Read the metrics in the console's Managed Service for
-Prometheus page (PromQL, exported names — `deploy/gke/README.md`, "Metrics scraping (dev)";
-`docs/delta-client-v2-guide.md`, "Metrics", for the full mapping). Counters reset when a pod
-restarts; `increase()` copes with that, so use it and `sum` across pods.
+**No meter here carries a site tag**, and the dev server holds other sites besides the pilot. A
+number that moved says *something* happened; the log line it comes with names the site and the
+table. Read the metrics in the console's Managed Service for Prometheus page (PromQL, exported
+names — `deploy/gke/README.md`, "Metrics scraping (dev)"; `docs/delta-client-v2-guide.md`,
+"Metrics", for the full mapping). Two kinds, two aggregations:
+
+- **Counters** (`*_total`) count what *this pod* did. They reset when a pod restarts; `increase()`
+  copes with that, so use `sum(increase(...))` across pods.
+- **The two database-backed gauges** — `delta_batch_parquet_queue` and
+  `delta_checkpoint_tables_given_up` — are a cached count of rows in the shared database, so every
+  pod reports the **same server-wide number**. `sum` would multiply it by the replica count (the dev
+  HPA runs 1 to 3) and make it move whenever the pod count does. Use `max`. Server-wide also means
+  every site's rows are in it, and the old-epoch artifacts a re-baseline left `ABANDONED` (#244)
+  too.
 
 | What | PromQL | Healthy | When it is not |
 |---|---|---|---|
-| Abandoned batch files | `sum(delta_batch_parquet_queue{status="abandoned"})` | 0, or unchanged since yesterday and already explained | section 4.1 |
-| Batch files stuck in retry | `sum(delta_batch_parquet_queue{status="failed"})` | 0 by the morning | a `FAILED` row retries for about an hour, then becomes `ABANDONED`; until then the v2 feed waits before that batch (`/changes` ends before it) |
+| Abandoned batch files | `max(delta_batch_parquet_queue{status="abandoned"})` | 0, or unchanged since yesterday and already explained — old-epoch artifacts a re-baseline left `ABANDONED` (#244) are legitimate and stay | a rise: find the batch by the WARN/ERROR line, then section 4.1 |
+| Batch files stuck in retry | `max(delta_batch_parquet_queue{status="failed"})` | 0 by the morning | a `FAILED` row retries for about an hour, then becomes `ABANDONED`; until then the v2 feed waits before that batch (`/changes` ends before it) |
 | Lost enqueues recovered | `sum(increase(delta_batch_parquet_enqueue_recovered_total[24h]))` | 0 | not a divergence by itself (#380 recovered the batch, in order); write it down |
 | Whole checkpoint builds aborted | `sum by (reason) (increase(delta_checkpoint_builds_aborted_total[24h]))` | 0 | `/snapshot` stays at the previous `checkpointSeq`; the changes above it are retained, so a running consumer is not affected, but a reload is. `reason` names the cause (`docs/delta-client-v2-guide.md`) |
-| Checkpoint behind ingestion | `max(max_over_time(delta_seq_lag_max[24h]))` (recorded at each commit) | bounded by about a day of changes, not growing from one morning to the next | growing for days: the build is not passing the site; the site's Delta Sync tab says why ("Checkpoint failed", the abort reason) |
-| Tables given up | `sum(delta_checkpoint_tables_given_up)` | 0 | `/snapshot` lists such a table as `missing` |
+| Checkpoint behind ingestion | `max(max_over_time(delta_seq_lag_max[24h]))` (recorded at each commit, all sites); the pilot site's own lag is on its Delta Sync tab | bounded by about a day of changes, not growing from one morning to the next | growing for days: the build is not passing the site. The reason is in `delta_checkpoint_builds_aborted_total{reason}` and the ERROR log for the site — **not** on the Delta Sync tab, which records a build's abort only while a site has no checkpoint at all (pointer 0), and this site has one |
+| Builds deferred behind another build | `sum(increase(delta_checkpoint_builds_deferred_total[24h]))` | 0 | a site's build waited out the fold budget (#178) and is retried the next night; if the WARN names the pilot site, its `/snapshot` is a day older |
+| Tables given up | `max(delta_checkpoint_tables_given_up)` | 0 | `/snapshot` lists such a table as `missing` |
 | Decimals written NULL in Parquet | `sum by (reason) (increase(delta_parquet_unrepresentable_decimals_total[24h]))` | 0 | `overflow`, `non_finite`, `malformed` — an **expected** v1/v2 difference for `overflow`, section 4.4 |
-| v1 side: SQL generation | `sum(increase(sql_generation_errors_total[24h]))`, `sum(increase(sql_generation_delta_segments_poisoned_total[24h]))`, `sum(increase(sql_generation_delta_records_skipped_unrepresentable_key_total[24h]))` | 0 | a difference caused on the **v1** side, section 4.4 |
+| v1 side: SQL generation | `sum(increase(sql_generation_errors_total[24h]))`, `sum(increase(sql_generation_delta_segments_poisoned_total[24h]))`, `sum(increase(sql_generation_delta_records_skipped_unrepresentable_key_total[24h]))` | 0 | a difference caused on the **v1** side, section 4.4. `poisoned` is a **census**: a stuck segment counts again on every retry (about once an hour past the threshold), so 24 a day can be one segment — the ERROR line names it |
 
 **ERROR lines for the site** (the backend logs JSON on dev):
 
@@ -110,10 +119,13 @@ the table (for degraded decimals, one line per rendered table). A background thr
 message search beside it.
 
 **The site's state**, from the admin UI (`/admin/sites/SITE`, Delta Sync tab) or
-`GET /api/v1/sites/SITE/delta/sync-state` with an admin token: the last checkpoint time and seq,
-whether a re-baseline or a rebuild is pending, the last build's abort. Two things there end the
-pilot's night without being a v2 defect: a re-baseline someone requested, and a history wipe —
-both move the epoch (section 4.2).
+`GET /api/v1/sites/SITE/delta/sync-state` with an admin token: the last checkpoint time and seq
+(and so the site's own lag), the outcome of the last **forced** rebuild, and whether a re-baseline
+or a rebuild is pending. It does **not** say why a nightly build failed for this site: the abort
+fields are written only while a site has no checkpoint yet (pointer 0, #224), so for the pilot the
+reason is in `delta_checkpoint_builds_aborted_total{reason}` and the ERROR log. Two things on the
+tab end the pilot's night without being a v2 defect: a re-baseline someone requested, and a history
+wipe — both move the epoch (section 4.2).
 
 ### 3.2 BitBi's side
 
@@ -132,16 +144,22 @@ One comment in #389 per morning:
 
 ```
 Night N (YYYY-MM-DD) — clean | explained | NOT CLEAN
-Ours: abandoned=…, failed=…, recovered=…, builds.aborted=…, seq.lag max=…, unrepresentable{reason}=…, v1 sql errors/poisoned/skipped_key=…, ERRORs for the site: none | <lines>
+Ours: abandoned=… (max), failed=… (max), given-up=… (max), recovered=…, builds.aborted{reason}=…, builds.deferred=…, seq.lag max=…, unrepresentable{reason}=…, v1 sql errors/poisoned/skipped_key=…, ERRORs for the site: none | <lines>
 BitBi: watermark (epoch, seq)=…, last v1 generation=…, tables compared=…, differing tables: none | <table: v1 rows / v2 rows, checksum>
 Explanation: – | <cause and section of the runbook>
-Count of consecutive clean nights: k/7
+Clean nights in the count (lost nights skipped, an unexplained one resets): k/7
 ```
 
 **A night counts** when every difference has a named cause that is not a defect of v2 (sections
-4.3 and 4.4 list the known ones). An unexplained difference resets the count to zero, and the count
-starts again on the first clean night after its cause is fixed. After night 7, a summary comment and
-BitBi's written confirmation quoted in #389 close the ticket.
+4.3 and 4.4 list the known ones). Two other outcomes, treated differently:
+
+- **An unexplained difference resets the count to zero**; it starts again on the first clean night
+  after its cause is fixed.
+- **A lost night** — the v2 consumer halted (section 4.1) and reloaded, or BitBi sent no comparison —
+  is **not counted and does not reset**: the count stays where it was and the next clean night
+  continues it. Nothing was compared, so nothing was shown either way.
+
+After night 7, a summary comment and BitBi's written confirmation quoted in #389 close the ticket.
 
 ## 4. When something is off
 
@@ -164,8 +182,8 @@ BitBi's consumer stops the site at that batch (CR, consumer protocol, step 5) an
   committed records (every table of the batch is `missing`, CR decision 25).
 - **When there is no file to produce** — a 409 on requeue, a `missing` the client cannot repair —
   the consumer waits for the nightly checkpoint to pass the batch (`/state` `checkpointSeq` ≥ its
-  `lastSeq`) and reloads the site from `/snapshot`. That is a night lost for the count, not an
-  unexplained difference.
+  `lastSeq`) and reloads the site from `/snapshot`. That is a **lost night** (section 3.3: not counted,
+  does not reset), not an unexplained difference.
 
 ### 4.2 A missed `full_snapshot`, or an epoch that moved
 

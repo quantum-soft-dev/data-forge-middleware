@@ -277,13 +277,17 @@ pages/{feature}/            # Route pages
   the row groups of the snapshot BitBi will load, read from the file's footer; `_row_hash` on every
   row and unique per table (a table without it needs one re-baseline, CR decision 8, a person's
   call); `track_duplicates` off and the extractor's frequency, both site-side. **Every morning**:
-  the exported PromQL names, with the caveat that every meter is pod-wide (no site tag, and the dev
-  server holds other sites), so the WARN/ERROR line found by site id in the JSON logs is what
-  attributes a moved counter; the v1 side's `sql_generation_*` beside the v2 one, because the
+  the exported PromQL names — counters as `sum(increase())`, the two database-backed gauges
+  (`delta_batch_parquet_queue`, `delta_checkpoint_tables_given_up`) as `max`, since every pod reports
+  the same server-wide count and `sum` would multiply it by the replica count — with the caveat that
+  no meter has a site tag (the dev server holds other sites), so the WARN/ERROR line found by site id
+  in the JSON logs is what attributes a moved number; a nightly build's abort reason comes from
+  `builds.aborted{reason}` and the log, not the Delta Sync tab, which records it only at pointer 0; the v1 side's `sql_generation_*` beside the v2 one, because the
   comparison is v2 against v1 on this server and a v1 loss reads as a divergence; what BitBi send
   (per table: both row counts, both checksums, the v2 watermark, the last v1 generation); a
   comment template for #389. **A night counts** when every difference has a named cause that is not
-  a v2 defect; an unexplained one resets the count. **Explained causes recorded**: lag between the
+  a v2 defect; an unexplained one resets the count to zero, a lost night (a halt and reload, or no
+  comparison) is neither counted nor a reset. **Explained causes recorded**: lag between the
   two consumers; `overflow` decimals (Parquet NULL since #382, v1 SQL keeps the number); v1's
   `unrepresentable_key` skips; a v1 mirror older than #370; DBF duplicates collapsed by the client.
   **Playbooks**: a non-`ready` table (abandoned → `lastError`, requeue; missing → no schema, a lost
