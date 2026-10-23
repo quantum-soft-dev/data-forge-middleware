@@ -101,8 +101,8 @@ names — `deploy/gke/README.md`, "Metrics scraping (dev)"; `docs/delta-client-v
 | Builds deferred behind another build | `sum(increase(delta_checkpoint_builds_deferred_total[24h]))` | 0 | a site's build waited out the fold budget (#178). It is retried once more at the end of the same tick, and only if that retry is deferred too does it wait for the next night — so one site can add **2** in one night. `Deferring site SITE this tick: …` (WARN) names it; if the pilot site was deferred on both passes, its `/snapshot` is a day older |
 | S3 would not say whether an object exists | `sum(increase(delta_s3_read_denied_total[24h]))` | 0 | a read denial S3 would not resolve (#157): a build skipped with `Skipping site SITE this tick` (WARN), not counted on `builds_aborted`. Many sites at once is a bucket-policy or IAM problem, not the site |
 | Tables given up | `max(delta_checkpoint_tables_given_up)` | 0 | `/snapshot` lists such a table as `missing` |
-| Decimals written NULL in Parquet | `sum by (reason) (increase(delta_parquet_unrepresentable_decimals_total[24h]))` | 0 | `overflow`, `non_finite`, `malformed` — an **expected** v1/v2 difference for `overflow`, section 4.4 |
-| v1 side: SQL generation | `sum(increase(sql_generation_errors_total[24h]))`, `sum(increase(sql_generation_delta_segments_poisoned_total[24h]))`, `sum(increase(sql_generation_delta_records_skipped_unrepresentable_key_total[24h]))` | 0 | a difference caused on the **v1** side, section 4.4. `poisoned` is a **census**: a stuck segment counts again on every retry (about once an hour past the threshold), so 24 a day can be one segment — the ERROR line names it |
+| Decimals written NULL in Parquet | `sum by (reason) (increase(delta_parquet_unrepresentable_decimals_total[24h]))` | 0 | `overflow`, `non_finite`, `malformed` — an **expected** v1/v2 difference for `overflow`, section 4.4. The WARN naming the table does not name the site: find it with the second log query below, not the site's |
+| v1 side: SQL generation | `sum(increase(sql_generation_errors_total[24h]))`, `sum(increase(sql_generation_delta_segments_poisoned_total[24h]))`, `sum(increase(sql_generation_delta_records_skipped_unrepresentable_key_total[24h]))` | 0. An **empty** result is 0 as well: `sql_generation_errors_total` and `…_skipped_unrepresentable_key_total` are created on their first increment, so a pod that never had one exports no series (`poisoned` is registered at zero and reads 0) | a difference caused on the **v1** side, section 4.4. `poisoned` is a **census**: a stuck segment counts again on every retry (about once an hour past the threshold), so 24 a day can be one segment — the ERROR line names it |
 
 **WARN and ERROR lines for the site**, every morning whatever the counters say (the backend logs
 JSON on dev). WARN is not optional: the commonest nightly failures — S3, JDBC or scratch errors
@@ -122,9 +122,35 @@ Lines worth knowing by their text (from `CheckpointScheduler`): `Checkpoint buil
 (WARN — the build threw; the message is the cause), `Skipping site SITE this tick: …` (WARN when S3
 would not answer, #157; the same text at INFO is a build discarded by a wipe or a re-baseline, which
 is routine), `Deferring site SITE this tick: …` (WARN, fold budget), `Checkpoint retention failed for
-site SITE: …` (WARN, the build itself succeeded). A WARN for degraded decimals names the table, one
-line per rendered table. A background thread does not always carry the `siteId` MDC key, hence the
-message search beside it.
+site SITE: …` (WARN, the build itself succeeded). A background thread does not always carry the
+`siteId` MDC key, hence the message search beside it.
+
+**The decimal WARNs are not in that query.** `ParquetCheckpointWriter` logs them while writing a
+table's file — `Column C of table T declared decimal(p,s) but its data needs precision N — widening
+the Parquet type …` when the declared schema is narrower than the data, and `Table T: N decimal
+cell(s) written as NULL …` when a value is degraded (`overflow` and the other reasons of the metric
+above). Neither line carries the site id or a `siteId` key, so the site query misses them. Read them
+server-wide, with the thread:
+
+```bash
+gcloud logging read \
+  'resource.type="k8s_container" AND resource.labels.namespace_name="forge"
+   AND jsonPayload.level="WARN"
+   AND jsonPayload.logger="com.bitbi.dfm.delta.application.ParquetCheckpointWriter"' \
+  --project bitbi-dev --freshness=1d --limit=200 \
+  --format='value(timestamp,jsonPayload.thread,jsonPayload.message)'
+```
+
+The thread and the time place a line on a site. `delta-egress-N` writes a segment's per-table delta
+file within seconds of that site's `Delta session committed: siteId=SITE …`; `batch-parquet-finalizer-N`
+writes the completed-batch files soon after; `scheduling-N` is the nightly build, which visits sites
+one at a time and writes the frame before any table, so its lines after `Stored checkpoint frame:
+key=checkpoints/SITE/…` and before the next site's frame line belong to SITE (a merge or a first build
+also ends with `Merged the checkpoint of site SITE …` or `Streamed the first checkpoint of site SITE
+…`). A widening
+WARN alone is not a difference (nothing is lost while the data fits 38 digits); the same set repeats
+every night the site sends data, so a **new** column in it, or a `written as NULL` line, is what to
+write down.
 
 **The site's state**, from the admin UI (`/admin/sites/SITE`, Delta Sync tab) or
 `GET /api/v1/sites/SITE/delta/sync-state` with an admin token: the last checkpoint time and seq
@@ -153,7 +179,7 @@ One comment in #389 per morning:
 
 ```
 Night N (YYYY-MM-DD) — clean | explained | NOT CLEAN
-Ours: abandoned=… (max), failed=… (max), given-up=… (max), recovered=…, builds.aborted{reason}=…, builds.deferred=…, s3.read-denied=…, WARNs `Checkpoint build failed`/`Skipping site` for the site=…, seq.lag max=…, unrepresentable{reason}=…, v1 sql errors/poisoned/skipped_key=…, ERRORs for the site: none | <lines>
+Ours: abandoned=… (max), failed=… (max), given-up=… (max), recovered=…, builds.aborted{reason}=…, builds.deferred=…, s3.read-denied=…, WARNs `Checkpoint build failed`/`Skipping site` for the site=…, seq.lag max=…, unrepresentable{reason}=…, v1 sql errors/poisoned/skipped_key=…, ERRORs for the site: none | <lines>, decimal WARNs for the site: same as yesterday | <new lines>
 BitBi: watermark (epoch, seq)=…, last v1 generation=…, tables compared=…, differing tables: none | <table: v1 rows / v2 rows, checksum>
 Explanation: – | <cause and section of the runbook>
 Consecutive clean nights: k/7
