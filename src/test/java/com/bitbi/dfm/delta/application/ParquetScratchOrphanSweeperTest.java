@@ -76,6 +76,17 @@ class ParquetScratchOrphanSweeperTest {
         assertFalse(Files.exists(orphan));
     }
 
+    /** Issue #404: egress writes its per-table files into the batch directory under its own prefix. */
+    @Test
+    void deletesAnOldEgressScratchFile() throws IOException {
+        Path orphan = scratch(batchDir, ParquetScratch.EGRESS_PREFIX + UUID.randomUUID() + "-", ".parquet");
+        age(orphan, AGE_SECONDS + 1);
+
+        sweeper.sweep();
+
+        assertFalse(Files.exists(orphan));
+    }
+
     @Test
     void keepsAFreshScratchFile() throws IOException {
         // Cutoff is exclusive (mtime.isBefore): a file one second inside the window must stay.
@@ -403,10 +414,14 @@ class ParquetScratchOrphanSweeperTest {
                 Path.of("src/main/java/com/bitbi/dfm/delta/application/CheckpointScratch.java"));
         String batch = Files.readString(
                 Path.of("src/main/java/com/bitbi/dfm/delta/application/BatchParquetFinalizationService.java"));
+        String egress = Files.readString(
+                Path.of("src/main/java/com/bitbi/dfm/delta/application/DeltaEgressService.java"));
         assertTrue(checkpoint.contains("ParquetScratch.CHECKPOINT_PREFIX"));
         assertTrue(batch.contains("ParquetScratch.BATCH_PARQUET_PREFIX"));
+        assertTrue(egress.contains("ParquetScratch.EGRESS_PREFIX"));
         assertFalse(checkpoint.contains("\"checkpoint-\""));
         assertFalse(batch.contains("\"batch-parquet-\""));
+        assertFalse(egress.contains("\"egress-\""));
     }
 
     private static ParquetScratchOrphanSweeper sharedVolumeSweeper(Path checkpointDir, Path batchDir) {

@@ -199,17 +199,10 @@ public class ChangelogSegmentService {
     }
 
     /**
-     * Read back the change records of a persisted segment.
-     *
-     * @param s3Key segment key
-     * @return the segment's change records in order
-     */
-    public List<ChangeRecord> readRecords(String s3Key) {
-        return ChangelogCodec.parse(storage.download(s3Key));
-    }
-
-    /**
-     * Stream a raw segment in wire order without retaining its records. The stream is closed here
+     * Stream a raw segment in wire order without retaining its records — the only way a segment is
+     * read back. A list form existed and is gone (issue #404): a DELTA session is one segment however
+     * large it grows, and the egress and SQL paths that collected it into a list are what turned a
+     * 289 MB segment into an {@link OutOfMemoryError} loop on every replica. The stream is closed here
      * rather than inside the codec: a truncated or corrupt object makes {@code GZIPInputStream}
      * throw while reading the header, and the wrapper that would have closed it is never created.
      */

@@ -1656,7 +1656,7 @@ row the source deleted remains. A **reinit** does not repair it: it reloads the 
 type does. A row **inserted after** the baseline is the one case that is simply absent from the
 mirror, since its `INSERT` is skipped too.
 
-`delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact}` counts
+`delta.parquet.scratch.refused{writer=checkpoint_frame|checkpoint_table|batch_artifact|egress_segment}` counts
 them, and `delta.parquet.scratch.bytes` gauges the live total — **including when the budget is
 unset**, which is the shipped default and how the key is sized before it is turned on
 (`max_over_time(delta_parquet_scratch_bytes[7d])` against the volume).
@@ -2987,6 +2987,73 @@ sitting out the cooldown their old failures earned. The deferral write is **clai
 straggler cannot undo that reset — it requires the attempt count to still be the one its claim saw
 — with one residual stated rather than implied: a reinit of a site whose head was already at zero
 attempts is indistinguishable from no reinit, and costs that head one cooldown.
+
+### A segment that kills its process does not kill the next one (issue #404)
+
+On 01.11.2026 a DELTA session on the test deployment wrote **one** segment of 289 MB raw — a
+periodic session is one segment however large it grows, since only re-baselines and CONTINUOUS
+sessions seal part way, and `delta.ingestion.max-session-bytes` (auto: an eighth of the heap) let it
+through. For 13½ hours every replica that took it died, and the API answered 502. Three things
+lined up, and each is closed here:
+
+- **Egress held the whole segment in heap.** It read the records into a list, copied them per
+  table and rendered each table's file into a `byte[]`. It now streams the segment through
+  `ChangelogSegmentService.forEachRecord` into `DeltaParquetWriter.writeBatchDeltaParquet` — the
+  completed-batch writer of 038: one scratch file per table, every table from one shared pass (two
+  when a table declares a decimal, for its envelope) — and uploads each file from disk. Heap is the
+  open writers' row groups (`delta.parquet.row-group-bytes` each), whatever the segment's size. The
+  tables are known up front from the segment's stats; a segment written before stats existed costs
+  one extra streamed pass to find them. The Bit BI SQL strategy streams the same way, and the list
+  form of the read is gone from `ChangelogSegmentService`, so neither path can quietly return to it.
+- **Two workers took one segment.** The read's `FOR UPDATE SKIP LOCKED` lock ends with its own
+  short transaction (#164), so both of a pod's egress workers — and every replica — read the same
+  global head, and the segment was rendered twice at once, doubling the heap exactly when there was
+  none to spare.
+- **A crash spent no attempt.** The queue deferred a failure it caught; an `OutOfMemoryError` is
+  not an exception it catches, and a liveness kill never reaches any code at all. The attempt count
+  stayed 0, the segment was offered first to the next process, and the next process died on it.
+
+**The claim now spends the attempt and takes a lease, before any work.** `leaseEgress` /
+`leasePluginSql` is one conditional `UPDATE` that increments the attempt count and sets the retry
+time to the lease's end, scoped to the count the read returned — of two workers that read the same
+head, one updates the row and the other gets 0 and moves on to the next head. The read's existing
+backoff filter then keeps the leased segment from everybody until the lease ends. The work's own
+outcome settles it:
+
+| Ending | What the row says afterwards |
+|---|---|
+| Success | `egress_at` / `plugin_sql_at` stamped — the lease is irrelevant |
+| An exception (#243) | the retry time moves to the backoff delay; the attempt was spent by the claim |
+| The pod shutting down (#162), a pod-level SQL refusal (#261) | the claim is **handed back**: the attempt count goes down by one and the segment is claimable at once |
+| The process dies — OOM, liveness kill, eviction | nothing more: the attempt is spent and the segment comes back when the lease lapses, one attempt further up the doubling |
+
+The lease is `delta.egress.claim-lease-seconds` / `plugin.sql-generation.delta-claim-lease-seconds`
+(600 s), or the attempt's retry delay when that is longer — from the fifth attempt on — so a segment
+that keeps killing its process backs off exactly as one that keeps throwing does, and reaches the
+poisoned report after the same seven attempts. Size the lease above the longest piece of work: a
+claimer still working when it lapses is overtaken, which is the pre-#404 behaviour — two renders of
+the same keys, harmless now that a render no longer scales with the segment.
+`sql.generation.claims.lost` should therefore sit near zero; a steady rate means the lease is shorter
+than the generations.
+
+**What this costs.** A pod killed mid-work — a rollout's SIGKILL after the grace period, an
+eviction — leaves its claims held until the lease lapses, so that site's egress or SQL waits up to
+ten minutes where it used to resume at once. A shutdown that reaches the work's failure path hands
+the claim back; one that does not, does not.
+
+**Scratch.** Egress writes into `delta.batch-parquet.temp-dir` under
+`delta.batch-parquet.max-temp-bytes` — a segment's slice of a table is never larger than its batch's
+— with the file prefix `egress-` that `ParquetScratchOrphanSweeper` reclaims, and is charged to the
+shared directory as `writer=egress_segment`, on the batch side of the #193 reserve. A refusal there,
+or a disk error, is the directory's condition rather than the table's, so the whole segment fails and
+is deferred; skipping the table would mark the segment egressed without its file for good. A table
+whose data its schema cannot render, or whose file passes the per-file ceiling, is still skipped
+with an ERROR, the poison-table contract above.
+
+**Not done here.** The SQL strategy still builds the batch's SQL text in heap (135 MB for that
+segment, which generated; a separate, smaller problem), and nothing bounds a DELTA segment's size at
+ingest — sealing a periodic session part way would change what 033 made a seal mean. Both are
+follow-ups.
 
 ### Objects no row references are reclaimed (issue #158)
 

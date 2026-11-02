@@ -89,6 +89,8 @@ public class DeltaSqlQueueService {
                                 int retryDelaySeconds,
                                 @Value("${plugin.sql-generation.delta-poison-after-attempts:7}")
                                 int poisonAfterAttempts,
+                                @Value("${plugin.sql-generation.delta-claim-lease-seconds:600}")
+                                int claimLeaseSeconds,
                                 ApplicationShutdownSignal shutdownSignal) {
         this.segmentRepository = segmentRepository;
         this.siteRepository = siteRepository;
@@ -99,7 +101,8 @@ public class DeltaSqlQueueService {
         this.meterRegistry = meterRegistry;
         this.backoff = new QueueRetryBackoff(
                 "plugin.sql-generation.delta-retry-delay-seconds", retryDelaySeconds,
-                "plugin.sql-generation.delta-poison-after-attempts", poisonAfterAttempts);
+                "plugin.sql-generation.delta-poison-after-attempts", poisonAfterAttempts,
+                "plugin.sql-generation.delta-claim-lease-seconds", claimLeaseSeconds);
         this.shutdownSignal = shutdownSignal;
         // Registered at zero so an alert on either can predate the first failure.
         meterRegistry.counter(DEFERRED_METRIC).increment(0);
@@ -109,7 +112,12 @@ public class DeltaSqlQueueService {
     /**
      * Claim and process the next pending segment.
      *
-     * @return {@code true} when a segment was processed and the drain should continue;
+     * <p>The claim spends the attempt and takes a lease before any work (issue #404), the egress
+     * queue's rule: no other worker or replica is offered the segment while the lease lives, and a
+     * process killed mid-generation leaves it in backoff instead of first in line for the next one.</p>
+     *
+     * @return {@code true} when a segment was processed, or another worker claimed the head first,
+     *         and the drain should continue;
      *         {@code false} when there was nothing claimable, when this attempt failed and the
      *         segment was deferred (issue #243 — the next wake claims another site's head), or when
      *         the failure was the pod shutting down. {@code false} therefore means "stop draining",
@@ -127,12 +135,19 @@ public class DeltaSqlQueueService {
                             + "generation waits on the semaphore and then talks to S3, which would "
                             + "hold that transaction's connection throughout (issue #164).");
         }
-        List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(
-                1, LocalDateTime.now(ZoneOffset.UTC));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(1, now);
         if (claimed.isEmpty()) {
             return false;
         }
         ChangelogSegment segment = claimed.get(0);
+        int claimedAttempts = segment.getPluginSqlAttempts() + 1;
+        if (segmentRepository.leasePluginSql(segment.getId(), backoff.leaseUntil(now, claimedAttempts),
+                segment.getPluginSqlAttempts()) == 0) {
+            // Another worker read the same head and claimed it first; its lease keeps the row out
+            // of the read, so the next iteration is offered a different head.
+            return true;
+        }
 
         // Everything after the claim is inside the try (review round 2): the site lookup, the
         // activation lookup and the mark write can fail deterministically too — a segment whose
@@ -172,10 +187,12 @@ public class DeltaSqlQueueService {
             // would turn a transient overload into a verdict on the data — the rule
             // #150/#162/#178 already hold elsewhere. Ending the drain is also the right
             // answer, since the next claim would be refused too. A wrapped S3 failure is
-            // *not* this type: a missing object for this batch should still poison.
+            // *not* this type: a missing object for this batch should still poison. The claim spent
+            // an attempt (#404), so it is handed back first.
+            releaseClaim(segment, claimedAttempts);
             throw e;
         } catch (RuntimeException e) {
-            deferSegment(segment, e);
+            deferSegment(segment, claimedAttempts, e);
             // Stop this drain after one deferral (issue #243, review round 1): continuing would
             // walk the whole backlog during a systemic failure — a bucket outage, sustained
             // semaphore contention — spending an attempt and a cooldown on every pending segment
@@ -202,24 +219,22 @@ public class DeltaSqlQueueService {
      * repairable; so the attempt count escalates the reporting instead. The outer horizon stays
      * batch retention (#212, {@code delta.retention.segments.deleted-pending}).</p>
      *
-     * <p>The attempt count logged here is this claim's snapshot plus one; the stored count is
-     * incremented in the database, so with two replicas attempting one segment the row can be
-     * ahead of the line logged here.</p>
+     * <p>The attempt was counted by the claim (issue #404), so this only moves the retry time from
+     * the lease to the backoff delay.</p>
      */
-    private void deferSegment(ChangelogSegment segment, RuntimeException failure) {
+    private void deferSegment(ChangelogSegment segment, int attempts, RuntimeException failure) {
         if (shutdownSignal.isShuttingDown()) {
             // The process ending, not the segment failing — #162's rule: such an ending records no
-            // verdict. The segment stays pending and the next process claims it.
+            // verdict. The claim is handed back and the next process claims the segment at once.
             log.info("Delta SQL generation for segment {} ended with the shutdown; it stays pending "
                     + "and spends no attempt", segment.getId());
+            releaseClaim(segment, attempts);
             return;
         }
-        int attemptsAtClaim = segment.getPluginSqlAttempts();
-        int attempts = attemptsAtClaim + 1;
         LocalDateTime retryAt = backoff.nextRetryAt(LocalDateTime.now(ZoneOffset.UTC), attempts);
         int deferred;
         try {
-            deferred = segmentRepository.deferPluginSql(segment.getId(), retryAt, attemptsAtClaim);
+            deferred = segmentRepository.deferPluginSql(segment.getId(), retryAt, attempts);
         } catch (RuntimeException e) {
             // Keep the original failure when the deferral write fails too — likeliest exactly when
             // the segment's own failure was the database (review round 3).
@@ -249,6 +264,20 @@ public class DeltaSqlQueueService {
         } else {
             log.warn("Bit BI delta SQL failed for segment {} of site {} (attempt {}, retry at {}): {}",
                     segment.getId(), segment.getSiteId(), attempts, retryAt, failure.toString());
+        }
+    }
+
+    /**
+     * Hand back a claim whose ending was not this segment's verdict — the pod shutting down (#162) or
+     * refusing on its own account (#261) — so it spends no attempt and is claimable at once
+     * (issue #404). Best effort: when the write fails too, the lease lapses on its own.
+     */
+    private void releaseClaim(ChangelogSegment segment, int claimedAttempts) {
+        try {
+            segmentRepository.releasePluginSql(segment.getId(), claimedAttempts);
+        } catch (RuntimeException e) {
+            log.debug("Could not hand back the claim on segment {}; its lease lapses instead",
+                    segment.getId(), e);
         }
     }
 

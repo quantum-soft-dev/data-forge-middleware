@@ -153,16 +153,11 @@ public class SqlGenerationService {
         // and uploaded SQL for a batch another worker had already claimed: wasted work, not a
         // failure — the batch has its SQL either way.
         //
-        // Read it as a *waste* rate rather than as a defect count, because a non-zero value is the
-        // ordinary state of a busy fleet. Since #164 the queue worker opens no transaction of its
-        // own, so the FOR UPDATE SKIP LOCKED claim in findNextPendingPluginSql releases its row
-        // lock when that query's short transaction commits, and plugin_sql_at is set only *after*
-        // the render — so two overlapping drains (plugin.sql-generation.delta-max-concurrent
-        // defaults to 2, and every replica has its own pool) deterministically pick the same
-        // global head segment and one of them always loses the unique. What is worth watching is
-        // this series against the rate of completed generations: a large share means the fleet is
-        // repeatedly rendering and discarding the same batch, and the lever is that key. Making
-        // the claim durable so the second worker never renders at all is #243's region.
+        // Since issue #404 the queue's claim is durable — it spends the attempt and leases the
+        // segment, so a second drain is not offered it — and this series should sit near zero. It
+        // still moves when a claim is overtaken: a generation that outlives
+        // plugin.sql-generation.delta-claim-lease-seconds, or a reinit re-pending the site while a
+        // generation runs. A steady rate means the lease is shorter than the generations.
         meterRegistry.counter("sql.generation.claims.lost");
         log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}, "
                         + "heapThresholdPercent={} ({})",

@@ -15,11 +15,13 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Issue #369 — a record carrying {@code row_hash} reaches the Bit BI SQL path and changes nothing
@@ -56,7 +58,12 @@ class DeltaSqlGenerationRowHashTest {
         ChangelogSegmentService segments = mock(ChangelogSegmentService.class);
         // Through the segment codec, as the queue reads it: the field has to survive the round trip
         // and still be ignored at the end of it.
-        when(segments.readRecords(anyString())).thenReturn(ChangelogCodec.parse(ChangelogCodec.serialize(records)));
+        List<ChangeRecord> parsed = ChangelogCodec.parse(ChangelogCodec.serialize(records));
+        doAnswer(invocation -> {
+            Consumer<ChangeRecord> consumer = invocation.getArgument(1);
+            parsed.forEach(consumer);
+            return null;
+        }).when(segments).forEachRecord(anyString(), any());
         DeltaSqlGenerationStrategy strategy =
                 new DeltaSqlGenerationStrategy(segments, new SqlStatementGenerator(), new SimpleMeterRegistry());
         ChangelogSegment segment = ChangelogSegment.create(SITE, BATCH, 1L, 2L, 2L, "hash", "delta/key/1",

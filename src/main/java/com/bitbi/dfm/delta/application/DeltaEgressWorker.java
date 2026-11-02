@@ -16,9 +16,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Bounded worker pool draining the delta Parquet egress queue (Delta Client v2 — 022, Task 8).
  *
  * <p>A session commit {@link #wake() wakes} the pool; each drain claims the next pending segment
- * (per-site head, {@code FOR UPDATE SKIP LOCKED} — see
- * {@link com.bitbi.dfm.delta.domain.ChangelogSegmentRepository#findNextPendingEgress}) and
- * materializes it, looping until the queue is empty. Different sites drain in parallel up to
+ * (per-site head, leased by
+ * {@link com.bitbi.dfm.delta.domain.ChangelogSegmentRepository#leaseEgress} so no two workers or
+ * replicas take the same one — issue #404) and materializes it, looping until the queue is empty. Different sites drain in parallel up to
  * {@code delta.egress.max-concurrent}; one site's segments always publish in seq order. Extra
  * wakes while the pool is saturated are discarded — a queued drain will see the new segment.
  * A low-frequency sweep re-wakes the pool for segments left pending by a crash or a failed

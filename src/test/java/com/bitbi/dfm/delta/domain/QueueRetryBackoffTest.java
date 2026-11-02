@@ -20,8 +20,30 @@ class QueueRetryBackoffTest {
 
     private static final String DELAY_KEY = "delta.egress.retry-delay-seconds";
     private static final String ATTEMPTS_KEY = "delta.egress.poison-after-attempts";
+    private static final String LEASE_KEY = "delta.egress.claim-lease-seconds";
 
-    private final QueueRetryBackoff backoff = new QueueRetryBackoff(DELAY_KEY, 60, ATTEMPTS_KEY, 7);
+    private final QueueRetryBackoff backoff = new QueueRetryBackoff(DELAY_KEY, 60, ATTEMPTS_KEY, 7,
+            LEASE_KEY, 600);
+
+    @Test
+    @DisplayName("a claim is leased for at least the lease, so a crash mid-work comes back after it (#404)")
+    void shouldLeaseAClaimForTheLeaseOrTheBackoffWhicheverIsLonger() {
+        assertThat(backoff.leaseUntil(NOW, 1)).isEqualTo(NOW.plusSeconds(600));
+        assertThat(backoff.leaseUntil(NOW, 4)).isEqualTo(NOW.plusSeconds(600));
+        // From the fifth attempt the doubling outgrows the lease, so a segment that keeps killing
+        // its process backs off exactly as one that keeps throwing would.
+        assertThat(backoff.leaseUntil(NOW, 5)).isEqualTo(NOW.plusSeconds(960));
+        assertThat(backoff.leaseUntil(NOW, 9)).isEqualTo(NOW.plusSeconds(60L * 64));
+    }
+
+    @Test
+    @DisplayName("an out-of-range lease fails startup naming its own key (#185)")
+    void shouldRefuseAnOutOfRangeLeaseNamingTheKey() {
+        assertThatThrownBy(() -> new QueueRetryBackoff(DELAY_KEY, 60, ATTEMPTS_KEY, 7, LEASE_KEY, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(LEASE_KEY)
+                .hasMessageContaining("0");
+    }
 
     @Test
     @DisplayName("doubles per attempt so a transient outage gets a wide window")
@@ -58,12 +80,13 @@ class QueueRetryBackoffTest {
     @Test
     @DisplayName("an out-of-range value fails startup naming its own key (#185)")
     void shouldRefuseAnOutOfRangeValueNamingTheKey() {
-        assertThatThrownBy(() -> new QueueRetryBackoff(DELAY_KEY, 0, ATTEMPTS_KEY, 7))
+        assertThatThrownBy(() -> new QueueRetryBackoff(DELAY_KEY, 0, ATTEMPTS_KEY, 7, LEASE_KEY, 600))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(DELAY_KEY)
                 .hasMessageContaining("0");
         assertThatThrownBy(() -> new QueueRetryBackoff("plugin.sql-generation.delta-retry-delay-seconds", 60,
-                "plugin.sql-generation.delta-poison-after-attempts", 0))
+                "plugin.sql-generation.delta-poison-after-attempts", 0,
+                "plugin.sql-generation.delta-claim-lease-seconds", 600))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("plugin.sql-generation.delta-poison-after-attempts");
     }

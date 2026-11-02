@@ -126,7 +126,8 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
             seedSegment(OTHER_SITE, 1, 3);
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-            assertEquals(1, segmentRepository.deferPluginSql(poison.getId(), now.plusMinutes(5), 0));
+            // A claim that never came back and a deferral leave the head in the same state (#404).
+            assertEquals(1, segmentRepository.leasePluginSql(poison.getId(), now.plusMinutes(5), 0));
 
             List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(10, now);
             assertEquals(1, claimed.size(), "only the other site's head is claimable");
@@ -144,7 +145,7 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
         transactionTemplate.executeWithoutResult(tx -> {
             ChangelogSegment poison = seedSegment(SITE, 40, 45);
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-            segmentRepository.deferPluginSql(poison.getId(), now.plusHours(1), 0);
+            segmentRepository.leasePluginSql(poison.getId(), now.plusHours(1), 0);
 
             segmentRepository.clearPluginSqlBySiteId(SITE);
 
@@ -153,6 +154,35 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
             assertNull(reloaded.getPluginSqlRetryAt());
             assertFalse(segmentRepository.findNextPendingPluginSql(10, now).isEmpty(),
                     "claimable again at once, not after the cooldown its old failures earned");
+        });
+    }
+
+    /**
+     * The delta-SQL claim (issue #404), on the real statements: one of two workers wins the lease, a
+     * deferral moves only the retry time and only for the claim holding the row, and a release
+     * returns the attempt.
+     */
+    @Test
+    void leaseDeferAndReleaseAreClaimScoped() {
+        transactionTemplate.executeWithoutResult(tx -> {
+            ChangelogSegment head = seedSegment(SITE, 50, 55);
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+            assertEquals(1, segmentRepository.leasePluginSql(head.getId(), now.plusMinutes(10), 0));
+            assertEquals(0, segmentRepository.leasePluginSql(head.getId(), now.plusMinutes(10), 0),
+                    "the second worker that read 0 attempts does not hold it");
+            assertTrue(segmentRepository.findNextPendingPluginSql(10, now).stream()
+                    .noneMatch(s -> s.getId().equals(head.getId())), "leased heads are offered to nobody");
+
+            assertEquals(0, segmentRepository.deferPluginSql(head.getId(), now.plusMinutes(1), 0));
+            assertEquals(1, segmentRepository.deferPluginSql(head.getId(), now.plusMinutes(1), 1));
+            assertEquals(1, segmentRepository.findById(head.getId()).orElseThrow().getPluginSqlAttempts(),
+                    "the deferral spends nothing the claim did not");
+
+            assertEquals(1, segmentRepository.releasePluginSql(head.getId(), 1));
+            ChangelogSegment released = segmentRepository.findById(head.getId()).orElseThrow();
+            assertEquals(0, released.getPluginSqlAttempts());
+            assertNull(released.getPluginSqlRetryAt());
         });
     }
 

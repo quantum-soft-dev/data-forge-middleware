@@ -120,6 +120,12 @@ public class ParquetScratchBudget {
     static final String CHECKPOINT_FRAME = "checkpoint_frame";
     static final String CHECKPOINT_TABLE = "checkpoint_table";
     static final String BATCH_ARTIFACT = "batch_artifact";
+    /**
+     * Per-segment delta Parquet (issue #404). On the batch side of the #193 reserve: it is the
+     * realtime twin of the completed-batch artifact, written into the same directory under the same
+     * per-file ceiling, and the nightly checkpoint must not lose its share to it either.
+     */
+    static final String EGRESS_SEGMENT = "egress_segment";
 
     private final AtomicLong liveBytes = new AtomicLong();
     private final AtomicLong batchLiveBytes = new AtomicLong();
@@ -165,7 +171,7 @@ public class ParquetScratchBudget {
                 .description("Bytes of file-backed Parquet scratch reserved by live writers")
                 .tag("application", "data-forge-middleware")
                 .register(registry);
-        for (String writer : new String[]{CHECKPOINT_FRAME, CHECKPOINT_TABLE, BATCH_ARTIFACT}) {
+        for (String writer : new String[]{CHECKPOINT_FRAME, CHECKPOINT_TABLE, BATCH_ARTIFACT, EGRESS_SEGMENT}) {
             refusals.put(writer, Counter.builder("delta.parquet.scratch.refused")
                     .description("Writers stopped because the shared scratch directory was full")
                     .tag("application", "data-forge-middleware")
@@ -203,6 +209,11 @@ public class ParquetScratchBudget {
             throw new IllegalArgumentException("Unknown scratch writer: " + writer);
         }
         return new BudgetedLease(writer, refused);
+    }
+
+    /** The writers capped by the batch share — everything but the checkpoint path (#193, #404). */
+    private static boolean onBatchSide(String writer) {
+        return BATCH_ARTIFACT.equals(writer) || EGRESS_SEGMENT.equals(writer);
     }
 
     /**
@@ -259,7 +270,7 @@ public class ParquetScratchBudget {
                 closed = true;
                 if (granted > 0) {
                     liveBytes.addAndGet(-granted);
-                    if (BATCH_ARTIFACT.equals(writer)) {
+                    if (onBatchSide(writer)) {
                         batchLiveBytes.addAndGet(-granted);
                     }
                     granted = 0;
@@ -273,7 +284,7 @@ public class ParquetScratchBudget {
             synchronized (accounting) {
                 long current = liveBytes.get();
                 long batchCurrent = batchLiveBytes.get();
-                long writerLive = BATCH_ARTIFACT.equals(writer) ? batchCurrent : current;
+                long writerLive = onBatchSide(writer) ? batchCurrent : current;
                 long take;
                 if (budgetBytes == 0L) {
                     take = want;
@@ -300,7 +311,7 @@ public class ParquetScratchBudget {
                             current, writerLive);
                 }
                 liveBytes.addAndGet(take);
-                if (BATCH_ARTIFACT.equals(writer)) {
+                if (onBatchSide(writer)) {
                     batchLiveBytes.addAndGet(take);
                 }
                 granted += take;
@@ -317,7 +328,7 @@ public class ParquetScratchBudget {
             if (budgetBytes == 0L) {
                 return 0L;
             }
-            if (BATCH_ARTIFACT.equals(writer)) {
+            if (onBatchSide(writer)) {
                 return budgetBytes - checkpointReserveBytes;
             }
             return budgetBytes;

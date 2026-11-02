@@ -222,6 +222,17 @@ public class S3CheckpointStorage {
         }
     }
 
+    /**
+     * The same object streamed from a local file (issue #404) — what egress uploads since it stopped
+     * rendering a segment's tables into heap. The {@code byte[]} form above stays for fixtures.
+     *
+     * @return the S3 key written
+     */
+    public String uploadDelta(UUID siteId, String tableName, long firstSeq, long lastSeq, Path file) {
+        return putFile(deltaKey(siteId, tableName, firstSeq, lastSeq),
+                "application/vnd.apache.parquet", file, "delta Parquet");
+    }
+
     /** Upload one completed batch/table artifact directly from a local file. */
     public String uploadBatchParquet(UUID siteId, UUID batchId, String tableName,
                                      UUID claimToken, Path file) {

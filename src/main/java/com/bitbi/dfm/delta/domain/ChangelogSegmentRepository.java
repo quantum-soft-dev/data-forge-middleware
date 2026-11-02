@@ -147,9 +147,11 @@ public interface ChangelogSegmentRepository {
 
     /**
      * Pick pending egress work: for every site with un-egressed segments, the earliest one
-     * (lowest {@code first_seq}) — so delta files publish in seq order per site — locked with
-     * {@code FOR UPDATE SKIP LOCKED} so concurrent workers (or instances) never double-process.
-     * Must run inside a transaction.
+     * (lowest {@code first_seq}) — so delta files publish in seq order per site.
+     *
+     * <p>A read, not a claim: the {@code FOR UPDATE SKIP LOCKED} lock ends with the statement's own
+     * short transaction (#164), so two workers can read the same head. The claim is
+     * {@link #leaseEgress}, which only one of them wins (issue #404).</p>
      *
      * <p>A segment whose last attempt failed is held out until its {@code egress_retry_at}
      * (issue #243) — its own site still queues behind it, every other site drains.</p>
@@ -169,8 +171,7 @@ public interface ChangelogSegmentRepository {
     /**
      * Pick pending Bit BI plugin SQL work (026-bitbi-delta-sql): for every site with segments
      * awaiting SQL generation, the earliest one (lowest {@code first_seq}) — so generations are
-     * created in seq order per site — locked with {@code FOR UPDATE SKIP LOCKED} so concurrent
-     * workers never double-process. Must run inside a transaction.
+     * created in seq order per site. A read, not a claim: the claim is {@link #leasePluginSql}.
      *
      * <p>Backoff applies exactly as in {@link #findNextPendingEgress} (issue #243).</p>
      *
@@ -181,28 +182,75 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findNextPendingPluginSql(int limit, LocalDateTime now);
 
     /**
-     * Record a failed delta-SQL attempt and hold the segment out of the queue until {@code retryAt}
-     * (issue #243). Increments the attempt count in the database rather than writing the caller's
-     * snapshot, and is <b>claim-scoped</b>: it does nothing when the segment is no longer pending,
-     * or when its attempt count has moved since the claim — a peer's deferral, or a reinit's reset
-     * (review round 3).
+     * Claim a delta-SQL head: spend its attempt and keep it from every other worker until
+     * {@code leaseUntil} (issue #404).
+     *
+     * <p>The attempt is counted here, before the work, because the failure that matters most never
+     * reaches a deferral: a process killed mid-work (out of heap, a liveness kill) used to leave the
+     * count untouched and the segment claimable at once, so the next process died on it too. The
+     * statement is conditional on the count the read saw, which is what makes it the claim — of two
+     * workers that read the same head, one updates the row and the other gets 0.</p>
+     *
+     * @param id            segment identifier
+     * @param leaseUntil    when the segment becomes claimable again if nothing settles it (UTC)
+     * @param attemptsAtRead the attempt count the read returned
+     * @return 1 if this caller holds the claim, 0 if another took it or the work had landed
+     */
+    int leasePluginSql(UUID id, LocalDateTime leaseUntil, int attemptsAtRead);
+
+    /**
+     * The egress twin of {@link #leasePluginSql(UUID, LocalDateTime, int)} (issue #404).
+     *
+     * @param id             segment identifier
+     * @param leaseUntil     when the segment becomes claimable again if nothing settles it (UTC)
+     * @param attemptsAtRead the attempt count the read returned
+     * @return 1 if this caller holds the claim, 0 if another took it or the segment was egressed
+     */
+    int leaseEgress(UUID id, LocalDateTime leaseUntil, int attemptsAtRead);
+
+    /**
+     * Hand a delta-SQL claim back without spending its attempt (issue #404): the attempt count goes
+     * back down and the segment is claimable at once. For an ending that is not this segment's
+     * verdict — the pod shutting down (#162), a pod-level refusal (#261).
+     *
+     * @param id              segment identifier
+     * @param claimedAttempts the attempt count this claim wrote
+     * @return 1 if the claim was handed back, 0 if the row has moved on since
+     */
+    int releasePluginSql(UUID id, int claimedAttempts);
+
+    /**
+     * The egress twin of {@link #releasePluginSql(UUID, int)} (issue #404).
+     *
+     * @param id              segment identifier
+     * @param claimedAttempts the attempt count this claim wrote
+     * @return 1 if the claim was handed back, 0 if the row has moved on since
+     */
+    int releaseEgress(UUID id, int claimedAttempts);
+
+    /**
+     * Hold a segment whose delta-SQL attempt failed out of the queue until {@code retryAt}
+     * (issue #243). The attempt itself was counted by the claim (issue #404), so this only moves the
+     * retry time; it is <b>claim-scoped</b>: it does nothing when the segment is no longer pending,
+     * or when its attempt count is no longer the one this claim wrote — a peer's claim after the
+     * lease lapsed, or a reinit's reset (review round 3).
      *
      * @param id              segment identifier
      * @param retryAt         when the segment may be claimed again (UTC)
-     * @param attemptsAtClaim the attempt count this claim saw
+     * @param claimedAttempts the attempt count this claim wrote
      * @return 1 if the segment was deferred, 0 if its work had landed or its state moved
      */
-    int deferPluginSql(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
+    int deferPluginSql(UUID id, LocalDateTime retryAt, int claimedAttempts);
 
     /**
      * The egress twin of {@link #deferPluginSql(UUID, LocalDateTime, int)} (issue #243).
      *
      * @param id              segment identifier
      * @param retryAt         when the segment may be claimed again (UTC)
-     * @param attemptsAtClaim the attempt count this claim saw
+     * @param claimedAttempts the attempt count this claim wrote
      * @return 1 if the segment was deferred, 0 if it had been egressed or its state moved
      */
-    int deferEgress(UUID id, LocalDateTime retryAt, int attemptsAtClaim);
+    int deferEgress(UUID id, LocalDateTime retryAt, int claimedAttempts);
 
     /**
      * Stamp {@code plugin_sql_at} and no other column (issue #245).

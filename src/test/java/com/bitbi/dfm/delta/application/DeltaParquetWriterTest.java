@@ -193,10 +193,12 @@ class DeltaParquetWriterTest {
                         Map.of("id", intVal(1), "qty", decVal(".12E+17"))),
                 change(Op.INSERT, 2L, Map.of("id", intVal(2)),
                         Map.of("id", intVal(2), "qty", decVal(".12E+40"))));
-        DecimalDegradeTally degraded = new DecimalDegradeTally();
+        Path output = tempDir.resolve("segment-overflow.parquet");
 
-        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet(
-                "customers", QTY_SCHEMA, records, ROW_GROUP_BYTES, degraded));
+        DecimalDegradeTally degraded = DeltaParquetWriter.writeDeltaParquet(output, "customers", QTY_SCHEMA,
+                records::forEach, Long.MAX_VALUE, ROW_GROUP_BYTES, TestScratchLeases.unbounded())
+                .degradedDecimals();
+        List<GenericRecord> rows = readBack(output);
 
         assertCappedAndNulled(rows);
         assertEquals(1L, degraded.overflowCount());

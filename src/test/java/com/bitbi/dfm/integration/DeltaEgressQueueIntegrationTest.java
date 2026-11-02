@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -105,7 +106,9 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         segment(SITE_B, BATCH_B, 1L, 3L);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5), 0));
+        // A claim held by a worker that never came back (issue #404) and a deferral both leave the
+        // head in exactly this state: one attempt spent, held out until a time in the future.
+        assertEquals(1, repository.leaseEgress(poison.getId(), now.plusMinutes(5), 0));
 
         List<ChangelogSegment> pending = repository.findNextPendingEgress(10, now);
         assertEquals(Set.of(SITE_B + "@1"),
@@ -135,8 +138,8 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         ChangelogSegment claimed = segment(SITE_A, BATCH_A, 1L, 5L);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-        // the egress worker defers it while the delta-SQL worker still holds its claim-time snapshot
-        repository.deferEgress(claimed.getId(), now.plusMinutes(4), 0);
+        // the egress worker leases it while the delta-SQL worker still holds its claim-time snapshot
+        repository.leaseEgress(claimed.getId(), now.plusMinutes(4), 0);
 
         claimed.markPluginSqlProcessed();
         repository.save(claimed);
@@ -155,37 +158,81 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * The deferral is claim-scoped (issue #243, review round 3): a straggler whose attempt started
-     * before a peer's deferral — or before a reinit reset the site's retry state — must not undo
-     * it.
+     * The lease is the claim (issue #404): of two workers that read the same head, the one whose
+     * conditional UPDATE lands first holds it, and the other's finds a different attempt count.
      */
     @Test
-    void doesNotDeferOnBehalfOfAClaimWhoseAttemptCountHasMoved() {
+    void onlyOneOfTwoWorkersThatReadTheSameHeadLeasesIt() {
+        ChangelogSegment head = segment(SITE_A, BATCH_A, 1L, 5L);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        assertEquals(1, repository.leaseEgress(head.getId(), now.plusMinutes(10), 0));
+        assertEquals(0, repository.leaseEgress(head.getId(), now.plusMinutes(10), 0),
+                "the second worker read 0 attempts; the row is at 1 — the head is not its to claim");
+
+        assertTrue(repository.findNextPendingEgress(10, now).isEmpty(),
+                "a leased head is offered to nobody until the lease lapses");
+        assertEquals(1, repository.findNextPendingEgress(10, now.plusMinutes(11)).size(),
+                "a claimer that never came back leaves the segment to the next one");
+    }
+
+    /**
+     * A deferral after the claim only moves the retry time — the claim already spent the attempt —
+     * and is claim-scoped (issue #243, review round 3): a straggler whose claim is no longer the
+     * row's, because the lease lapsed and a peer claimed again or a reinit reset the count, must not
+     * move it.
+     */
+    @Test
+    void defersOnlyOnBehalfOfTheClaimThatHoldsTheRow() {
         ChangelogSegment poison = segment(SITE_A, BATCH_A, 1L, 5L);
         // Truncated to microseconds because that is what a PostgreSQL `timestamp` keeps: the JVM
         // clock is nanosecond-resolution on Linux (micros on macOS), so the round trip would
         // otherwise fail the equality below on CI and pass locally.
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
-        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(5), 0));
+        assertEquals(1, repository.leaseEgress(poison.getId(), now.plusMinutes(10), 0));
 
+        assertEquals(1, repository.deferEgress(poison.getId(), now.plusMinutes(1), 1));
         assertEquals(0, repository.deferEgress(poison.getId(), now.plusMinutes(90), 0),
-                "the second claim saw 0 attempts, the row is at 1 — its deferral is not this one's");
+                "a claim that wrote 0 attempts does not hold a row at 1");
 
         entityManager.flush();
         entityManager.clear();
         ChangelogSegment reloaded = repository.findById(poison.getId()).orElseThrow();
-        assertEquals(1, reloaded.getEgressAttempts());
-        assertEquals(now.plusMinutes(5), reloaded.getEgressRetryAt());
+        assertEquals(1, reloaded.getEgressAttempts(), "the deferral spends nothing the claim did not");
+        assertEquals(now.plusMinutes(1), reloaded.getEgressRetryAt());
     }
 
-    /** A deferral is refused once the work landed (issue #243, the #212 marker-predicate shape). */
+    /**
+     * An ending that is not the segment's verdict — the pod shutting down (#162) — hands the claim
+     * back: the attempt is returned and the segment is claimable at once (issue #404).
+     */
     @Test
-    void doesNotDeferASegmentThatIsAlreadyEgressed() {
+    void releasingAClaimReturnsTheAttemptAndOffersTheSegmentAtOnce() {
+        ChangelogSegment head = segment(SITE_A, BATCH_A, 1L, 5L);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        assertEquals(1, repository.leaseEgress(head.getId(), now.plusMinutes(10), 0));
+
+        assertEquals(0, repository.releaseEgress(head.getId(), 2), "not this claim's count");
+        assertEquals(1, repository.releaseEgress(head.getId(), 1));
+
+        entityManager.flush();
+        entityManager.clear();
+        ChangelogSegment reloaded = repository.findById(head.getId()).orElseThrow();
+        assertEquals(0, reloaded.getEgressAttempts());
+        assertNull(reloaded.getEgressRetryAt());
+        assertEquals(1, repository.findNextPendingEgress(10, now).size());
+    }
+
+    /** Neither a lease nor a deferral touches a segment whose work landed (the #212 marker shape). */
+    @Test
+    void doesNotLeaseOrDeferASegmentThatIsAlreadyEgressed() {
         ChangelogSegment done = segment(SITE_A, BATCH_A, 1L, 5L);
         done.markEgressed();
         repository.save(done);
+        LocalDateTime later = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
 
-        assertEquals(0, repository.deferEgress(done.getId(), LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), 0));
+        assertEquals(0, repository.leaseEgress(done.getId(), later, 0));
+        assertEquals(0, repository.deferEgress(done.getId(), later, 0));
         assertEquals(0, repository.findById(done.getId()).orElseThrow().getEgressAttempts());
     }
 }

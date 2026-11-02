@@ -17,9 +17,12 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -71,6 +74,18 @@ class DeltaSqlGenerationStrategyTest {
         return Value.newBuilder().setDoubleValue(v).build();
     }
 
+    /**
+     * Every segment streams these records (issue #404: the strategy reads a segment through
+     * {@link ChangelogSegmentService#forEachRecord}, never as a list).
+     */
+    private void streams(List<ChangeRecord> records) {
+        doAnswer(invocation -> {
+            Consumer<ChangeRecord> consumer = invocation.getArgument(1);
+            records.forEach(consumer);
+            return null;
+        }).when(segmentService).forEachRecord(anyString(), any());
+    }
+
     private static ChangeRecord record(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
         ChangeRecord.Builder builder = ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq);
         if (key != null) builder.putAllKey(key);
@@ -81,7 +96,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should map INSERT/UPDATE/DELETE to SQL with key merged into INSERT data")
     void shouldMapOpsToSql() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.INSERT, 1, Map.of("id", intVal(1)), Map.of("name", str("Alice"))),
                 record("customers", Op.UPDATE, 2, Map.of("id", intVal(2)), Map.of("name", str("Bob"))),
                 record("customers", Op.DELETE, 3, Map.of("id", intVal(3)), Map.of())));
@@ -111,7 +126,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should skip a record whose key holds a decimal it cannot represent")
     void shouldSkipRecordWithUnrepresentableKey() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.DELETE, 1,
                         Map.of("id", Value.newBuilder().setDecimalValue("NaN").build()), Map.of())));
 
@@ -154,7 +169,7 @@ class DeltaSqlGenerationStrategyTest {
                 new TableSchema.ColumnDefinition("name", "varchar", true),
                 new TableSchema.ColumnDefinition("born", "date", true)),
                 List.of(), List.of());
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("people", Op.DELETE, 1, ordered("name", str("Alice"), "born", sqlNull()), Map.of())));
 
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")),
@@ -179,7 +194,7 @@ class DeltaSqlGenerationStrategyTest {
                 new TableSchema.ColumnDefinition("branch", "varchar", true),
                 new TableSchema.ColumnDefinition("note", "varchar", true)),
                 List.of(), List.of(new TableSchema.UniqueKeyDefinition("uk_code_branch", List.of("code", "branch"))));
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("items", Op.UPDATE, 1, ordered("code", str("A1"), "branch", sqlNull()),
                         Map.of("note", sqlNull())),
                 record("items", Op.DELETE, 2, ordered("code", str("A1"), "branch", sqlNull()), Map.of())));
@@ -197,7 +212,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should carry the record seq in the statement terminator")
     void shouldCarrySeqInTerminator() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.INSERT, 41, Map.of("id", intVal(1)), Map.of())));
 
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(41, 41, "DELTA")), schemas, Map.of());
@@ -208,7 +223,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should filter records at or below the table baseline seq")
     void shouldFilterByBaselineSeq() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.INSERT, 10, Map.of("id", intVal(1)), Map.of()),
                 record("customers", Op.INSERT, 11, Map.of("id", intVal(2)), Map.of()),
                 record("orders", Op.INSERT, 10, Map.of("id", intVal(3)), Map.of())));
@@ -225,7 +240,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should suspend a table entirely when baseline is MAX_VALUE")
     void shouldSuspendTableAtMaxBaseline() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.INSERT, 100, Map.of("id", intVal(1)), Map.of())));
 
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(100, 100, "DELTA")),
@@ -237,7 +252,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should skip records of tables without a declared schema")
     void shouldSkipRecordsWithoutSchema() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("unknown_table", Op.INSERT, 1, Map.of("id", intVal(1)), Map.of()),
                 record("customers", Op.INSERT, 2, Map.of("id", intVal(2)), Map.of())));
 
@@ -250,7 +265,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should filter unknown data columns against the schema")
     void shouldFilterUnknownColumns() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.INSERT, 1, Map.of("id", intVal(1)),
                         Map.of("name", str("Alice"), "ghost_column", str("boo")))));
 
@@ -263,7 +278,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should skip an UPDATE whose data is empty after column filtering")
     void shouldSkipUpdateEmptyAfterFilter() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.UPDATE, 1, Map.of("id", intVal(1)), Map.of("ghost", str("x"))),
                 record("customers", Op.INSERT, 2, Map.of("id", intVal(2)), Map.of())));
 
@@ -289,7 +304,7 @@ class DeltaSqlGenerationStrategyTest {
         Map<String, Value> data = Map.of(
                 "name", Value.newBuilder().setDecimalValue("1E-2").build(),
                 "email", Value.newBuilder().setBytesValue(ByteString.copyFrom(new byte[]{(byte) 0xAB})).build());
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("customers", Op.INSERT, 1,
                         Map.of("id", Value.newBuilder().setIsNull(true).build()), data)));
 
@@ -304,7 +319,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should return null when no records survive filtering")
     void shouldReturnNullWhenNothingGenerated() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of());
+        streams(List.of());
 
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")), schemas, Map.of());
 
@@ -322,7 +337,7 @@ class DeltaSqlGenerationStrategyTest {
     @Test
     @DisplayName("should render a non-finite double as a quoted literal instead of skipping it")
     void shouldRenderNonFiniteDoubleAsQuotedLiteral() throws IOException {
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("orders", Op.UPDATE, 1, Map.of("id", intVal(1)),
                         Map.of("total", dbl(Double.NaN))),
                 record("orders", Op.DELETE, 2,
@@ -363,7 +378,7 @@ class DeltaSqlGenerationStrategyTest {
                                 new TableSchema.ColumnDefinition("label", "varchar", true)),
                         List.of("id"), List.of()));
 
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("priced", Op.DELETE, 1, Map.of("id", dbl(Double.NaN)), Map.of()),
                 // the same hazard one wire case over: a string spelling, quoted just as legally
                 record("priced", Op.DELETE, 3, Map.of("id", str("Infinity")), Map.of()),
@@ -392,7 +407,7 @@ class DeltaSqlGenerationStrategyTest {
                         List.of(new TableSchema.ColumnDefinition("id", "numeric", true)),
                         List.of("id"), List.of()));
 
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("priced", Op.DELETE, 1, Map.of("id", dbl(Double.POSITIVE_INFINITY)), Map.of())));
 
         SqlGenerationResult result = strategy.generate(BATCH, SITE, List.of(segment(1, 1, "DELTA")),
@@ -433,7 +448,7 @@ class DeltaSqlGenerationStrategyTest {
                                 new TableSchema.ColumnDefinition("amount", "numeric", true)),
                         List.of("id"), List.of()));
 
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("priced", Op.UPDATE, 1, Map.of("id", intVal(1)),
                         Map.of("price", dbl(Double.NaN))),
                 record("priced", Op.UPDATE, 2, Map.of("id", intVal(2)),
@@ -497,7 +512,7 @@ class DeltaSqlGenerationStrategyTest {
                 List.of("id"), List.of());
         String thirtySixDigits = "1".repeat(36);
 
-        when(segmentService.readRecords(anyString())).thenReturn(List.of(
+        streams(List.of(
                 record("stock", Op.DELETE, 1, ordered("code", str("A"), "qty", dec(".12E+40")), Map.of()),
                 record("stock", Op.UPDATE, 2, ordered("code", str("B"), "qty", dec(".12E+40")),
                         Map.of("code", str("B2"))),

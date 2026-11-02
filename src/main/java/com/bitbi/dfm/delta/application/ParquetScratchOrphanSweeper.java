@@ -119,7 +119,8 @@ public class ParquetScratchOrphanSweeper {
         // The claim is invisible in the manifests once a deployment is patched out of band
         // (`kubectl set env`, a non-kustomize path), so state it where an operator can see it.
         log.info("Parquet scratch orphan sweep over {}: deleting {} older than {}s{}",
-                directories, ParquetScratch.CHECKPOINT_PREFIX + " / " + ParquetScratch.BATCH_PARQUET_PREFIX,
+                directories, ParquetScratch.CHECKPOINT_PREFIX + " / " + ParquetScratch.BATCH_PARQUET_PREFIX
+                        + " / " + ParquetScratch.EGRESS_PREFIX,
                 ageSeconds,
                 this.privateToPod
                         ? ", and — the directories being declared pod-private — anything older than "
