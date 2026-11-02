@@ -170,9 +170,12 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         assertEquals(0, repository.leaseEgress(head.getId(), now.plusMinutes(10), 0),
                 "the second worker read 0 attempts; the row is at 1 — the head is not its to claim");
 
-        assertTrue(repository.findNextPendingEgress(10, now).isEmpty(),
+        // Filtered to this head: the queue is global and the table shared with every other class.
+        assertTrue(repository.findNextPendingEgress(100, now).stream()
+                        .noneMatch(s -> s.getId().equals(head.getId())),
                 "a leased head is offered to nobody until the lease lapses");
-        assertEquals(1, repository.findNextPendingEgress(10, now.plusMinutes(11)).size(),
+        assertTrue(repository.findNextPendingEgress(100, now.plusMinutes(11)).stream()
+                        .anyMatch(s -> s.getId().equals(head.getId())),
                 "a claimer that never came back leaves the segment to the next one");
     }
 
@@ -220,7 +223,8 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         ChangelogSegment reloaded = repository.findById(head.getId()).orElseThrow();
         assertEquals(0, reloaded.getEgressAttempts());
         assertNull(reloaded.getEgressRetryAt());
-        assertEquals(1, repository.findNextPendingEgress(10, now).size());
+        assertTrue(repository.findNextPendingEgress(100, now).stream()
+                .anyMatch(s -> s.getId().equals(head.getId())));
     }
 
     /** Neither a lease nor a deferral touches a segment whose work landed (the #212 marker shape). */
