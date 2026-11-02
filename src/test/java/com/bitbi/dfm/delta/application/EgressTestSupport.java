@@ -41,7 +41,7 @@ final class EgressTestSupport {
                                      Path scratch) {
         return new DeltaEgressService(repository, segments, schemas, storage, new DeltaMetrics(registry),
                 new DeltaParquetProperties(ROW_GROUP_BYTES), new ParquetScratchBudget(registry, 0L),
-                scratch.toString(), Long.MAX_VALUE, 60, 7, 600, shutdown);
+                scratch.toString(), Long.MAX_VALUE, 8, 60, 7, 600, shutdown);
     }
 
     /** The segment {@code key} streams these records, as many times as it is read. */

@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -41,9 +42,11 @@ import java.util.Set;
  * {@link OutOfMemoryError} killed every replica that claimed it in turn. The records now stream
  * through {@link DeltaParquetWriter#writeBatchDeltaParquet} — the completed-batch writer, one
  * scratch file per table from one shared pass — and each file is uploaded from disk. Heap is the
- * open writers' row groups; the files are charged to the shared scratch directory
- * ({@link ParquetScratchBudget#EGRESS_SEGMENT}) and share the completed-batch directory and
- * per-file ceiling, since a segment's slice of a table is never larger than its batch's.</p>
+ * open writers' row groups, and at most {@code delta.egress.table-writers} are open at once (review
+ * round 2): {@code W x delta.parquet.row-group-bytes} per worker, whatever the segment's size or its
+ * table count; a segment with more tables is read once per group. The files are charged to the
+ * shared scratch directory ({@link ParquetScratchBudget#EGRESS_SEGMENT}) and share the
+ * completed-batch directory and per-file ceiling, since a segment's slice of a table is never larger than its batch's.</p>
  *
  * <p>This class opens <em>no</em> transaction of its own (issue #164). The pending-row claim
  * and the {@code egress_at} write are the repository's short transactions; the S3 download,
@@ -74,6 +77,7 @@ public class DeltaEgressService {
     private final ParquetScratchBudget scratchBudget;
     private final Path tempDirectory;
     private final long maxTempBytes;
+    private final int tableWriters;
 
     public DeltaEgressService(ChangelogSegmentRepository segmentRepository,
                               ChangelogSegmentService changelogSegmentService,
@@ -84,6 +88,7 @@ public class DeltaEgressService {
                               ParquetScratchBudget scratchBudget,
                               @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String tempDirectory,
                               @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
+                              @Value("${delta.egress.table-writers:8}") int tableWriters,
                               @Value("${delta.egress.retry-delay-seconds:60}") int retryDelaySeconds,
                               @Value("${delta.egress.poison-after-attempts:7}") int poisonAfterAttempts,
                               @Value("${delta.egress.claim-lease-seconds:600}") int claimLeaseSeconds,
@@ -97,6 +102,11 @@ public class DeltaEgressService {
         this.scratchBudget = scratchBudget;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
+        if (tableWriters < 1) {
+            throw new IllegalArgumentException(
+                    "delta.egress.table-writers must be at least 1, got " + tableWriters);
+        }
+        this.tableWriters = tableWriters;
         this.backoff = new QueueRetryBackoff("delta.egress.retry-delay-seconds", retryDelaySeconds,
                 "delta.egress.poison-after-attempts", poisonAfterAttempts,
                 "delta.egress.claim-lease-seconds", claimLeaseSeconds);
@@ -266,46 +276,73 @@ public class DeltaEgressService {
         }
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(segment.getSiteId());
         Set<String> tables = tablesOf(segment);
+        List<String> renderable = new ArrayList<>();
+        for (String table : tables) {
+            if (schemas.containsKey(table)) {
+                renderable.add(table);
+            } else {
+                log.warn("No declared schema for table {} of site {} — skipping delta Parquet egress",
+                        table, segment.getSiteId());
+            }
+        }
+
+        // At most delta.egress.table-writers tables at once (review round 2 of #404). A writer per
+        // table would bound the heap by the table count instead of the segment's size — 87 tables x
+        // a 16 MiB row group x two workers is more than the pod has — so the tables are written in
+        // groups, one pass over the segment per group, the #292 trade: ceil(tables / W) reads of the
+        // segment for a heap of W row groups per worker. Each group's files are uploaded and deleted
+        // before the next opens, which bounds the scratch directory the same way.
+        PhaseClock clock = new PhaseClock();
+        try {
+            for (int from = 0; from < renderable.size(); from += tableWriters) {
+                egressGroup(segment, renderable.subList(from, Math.min(from + tableWriters, renderable.size())),
+                        schemas, clock);
+            }
+        } finally {
+            if (clock.hasSamples()) {
+                // The phases this meter has always had: reading the segment (transfer and parse) and
+                // writing the files (the decimal envelope pass included), summed over the groups.
+                metrics.recordEgressPhase("download", clock.downloadNanos() + clock.decodeNanos());
+                if (clock.writeAttempted() || clock.decimalScanAttempted()) {
+                    metrics.recordEgressPhase("write", clock.writeNanos() + clock.decimalScanNanos());
+                }
+            }
+        }
+
+        // Targeted UPDATE of this marker only (issue #245): a save of the claim-time snapshot
+        // would merge plugin_sql_at back to NULL after the SQL worker had already stamped it.
+        segmentRepository.markEgressed(segment.getId());
+        metrics.segmentEgressed();
+
+        log.info("Delta egress done: siteId={}, seq={}..{}, tables={}",
+                segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), tables);
+    }
+
+    /**
+     * Write one group of tables from one pass over the segment and upload them, holding at most the
+     * group's scratch files at once.
+     */
+    private void egressGroup(ChangelogSegment segment, List<String> group, Map<String, TableSchema> schemas,
+                             PhaseClock clock) {
         Map<String, Path> files = new LinkedHashMap<>();
-        // One lease per scratch file, released with the file in the finally below — every file is
-        // kept until the last upload, so the directory carries them all at once (#150).
+        // One lease per scratch file, released with the file in the finally below — the group's files
+        // are kept until its last upload, so the directory carries them all at once (#150).
         Map<String, ScratchLease> leases = new LinkedHashMap<>();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         try {
-            for (String table : tables) {
-                TableSchema schema = schemas.get(table);
-                if (schema == null) {
-                    log.warn("No declared schema for table {} of site {} — skipping delta Parquet egress",
-                            table, segment.getSiteId());
-                    continue;
-                }
-                if (files.isEmpty()) {
-                    Files.createDirectories(tempDirectory);
-                }
+            Files.createDirectories(tempDirectory);
+            for (String table : group) {
                 Path output = Files.createTempFile(tempDirectory,
                         ParquetScratch.EGRESS_PREFIX + segment.getId() + "-", ".parquet");
                 files.put(table, output);
                 ScratchLease lease = scratchBudget.open(ParquetScratchBudget.EGRESS_SEGMENT);
                 leases.put(table, lease);
-                requests.put(table, new DeltaParquetWriter.TableWriteRequest(output, schema, lease));
+                requests.put(table, new DeltaParquetWriter.TableWriteRequest(output, schemas.get(table), lease));
             }
 
-            PhaseClock clock = new PhaseClock();
-            DeltaParquetWriter.BatchWriteResult written;
-            try {
-                written = DeltaParquetWriter.writeBatchDeltaParquet(requests,
-                        consumer -> changelogSegmentService.forEachRecord(segment.getS3Key(), consumer, clock),
-                        maxTempBytes, parquetProperties.rowGroupBytes(), clock);
-            } finally {
-                if (clock.hasSamples()) {
-                    // The phases this meter has always had: reading the segment (transfer and parse)
-                    // and writing the files (the decimal envelope pass included).
-                    metrics.recordEgressPhase("download", clock.downloadNanos() + clock.decodeNanos());
-                    if (clock.writeAttempted() || clock.decimalScanAttempted()) {
-                        metrics.recordEgressPhase("write", clock.writeNanos() + clock.decimalScanNanos());
-                    }
-                }
-            }
+            DeltaParquetWriter.BatchWriteResult written = DeltaParquetWriter.writeBatchDeltaParquet(requests,
+                    consumer -> changelogSegmentService.forEachRecord(segment.getS3Key(), consumer, clock),
+                    maxTempBytes, parquetProperties.rowGroupBytes(), clock);
 
             written.failures().forEach((table, failure) -> {
                 if (failure.storage()) {
@@ -351,14 +388,6 @@ public class DeltaEgressService {
             // while the file itself is residue ParquetScratchOrphanSweeper reclaims.
             leases.values().forEach(ScratchLease::close);
         }
-
-        // Targeted UPDATE of this marker only (issue #245): a save of the claim-time snapshot
-        // would merge plugin_sql_at back to NULL after the SQL worker had already stamped it.
-        segmentRepository.markEgressed(segment.getId());
-        metrics.segmentEgressed();
-
-        log.info("Delta egress done: siteId={}, seq={}..{}, tables={}",
-                segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), tables);
     }
 
     /**

@@ -272,7 +272,11 @@ pages/{feature}/            # Route pages
   table and `toDeltaParquet` rendered each file into a `byte[]`. It now streams through
   `ChangelogSegmentService.forEachRecord` into `DeltaParquetWriter.writeBatchDeltaParquet`, 038's
   file-backed writer, with one scratch file per table from one shared pass (two with a decimal
-  envelope), and uploads from disk (new `S3CheckpointStorage.uploadDelta(..., Path)`). The tables
+  envelope), and uploads from disk (new `S3CheckpointStorage.uploadDelta(..., Path)`). At most new
+  `delta.egress.table-writers` (8, refused below 1 by name) tables are open at once, review round 2:
+  a writer per table bounds the heap by the table count instead (87 x 16 MiB x two workers is past
+  the heap). A segment with more tables is read once per group, and each group's files are uploaded
+  and deleted before the next opens: the #292 `snapshot-writers` trade. The tables
   come from the segment's stats; a segment without stats costs one extra streamed pass. Files go to
   `delta.batch-parquet.temp-dir` under `delta.batch-parquet.max-temp-bytes` with the prefix `egress-`,
   which the orphan sweeper knows. They are charged as new `ParquetScratchBudget.EGRESS_SEGMENT`
@@ -311,7 +315,7 @@ pages/{feature}/            # Route pages
   (one of two leases wins, a leased head is offered to nobody, deferral spends nothing, release
   returns the attempt, none of them touch a processed row). No REST, gRPC, proto, DTO, migration
   (**V62 stays next**; the attempt and retry columns are V55's), `specs/NNN-*`, S3-key or frontend
-  change; two configuration keys, two gauges and one metric tag value added. The temporary cluster workaround
+  change; three configuration keys, two gauges and one metric tag value added. The temporary cluster workaround
   (6Gi, `DELTA_EGRESS_MAX_CONCURRENT=1`) can be removed once this is deployed. See
   `docs/delta-client-v2-guide.md` ("A segment that kills its process does not kill the next one").
 - bitbi-v2-pilot-runbook: The Bit BI v2 pilot on `fyt-new` has a runbook,

@@ -707,7 +707,7 @@ You don't write these — they're how downstream tools read your data:
   volume, where the cost of guessing low is a visible, self-healing hole, while the same reduction
   applied to the frame would stop the pointer and with it retention. The writers delete their own scratch
   file in `finally`; if the process dies first, `ParquetScratchOrphanSweeper` removes
-  `checkpoint-*` / `batch-parquet-*` files older than `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`
+  `checkpoint-*` / `batch-parquet-*` / `egress-*` (#404) files older than `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`
   (`delta.parquet.scratch-orphan-age-seconds`, default **4 hours**) from the configured directories,
   on startup and then every `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS` (default 1 hour). Frame scratch
   files use the same `checkpoint-` prefix, so they are swept too. Age is the only safe filter on a
@@ -1840,7 +1840,7 @@ check that it is a mount:
 
 ```bash
 kubectl exec deploy/forge-backend -n forge -- df -h /scratch/parquet   # its own filesystem line
-kubectl exec deploy/forge-backend -n forge -- ls -la /scratch/parquet  # checkpoint-* / batch-parquet-*
+kubectl exec deploy/forge-backend -n forge -- ls -la /scratch/parquet  # checkpoint-* / batch-parquet-* / egress-*
 ```
 
 **The first rollout can stall on placement.** This is the first time `ephemeral-storage`
@@ -2999,9 +2999,14 @@ lined up, and each is closed here:
 - **Egress held the whole segment in heap.** It read the records into a list, copied them per
   table and rendered each table's file into a `byte[]`. It now streams the segment through
   `ChangelogSegmentService.forEachRecord` into `DeltaParquetWriter.writeBatchDeltaParquet` — the
-  completed-batch writer of 038: one scratch file per table, every table from one shared pass (two
-  when a table declares a decimal, for its envelope) — and uploads each file from disk. Heap is the
-  open writers' row groups (`delta.parquet.row-group-bytes` each), whatever the segment's size. The
+  completed-batch writer of 038: one scratch file per table, the tables of a group from one shared
+  pass (two when a table declares a decimal, for its envelope) — and uploads each file from disk.
+  Heap is the open writers' row groups (`delta.parquet.row-group-bytes` each), and at most
+  `delta.egress.table-writers` (8) are open at once per worker (review round 2): a writer per table
+  would have traded the segment-size bound for a table-count one, 87 tables x 16 MiB x two workers
+  being more than the pod's heap. A segment with more tables is read once per group of eight and
+  each group's files are uploaded and deleted before the next opens — the `snapshot-writers` trade
+  of #292, so the scratch directory is bounded the same way. The
   tables are known up front from the segment's stats; a segment written before stats existed costs
   one extra streamed pass to find them. The Bit BI SQL strategy streams the same way, and the list
   form of the read is gone from `ChangelogSegmentService`, so neither path can quietly return to it.
@@ -3469,8 +3474,8 @@ the budget bounds only the encoder's own buffer; it takes the same key deliberat
 three writers share one pod's heap and one tuning decision.
 `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` / `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS` /
 `DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD` sit next to
-that key because both file-backed writers share the same recovery: leftover `checkpoint-*` and
-`batch-parquet-*` files older than the age — or, on a volume declared pod-private, older than the
+that key because both file-backed writers share the same recovery: leftover `checkpoint-*`,
+`batch-parquet-*` and (since #404) `egress-*` files older than the age — or, on a volume declared pod-private, older than the
 running JVM — are deleted from the configured temp directories.
 
 Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream

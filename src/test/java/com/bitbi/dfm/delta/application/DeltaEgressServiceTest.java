@@ -210,6 +210,55 @@ class DeltaEgressServiceTest {
     }
 
     /**
+     * Review round 2 of #404: one writer per table at once would trade the segment-size bound for a
+     * table-count one — 87 tables x 16 MiB row groups x two workers is more heap than the pod has.
+     * The tables are written {@code delta.egress.table-writers} at a time, one pass over the segment
+     * per group, and each group's files are uploaded and deleted before the next opens.
+     */
+    @Test
+    void shouldWriteTheTablesAtMostTableWritersAtATime() {
+        DeltaEgressService oneAtATime = new DeltaEgressService(segmentRepository, changelogSegmentService,
+                siteSchemaService, storage, new DeltaMetrics(registry),
+                new DeltaParquetProperties(EgressTestSupport.ROW_GROUP_BYTES),
+                new ParquetScratchBudget(registry, 0L), scratch.toString(), Long.MAX_VALUE, 1, 60, 7, 600,
+                shutdownSignal);
+        ChangelogSegment withStats = ChangelogSegment.create(SITE_ID, UUID.randomUUID(), 1L, 2L, 2L,
+                "hash", KEY, "DELTA", Map.of("a", new TableChangeStats(1, 0, 0),
+                        "b", new TableChangeStats(1, 0, 0)));
+        stubSegment(changelogSegmentService, KEY, List.of(
+                insert("a", 1L, Map.of("id", intVal(1))), insert("b", 2L, Map.of("id", intVal(2)))));
+        TableSchema idOnly = new TableSchema(List.of(new ColumnDefinition("id", "bigint", false)),
+                List.of("id"), List.of());
+        when(siteSchemaService.getTableSchemas(SITE_ID)).thenReturn(Map.of("a", idOnly, "b", idOnly));
+        List<Long> filesOnDiskAtUpload = new java.util.ArrayList<>();
+        when(storage.uploadDelta(eq(SITE_ID), anyString(), anyLong(), anyLong(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    try (Stream<Path> files = Files.list(scratch)) {
+                        filesOnDiskAtUpload.add(files.count());
+                    }
+                    return "egress/key";
+                });
+
+        oneAtATime.egressSegment(withStats);
+
+        verify(changelogSegmentService, times(2)).forEachRecord(eq(KEY), any(), any());
+        assertEquals(List.of(1L, 1L), filesOnDiskAtUpload,
+                "one table's file at a time: the first group is deleted before the second opens");
+        verify(segmentRepository).markEgressed(withStats.getId());
+    }
+
+    @Test
+    void shouldRefuseFewerThanOneTableWriterNamingTheKey() {
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> new DeltaEgressService(segmentRepository, changelogSegmentService, siteSchemaService,
+                        storage, new DeltaMetrics(registry),
+                        new DeltaParquetProperties(EgressTestSupport.ROW_GROUP_BYTES),
+                        new ParquetScratchBudget(registry, 0L), scratch.toString(), Long.MAX_VALUE, 0,
+                        60, 7, 600, shutdownSignal));
+        assertTrue(refused.getMessage().contains("delta.egress.table-writers"), refused.getMessage());
+    }
+
+    /**
      * A segment written before stats existed names no tables, so one extra streamed pass finds them
      * — still a stream, never a list.
      */
@@ -237,7 +286,7 @@ class DeltaEgressServiceTest {
         DeltaEgressService tight = new DeltaEgressService(segmentRepository, changelogSegmentService,
                 siteSchemaService, storage, new DeltaMetrics(registry),
                 new DeltaParquetProperties(EgressTestSupport.ROW_GROUP_BYTES),
-                new ParquetScratchBudget(registry, 1L), scratch.toString(), Long.MAX_VALUE, 60, 7, 600,
+                new ParquetScratchBudget(registry, 1L), scratch.toString(), Long.MAX_VALUE, 8, 60, 7, 600,
                 shutdownSignal);
         stubSegment(changelogSegmentService, KEY, List.of(insert("good", 1L, Map.of("id", intVal(1)))));
         when(siteSchemaService.getTableSchemas(SITE_ID)).thenReturn(Map.of(
