@@ -10,11 +10,14 @@ final class ParquetScratch {
 
     static final String CHECKPOINT_PREFIX = "checkpoint-";
     static final String BATCH_PARQUET_PREFIX = "batch-parquet-";
+    /** Per-segment delta Parquet, written to disk since issue #404 instead of into heap. */
+    static final String EGRESS_PREFIX = "egress-";
 
     private ParquetScratch() {
     }
 
     static boolean matches(String fileName) {
-        return fileName.startsWith(CHECKPOINT_PREFIX) || fileName.startsWith(BATCH_PARQUET_PREFIX);
+        return fileName.startsWith(CHECKPOINT_PREFIX) || fileName.startsWith(BATCH_PARQUET_PREFIX)
+                || fileName.startsWith(EGRESS_PREFIX);
     }
 }

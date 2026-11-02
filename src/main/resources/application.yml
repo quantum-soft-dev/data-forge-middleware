@@ -313,6 +313,13 @@ plugin:
     # sql.generation.delta.segments.poisoned — rather than merely retried; >= 1. With the doubling
     # above, 7 attempts span roughly an hour, so a transient outage does not reach it.
     delta-poison-after-attempts: ${PLUGIN_SQL_GENERATION_DELTA_POISON_AFTER_ATTEMPTS:7}
+    # The claim spends the attempt and holds the segment from every other worker and replica for
+    # at least this long (issue #404); past the fourth attempt the retry delay above is longer and
+    # wins. A process killed mid-generation leaves the segment in backoff instead of first in line
+    # for the next process. Size it above the longest generation: a claimer still working when it
+    # lapses is overtaken, which costs a duplicate render. >= 1 second, validated in
+    # DeltaSqlQueueService.
+    delta-claim-lease-seconds: ${PLUGIN_SQL_GENERATION_DELTA_CLAIM_LEASE_SECONDS:600}
 
 plugins:
   bitbi:
@@ -611,6 +618,20 @@ delta:
     # Failed attempts after which the segment is reported as poisoned — an ERROR naming it and
     # delta.egress.segments.poisoned — rather than merely retried; >= 1.
     poison-after-attempts: ${DELTA_EGRESS_POISON_AFTER_ATTEMPTS:7}
+    # The claim spends the attempt and holds the segment from every other worker and replica for
+    # at least this long (issue #404): a segment that kills its process — out of heap, a liveness
+    # kill — comes back after the lease, one attempt further up the doubling, instead of killing the
+    # next process at once. Size it above the longest egress: a claimer still working when it lapses
+    # is overtaken and both write the same keys. >= 1 second, validated in DeltaEgressService.
+    # Egress writes its per-table files into delta.batch-parquet.temp-dir under
+    # delta.batch-parquet.max-temp-bytes — a segment's slice of a table is never larger than its batch's.
+    claim-lease-seconds: ${DELTA_EGRESS_CLAIM_LEASE_SECONDS:600}
+    # Tables written at once by one egress worker (#404, review round 2): each holds a Parquet row
+    # group (delta.parquet.row-group-bytes) in heap, so a writer per table would bound the heap by
+    # the table count — 87 tables x 16 MiB x two workers is more than the pod has. A segment with
+    # more tables is read once per group of this many, the delta.checkpoint.snapshot-writers trade
+    # (#292). >= 1, validated in DeltaEgressService.
+    table-writers: ${DELTA_EGRESS_TABLE_WRITERS:8}
   batch-parquet:
     # Completed-session artifacts are separate from the realtime per-segment egress above.
     max-concurrent: ${DELTA_BATCH_PARQUET_MAX_CONCURRENT:2}

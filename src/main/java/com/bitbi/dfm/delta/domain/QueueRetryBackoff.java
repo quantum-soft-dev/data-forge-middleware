@@ -22,6 +22,15 @@ import java.time.LocalDateTime;
  * object, a misconfigured ceiling) are operator-repairable — so the attempt count escalates
  * reporting rather than discarding work. The outer horizon stays batch retention (#212).</p>
  *
+ * <p><b>The attempt is spent when the segment is claimed, not when it fails</b> (issue #404). A
+ * failure that is an exception is deferred by the queue; a failure that kills the process — an
+ * {@link OutOfMemoryError}, a liveness kill, an eviction — reaches no deferral at all, and before
+ * this the segment went straight back to the next process with its count untouched, so one segment
+ * too large for the heap crash-looped every replica in turn. The claim therefore writes the attempt
+ * and a {@linkplain #leaseUntil lease}: while the lease lives no other worker or replica is offered
+ * the segment, and if the claimer never comes back the segment returns when it lapses, one attempt
+ * further up the doubling — the same escalation a thrown failure gets.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -32,6 +41,7 @@ public final class QueueRetryBackoff {
 
     private final int retryDelaySeconds;
     private final int poisonAfterAttempts;
+    private final int claimLeaseSeconds;
 
     /**
      * @param retryDelayKey        configuration key of {@code retryDelaySeconds}, quoted when it is
@@ -40,9 +50,13 @@ public final class QueueRetryBackoff {
      * @param poisonAttemptsKey    configuration key of {@code poisonAfterAttempts}
      * @param poisonAfterAttempts  consecutive failed attempts after which the segment is reported as
      *                             poisoned rather than merely retried; {@code >= 1}
+     * @param claimLeaseKey        configuration key of {@code claimLeaseSeconds}
+     * @param claimLeaseSeconds    how long a claim keeps the segment from every other worker;
+     *                             {@code >= 1} (issue #404)
      */
     public QueueRetryBackoff(String retryDelayKey, int retryDelaySeconds,
-                             String poisonAttemptsKey, int poisonAfterAttempts) {
+                             String poisonAttemptsKey, int poisonAfterAttempts,
+                             String claimLeaseKey, int claimLeaseSeconds) {
         if (retryDelaySeconds < 1) {
             throw new IllegalArgumentException(
                     retryDelayKey + " must be at least 1 second, got " + retryDelaySeconds);
@@ -51,8 +65,32 @@ public final class QueueRetryBackoff {
             throw new IllegalArgumentException(
                     poisonAttemptsKey + " must be at least 1, got " + poisonAfterAttempts);
         }
+        if (claimLeaseSeconds < 1) {
+            throw new IllegalArgumentException(
+                    claimLeaseKey + " must be at least 1 second, got " + claimLeaseSeconds);
+        }
         this.retryDelaySeconds = retryDelaySeconds;
         this.poisonAfterAttempts = poisonAfterAttempts;
+        this.claimLeaseSeconds = claimLeaseSeconds;
+    }
+
+    /**
+     * Until when a claim holds the segment (issue #404).
+     *
+     * <p>The longer of the lease and this attempt's retry delay. The lease is sized to cover the
+     * work, so a live claimer is never overtaken; the retry delay takes over once the doubling
+     * outgrows it, so a segment that keeps killing its process backs off exactly as one that keeps
+     * throwing does. A claimer that is still working when the lease lapses is overtaken — the
+     * pre-#404 behaviour, harmless since both write the same keys.</p>
+     *
+     * @param now             the claiming instant (UTC)
+     * @param claimedAttempts the attempt count including this claim
+     * @return the instant the segment becomes claimable again if nothing settles it first
+     */
+    public LocalDateTime leaseUntil(LocalDateTime now, int claimedAttempts) {
+        LocalDateTime retryAt = nextRetryAt(now, claimedAttempts);
+        LocalDateTime leased = now.plusSeconds(claimLeaseSeconds);
+        return retryAt.isAfter(leased) ? retryAt : leased;
     }
 
     /**

@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -110,7 +111,7 @@ class DeltaSqlQueueMemoryPressureTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                meterRegistry, 60, 7, new ApplicationShutdownSignal());
+                meterRegistry, 60, 7, 600, new ApplicationShutdownSignal());
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -131,6 +132,7 @@ class DeltaSqlQueueMemoryPressureTest {
 
         segment = ChangelogSegment.create(SITE_ID, BATCH_ID, 1L, 9L, 9L, "hash", "delta/x", "DELTA", Map.of());
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        lenient().when(segmentRepository.leasePluginSql(any(), any(), anyInt())).thenReturn(1);
 
         when(persistence.existsByBatchId(BATCH_ID)).thenReturn(true);
         when(persistence.loadBatchData(eq(BATCH_ID), anyBoolean())).thenReturn(
@@ -158,6 +160,8 @@ class DeltaSqlQueueMemoryPressureTest {
         // never walk a segment towards the poisoned report (#243, the #150/#162/#178 rule that a
         // transient overload does not become a permanent verdict)
         verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        // the claim spent an attempt before the work (#404), so it is handed back
+        verify(segmentRepository).releasePluginSql(segment.getId(), 1);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
         // and nothing was generated or written on the way out
         verifyNoInteractions(deltaStrategy);

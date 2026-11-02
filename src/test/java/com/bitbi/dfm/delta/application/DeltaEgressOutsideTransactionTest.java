@@ -14,10 +14,12 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -27,7 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -50,12 +54,13 @@ class DeltaEgressOutsideTransactionTest {
     private DeltaEgressService service;
     private ChangelogSegment segment;
 
+    @TempDir
+    Path scratch;
+
     @BeforeEach
     void setUp() {
-        service = new DeltaEgressService(segmentRepository, changelogSegmentService,
-                siteSchemaService, storage, new DeltaMetrics(new SimpleMeterRegistry()),
-                new DeltaParquetProperties(8L * 1024 * 1024), 60, 7,
-                new ApplicationShutdownSignal());
+        service = EgressTestSupport.egress(segmentRepository, changelogSegmentService,
+                siteSchemaService, storage, new SimpleMeterRegistry(), new ApplicationShutdownSignal(), scratch);
         segment = ChangelogSegment.create(SITE, UUID.randomUUID(), 1L, 1L, 1L,
                 "hash", "changelog/key", "DELTA", null);
     }
@@ -91,7 +96,9 @@ class DeltaEgressOutsideTransactionTest {
     @Test
     void egressNextPendingDownloadsAndUploadsBeforeMarkingTheRow() {
         when(segmentRepository.findNextPendingEgress(eq(1), any())).thenReturn(List.of(segment));
-        when(changelogSegmentService.readRecords("changelog/key")).thenReturn(List.of(
+        when(segmentRepository.leaseEgress(any(), any(), anyInt())).thenReturn(1);
+        EgressTestSupport.captureUploads(storage);
+        EgressTestSupport.stubSegment(changelogSegmentService, "changelog/key", List.of(
                 ChangeRecord.newBuilder().setTable("orders").setOp(Op.INSERT).setSeq(1L)
                         .putAllKey(Map.of("id", Value.newBuilder().setIntValue(1).build()))
                         .putAllData(Map.of("id", Value.newBuilder().setIntValue(1).build()))
@@ -104,8 +111,9 @@ class DeltaEgressOutsideTransactionTest {
 
         var order = inOrder(changelogSegmentService, storage, segmentRepository);
         order.verify(segmentRepository).findNextPendingEgress(eq(1), any());
-        order.verify(changelogSegmentService).readRecords("changelog/key");
-        order.verify(storage).uploadDelta(eq(SITE), eq("orders"), eq(1L), eq(1L), any(byte[].class));
+        order.verify(segmentRepository).leaseEgress(eq(segment.getId()), any(), eq(0));
+        order.verify(changelogSegmentService, atLeastOnce()).forEachRecord(eq("changelog/key"), any(), any());
+        order.verify(storage).uploadDelta(eq(SITE), eq("orders"), eq(1L), eq(1L), any(Path.class));
         order.verify(segmentRepository).markEgressed(segment.getId());
         assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
     }

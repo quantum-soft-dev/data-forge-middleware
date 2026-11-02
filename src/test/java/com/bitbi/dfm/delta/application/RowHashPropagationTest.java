@@ -22,7 +22,6 @@ import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.ArgumentCaptor;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -37,10 +36,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -368,18 +364,16 @@ class RowHashPropagationTest {
             SiteSchemaService schemas = mock(SiteSchemaService.class);
             S3CheckpointStorage storage = mock(S3CheckpointStorage.class);
             byte[] segmentBytes = ChangelogCodec.serialize(sequenced(insert(1, "a", H1), delete(1, H1)));
-            when(segments.readRecords("changelog/key")).thenReturn(ChangelogCodec.parse(segmentBytes));
+            EgressTestSupport.stubSegment(segments, "changelog/key", ChangelogCodec.parse(segmentBytes));
+            Map<String, byte[]> uploads = EgressTestSupport.captureUploads(storage);
             when(schemas.getTableSchemas(site)).thenReturn(Map.of("t", SCHEMA));
-            DeltaEgressService egress = new DeltaEgressService(mock(ChangelogSegmentRepository.class), segments,
-                    schemas, storage, new DeltaMetrics(new SimpleMeterRegistry()),
-                    new DeltaParquetProperties(8L * 1024 * 1024), 60, 7, new ApplicationShutdownSignal());
+            DeltaEgressService egress = EgressTestSupport.egress(mock(ChangelogSegmentRepository.class), segments,
+                    schemas, storage, new SimpleMeterRegistry(), new ApplicationShutdownSignal(), tempDir);
 
             egress.egressSegment(ChangelogSegment.create(site, UUID.randomUUID(), 1L, 2L, 2L,
                     "hash", "changelog/key", "DELTA", null));
 
-            ArgumentCaptor<byte[]> parquet = ArgumentCaptor.forClass(byte[].class);
-            verify(storage).uploadDelta(eq(site), eq("t"), anyLong(), anyLong(), parquet.capture());
-            assertEquals(hexes(RowHash.hex(H1), RowHash.hex(H1)), rowHashes(read(parquet.getValue())));
+            assertEquals(hexes(RowHash.hex(H1), RowHash.hex(H1)), rowHashes(read(uploads.get("t"))));
         }
 
         private List<GenericRecord> read(byte[] parquet) throws Exception {

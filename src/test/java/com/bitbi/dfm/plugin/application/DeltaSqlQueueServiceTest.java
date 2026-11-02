@@ -15,7 +15,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import ch.qos.logback.classic.Level;
+import com.bitbi.dfm.util.LogCapture;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -81,7 +84,9 @@ class DeltaSqlQueueServiceTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                meterRegistry, 60, 7, shutdownSignal);
+                meterRegistry, 60, 7, 600, shutdownSignal);
+        // Every claim in this class wins its lease unless a test says otherwise (issue #404).
+        lenient().when(segmentRepository.leasePluginSql(any(), any(), anyInt())).thenReturn(1);
 
         site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -238,7 +243,7 @@ class DeltaSqlQueueServiceTest {
                 .isFalse();
 
         ArgumentCaptor<LocalDateTime> retryAt = ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(segmentRepository).deferPluginSql(eq(segment.getId()), retryAt.capture(), eq(0));
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), retryAt.capture(), eq(1));
         assertThat(retryAt.getValue()).isAfter(before.plusSeconds(59));
         assertThat(segment.getPluginSqlAt()).as("still the durable queue entry").isNull();
         verify(segmentRepository, never()).save(segment);
@@ -259,6 +264,7 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(queueService.processNextPending()).isFalse();
 
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any(), eq(7));
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isEqualTo(1.0);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
     }
@@ -278,7 +284,7 @@ class DeltaSqlQueueServiceTest {
     }
 
     @Test
-    @DisplayName("a failure while the pod is shutting down spends no attempt (#162's rule)")
+    @DisplayName("a failure while the pod is shutting down hands the claim back (#162's rule, #404)")
     void shouldNotSpendAnAttemptWhenThePodIsShuttingDown() {
         ChangelogSegment segment = segment("DELTA", Map.of());
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
@@ -289,6 +295,7 @@ class DeltaSqlQueueServiceTest {
         assertThat(queueService.processNextPending()).isFalse();
 
         verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        verify(segmentRepository).releasePluginSql(segment.getId(), 1);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isZero();
     }
 
@@ -340,6 +347,8 @@ class DeltaSqlQueueServiceTest {
                 .isInstanceOf(SqlGenerationService.SemaphoreTimeoutAbortedException.class)
                 .isInstanceOf(SqlGenerationService.PodLevelAbortedException.class);
 
+        verify(segmentRepository).releasePluginSql(segment.getId(), 1);
+
         assertThat(segment.getPluginSqlAt()).isNull();
         verify(segmentRepository, never()).save(segment);
         verify(segmentRepository, never()).markPluginSqlProcessed(any());
@@ -359,6 +368,8 @@ class DeltaSqlQueueServiceTest {
         assertThatThrownBy(() -> queueService.processNextPending())
                 .isInstanceOf(SqlGenerationService.MemoryPressureAbortedException.class)
                 .isInstanceOf(SqlGenerationService.PodLevelAbortedException.class);
+
+        verify(segmentRepository).releasePluginSql(segment.getId(), 1);
 
         assertThat(segment.getPluginSqlAt()).isNull();
         verify(segmentRepository, never()).save(segment);
@@ -385,8 +396,70 @@ class DeltaSqlQueueServiceTest {
 
         assertThat(queueService.processNextPending()).isFalse();
 
-        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any(), eq(0));
+        verify(segmentRepository).deferPluginSql(eq(segment.getId()), any(), eq(1));
         assertThat(meterRegistry.counter("sql.generation.delta.segments.deferred").count()).isEqualTo(1.0);
         assertThat(meterRegistry.counter("sql.generation.delta.segments.poisoned").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("the claim spends the attempt and takes a lease before generating (#404)")
+    void shouldLeaseTheSegmentBeforeGenerating() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        LocalDateTime before = LocalDateTime.now(ZoneOffset.UTC);
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+
+        assertThat(queueService.processNextPending()).isTrue();
+
+        ArgumentCaptor<LocalDateTime> leaseUntil = ArgumentCaptor.forClass(LocalDateTime.class);
+        InOrder order = inOrder(segmentRepository, sqlGenerationService);
+        order.verify(segmentRepository).leasePluginSql(eq(segment.getId()), leaseUntil.capture(), eq(0));
+        order.verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACTIVATION_ID);
+        order.verify(segmentRepository).markPluginSqlProcessed(segment.getId());
+        assertThat(leaseUntil.getValue()).isAfter(before.plusSeconds(599));
+    }
+
+    @Test
+    @DisplayName("a head another worker leased first is left to it (#404)")
+    void shouldLeaveAHeadAnotherWorkerLeasedFirst() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(segmentRepository.leasePluginSql(any(), any(), anyInt())).thenReturn(0);
+
+        assertThat(queueService.processNextPending()).as("the drain goes on to the next head").isTrue();
+
+        verifyNoInteractions(sqlGenerationService);
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("an Error mid-generation leaves the lease in place — the attempt is already spent (#404)")
+    void shouldLeaveTheLeaseInPlaceWhenGenerationDiesWithAnError() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        when(sqlGenerationService.generateSqlForBatch(any(), any()))
+                .thenThrow(new OutOfMemoryError("Java heap space"));
+
+        assertThatThrownBy(() -> queueService.processNextPending()).isInstanceOf(OutOfMemoryError.class);
+
+        verify(segmentRepository).leasePluginSql(eq(segment.getId()), any(), eq(0));
+        verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
+        verify(segmentRepository, never()).releasePluginSql(any(), anyInt());
+        verify(segmentRepository, never()).markPluginSqlProcessed(any());
+    }
+
+    @Test
+    @DisplayName("a head claimed again past the poison threshold is named, since a kill logs nothing (#404 r1)")
+    void shouldNameAHeadClaimedAgainPastThePoisonThreshold() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        ReflectionTestUtils.setField(segment, "pluginSqlAttempts", 7);
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+
+        try (LogCapture capture = LogCapture.attachTo(DeltaSqlQueueService.class)) {
+            assertThat(queueService.processNextPending()).isTrue();
+
+            assertThat(capture.messagesContaining(Level.WARN, segment.getId().toString()))
+                    .singleElement().asString().contains("attempt 8");
+        }
     }
 }

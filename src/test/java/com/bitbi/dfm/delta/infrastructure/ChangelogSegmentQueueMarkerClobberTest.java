@@ -94,7 +94,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
     void sqlMarkLeavesEgressRetryStateIntact() {
         UUID id = seedPending().getId();
         LocalDateTime retryAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
-        assertThat(segmentRepository.deferEgress(id, retryAt, 0)).isEqualTo(1);
+        assertThat(segmentRepository.leaseEgress(id, retryAt, 0)).isEqualTo(1);
 
         assertThat(segmentRepository.markPluginSqlProcessed(id)).isEqualTo(1);
 
@@ -112,7 +112,7 @@ class ChangelogSegmentQueueMarkerClobberTest extends BaseIntegrationTest {
     void egressMarkLeavesSqlRetryStateIntact() {
         UUID id = seedPending().getId();
         LocalDateTime retryAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5);
-        assertThat(segmentRepository.deferPluginSql(id, retryAt, 0)).isEqualTo(1);
+        assertThat(segmentRepository.leasePluginSql(id, retryAt, 0)).isEqualTo(1);
 
         assertThat(segmentRepository.markEgressed(id)).isEqualTo(1);
 

@@ -26,7 +26,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -58,7 +60,7 @@ class DeltaSqlQueueOutsideTransactionTest {
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, mock(PluginDeltaBaselineRepository.class),
-                mock(PluginAuditService.class), new SimpleMeterRegistry(), 60, 7, new ApplicationShutdownSignal());
+                mock(PluginAuditService.class), new SimpleMeterRegistry(), 60, 7, 600, new ApplicationShutdownSignal());
 
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -72,6 +74,7 @@ class DeltaSqlQueueOutsideTransactionTest {
 
         segment = ChangelogSegment.create(SITE_ID, BATCH_ID, 1L, 1L, 1L, "hash", "delta/x", "DELTA", Map.of());
         when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+        lenient().when(segmentRepository.leasePluginSql(any(), any(), anyInt())).thenReturn(1);
     }
 
     @AfterEach

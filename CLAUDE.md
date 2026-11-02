@@ -781,6 +781,59 @@ pages/{feature}/            # Route pages
 - Migrations current at **V61**; next migration is **V62** (do not reuse numbers)
 
 ## Recent Changes
+- egress-streaming-claim-lease: A segment too large for the heap no longer crash-loops every replica
+  (issue #404, the test deployment's outage of 01–02.11.2026: 13½ hours of 502s). A DELTA session is
+  one segment however large it grows, and `fyt-with-hash` wrote one of 289 MB raw. Three defects
+  lined up. **Egress held the segment in heap**: `readRecords` built a list, egress copied it per
+  table and `toDeltaParquet` rendered each file into a `byte[]`. It now streams through
+  `ChangelogSegmentService.forEachRecord` into `DeltaParquetWriter.writeBatchDeltaParquet`, 038's
+  file-backed writer, with one scratch file per table from one shared pass (two with a decimal
+  envelope), and uploads from disk (new `S3CheckpointStorage.uploadDelta(..., Path)`). At most new
+  `delta.egress.table-writers` (8, refused below 1 by name) tables are open at once, review round 2:
+  a writer per table bounds the heap by the table count instead (87 x 16 MiB x two workers is past
+  the heap). A segment with more tables is read once per group, and each group's files are uploaded
+  and deleted before the next opens: the #292 `snapshot-writers` trade. The tables
+  come from the segment's stats; a segment without stats costs one extra streamed pass. Files go to
+  `delta.batch-parquet.temp-dir` under `delta.batch-parquet.max-temp-bytes` with the prefix `egress-`,
+  which the orphan sweeper knows. They are charged as new `ParquetScratchBudget.EGRESS_SEGMENT`
+  (`delta.parquet.scratch.refused{writer=egress_segment}`, registered at zero) on the batch side of
+  the #193 reserve. A scratch refusal or disk error (`FileWriteFailure.storage`) fails the whole
+  segment so it is deferred, since skipping the table would mark it egressed without its file; a
+  render failure or a file past its ceiling is still the poison-table skip. The Bit BI SQL strategy
+  streams the same way, and `readRecords` is deleted so neither path can return to a list.
+  `toDeltaParquet` survives package-private as the renderer tests' wrapper over the file writer.
+  **Two workers took one segment**: the read's `FOR UPDATE SKIP LOCKED` lock ends with its own
+  transaction (#164), so both workers and every replica rendered the same head. **A crash spent no
+  attempt**: `catch (RuntimeException)` misses an `OutOfMemoryError`, a liveness kill reaches no
+  code, and the segment went first to the next process. **The claim now spends the attempt and takes
+  a lease before any work**, in both queues: `leaseEgress` / `leasePluginSql` increment the count and
+  set the retry time to the lease's end, conditional on the count the read saw (one of two readers
+  wins, the other moves on). `deferEgress` / `deferPluginSql` no longer increment: they move the
+  retry time, scoped to the claimed count. New `releaseEgress` / `releasePluginSql` hand a claim back
+  (count down, retry cleared) for a shutdown (#162) and a pod-level SQL refusal (#261). An `Error` is
+  still not caught, deliberately, because the lease already did the work. The lease is new
+  `delta.egress.claim-lease-seconds` / `plugin.sql-generation.delta-claim-lease-seconds` (600, refused
+  below 1 by name), or the attempt's retry delay when longer (`QueueRetryBackoff.leaseUntil`), so a
+  segment that keeps killing its process backs off as one that throws does. **A kill moves no
+  counter** (review round 1 caught the first wording promising the poisoned report): the deferral
+  counters see only caught failures. New gauges `delta.egress.segments.poisoned.pending` and
+  `sql.generation.delta.segments.poisoned.pending` (`PoisonedSegmentMetrics`) count pending rows at
+  or past the poison threshold however the attempts were spent, and a claim that takes such a
+  segment again logs a WARN naming it, the one line a kill loop leaves.
+  **Cost, stated**: a pod killed mid-work leaves its claims held for up to the lease.
+  `sql.generation.claims.lost` should now sit near zero; a steady rate means the lease is shorter
+  than the generations. **Not done**: the SQL text of a batch is still built in heap, and nothing
+  bounds a DELTA segment at ingest. **Tests**: `DeltaEgressServiceTest` (stream, one pass with stats,
+  scratch empty after, scratch refusal fails the segment, lease before work, lost lease, `Error`
+  leaves the lease, deferral and release by claimed count), `DeltaSqlQueueServiceTest` (lease, lost
+  lease, `Error`, release on shutdown and pod-level refusal), `QueueRetryBackoffTest`, and on the
+  real statements `DeltaEgressQueueIntegrationTest` and `DeltaSqlQueueRepositoryIntegrationTest`
+  (one of two leases wins, a leased head is offered to nobody, deferral spends nothing, release
+  returns the attempt, none of them touch a processed row). No REST, gRPC, proto, DTO, migration
+  (**V62 stays next**; the attempt and retry columns are V55's), `specs/NNN-*`, S3-key or frontend
+  change; three configuration keys, two gauges and one metric tag value added. The temporary cluster workaround
+  (6Gi, `DELTA_EGRESS_MAX_CONCURRENT=1`) can be removed once this is deployed. See
+  `docs/delta-client-v2-guide.md` ("A segment that kills its process does not kill the next one").
 - bitbi-v2-pilot-runbook: The Bit BI v2 pilot on `fyt-new` has a runbook,
   `docs/bitbi-v2-pilot-runbook.md` (issue #389, phase 3 of `docs/cr-bitbi-parquet-plugin.md`, linked
   from its status line, plan and ticket table). Documentation only, and **only half of #389**: the

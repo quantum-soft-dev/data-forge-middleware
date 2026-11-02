@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * counterpart of {@link com.bitbi.dfm.delta.application.DeltaEgressWorker}.
  *
  * <p>A batch-completed plugin event {@link #wake() wakes} the pool; each drain claims the next
- * pending segment (per-site head, {@code FOR UPDATE SKIP LOCKED}) via
+ * pending segment (per-site head, leased by {@code leasePluginSql} — issue #404) via
  * {@link DeltaSqlQueueService#processNextPending()} and renders it, looping until the queue is
  * empty. Per-site head-of-line claiming keeps a site's generations in seq order, so
  * {@code /sql-changes} (ordered by {@code created_at}) streams them correctly. A low-frequency

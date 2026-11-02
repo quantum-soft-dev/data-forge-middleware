@@ -53,60 +53,47 @@ public final class DeltaParquetWriter {
 
     private static final CompressionCodecName CODEC = CompressionCodecName.SNAPPY;
 
+    /** A lease that charges nothing: {@link #toDeltaParquet} runs outside the scratch directory. */
+    private static final ScratchLease UNCHARGED = new ScratchLease() {
+        @Override
+        public void charge(long delta) {
+        }
+
+        @Override
+        public void close() {
+        }
+    };
+
     private DeltaParquetWriter() {
     }
 
     /**
-     * Write one table's slice of a segment to an in-memory delta Parquet file.
+     * Render one table's records into Parquet bytes through the same file-backed writer egress and
+     * finalization use — the renderer's own tests read the file back this way.
      *
-     * @param tableName   table name (Parquet record name)
-     * @param tableSchema the stored PG schema for the table
-     * @param records     the segment's change records for this table, in seq order
-     * @param rowGroupBytes the configured row-group budget ({@link DeltaParquetProperties})
-     * @return Parquet file bytes
+     * <p>Not a production path any more (issue #404): egress used to build each table's file in heap
+     * from a list of the whole segment, which is what a 289 MB segment turned into an
+     * {@link OutOfMemoryError} loop. It now streams through {@link #writeBatchDeltaParquet}.</p>
      */
-    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
-                                        long rowGroupBytes) {
-        return toDeltaParquet(tableName, tableSchema, records, rowGroupBytes, new DecimalDegradeTally());
-    }
-
-    /** As above, reporting the cells degraded to NULL (issue #215) into {@code nonFinite}. */
-    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
-                                        long rowGroupBytes, DecimalDegradeTally nonFinite) {
-        List<Map<String, Value>> cellRows = new ArrayList<>(records.size());
-        for (ChangeRecord change : records) {
-            Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
-            cells.putAll(change.getDataMap());
-            cellRows.add(cells);
-        }
-        Schema avro = ParquetCheckpointWriter.widenDecimalsToFit(
-                ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema), cellRows);
-        List<GenericRecord> rows = new ArrayList<>(records.size());
-        for (int i = 0; i < records.size(); i++) {
-            ChangeRecord change = records.get(i);
-            GenericRecord row = new GenericData.Record(avro);
-            row.put("_op", change.getOp().name());
-            row.put("_seq", change.getSeq());
-            // For an UPDATE, record which columns the change actually carried so a consumer can tell
-            // "set to NULL" (listed, null cell) from "unchanged" (not listed, also a null cell). Full
-            // rows (INSERT) and key-only rows (DELETE) leave _changed null.
-            row.put("_changed", change.getOp() == com.bitbi.dfm.delta.grpc.v2.Op.UPDATE
-                    ? String.join(",", change.getDataMap().keySet())
-                    : null);
-            Map<String, Value> cells = cellRows.get(i);
-            for (ColumnDefinition column : tableSchema.columns()) {
-                row.put(column.name(), ParquetCheckpointWriter.coerceValue(
-                        cells.get(column.name()), avro.getField(column.name()).schema(), nonFinite));
+    static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
+                                 long rowGroupBytes) {
+        Path file = null;
+        try {
+            file = Files.createTempFile(ParquetScratch.EGRESS_PREFIX + "render-", ".parquet");
+            writeDeltaParquet(file, tableName, tableSchema, records::forEach, Long.MAX_VALUE,
+                    rowGroupBytes, UNCHARGED);
+            return Files.readAllBytes(file);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to render Parquet for table " + tableName, e);
+        } finally {
+            if (file != null) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException e) {
+                    log.warn("Could not delete Parquet render file {}", file, e);
+                }
             }
-            row.put(ParquetSchemaMapper.ROW_HASH_COLUMN, RowHash.hex(RowHash.of(change)));
-            rows.add(row);
         }
-        // After the write, not before it: a failed write is caught by DeltaEgressService, which
-        // skips the table and never counts -- leaving a WARN describing a file that was never
-        // written (review round 3).
-        byte[] encoded = ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
-        ParquetCheckpointWriter.warnDegraded(tableName, nonFinite);
-        return encoded;
     }
 
     /**
@@ -458,7 +445,13 @@ public final class DeltaParquetWriter {
     record TableWriteRequest(Path output, TableSchema schema, ScratchLease lease) {
     }
 
-    record FileWriteFailure(String error, boolean permanent) {
+    /**
+     * @param permanent the artifact is deterministically too large for its ceiling
+     * @param storage   the failure is the scratch directory's, not the table's — the shared budget
+     *                  was full or the disk refused a write — so it says nothing about the data
+     *                  (issue #404: egress must not skip a table for it)
+     */
+    record FileWriteFailure(String error, boolean permanent, boolean storage) {
     }
 
     record BatchWriteResult(Map<String, FileWriteResult> files,
@@ -468,7 +461,11 @@ public final class DeltaParquetWriter {
     private static FileWriteFailure failure(Throwable error) {
         Throwable cause = error;
         boolean permanent = false;
+        boolean storage = false;
         while (cause != null) {
+            if (cause instanceof ScratchBudgetExceededException || cause instanceof IOException) {
+                storage = true;
+            }
             if (cause instanceof ArtifactSizeLimitExceededException) {
                 // Deterministically too large for its own ceiling: the artifact fails identically
                 // on every retry, so the caller abandons it now instead of spending seven attempts.
@@ -480,7 +477,7 @@ public final class DeltaParquetWriter {
             cause = cause.getCause();
         }
         String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-        return new FileWriteFailure(message, permanent);
+        return new FileWriteFailure(message, permanent, storage && !permanent);
     }
 
     private static final class TableWriter implements AutoCloseable {

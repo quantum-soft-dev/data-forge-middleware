@@ -137,6 +137,17 @@ public interface JpaChangelogSegmentRepository
     @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.egressAt IS NULL")
     long countPendingEgress();
 
+    // Both read the pending partial index of their queue (V33 / V38): the census only ever looks
+    // at rows still owed work, and those are few.
+    @Override
+    @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.egressAt IS NULL AND s.egressAttempts >= :attempts")
+    long countPendingEgressAttemptedAtLeast(int attempts);
+
+    @Override
+    @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.pluginSqlAt IS NULL "
+            + "AND s.pluginSqlAttempts >= :attempts")
+    long countPendingPluginSqlAttemptedAtLeast(int attempts);
+
     // Same backoff filter and same head-of-line rule as findNextPendingEgress (issue #243).
     @Override
     @Query(value = """
@@ -153,30 +164,68 @@ public interface JpaChangelogSegmentRepository
             """, nativeQuery = true)
     java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit, java.time.LocalDateTime now);
 
-    // Targeted UPDATEs, not a save of the claimed entity: the claim lock is released before the
-    // work (#164), so two replicas can attempt one segment at once and the write has to happen in
-    // the database rather than from a snapshot. The statement is **claim-scoped** (review round 3):
-    // the marker predicate is the #212 one — a segment whose work has since landed must not be
-    // pushed into a cooldown by a straggler — and the attempt count must still be the one this
-    // claim saw, so a peer's deferral or a reinit's reset (clearPluginSqlBySiteId zeroes the count)
-    // is not undone by a failure that started before it. The residual is stated rather than
-    // implied: a reinit of a site whose head was at zero attempts is indistinguishable from no
-    // reinit at all, and costs that head one cooldown.
+    // The claim (issue #404). The read above returns a head but holds nothing — its lock ends with
+    // its own short transaction (#164) — so the claim is this conditional UPDATE: it spends the
+    // attempt and writes the lease in one statement, and of two workers that read the same head
+    // only one finds the count it read. The backoff filter of the read is what then keeps every
+    // other worker and replica off the row until the lease lapses.
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.pluginSqlAttempts = s.pluginSqlAttempts + 1, "
-            + "s.pluginSqlRetryAt = :retryAt WHERE s.id = :id AND s.pluginSqlAt IS NULL "
-            + "AND s.pluginSqlAttempts = :attemptsAtClaim")
-    int deferPluginSql(UUID id, java.time.LocalDateTime retryAt, int attemptsAtClaim);
+            + "s.pluginSqlRetryAt = :leaseUntil WHERE s.id = :id AND s.pluginSqlAt IS NULL "
+            + "AND s.pluginSqlAttempts = :attemptsAtRead")
+    int leasePluginSql(UUID id, java.time.LocalDateTime leaseUntil, int attemptsAtRead);
 
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.egressAttempts = s.egressAttempts + 1, "
-            + "s.egressRetryAt = :retryAt WHERE s.id = :id AND s.egressAt IS NULL "
-            + "AND s.egressAttempts = :attemptsAtClaim")
-    int deferEgress(UUID id, java.time.LocalDateTime retryAt, int attemptsAtClaim);
+            + "s.egressRetryAt = :leaseUntil WHERE s.id = :id AND s.egressAt IS NULL "
+            + "AND s.egressAttempts = :attemptsAtRead")
+    int leaseEgress(UUID id, java.time.LocalDateTime leaseUntil, int attemptsAtRead);
+
+    // Handing a claim back (#162 shutdown, #261 pod-level refusal): the attempt was not this
+    // segment's, so the count goes back down and the row is claimable at once. Scoped to the count
+    // the claim wrote, so a claim that lapsed and was taken by a peer is not handed back by a
+    // straggler.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAttempts = s.pluginSqlAttempts - 1, "
+            + "s.pluginSqlRetryAt = NULL WHERE s.id = :id AND s.pluginSqlAt IS NULL "
+            + "AND s.pluginSqlAttempts = :claimedAttempts")
+    int releasePluginSql(UUID id, int claimedAttempts);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.egressAttempts = s.egressAttempts - 1, "
+            + "s.egressRetryAt = NULL WHERE s.id = :id AND s.egressAt IS NULL "
+            + "AND s.egressAttempts = :claimedAttempts")
+    int releaseEgress(UUID id, int claimedAttempts);
+
+    // Targeted UPDATEs, not a save of the claimed entity: the claim lock is released before the
+    // work (#164), so the write has to happen in the database rather than from a snapshot. The
+    // attempt was spent by the claim (issue #404), so a deferral only moves the retry time. The
+    // statement is **claim-scoped** (review round 3 of #243): the marker predicate is the #212 one —
+    // a segment whose work has since landed must not be pushed into a cooldown by a straggler — and
+    // the attempt count must still be the one this claim wrote, so a peer's claim after the lease
+    // lapsed, or a reinit's reset (clearPluginSqlBySiteId zeroes the count), is not undone by a
+    // failure that started before it.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlRetryAt = :retryAt WHERE s.id = :id "
+            + "AND s.pluginSqlAt IS NULL AND s.pluginSqlAttempts = :claimedAttempts")
+    int deferPluginSql(UUID id, java.time.LocalDateTime retryAt, int claimedAttempts);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.egressRetryAt = :retryAt WHERE s.id = :id "
+            + "AND s.egressAt IS NULL AND s.egressAttempts = :claimedAttempts")
+    int deferEgress(UUID id, java.time.LocalDateTime retryAt, int claimedAttempts);
 
     // Targeted UPDATEs of one marker, not a save of the claimed entity (issue #245): since #164
     // the claim lock is released before S3, so a merge of the claim-time snapshot would write the

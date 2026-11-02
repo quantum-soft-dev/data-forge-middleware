@@ -70,9 +70,8 @@ public class DeltaSqlGenerationStrategy {
                                         Map<String, TableSchema> tableSchemas,
                                         Map<String, Long> baselineSeqs) throws IOException {
         StringBuilder sqlContent = new StringBuilder();
-        int totalInserts = 0;
-        int totalUpdates = 0;
-        int totalDeletes = 0;
+        // Counted from inside the stream's consumer, hence an array rather than locals.
+        int[] totals = new int[3];
         int segmentsProcessed = 0;
 
         List<ChangelogSegment> ordered = segments.stream()
@@ -86,36 +85,11 @@ public class DeltaSqlGenerationStrategy {
                 continue;
             }
 
-            for (ChangeRecord record : changelogSegmentService.readRecords(segment.getS3Key())) {
-                String tableName = record.getTable();
-                long seq = record.getSeq();
-
-                if (seq <= baselineSeqs.getOrDefault(tableName, 0L)) {
-                    continue;
-                }
-
-                TableSchema schema = tableSchemas.get(tableName);
-                if (schema == null) {
-                    log.warn("No schema found for table '{}', skipping record: batchId={}, seq={}",
-                            tableName, batchId, seq);
-                    meterRegistry.counter("sql.generation.delta.records.skipped.no_schema").increment();
-                    continue;
-                }
-
-                JsonlChangeRecord mapped = mapRecord(record, schema, tableName);
-                if (mapped == null) {
-                    continue;
-                }
-
-                sqlContent.append(sqlStatementGenerator.generateFromJsonl(mapped, tableName));
-
-                switch (mapped.op()) {
-                    case JsonlChangeRecord.OP_INSERT -> totalInserts++;
-                    case JsonlChangeRecord.OP_UPDATE -> totalUpdates++;
-                    case JsonlChangeRecord.OP_DELETE -> totalDeletes++;
-                    default -> { /* unreachable: mapRecord yields I/U/D only */ }
-                }
-            }
+            // Streamed, never collected (issue #404): a DELTA session is one segment however large
+            // it grows, and a list of its records is what the heap could not hold. The SQL text this
+            // builds is still in heap — a smaller, separate problem.
+            changelogSegmentService.forEachRecord(segment.getS3Key(), record ->
+                    render(record, batchId, tableSchemas, baselineSeqs, sqlContent, totals));
 
             segmentsProcessed++;
             meterRegistry.counter("sql.generation.delta.segments.processed").increment();
@@ -127,8 +101,41 @@ public class DeltaSqlGenerationStrategy {
 
         return new SqlGenerationResult(
                 sqlContent.toString(),
-                new SqlGenerationStats(totalInserts, totalUpdates, totalDeletes, segmentsProcessed)
+                new SqlGenerationStats(totals[0], totals[1], totals[2], segmentsProcessed)
         );
+    }
+
+    /** One record's statement, appended to {@code sqlContent} and counted in {@code totals} (I/U/D). */
+    private void render(ChangeRecord record, UUID batchId, Map<String, TableSchema> tableSchemas,
+                        Map<String, Long> baselineSeqs, StringBuilder sqlContent, int[] totals) {
+        String tableName = record.getTable();
+        long seq = record.getSeq();
+
+        if (seq <= baselineSeqs.getOrDefault(tableName, 0L)) {
+            return;
+        }
+
+        TableSchema schema = tableSchemas.get(tableName);
+        if (schema == null) {
+            log.warn("No schema found for table '{}', skipping record: batchId={}, seq={}",
+                    tableName, batchId, seq);
+            meterRegistry.counter("sql.generation.delta.records.skipped.no_schema").increment();
+            return;
+        }
+
+        JsonlChangeRecord mapped = mapRecord(record, schema, tableName);
+        if (mapped == null) {
+            return;
+        }
+
+        sqlContent.append(sqlStatementGenerator.generateFromJsonl(mapped, tableName));
+
+        switch (mapped.op()) {
+            case JsonlChangeRecord.OP_INSERT -> totals[0]++;
+            case JsonlChangeRecord.OP_UPDATE -> totals[1]++;
+            case JsonlChangeRecord.OP_DELETE -> totals[2]++;
+            default -> { /* unreachable: mapRecord yields I/U/D only */ }
+        }
     }
 
     /**

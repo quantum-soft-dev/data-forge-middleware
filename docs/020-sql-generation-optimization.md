@@ -399,6 +399,7 @@ bean's constructor — and an out-of-range value **fails the application context
 | `delta-sweep-ms` | `>= 1` | `DeltaSqlSweepWorker` |
 | `delta-retry-delay-seconds` | `>= 1` | `DeltaSqlQueueService` (#243) |
 | `delta-poison-after-attempts` | `>= 1` | `DeltaSqlQueueService` (#243) |
+| `delta-claim-lease-seconds` | `>= 1` | `DeltaSqlQueueService` (#404) |
 
 None of the five #185 covered was scoped out, and the two keys #243 added carry the same rule.
 The rest of the application's `@Scheduled(fixedDelayString)` interval keys — every sweep that
@@ -524,22 +525,18 @@ generation, and one increment of the new counter
   occurrence. It counts *attempts that rendered and uploaded SQL for a batch another worker had
   already claimed*: wasted work, not a failure — the batch has its SQL either way.
 
-**Read that counter as a waste rate, not as a defect count** (review round 2 corrected the first
-wording, which called a steady rate alert-worthy). A non-zero value is the ordinary state of a busy
-fleet: since #164 `DeltaSqlQueueService.processNextPending` opens no transaction of its own, so the
-`FOR UPDATE SKIP LOCKED` claim in `findNextPendingPluginSql` releases its row lock as soon as that
-query's own short transaction commits, and `plugin_sql_at` is set only *after* the render —
-a targeted `UPDATE` of that column only (issue #245), so a concurrent egress mark cannot be
-merged back to `NULL`. Two
-overlapping drains — `plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every
-replica has its own pool — therefore pick the same global head segment deterministically, and one
-of them always loses the unique. An alert on "any steady rate" would fire continuously in healthy
-operation.
-
-What is worth watching is this series **against the rate of completed generations**: a large share
-means the fleet is repeatedly rendering, uploading and discarding the same batch, and the only lever
-short of a durable claim is that key. Making the claim durable so the second worker never renders at
-all belongs to the queue rather than here — recorded on **#243**, which owns that claim query.
+**Since issue #404 the counter should sit near zero.** Before it, a non-zero value was the ordinary
+state of a busy fleet: since #164 `DeltaSqlQueueService.processNextPending` opens no transaction of
+its own, so the `FOR UPDATE SKIP LOCKED` read in `findNextPendingPluginSql` releases its row lock as
+soon as that query's own short transaction commits, and two overlapping drains —
+`plugin.sql-generation.delta-max-concurrent` defaults to **2**, and every replica has its own pool —
+picked the same global head and one of them lost the unique. The claim is now durable:
+`leasePluginSql` spends the attempt and holds the segment from every other worker for
+`plugin.sql-generation.delta-claim-lease-seconds` (600 s), so the second drain is offered another
+head. What still moves the counter is a claim being overtaken — a generation that outlives the
+lease, or a reinit re-pending the site while a generation runs — and a steady rate means the lease is
+shorter than the generations. See `docs/delta-client-v2-guide.md` ("A segment that kills its process
+does not kill the next one").
 
 Two neighbouring series still move for both callers, deliberately: `sql.generation.duration` takes
 a sample from each (both really did render), and `sql.generation.semaphore.acquired` counts both
