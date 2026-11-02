@@ -171,10 +171,10 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
                 "the second worker read 0 attempts; the row is at 1 — the head is not its to claim");
 
         // Filtered to this head: the queue is global and the table shared with every other class.
-        assertTrue(repository.findNextPendingEgress(100, now).stream()
+        assertTrue(repository.findNextPendingEgress(Integer.MAX_VALUE, now).stream()
                         .noneMatch(s -> s.getId().equals(head.getId())),
                 "a leased head is offered to nobody until the lease lapses");
-        assertTrue(repository.findNextPendingEgress(100, now.plusMinutes(11)).stream()
+        assertTrue(repository.findNextPendingEgress(Integer.MAX_VALUE, now.plusMinutes(11)).stream()
                         .anyMatch(s -> s.getId().equals(head.getId())),
                 "a claimer that never came back leaves the segment to the next one");
     }
@@ -223,7 +223,7 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         ChangelogSegment reloaded = repository.findById(head.getId()).orElseThrow();
         assertEquals(0, reloaded.getEgressAttempts());
         assertNull(reloaded.getEgressRetryAt());
-        assertTrue(repository.findNextPendingEgress(100, now).stream()
+        assertTrue(repository.findNextPendingEgress(Integer.MAX_VALUE, now).stream()
                 .anyMatch(s -> s.getId().equals(head.getId())));
     }
 

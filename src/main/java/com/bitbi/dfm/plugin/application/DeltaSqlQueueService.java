@@ -29,9 +29,9 @@ import java.util.Set;
 /**
  * Transactional consumer of the delta-SQL work queue (026-bitbi-delta-sql).
  *
- * <p>Claims the per-site head pending segment ({@code FOR UPDATE SKIP LOCKED}), renders it into
- * plugin SQL via {@link SqlGenerationService} (semaphore, idempotency, audit and persistence all
- * reused), and marks it processed. This class opens <em>no</em> transaction of its own
+ * <p>Claims the per-site head pending segment (read, then leased with the attempt spent — issue
+ * #404), renders it into plugin SQL via {@link SqlGenerationService} (semaphore, idempotency,
+ * audit and persistence all reused), and marks it processed. This class opens <em>no</em> transaction of its own
  * (issue #164): the claim query, the skip/snapshot path and the {@code plugin_sql_at} write
  * are short repository transactions, and generation — which first waits on the SQL semaphore
  * and then talks to S3 — runs with nothing open. The mark is a targeted

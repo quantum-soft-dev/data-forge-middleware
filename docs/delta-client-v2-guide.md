@@ -2653,12 +2653,14 @@ network round trip, and the delta-SQL worker must not hold one across the genera
 either (up to `plugin.sql-generation.semaphore-timeout-seconds`, 120 s).
 
 `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` open **no**
-transaction of their own. The pending-row claim (`FOR UPDATE SKIP LOCKED`) and the later
+transaction of their own. The pending-row read and its claim (since #404 a conditional
+`UPDATE` spending the attempt and taking a lease — see "A segment that kills its process") and the later
 `egress_at` / `plugin_sql_at` write are the repository's short transactions; the S3 download,
 Parquet render, per-table uploads, semaphore wait and SQL `PutObject` run with nothing open. A
 crash between the two halves leaves the row pending and the sweep retries — the same keys are
-overwritten. Two workers can now claim the same pending SQL segment; `uk_sql_gen_source_batch`
-is the durable claim (the loser adopts the winner's row and deletes its own orphaned SQL object).
+overwritten. Since #404 two workers no longer take the same pending segment while its lease lives;
+`uk_sql_gen_source_batch` stays the backstop for a claim that is overtaken (the loser adopts the
+winner's row and deletes its own orphaned SQL object).
 `generateSqlForBatch` acquires the semaphore *before* any transaction and throws if
 one is already open, so the hold cannot return silently. `loadBatchData` and
 `saveGenerationRecord` live on `SqlGenerationPersistence` so their `@Transactional` is a real
@@ -3002,8 +3004,9 @@ lined up, and each is closed here:
   completed-batch writer of 038: one scratch file per table, the tables of a group from one shared
   pass (two when a table declares a decimal, for its envelope) — and uploads each file from disk.
   Heap is the open writers' row groups (`delta.parquet.row-group-bytes` each), and at most
-  `delta.egress.table-writers` (8) are open at once per worker (review round 2): a writer per table
-  would have traded the segment-size bound for a table-count one, 87 tables x 16 MiB x two workers
+  `delta.egress.table-writers` (8) are open at once per worker (review round 2) — size the claim
+  lease above `ceil(tables / 8)` reads of the segment, twice that when a table declares decimals.
+  A writer per table would have traded the segment-size bound for a table-count one, 87 tables x 16 MiB x two workers
   being more than the pod's heap. A segment with more tables is read once per group of eight and
   each group's files are uploaded and deleted before the next opens — the `snapshot-writers` trade
   of #292, so the scratch directory is bounded the same way. The
@@ -3068,7 +3071,8 @@ the claim back; one that does not, does not.
 — with the file prefix `egress-` that `ParquetScratchOrphanSweeper` reclaims, and is charged to the
 shared directory as `writer=egress_segment`, on the batch side of the #193 reserve. A refusal there,
 or a disk error, is the directory's condition rather than the table's, so the whole segment fails and
-is deferred; skipping the table would mark the segment egressed without its file for good. A table
+is deferred — which also moves `delta.egress.errors` and, if it lasts, `*.segments.poisoned`: a
+directory held full by a completed-batch backlog is one more systemic cause for that alert; skipping the table would mark the segment egressed without its file for good. A table
 whose data its schema cannot render, or whose file passes the per-file ceiling, is still skipped
 with an ERROR, the poison-table contract above.
 

@@ -399,6 +399,7 @@ bean's constructor — and an out-of-range value **fails the application context
 | `delta-sweep-ms` | `>= 1` | `DeltaSqlSweepWorker` |
 | `delta-retry-delay-seconds` | `>= 1` | `DeltaSqlQueueService` (#243) |
 | `delta-poison-after-attempts` | `>= 1` | `DeltaSqlQueueService` (#243) |
+| `delta-claim-lease-seconds` | `>= 1` | `DeltaSqlQueueService` (#404) |
 
 None of the five #185 covered was scoped out, and the two keys #243 added carry the same rule.
 The rest of the application's `@Scheduled(fixedDelayString)` interval keys — every sweep that
