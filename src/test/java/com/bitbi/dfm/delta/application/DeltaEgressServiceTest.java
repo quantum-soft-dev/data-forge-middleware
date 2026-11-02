@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import ch.qos.logback.classic.Level;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.TableChangeStats;
@@ -11,6 +12,7 @@ import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
+import com.bitbi.dfm.util.LogCapture;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -275,6 +277,41 @@ class DeltaEgressServiceTest {
         order.verify(segmentRepository).markEgressed(segment.getId());
         assertTrue(leaseUntil.getValue().isAfter(before.plusSeconds(599)),
                 "the lease covers the work, not just the first retry delay: " + leaseUntil.getValue());
+    }
+
+    /**
+     * Review round 1 of #404: a segment that kills its process leaves no failure line, so the claim
+     * that takes it again past the threshold is the one place that can name it. Its attempts may
+     * also have been spent by thrown failures — the line says both.
+     */
+    @Test
+    void shouldNameASegmentClaimedAgainPastThePoisonThreshold() {
+        ReflectionTestUtils.setField(segment, "egressAttempts", 7);
+        segmentIsOffered();
+        when(siteSchemaService.getTableSchemas(SITE_ID)).thenReturn(Map.of());
+        stubSegment(changelogSegmentService, KEY, List.of());
+
+        try (LogCapture capture = LogCapture.attachTo(DeltaEgressService.class)) {
+            assertTrue(service.egressNextPending());
+
+            List<String> warnings = capture.messagesContaining(Level.WARN, segment.getId().toString());
+            assertEquals(1, warnings.size(), "one line naming the segment: " + capture.messagesAt(Level.WARN));
+            assertTrue(warnings.get(0).contains("8"), "with the attempt it is now on: " + warnings.get(0));
+        }
+    }
+
+    @Test
+    void shouldNotWarnWhenClaimingASegmentBelowThePoisonThreshold() {
+        ReflectionTestUtils.setField(segment, "egressAttempts", 5);
+        segmentIsOffered();
+        when(siteSchemaService.getTableSchemas(SITE_ID)).thenReturn(Map.of());
+        stubSegment(changelogSegmentService, KEY, List.of());
+
+        try (LogCapture capture = LogCapture.attachTo(DeltaEgressService.class)) {
+            assertTrue(service.egressNextPending());
+
+            assertEquals(List.of(), capture.messagesContaining(Level.WARN, segment.getId().toString()));
+        }
     }
 
     /** Another worker leased the segment between the read and the lease: this one does nothing. */

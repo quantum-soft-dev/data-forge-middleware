@@ -186,6 +186,24 @@ class DeltaSqlQueueRepositoryIntegrationTest extends BaseIntegrationTest {
         });
     }
 
+    /** The delta-SQL census (review round 1 of #404), on the real statement. */
+    @Test
+    void theCensusCountsPendingSegmentsPastTheThreshold() {
+        transactionTemplate.executeWithoutResult(tx -> {
+            ChangelogSegment head = seedSegment(SITE, 60, 65);
+            LocalDateTime past = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1);
+            long before = segmentRepository.countPendingPluginSqlAttemptedAtLeast(3);
+
+            for (int attempts = 0; attempts < 3; attempts++) {
+                assertEquals(1, segmentRepository.leasePluginSql(head.getId(), past, attempts));
+            }
+            assertEquals(before + 1, segmentRepository.countPendingPluginSqlAttemptedAtLeast(3));
+
+            segmentRepository.markPluginSqlProcessed(head.getId());
+            assertEquals(before, segmentRepository.countPendingPluginSqlAttemptedAtLeast(3));
+        });
+    }
+
     @Test
     void baselineCrudAndUniqueConstraint() {
         AccountPlugin activation = accountPluginRepository.save(AccountPlugin.activate(ACCOUNT, "bit-bi", Map.of()));

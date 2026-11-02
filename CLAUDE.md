@@ -810,7 +810,12 @@ pages/{feature}/            # Route pages
   still not caught, deliberately, because the lease already did the work. The lease is new
   `delta.egress.claim-lease-seconds` / `plugin.sql-generation.delta-claim-lease-seconds` (600, refused
   below 1 by name), or the attempt's retry delay when longer (`QueueRetryBackoff.leaseUntil`), so a
-  segment that keeps killing its process reaches the poisoned report after the same seven attempts.
+  segment that keeps killing its process backs off as one that throws does. **A kill moves no
+  counter** (review round 1 caught the first wording promising the poisoned report): the deferral
+  counters see only caught failures. New gauges `delta.egress.segments.poisoned.pending` and
+  `sql.generation.delta.segments.poisoned.pending` (`PoisonedSegmentMetrics`) count pending rows at
+  or past the poison threshold however the attempts were spent, and a claim that takes such a
+  segment again logs a WARN naming it, the one line a kill loop leaves.
   **Cost, stated**: a pod killed mid-work leaves its claims held for up to the lease.
   `sql.generation.claims.lost` should now sit near zero; a steady rate means the lease is shorter
   than the generations. **Not done**: the SQL text of a batch is still built in heap, and nothing
@@ -822,7 +827,7 @@ pages/{feature}/            # Route pages
   (one of two leases wins, a leased head is offered to nobody, deferral spends nothing, release
   returns the attempt, none of them touch a processed row). No REST, gRPC, proto, DTO, migration
   (**V62 stays next**; the attempt and retry columns are V55's), `specs/NNN-*`, S3-key or frontend
-  change; two configuration keys and one metric tag value added. The temporary cluster workaround
+  change; two configuration keys, two gauges and one metric tag value added. The temporary cluster workaround
   (6Gi, `DELTA_EGRESS_MAX_CONCURRENT=1`) can be removed once this is deployed. See
   `docs/delta-client-v2-guide.md` ("A segment that kills its process does not kill the next one").
 - bitbi-v2-pilot-runbook: The Bit BI v2 pilot on `fyt-new` has a runbook,

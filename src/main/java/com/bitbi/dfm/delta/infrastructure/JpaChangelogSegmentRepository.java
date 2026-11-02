@@ -137,6 +137,17 @@ public interface JpaChangelogSegmentRepository
     @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.egressAt IS NULL")
     long countPendingEgress();
 
+    // Both read the pending partial index of their queue (V33 / V38): the census only ever looks
+    // at rows still owed work, and those are few.
+    @Override
+    @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.egressAt IS NULL AND s.egressAttempts >= :attempts")
+    long countPendingEgressAttemptedAtLeast(int attempts);
+
+    @Override
+    @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.pluginSqlAt IS NULL "
+            + "AND s.pluginSqlAttempts >= :attempts")
+    long countPendingPluginSqlAttemptedAtLeast(int attempts);
+
     // Same backoff filter and same head-of-line rule as findNextPendingEgress (issue #243).
     @Override
     @Query(value = """

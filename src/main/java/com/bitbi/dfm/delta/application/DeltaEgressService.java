@@ -135,6 +135,15 @@ public class DeltaEgressService {
             // out of the read, so the next iteration is offered a different head.
             return true;
         }
+        if (backoff.isPoisoned(segment.getEgressAttempts())) {
+            // Review round 1 of #404: a segment that killed its process leaves no failure line and
+            // moves no counter, so this claim is the one place that can name it. Its earlier
+            // attempts may also have thrown; the census is delta.egress.segments.poisoned.pending.
+            log.warn("Delta egress claims segment {} of site {} (seq {}..{}) for attempt {}: its earlier "
+                            + "attempts did not settle it — they failed, or the process died mid-work "
+                            + "(out of heap, a liveness kill)", segment.getId(), segment.getSiteId(),
+                    segment.getFirstSeq(), segment.getLastSeq(), claimedAttempts);
+        }
         // Only an exception is caught. An Error — the OutOfMemoryError of issue #404 — ends the
         // process or at least this thread, and needs nothing from here: the attempt is already
         // spent and the lease keeps the segment away until it lapses.

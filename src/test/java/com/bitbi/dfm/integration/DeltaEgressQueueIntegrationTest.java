@@ -235,4 +235,27 @@ class DeltaEgressQueueIntegrationTest extends BaseIntegrationTest {
         assertEquals(0, repository.deferEgress(done.getId(), later, 0));
         assertEquals(0, repository.findById(done.getId()).orElseThrow().getEgressAttempts());
     }
+
+    /**
+     * Review round 1 of #404: the census behind {@code delta.egress.segments.poisoned.pending} counts a
+     * pending segment by its attempts, however they were spent — seven lapsed leases, as a segment
+     * that kills its process leaves, included — and stops counting it once its work lands. Read as a
+     * delta, since the table is shared with every other class.
+     */
+    @Test
+    void theCensusCountsPendingSegmentsPastTheThresholdUntilTheirWorkLands() {
+        ChangelogSegment killer = segment(SITE_A, BATCH_A, 1L, 5L);
+        LocalDateTime past = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(1);
+        long before = repository.countPendingEgressAttemptedAtLeast(7);
+
+        for (int attempts = 0; attempts < 6; attempts++) {
+            assertEquals(1, repository.leaseEgress(killer.getId(), past, attempts));
+        }
+        assertEquals(before, repository.countPendingEgressAttemptedAtLeast(7), "six attempts: not yet");
+        assertEquals(1, repository.leaseEgress(killer.getId(), past, 6));
+        assertEquals(before + 1, repository.countPendingEgressAttemptedAtLeast(7));
+
+        assertEquals(1, repository.markEgressed(killer.getId()));
+        assertEquals(before, repository.countPendingEgressAttemptedAtLeast(7), "done is not poisoned");
+    }
 }

@@ -15,6 +15,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import ch.qos.logback.classic.Level;
+import com.bitbi.dfm.util.LogCapture;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -444,5 +446,20 @@ class DeltaSqlQueueServiceTest {
         verify(segmentRepository, never()).deferPluginSql(any(), any(), anyInt());
         verify(segmentRepository, never()).releasePluginSql(any(), anyInt());
         verify(segmentRepository, never()).markPluginSqlProcessed(any());
+    }
+
+    @Test
+    @DisplayName("a head claimed again past the poison threshold is named, since a kill logs nothing (#404 r1)")
+    void shouldNameAHeadClaimedAgainPastThePoisonThreshold() {
+        ChangelogSegment segment = segment("DELTA", Map.of());
+        ReflectionTestUtils.setField(segment, "pluginSqlAttempts", 7);
+        when(segmentRepository.findNextPendingPluginSql(eq(1), any())).thenReturn(List.of(segment));
+
+        try (LogCapture capture = LogCapture.attachTo(DeltaSqlQueueService.class)) {
+            assertThat(queueService.processNextPending()).isTrue();
+
+            assertThat(capture.messagesContaining(Level.WARN, segment.getId().toString()))
+                    .singleElement().asString().contains("attempt 8");
+        }
     }
 }

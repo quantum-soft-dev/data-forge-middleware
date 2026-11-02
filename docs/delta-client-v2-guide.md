@@ -3029,12 +3029,29 @@ outcome settles it:
 
 The lease is `delta.egress.claim-lease-seconds` / `plugin.sql-generation.delta-claim-lease-seconds`
 (600 s), or the attempt's retry delay when that is longer — from the fifth attempt on — so a segment
-that keeps killing its process backs off exactly as one that keeps throwing does, and reaches the
-poisoned report after the same seven attempts. Size the lease above the longest piece of work: a
-claimer still working when it lapses is overtaken, which is the pre-#404 behaviour — two renders of
+that keeps killing its process backs off exactly as one that keeps throwing does. Size the lease
+above the longest piece of work: a claimer still working when it lapses is overtaken, which is the pre-#404 behaviour — two renders of
 the same keys, harmless now that a render no longer scales with the segment.
 `sql.generation.claims.lost` should therefore sit near zero; a steady rate means the lease is shorter
 than the generations.
+
+**How a kill is reported, since the counters cannot see it** (review round 1). `delta.egress.errors`,
+`*.segments.deferred` and `*.segments.poisoned` move at a *deferral*, a failure the queue caught; a
+process that dies never reaches one, so a segment can climb to any attempt count by killing pods
+without moving them. Two things see it instead:
+
+- **`delta.egress.segments.poisoned.pending`** and **`sql.generation.delta.segments.poisoned.pending`**
+  — gauges counting rows still pending at or past `delta.egress.poison-after-attempts` /
+  `plugin.sql-generation.delta-poison-after-attempts`, however the attempts were spent. A census: a
+  segment counts for as long as it stays there and drops out when its work lands, its batch is
+  deleted or a reinit resets the SQL queue. Alert on these being above zero; they are registered from
+  startup and read the queues' pending partial indexes.
+- **A WARN at the claim** that takes such a segment again, naming the segment, its site and seq range
+  and the attempt it is on — the one log line a kill loop produces, since the failure itself logs
+  nothing. A segment that keeps throwing gets the deferral's ERROR as well.
+
+The pod's own restarts (`kube_pod_container_status_restarts_total`, `OOMKilled`) remain the other
+half of the picture.
 
 **What this costs.** A pod killed mid-work — a rollout's SIGKILL after the grace period, an
 eviction — leaves its claims held until the lease lapses, so that site's egress or SQL waits up to
@@ -3394,6 +3411,8 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.egress.segments.poisoned` | `delta_egress_segments_poisoned_total` |
 | `sql.generation.delta.segments.deferred` | `sql_generation_delta_segments_deferred_total` |
 | `sql.generation.delta.segments.poisoned` | `sql_generation_delta_segments_poisoned_total` |
+| `delta.egress.segments.poisoned.pending` | `delta_egress_segments_poisoned_pending` |
+| `sql.generation.delta.segments.poisoned.pending` | `sql_generation_delta_segments_poisoned_pending` |
 | `delta.egress.duration{phase=...}` (timer) | `delta_egress_duration_seconds_count` / `_sum` / `_max` |
 | `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
 | `delta.batch-parquet.enqueue.recovered` | `delta_batch_parquet_enqueue_recovered_total` |

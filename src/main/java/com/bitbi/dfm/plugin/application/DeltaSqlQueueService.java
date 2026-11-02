@@ -148,6 +148,15 @@ public class DeltaSqlQueueService {
             // of the read, so the next iteration is offered a different head.
             return true;
         }
+        if (backoff.isPoisoned(segment.getPluginSqlAttempts())) {
+            // Review round 1 of #404: a generation that killed its process leaves no failure line
+            // and moves no counter, so this claim is the one place that can name the segment. The
+            // census is sql.generation.delta.segments.poisoned.pending.
+            log.warn("Bit BI delta SQL claims segment {} of site {} (batch {}, seq {}..{}) for attempt {}: "
+                            + "its earlier attempts did not settle it — they failed, or the process died "
+                            + "mid-work (out of heap, a liveness kill)", segment.getId(), segment.getSiteId(),
+                    segment.getBatchId(), segment.getFirstSeq(), segment.getLastSeq(), claimedAttempts);
+        }
 
         // Everything after the claim is inside the try (review round 2): the site lookup, the
         // activation lookup and the mark write can fail deterministically too — a segment whose

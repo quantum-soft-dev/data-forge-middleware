@@ -22,8 +22,9 @@ data:
   # Both writers default to java.io.tmpdir, i.e. the container's writable layer, which
   # nothing bounds. Point them at the `parquet-scratch` emptyDir mounted by
   # deployment-backend.yaml so one declared sizeLimit covers the directory they share.
-  # The two prefixes (`checkpoint-*`, `batch-parquet-*`) keep them apart inside it, and
-  # ParquetScratchOrphanSweeper deduplicates the two paths before sweeping.
+  # The prefixes (`checkpoint-*`, `batch-parquet-*`, and since #404 `egress-*` for the
+  # per-segment delta files, written under the batch dir and ceiling) keep them apart inside it,
+  # and ParquetScratchOrphanSweeper deduplicates the two paths before sweeping.
   DELTA_CHECKPOINT_TEMP_DIR: "/scratch/parquet"
   DELTA_BATCH_PARQUET_TEMP_DIR: "/scratch/parquet"
   # That emptyDir is pod-private and is cleared only when the pod goes away, so it outlives a
@@ -88,7 +89,9 @@ data:
   # wrote the frame, uploaded it and deleted it before the first table's file existed. Every
   # streamed build's snapshot passes (the #292 bootstrap, every nightly incremental one since
   # #293) READ the frame, so it stays on the volume beside a snapshot file and the reserve is the two together: 5Gi - (1.5Gi + 1Gi) leaves 2.5Gi for
-  # completed-batch artifacts, which still clears their own 1Gi ceiling.
+  # completed-batch artifacts, which still clears their own 1Gi ceiling. Since #404 per-segment
+  # egress files (writer=egress_segment) draw on that same 2.5Gi: a busy egress can refuse a batch
+  # artifact into its backoff, which is the shared-total trade #150 already made, not a new one.
   # One snapshot, not DELTA_CHECKPOINT_SNAPSHOT_WRITERS of them, for the same reason this share
   # is not max-concurrent x the batch ceiling: the per-file keys are safety ceilings rather than
   # size estimates and the directory is charged by bytes actually written, so what is reserved is

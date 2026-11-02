@@ -169,6 +169,16 @@ public interface ChangelogSegmentRepository {
     long countPendingEgress();
 
     /**
+     * Pending egress segments whose attempt count has reached {@code attempts} — the census behind
+     * {@code delta.egress.segments.poisoned.pending} (issue #404). Counts however the attempts were
+     * spent, a process killed mid-work included, which no deferral ever sees.
+     */
+    long countPendingEgressAttemptedAtLeast(int attempts);
+
+    /** The delta-SQL twin of {@link #countPendingEgressAttemptedAtLeast(int)} (issue #404). */
+    long countPendingPluginSqlAttemptedAtLeast(int attempts);
+
+    /**
      * Pick pending Bit BI plugin SQL work (026-bitbi-delta-sql): for every site with segments
      * awaiting SQL generation, the earliest one (lowest {@code first_seq}) — so generations are
      * created in seq order per site. A read, not a claim: the claim is {@link #leasePluginSql}.
